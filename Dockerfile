@@ -1,11 +1,11 @@
 FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock README.md ./
 COPY llmao/ ./llmao/
+RUN uv sync --frozen --no-dev --no-editable
 COPY litellm/ ./litellm/
+ENV PATH="/app/.venv/bin:$PATH"
 ENV LLMAO_HOST=0.0.0.0 LLMAO_PORT=8080
 EXPOSE 8080
 # Production note: front this with hypercorn and set LLMAO_AUTH_MODE=asf,

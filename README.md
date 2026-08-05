@@ -28,18 +28,18 @@ Runs out of the box in **dev mode** (stub login) with a **mock LLM backend**,
 so you can click through the whole flow on a laptop.
 
 ```bash
-make install        # creates a local .venv and installs deps into it
+make install        # uv sync — creates .venv and installs deps
 make run            # serves http://127.0.0.1:8080
 ```
 
-`make` builds an isolated `.venv` so it works on Debian/Ubuntu's
-"externally managed" Python (PEP 668) without touching your system packages.
-If you'd rather manage the environment yourself:
+Requires [uv](https://docs.astral.sh/uv/) on your `PATH`. `make` uses it to
+build an isolated `.venv` so it works on Debian/Ubuntu's "externally managed"
+Python (PEP 668) without touching your system packages. If you'd rather drive
+uv yourself:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-python -m llmao.app
+uv sync
+uv run python -m llmao.app
 ```
 
 Open <http://127.0.0.1:8080>, click **Sign in (dev)**, and stand in as an

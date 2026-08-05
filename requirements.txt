@@ -1,5 +1,0 @@
-# llmao gateway — Phase 1 runtime dependencies.
-quart>=0.19
-# Production extras (not needed for dev/mock mode):
-requests>=2.31        # ProxyBackend -> litellm proxy admin + chat calls
-asfquart @ git+https://github.com/apache/infrastructure-asfquart.git

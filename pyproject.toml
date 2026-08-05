@@ -1,0 +1,27 @@
+[project]
+name = "llmao"
+version = "0.1.0"
+description = "Thin litellm-proxy gateway fronted by asfquart for the ASF"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "quart>=0.19",
+    "requests>=2.31",  # ProxyBackend -> litellm proxy admin + chat calls
+    "asfquart",
+    "litellm[proxy]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["llmao"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
