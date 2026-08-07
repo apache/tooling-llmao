@@ -1,9 +1,9 @@
-"""Control-plane tests: seam, authz, team provision, budget/usage HTTP.
+"""Offline tests: catalog, mock team provision, seam authz.
 
+Authenticated HTTP endpoints require a real asfquart session (OAuth). Those
+paths are not automated while the stack is in flux; expand later if needed.
 Run with: pytest -q
-These exercise the mock backend so no litellm proxy or ASF auth is needed.
 """
-import asyncio
 import os
 import tempfile
 import time
@@ -19,7 +19,6 @@ from llmao import catalog
 
 def _settings(tmp):
     return Settings(
-        auth_mode="dev",
         litellm_mode="mock",
         state_path=os.path.join(tmp, "state.json"),
         default_team_budget_usd=100.0,
@@ -49,8 +48,22 @@ def _seed_usage(store: StateStore, project: str, cost: float = 0.01) -> None:
     store.update(_mut)
 
 
+def test_settings_from_cfg():
+    s = Settings.from_cfg({
+        "litellm": {"mode": "proxy", "base_url": "http://llm:4000", "master_key": "sk-x"},
+        "budgets": {"default_team_budget_usd": 50, "duration": "7d"},
+        "site_admins": ["alice"],
+        "state_path": "/tmp/s.json",
+    })
+    assert s.litellm_mode == "proxy"
+    assert not s.is_mock_llm
+    assert s.litellm_base_url == "http://llm:4000"
+    assert s.default_team_budget_usd == 50
+    assert s.budget_duration == "7d"
+    assert s.site_admins == ["alice"]
+
+
 def test_catalog_has_governance_metadata():
-    # catalog.py is still used by make config; keep a smoke assertion.
     for m in catalog.all_models():
         assert m["license"]
         assert m["openness"] in ("open-weight", "open-source", "proprietary")
@@ -65,7 +78,6 @@ def test_ensure_team_provisions_budget():
         assert info.key.startswith("sk-")
         assert info.max_budget == s.default_team_budget_usd
         assert info.spend == 0.0
-        # Idempotent
         again = seam.ensure_project_team("airflow")
         assert again.team_id == info.team_id
 
@@ -76,7 +88,7 @@ def test_require_member_refuses_outsider():
         ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
         with pytest.raises(AuthzError):
             seam.require_member(ident, "kafka")
-        seam.require_member(ident, "airflow")  # no raise
+        seam.require_member(ident, "airflow")
 
 
 def test_activity_requires_pmc_admin():
@@ -100,69 +112,3 @@ def test_site_admin_sees_any_project():
         _seed_usage(store, "airflow")
         rows = seam.project_activity(root, "airflow")
         assert len(rows) == 1
-
-
-def test_http_budget_and_authz():
-    with tempfile.TemporaryDirectory() as tmp:
-        s = _settings(tmp)
-        from llmao.app import create_app
-        app = create_app(s)
-
-        async def run():
-            client = app.test_client()
-            r = await client.get("/healthz")
-            assert r.status_code == 200
-
-            r = await client.get("/v1/projects/airflow/budget")
-            assert r.status_code == 401
-
-            await client.post(
-                "/auth/dev/login",
-                form={"uid": "jdoe", "projects": "airflow", "committees": ""},
-            )
-            r = await client.get("/v1/projects/airflow/budget")
-            assert r.status_code == 200
-            body = await r.get_json()
-            assert body["provisioned"] is False
-
-            # Provision via seam (no public mint API yet in Phase A).
-            seam = app.config["LLMAO_SEAM"]
-            seam.ensure_project_team("airflow")
-
-            r = await client.get("/v1/projects/airflow/budget")
-            body = await r.get_json()
-            assert body["provisioned"] is True
-            assert body["max_budget_usd"] == s.default_team_budget_usd
-
-            r = await client.get("/v1/projects/kafka/budget")
-            assert r.status_code == 403
-
-            r = await client.get("/v1/projects/airflow/usage")
-            assert r.status_code == 403  # member, not PMC admin
-
-        asyncio.run(run())
-
-
-def test_http_usage_for_pmc_admin():
-    with tempfile.TemporaryDirectory() as tmp:
-        s = _settings(tmp)
-        from llmao.app import create_app
-        app = create_app(s)
-        seam = app.config["LLMAO_SEAM"]
-        store = StateStore(s.state_path)
-        seam.ensure_project_team("airflow")
-        _seed_usage(store, "airflow", cost=0.02)
-
-        async def run():
-            client = app.test_client()
-            await client.post(
-                "/auth/dev/login",
-                form={"uid": "chair", "projects": "", "committees": "airflow"},
-            )
-            r = await client.get("/v1/projects/airflow/usage")
-            assert r.status_code == 200
-            body = await r.get_json()
-            assert body["count"] == 1
-            assert body["total_cost_usd"] == 0.02
-
-        asyncio.run(run())

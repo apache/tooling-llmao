@@ -1,81 +1,64 @@
 """Configuration for the llmao control plane.
 
-Everything is environment-driven so the same image runs locally, in CI, and
-in production. Defaults are chosen so that `python -m llmao.app` works on a
-laptop with no external services: dev-stub auth and a mock litellm backend.
-
-Set LLMAO_AUTH_MODE=asf and LLMAO_LITELLM_MODE=proxy in production.
+Settings are loaded from asfquart's ``app.cfg`` (YAML ``config.yaml`` next to
+``main.py``). That file is local-only and holds secrets — see
+``config.yaml.example``. There is no separate "auth mode": the app is always
+asfquart.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, List, Mapping, Optional
 
 
-def _bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
+def _get(mapping: Any, key: str, default: Any = None) -> Any:
+    if mapping is None:
         return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _list(name: str, default: List[str]) -> List[str]:
-    raw = os.getenv(name)
-    if not raw:
-        return list(default)
-    return [item.strip() for item in raw.split(",") if item.strip()]
+    if isinstance(mapping, Mapping):
+        return mapping.get(key, default)
+    return getattr(mapping, key, default)
 
 
 @dataclass
 class Settings:
-    # --- Auth -------------------------------------------------------------
-    # "dev" -> dev-stub login (no external calls; pick a uid + projects).
-    # "asf" -> real asfquart OAuth (oauth.apache.org) + LDAP.
-    auth_mode: str = field(default_factory=lambda: os.getenv("LLMAO_AUTH_MODE", "dev"))
-
-    # Site admins (uids) always allowed, may view all projects' activity.
-    site_admins: List[str] = field(default_factory=lambda: _list("LLMAO_SITE_ADMINS", []))
-
-    # Secret for signing the asfquart/quart session cookie.
-    app_secret: str = field(default_factory=lambda: os.getenv("LLMAO_APP_SECRET", "dev-insecure-secret-change-me"))
-
     # --- litellm backend --------------------------------------------------
     # "mock"  -> in-process fake teams/usage (no network; good for demos/CI).
     # "proxy" -> talk to a real litellm proxy admin API (production).
-    litellm_mode: str = field(default_factory=lambda: os.getenv("LLMAO_LITELLM_MODE", "mock"))
-
-    # Base URL of the litellm proxy (when litellm_mode == "proxy").
-    litellm_base_url: str = field(default_factory=lambda: os.getenv("LLMAO_LITELLM_BASE_URL", "http://localhost:4000"))
-
-    # The litellm proxy *master* key, used by the seam to provision teams and
-    # mint keys via the proxy's /team and /key admin endpoints.
-    litellm_master_key: str = field(default_factory=lambda: os.getenv("LLMAO_LITELLM_MASTER_KEY", "sk-llmao-master-dev"))
-
-    # How long (seconds) to wait for litellm *admin* HTTP calls.
-    request_timeout_s: int = field(default_factory=lambda: int(os.getenv("LLMAO_REQUEST_TIMEOUT_S", "30")))
+    litellm_mode: str = "mock"
+    litellm_base_url: str = "http://localhost:4000"
+    litellm_master_key: str = "sk-llmao-master-dev"
+    request_timeout_s: int = 30
 
     # --- Budgets ----------------------------------------------------------
-    # Default monthly budget (USD) granted to a PMC team on first provision.
-    default_team_budget_usd: float = field(default_factory=lambda: float(os.getenv("LLMAO_DEFAULT_TEAM_BUDGET_USD", "100")))
-    budget_duration: str = field(default_factory=lambda: os.getenv("LLMAO_BUDGET_DURATION", "30d"))
+    default_team_budget_usd: float = 100.0
+    budget_duration: str = "30d"
 
-    # --- Storage ----------------------------------------------------------
-    # Where the seam persists its ASF-project -> litellm-team mapping and the
-    # mock backend keeps usage. A JSON file keeps Phase 1 dependency-free;
-    # swap for a real DB later without touching callers.
-    state_path: str = field(default_factory=lambda: os.getenv("LLMAO_STATE_PATH", "./llmao-state.json"))
+    # --- Storage / admins -------------------------------------------------
+    state_path: str = "./llmao-state.json"
+    site_admins: List[str] = field(default_factory=list)
 
-    host: str = field(default_factory=lambda: os.getenv("LLMAO_HOST", "127.0.0.1"))
-    port: int = field(default_factory=lambda: int(os.getenv("LLMAO_PORT", "8080")))
+    @classmethod
+    def from_cfg(cls, cfg: Any = None) -> Settings:
+        """Build settings from an asfquart EasyDict / plain dict config root."""
+        cfg = cfg or {}
+        litellm = _get(cfg, "litellm") or {}
+        budgets = _get(cfg, "budgets") or {}
+        site_admins = _get(cfg, "site_admins") or []
+        if isinstance(site_admins, str):
+            site_admins = [s.strip() for s in site_admins.split(",") if s.strip()]
 
-    @property
-    def is_dev_auth(self) -> bool:
-        return self.auth_mode != "asf"
+        mode = str(_get(litellm, "mode", "mock") or "mock").strip().lower()
+        return cls(
+            litellm_mode=mode,
+            litellm_base_url=str(_get(litellm, "base_url", "http://localhost:4000")),
+            litellm_master_key=str(_get(litellm, "master_key", "sk-llmao-master-dev")),
+            request_timeout_s=int(_get(litellm, "request_timeout_s", 30)),
+            default_team_budget_usd=float(_get(budgets, "default_team_budget_usd", 100)),
+            budget_duration=str(_get(budgets, "duration", "30d")),
+            state_path=str(_get(cfg, "state_path", "./llmao-state.json")),
+            site_admins=list(site_admins),
+        )
 
     @property
     def is_mock_llm(self) -> bool:
         return self.litellm_mode != "proxy"
-
-
-settings = Settings()

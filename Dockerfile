@@ -1,13 +1,13 @@
 FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md main.py config.yaml.example ./
 COPY llmao/ ./llmao/
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable \
+    && cp config.yaml.example config.yaml
 COPY litellm/ ./litellm/
 ENV PATH="/app/.venv/bin:$PATH"
-ENV LLMAO_HOST=0.0.0.0 LLMAO_PORT=8080
-EXPOSE 8080
-# Production note: front this with hypercorn and set LLMAO_AUTH_MODE=asf,
-# LLMAO_LITELLM_MODE=proxy. For the simplest run, the built-in server is fine.
-CMD ["python", "-m", "llmao.app"]
+EXPOSE 8443
+# Mount or replace /app/config.yaml with real secrets in production.
+# Leave server.certfile/keyfile blank for plain HTTP behind a TLS proxy.
+CMD ["python", "main.py"]

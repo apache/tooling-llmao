@@ -1,6 +1,9 @@
 # llmao — dev workflow. Uses UV (https://docs.astral.sh/uv/) to manage a local
 # .venv so it works on PEP 668 "externally managed" systems without touching
 # the system Python. Requires `uv` on PATH.
+#
+# Local run needs config.yaml (from config.yaml.example) and, for OAuth,
+# TLS certs under certs/ — see certs/README.md.
 
 .PHONY: install run test config proxy build clean
 
@@ -8,7 +11,7 @@ install:
 	uv sync
 
 run: install
-	uv run python -m llmao.app
+	uv run python main.py
 
 test: install
 	uv run pytest tests/ -q
@@ -23,7 +26,7 @@ proxy: install
 
 # Build the production Docker image (used by Puppet: `make build`).
 # Regenerates the litellm config from the catalog first so the image ships
-# a config.yaml that matches the catalog.
+# a litellm config.yaml that matches the catalog.
 build: config
 	docker build -t llmao:latest .
 

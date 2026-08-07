@@ -10,64 +10,55 @@ project ↔ LiteLLM team mapping, authorization, and (next) PAT lifecycle UX.
 **LiteLLM** is the OpenAI-compatible inference path, budgets, virtual keys, and
 metering. Completions are **not** re-proxied through this process.
 
+## Always asfquart
+
+There is no “dev auth mode.” The process is always constructed with
+`asfquart.construct("llmao", …)` (see root `main.py`, same idea as Apache
+STeVe’s `server/main.py`):
+
+- OAuth at `/auth` (oauth.apache.org)
+- Session cookies (`SESSION_COOKIE_SECURE=True` → use HTTPS locally)
+- Optional `token_handler` for bearer tokens against *this* app (stub today)
+- `@asfquart.auth.require` / `Requirements` on protected routes; project-scoped
+  rules stay in `seam.py`
+
+Local TLS: `config.yaml` `server.certfile` / `keyfile` under `certs/`, typically
+mkcert for **`localhost.apache.org`**. `config.yaml` is gitignored (secrets).
+
 ## The two halves
 
-**asfquart** (front) handles *who you are and what you're allowed to do*. In
-production the app is built with `asfquart.construct("llmao")`, which mounts
-the ASF OAuth gateway at `/auth`, supports bearer tokens via a `token_handler`,
-and populates a `ClientSession` from LDAP with the user's `uid`, committer
-`projects`, and PMC `committees`. Per-PMC gating is the `@require(R.pmc_member)`
-decorator. None of this is reimplemented here.
+**asfquart** handles *who you are and what you're allowed to do* at the
+Foundation level. LDAP-backed `ClientSession` carries `uid`, committer
+`projects`, and PMC `committees` (`pmcs`).
 
 **LiteLLM proxy** holds *teams, users, virtual keys (PATs), budgets, capacity
 limits, and spend*. Clients call its OpenAI-compatible API with a PAT. This
 process talks to LiteLLM over the **admin** surface (master key) to provision
-teams and (soon) mint, regenerate, or revoke virtual keys—see design §5–6
-(user + team + purpose on normal keys).
+teams and (soon) mint or revoke virtual keys—see design §5–6.
+
+`litellm.mode: mock` in config is only an offline stand-in for team/usage
+storage in tests and laptop work without a proxy—not a second auth system.
 
 ## The seam
 
-`seam.py` is the join code that matters today. It:
+`seam.py`:
 
-1. **authorizes** — the calling identity must be a member (or site admin) of
-   the project it wants to act on; activity views require PMC admin (design:
-   PMC as team admin);
-2. **resolves** the ASF project to a LiteLLM team, provisioning the team with a
-   budget on first use.
+1. **authorizes** project membership / PMC admin after asfquart has authenticated;
+2. **resolves** the ASF project to a LiteLLM team (budget on first use).
 
-Keeping the ASF-project ↔ LiteLLM-team mapping correct as membership changes
-is “the part that isn't free” (design §6.1). Today the mapping is created
-lazily and persisted in `store.py`; production should reconcile against LDAP /
-asfquart membership on a schedule.
-
-## Why it runs with no infrastructure
-
-So the seam is reviewable and demoable anywhere, both halves have a local
-stand-in selected by environment variables:
-
-- `LLMAO_AUTH_MODE=dev` → a stub login that produces the same `Identity` an
-  asfquart session would.
-- `LLMAO_LITELLM_MODE=mock` → an in-process backend that fakes teams and usage
-  storage, so authz and budget GETs are exercised end to end.
-
-Flipping both to `asf` / `proxy` swaps in the real systems without changing any
-code above the backend interface. Production LiteLLM uses **Postgres** (design
-§9); that is an Infra concern (`p6/modules/llmao`), not this package’s store.
-
-## Request path (this process — control / PAT plane)
+## Request path (this process)
 
 ```
-operator/browser → [asfquart front] → seam.authorize
-                 → [LiteLLM admin API] team/budget (and soon PAT keys)
+browser → HTTPS (local mkcert or prod proxy)
+       → asfquart OAuth / session
+       → @require + seam.authorize
+       → LiteLLM admin API (team/budget; soon PATs)
 ```
 
-## Inference path (LiteLLM — not reimplemented here)
+## Inference path (LiteLLM)
 
 ```
-client tool → [LiteLLM] PAT (virtual key) → budget / capacity check → model
+client tool → LiteLLM + PAT → budget / capacity → model
 ```
 
-PATs bind **person + project (+ purpose)** for normal committer work (design
-§5). Service-account keys may be team-only for automation.
-
-See `../README.md` for the API surface currently exposed and quickstart.
+See `../README.md` for quickstart and API surface.

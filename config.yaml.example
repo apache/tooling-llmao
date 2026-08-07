@@ -1,0 +1,29 @@
+# Copy to config.yaml and edit. config.yaml is gitignored (may hold secrets).
+#
+#   cp config.yaml.example config.yaml
+
+server:
+  # Port for the asfquart process. Behind a reverse proxy in production.
+  port: 8443
+
+  # PEM files relative to certs/ (see certs/README.md), or absolute paths.
+  # Leave both blank for plain HTTP (e.g. Docker behind Apache TLS).
+  # Local OAuth needs HTTPS + localhost.apache.org — use mkcert as documented.
+  certfile: localhost.apache.org+3.pem
+  keyfile: localhost.apache.org+3-key.pem
+
+litellm:
+  # mock = in-process fake teams/usage; proxy = real LiteLLM admin API
+  mode: mock
+  base_url: http://localhost:4000
+  master_key: CHANGE_ME
+  request_timeout_s: 30
+
+budgets:
+  default_team_budget_usd: 100
+  duration: 30d
+
+# uids that may view any project's activity (plus asfquart isRoot)
+site_admins: []
+
+state_path: ./llmao-state.json

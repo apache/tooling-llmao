@@ -35,34 +35,27 @@ client tools ──────────────────────�
 
 ---
 
-## Quickstart (no external services)
+## Quickstart (local, asfquart + TLS)
 
-Runs out of the box in **dev mode** (stub login) with a **mock** LiteLLM
-backend, so you can exercise auth and budget GETs on a laptop.
+The app is **always asfquart** (Apache OAuth). Local login needs HTTPS and a
+host name OAuth will accept — same pattern as Apache STeVe: **mkcert** certs
+for `localhost.apache.org` (see `certs/README.md`).
+
+Requires [uv](https://docs.astral.sh/uv/) on your `PATH`.
 
 ```bash
-make install        # uv sync — creates .venv and installs deps
-make run            # serves http://127.0.0.1:8080
+make install
+cp config.yaml.example config.yaml   # edit secrets; file is gitignored
+# generate certs under certs/ (mkcert) — certs/README.md
+make run                             # uv run python main.py
 ```
 
-Requires [uv](https://docs.astral.sh/uv/) on your `PATH`. `make` uses it to
-build an isolated `.venv` so it works on Debian/Ubuntu's "externally managed"
-Python (PEP 668) without touching your system packages. If you'd rather drive
-uv yourself:
+Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
+with ASF, then use the JSON API for budget and (as PMC) usage. Default
+`litellm.mode: mock` needs no real LiteLLM for team/budget plumbing.
 
 ```bash
-uv sync
-uv run python -m llmao.app
-```
-
-Open <http://127.0.0.1:8080>, click **Sign in (dev)**, and stand in as an
-identity — e.g. uid `jdoe`, projects `airflow, lineage`, PMC `airflow`. Use the
-JSON API for budget and (as PMC) usage.
-
-Run the tests:
-
-```bash
-make test
+make test          # offline seam/catalog tests (no OAuth session automation yet)
 ```
 
 ---
@@ -71,12 +64,13 @@ make test
 
 | Capability | Where it lives | Notes |
 |---|---|---|
-| ASF login + PMC authz | `auth.py` + asfquart (prod) | dev-stub mirrors asfquart's `ClientSession` shape |
-| Per-PMC budgets & spend (read) | litellm teams (prod) / `MockBackend` (dev) | one litellm *team* per ASF project |
+| ASF login + PMC authz | asfquart always + `auth.py` | `@asfquart.auth.require`; project scope in seam |
+| Per-PMC budgets & spend (read) | litellm teams / `MockBackend` | one litellm *team* per ASF project |
 | Project ↔ team mapping | `seam.py` | provision team on first use |
 | Model catalog + governance metadata | `catalog.py` | still drives `make config` for the proxy |
 | Per-project activity view | `app.py` `/v1/projects/<p>/usage` | PMC admins / site admins only |
 | Minimal status page | `portal.py` | no chat UI |
+| Local TLS + config | `main.py`, `config.yaml`, `certs/` | Steve-style; config.yaml gitignored |
 
 **Next:** mint/list/revoke LiteLLM virtual keys for teams, users, and needs;
 budget updates via the control plane.
@@ -85,8 +79,8 @@ budget updates via the control plane.
 
 ## API
 
-Authenticated session (cookie) or, in asf mode, a bearer token for *this*
-service (not the same thing as a LiteLLM virtual key).
+Authenticated asfquart session (cookie after OAuth). Not the same thing as a
+LiteLLM virtual key (PAT for inference).
 
 ```bash
 # Per-project budget (members) and activity (PMC admins)
@@ -96,25 +90,18 @@ GET /v1/projects/<project>/usage
 GET /healthz
 ```
 
-Errors use standard codes: `401` unauthenticated, `403` not a member / not a
-PMC admin. Error bodies on `/v1/*` are JSON.
+Unauthenticated access to protected routes redirects to OAuth (browser) or
+fails auth via asfquart. Project membership failures return JSON `403` where
+the handler still runs.
 
 ---
 
 ## Production
 
-Two environment flips move from the laptop demo to the real thing:
-
-```bash
-export LLMAO_AUTH_MODE=asf          # oauth.apache.org + LDAP via asfquart
-export LLMAO_LITELLM_MODE=proxy     # talk to a real litellm proxy
-```
-
-1. **asfquart** (dependency via `pyproject.toml`) provides the OAuth gateway at
-   `/auth`, JWT support, and LDAP-backed sessions — see
-   <https://github.com/apache/infrastructure-asfquart>. In asf mode the app is
-   built with `asfquart.construct("llmao")`, so login and PMC membership come
-   from real ASF identity.
+1. **asfquart** (dependency via `pyproject.toml`) always provides OAuth at
+   `/auth` and LDAP-backed sessions — see
+   <https://github.com/apache/infrastructure-asfquart>. Set `litellm.mode:
+   proxy` and secrets in a mounted `config.yaml` (never commit that file).
 
 2. **Run the litellm proxy** with the generated config:
 
@@ -126,13 +113,12 @@ export LLMAO_LITELLM_MODE=proxy     # talk to a real litellm proxy
    Set the self-host endpoints (one per vLLM model, e.g.
    `LLMAO_SELFHOST_GEMMA_URL`, `LLMAO_SELFHOST_QWEN_CODER_URL`,
    `LLMAO_SELFHOST_QWEN8B_URL`) and any external provider keys
-   (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, etc.). Set
-   `LLMAO_LITELLM_MASTER_KEY` to the same value as the proxy's `master_key`;
-   the seam uses it to provision teams (and will mint virtual keys for
-   operators).
+   (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, etc.). Put the same
+   value as the proxy `master_key` in `config.yaml` → `litellm.master_key`.
 
-3. **Serve** llmao behind hypercorn for the control plane; point client tools
-   at the **LiteLLM** base URL with virtual keys, not at llmao for chat.
+3. **Serve** llmao (`main.py` or Hypercorn) for the control plane with a real
+   `config.yaml`; point client tools at the **LiteLLM** base URL with PATs,
+   not at llmao for chat.
 
 The token handler in `auth.py` (`make_token_handler`) is a stub for calling
 llmao's own API non-interactively; LiteLLM virtual keys are separate and will
@@ -191,16 +177,19 @@ so catalog and proxy routes stay aligned. Add a model by adding a
 ## Layout
 
 ```
+main.py             standalone entry (asfquart + TLS runx; Steve-style)
+config.yaml.example copy to config.yaml (gitignored; secrets)
+certs/              mkcert PEMs (gitignored) + README
 llmao/
-  app.py            app factory + routes (dev: plain Quart; prod: asfquart)
-  seam.py           ASF project -> litellm team; authz
-  auth.py           identity resolution (asfquart session/token or dev stub)
-  litellm_client.py ProxyBackend (real) + MockBackend (dev), one interface
-  catalog.py        models + license/openness/weights/provenance
-  portal.py         minimal status + dev login HTML
-  store.py          tiny JSON state store (swap for a DB later)
-  config.py         env-driven settings
-litellm/config.yaml litellm proxy config (generated)
+  app.py            asfquart factory + routes
+  seam.py           ASF project -> litellm team; project authz
+  auth.py           ClientSession -> Identity; token_handler stub
+  litellm_client.py ProxyBackend + MockBackend
+  catalog.py        models + governance metadata
+  portal.py         minimal status HTML
+  store.py          JSON state store
+  config.py         Settings.from_cfg(app.cfg)
+litellm/config.yaml litellm proxy model routes (generated)
 scripts/            config renderer
-tests/              control-plane test suite
+tests/              offline seam/catalog tests
 ```

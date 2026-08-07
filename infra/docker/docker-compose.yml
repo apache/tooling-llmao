@@ -42,15 +42,11 @@ services:
     networks: [llmao-net]
     ports:
       - "127.0.0.1:8080:8080"    # loopback only; host Apache vhost fronts it
-    environment:
-      - LLMAO_AUTH_MODE=${LLMAO_AUTH_MODE:-asf}
-      - LLMAO_LITELLM_MODE=proxy
-      - LLMAO_LITELLM_BASE_URL=http://litellm-proxy:4000
-      - LLMAO_LITELLM_MASTER_KEY=${LLMAO_LITELLM_MASTER_KEY}
-      - LLMAO_APP_SECRET=${LLMAO_APP_SECRET}
-      - LLMAO_STATE_PATH=/var/opt/llmao-state/llmao-state.json
+    # Provide a real config.yaml (litellm.mode=proxy, master_key, blank TLS
+    # certs for HTTP behind the host Apache vhost). Example only ships in image.
     volumes:
       - llmao-state:/var/opt/llmao-state
+      - ${LLMAO_CONFIG:-./config.yaml}:/app/config.yaml:ro
     depends_on: [litellm-proxy]
 
   # --- litellm proxy (CPU) --------------------------------------------
