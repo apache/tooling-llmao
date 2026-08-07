@@ -1,10 +1,9 @@
-"""The seam — the one piece of real Phase 1 code.
+"""The seam — ASF identity joined to litellm teams.
 
-asfquart tells us *who the user is and what projects they're on*. litellm tells
-us *what it cost*. The seam is the join: it resolves an ASF project to a litellm
-team (provisioning the team with a budget on first use), authorizes that the
-calling identity is actually a member of the project it wants to bill, and runs
-the metered chat through the backend.
+asfquart tells us *who the user is and what projects they're on*. litellm
+holds *budgets and virtual keys*. The seam is the join: it resolves an ASF
+project to a litellm team (provisioning the team with a budget on first use)
+and authorizes that the calling identity may act on that project.
 
 Keeping the ASF-project <-> litellm-team mapping correct as membership changes
 is the substance flagged in the plan as "the part that isn't free."
@@ -14,17 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from . import catalog
 from .config import Settings
-from .litellm_client import Backend, BudgetExceeded, Completion, TeamInfo
+from .litellm_client import Backend, TeamInfo
 
 
 class AuthzError(Exception):
-    """Caller is not a member of the project they tried to use."""
-
-
-class CatalogError(Exception):
-    """Requested model is not in the catalog."""
+    """Caller is not allowed to perform this action on the project."""
 
 
 @dataclass
@@ -60,35 +54,19 @@ class Seam:
     def team_status(self, project: str) -> Optional[TeamInfo]:
         return self._backend.team_info(project)
 
-    # -- the metered, authorized call -------------------------------------
+    # -- authorization helpers --------------------------------------------
 
-    def chat(
-        self,
-        identity: Identity,
-        project: str,
-        model_id: str,
-        messages: List[Dict],
-        params: Optional[Dict] = None,
-    ) -> Completion:
-        # 1. Authorization: the identity must belong to the project it bills.
+    def require_member(self, identity: Identity, project: str) -> None:
         if not (identity.is_site_admin or identity.member_of(project)):
             raise AuthzError(f"{identity.uid} is not a member of {project}")
 
-        # 2. Catalog: only approved models are callable.
-        model = catalog.get(model_id)
-        if model is None:
-            raise CatalogError(f"unknown model {model_id!r}")
-
-        # 3. Ensure the team exists (provisions budget on first use).
-        self.ensure_project_team(project)
-
-        # 4. Metered call through litellm (budget enforced in the backend).
-        return self._backend.chat(project, model.backend, messages, params or {})
+    def require_admin(self, identity: Identity, project: str) -> None:
+        if not identity.admin_of(project):
+            raise AuthzError(f"{identity.uid} is not a PMC admin of {project}")
 
     # -- activity view ----------------------------------------------------
 
     def project_activity(self, identity: Identity, project: str) -> List[Dict]:
         """Everyone's activity in a project. PMC admins (or site admins) only."""
-        if not identity.admin_of(project):
-            raise AuthzError(f"{identity.uid} is not a PMC admin of {project}")
+        self.require_admin(identity, project)
         return self._backend.usage(project)

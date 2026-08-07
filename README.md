@@ -1,31 +1,28 @@
 # llmao
 
-A thin **litellm-proxy gateway fronted by asfquart**, served at `llm.apache.org`.
-This is **Phase 1**: ASF identity, per-PMC budgets, a model catalog with
-governance metadata, and manual model selection — text or file in, metered
-response out.
+**Control plane** for ASF access to LiteLLM, served at `llm.apache.org`.
+asfquart owns identity and per-PMC authorization. LiteLLM owns teams, virtual
+keys, budgets, metering, and the OpenAI-compatible API that **clients** use.
+This repo is the **seam**: who may act on which ASF project, and how that maps
+to LiteLLM admin (teams, budgets; key minting next).
 
-<p align="center">
-  <img src="docs/screenshots/portal.png" width="820"
-       alt="llmao portal — a metered call billed to a PMC, with model governance metadata, budget, and per-project activity">
-</p>
-
-`asfquart` owns identity and per-PMC authorization. litellm owns the catalog,
-budgets, metering, and the OpenAI-compatible API. The code in this repo is the
-**seam** between them, plus a thin portal.
+This service does **not** host a chat client or proxy completions. Point Cursor,
+CLIs, and SDKs at the LiteLLM proxy with a project virtual key.
 
 ```
-ASF id ──oauth/JWT──►  asfquart front  ──team key──►  litellm proxy ──►  models
-                       (who you are,                  (what it cost,      (external +
-                        what PMCs)                      per-team budget)    self-host)
+ASF id ──oauth/JWT──►  asfquart / llmao     ──admin──►  litellm proxy
+                       (who you are,                    (teams, budgets,
+                        what PMCs)                       virtual keys)
+
+client tools ────────────────────────────────key────►  litellm ──► models
 ```
 
 ---
 
 ## Quickstart (no external services)
 
-Runs out of the box in **dev mode** (stub login) with a **mock LLM backend**,
-so you can click through the whole flow on a laptop.
+Runs out of the box in **dev mode** (stub login) with a **mock** LiteLLM
+backend, so you can exercise auth and budget GETs on a laptop.
 
 ```bash
 make install        # uv sync — creates .venv and installs deps
@@ -43,62 +40,48 @@ uv run python -m llmao.app
 ```
 
 Open <http://127.0.0.1:8080>, click **Sign in (dev)**, and stand in as an
-identity — e.g. uid `jdoe`, projects `airflow, lineage`, PMC `airflow`. Then:
-
-- pick a model (note the license / openness / provenance shown inline),
-- type a prompt or attach a text/code file,
-- **Send** — the call is metered and billed to the selected project,
-- watch the **Budget & activity** panel update (activity is visible to PMC
-  members of the project).
+identity — e.g. uid `jdoe`, projects `airflow, lineage`, PMC `airflow`. Use the
+JSON API for budget and (as PMC) usage.
 
 Run the tests:
 
 ```bash
-make test          # 9 tests: seam, budgets, authz, catalog, HTTP API
+make test
 ```
 
 ---
 
-## What Phase 1 includes
+## What this includes today
 
 | Capability | Where it lives | Notes |
 |---|---|---|
 | ASF login + PMC authz | `auth.py` + asfquart (prod) | dev-stub mirrors asfquart's `ClientSession` shape |
-| Per-PMC budgets & spend | litellm teams (prod) / `MockBackend` (dev) | one litellm *team* per ASF project |
-| Project ↔ team mapping | `seam.py` | the one real piece of Phase 1 code |
-| Model catalog + governance metadata | `catalog.py` | license, openness, weights, provenance (explicit) |
-| OpenAI-compatible chat API | `app.py` `/v1/chat/completions` | text or uploaded file |
+| Per-PMC budgets & spend (read) | litellm teams (prod) / `MockBackend` (dev) | one litellm *team* per ASF project |
+| Project ↔ team mapping | `seam.py` | provision team on first use |
+| Model catalog + governance metadata | `catalog.py` | still drives `make config` for the proxy |
 | Per-project activity view | `app.py` `/v1/projects/<p>/usage` | PMC admins / site admins only |
-| Thin portal | `portal.py` | single self-contained page, no build step |
+| Minimal status page | `portal.py` | no chat UI |
 
-**Deferred to later phases:** input scanning (Phase 2), automatic routing
-(Phase 3), benchmarking (Phase 4). Models are chosen by hand in Phase 1.
+**Next:** mint/list/revoke LiteLLM virtual keys for teams, users, and needs;
+budget updates via the control plane.
 
 ---
 
 ## API
 
-All endpoints require an authenticated session (cookie) or, in asf mode, a
-bearer PAT. The chat endpoint is OpenAI-shaped, so existing clients work by
-changing the base URL.
+Authenticated session (cookie) or, in asf mode, a bearer token for *this*
+service (not the same thing as a LiteLLM virtual key).
 
 ```bash
-# List approved models (with governance metadata under `.llmao`)
-GET /v1/models
-
-# Chat. The billed project comes from the X-LLMAO-Project header,
-# the body's "project", or (if you're on exactly one) your sole project.
-POST /v1/chat/completions
-  { "model": "selfhost/gemma4-26b", "messages": [{"role":"user","content":"hi"}] }
-
 # Per-project budget (members) and activity (PMC admins)
 GET /v1/projects/<project>/budget
 GET /v1/projects/<project>/usage
+
+GET /healthz
 ```
 
 Errors use standard codes: `401` unauthenticated, `403` not a member / not a
-PMC admin, `404` unknown model, `429` project budget exceeded, `504` the model
-timed out or the proxy was unreachable. Error bodies are always JSON.
+PMC admin. Error bodies on `/v1/*` are JSON.
 
 ---
 
@@ -111,8 +94,8 @@ export LLMAO_AUTH_MODE=asf          # oauth.apache.org + LDAP via asfquart
 export LLMAO_LITELLM_MODE=proxy     # talk to a real litellm proxy
 ```
 
-1. **Install asfquart** (provides the OAuth gateway at `/auth`, JWT/PAT, and
-   LDAP-backed sessions): see
+1. **asfquart** (dependency via `pyproject.toml`) provides the OAuth gateway at
+   `/auth`, JWT support, and LDAP-backed sessions — see
    <https://github.com/apache/infrastructure-asfquart>. In asf mode the app is
    built with `asfquart.construct("llmao")`, so login and PMC membership come
    from real ASF identity.
@@ -129,12 +112,15 @@ export LLMAO_LITELLM_MODE=proxy     # talk to a real litellm proxy
    `LLMAO_SELFHOST_QWEN8B_URL`) and any external provider keys
    (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, etc.). Set
    `LLMAO_LITELLM_MASTER_KEY` to the same value as the proxy's `master_key`;
-   the seam uses it to provision teams and mint per-team keys.
+   the seam uses it to provision teams (and will mint virtual keys for
+   operators).
 
-3. **Serve** behind hypercorn and point DNS/TLS for `llm.apache.org` at it.
+3. **Serve** llmao behind hypercorn for the control plane; point client tools
+   at the **LiteLLM** base URL with virtual keys, not at llmao for chat.
 
-The PAT handler in `auth.py` (`make_token_handler`) is a stub: wire it to your
-token store to let non-interactive CLI/SDK callers authenticate.
+The token handler in `auth.py` (`make_token_handler`) is a stub for calling
+llmao's own API non-interactively; LiteLLM virtual keys are separate and will
+be managed by this control plane.
 
 ### Self-hosted models via vLLM
 
@@ -168,11 +154,8 @@ litellm reaches each model through a per-model base-URL env var
 five-container stack (llmao + litellm + three vLLM servers) is defined in
 `infra/docker/docker-compose.yml`.
 
-Slow models: the gateway waits `LLMAO_REQUEST_TIMEOUT_S` (default 600s) for a
-response; on timeout the portal returns a clean `504` rather than hanging.
-
 **Adding or changing a model touches two files that must agree:**
-`llmao/catalog.py` (what the portal lists, plus governance metadata) and
+`llmao/catalog.py` (governance metadata + route inputs) and
 `litellm/config.yaml` (the generated route). Each catalog `backend` string must
 equal a config `model_name`. For a self-host model, set its `served_name` (the
 vLLM `--served-model-name`) and `api_base_env` (the env var holding that
@@ -180,12 +163,12 @@ model's vLLM URL) in the catalog, then `make config` to regenerate.
 
 ---
 
-## The catalog is the source of truth
+## The catalog is the source of truth (for proxy model routes)
 
 `llmao/catalog.py` defines the models and their governance metadata. The
 litellm proxy config is generated from it (`scripts/render_litellm_config.py`),
-so the portal's list and the proxy's routes never drift. Add a model by adding
-a `CatalogModel`, then `make config`.
+so catalog and proxy routes stay aligned. Add a model by adding a
+`CatalogModel`, then `make config`.
 
 ---
 
@@ -194,14 +177,14 @@ a `CatalogModel`, then `make config`.
 ```
 llmao/
   app.py            app factory + routes (dev: plain Quart; prod: asfquart)
-  seam.py           ASF project -> litellm team; authz; metered chat
-  auth.py           identity resolution (asfquart session/PAT or dev stub)
+  seam.py           ASF project -> litellm team; authz
+  auth.py           identity resolution (asfquart session/token or dev stub)
   litellm_client.py ProxyBackend (real) + MockBackend (dev), one interface
   catalog.py        models + license/openness/weights/provenance
-  portal.py         the single-page portal
+  portal.py         minimal status + dev login HTML
   store.py          tiny JSON state store (swap for a DB later)
   config.py         env-driven settings
 litellm/config.yaml litellm proxy config (generated)
 scripts/            config renderer
-tests/              Phase 1 test suite
+tests/              control-plane test suite
 ```

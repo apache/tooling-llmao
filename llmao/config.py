@@ -1,8 +1,8 @@
-"""Configuration for the llmao gateway.
+"""Configuration for the llmao control plane.
 
 Everything is environment-driven so the same image runs locally, in CI, and
 in production. Defaults are chosen so that `python -m llmao.app` works on a
-laptop with no external services: dev-stub auth and a mock LLM backend.
+laptop with no external services: dev-stub auth and a mock litellm backend.
 
 Set LLMAO_AUTH_MODE=asf and LLMAO_LITELLM_MODE=proxy in production.
 """
@@ -41,21 +41,19 @@ class Settings:
     app_secret: str = field(default_factory=lambda: os.getenv("LLMAO_APP_SECRET", "dev-insecure-secret-change-me"))
 
     # --- litellm backend --------------------------------------------------
-    # "mock"  -> in-process fake completion (no network; good for demos/CI).
-    # "proxy" -> talk to a real litellm proxy over HTTP (production).
+    # "mock"  -> in-process fake teams/usage (no network; good for demos/CI).
+    # "proxy" -> talk to a real litellm proxy admin API (production).
     litellm_mode: str = field(default_factory=lambda: os.getenv("LLMAO_LITELLM_MODE", "mock"))
 
     # Base URL of the litellm proxy (when litellm_mode == "proxy").
     litellm_base_url: str = field(default_factory=lambda: os.getenv("LLMAO_LITELLM_BASE_URL", "http://localhost:4000"))
 
     # The litellm proxy *master* key, used by the seam to provision teams and
-    # mint per-team keys via the proxy's /team and /key admin endpoints.
+    # mint keys via the proxy's /team and /key admin endpoints.
     litellm_master_key: str = field(default_factory=lambda: os.getenv("LLMAO_LITELLM_MASTER_KEY", "sk-llmao-master-dev"))
 
-    # How long (seconds) to wait for a chat completion from the proxy. Local
-    # models on modest GPUs (or reasoning models that think first) can be slow,
-    # so this is generous by default and overridable.
-    request_timeout_s: int = field(default_factory=lambda: int(os.getenv("LLMAO_REQUEST_TIMEOUT_S", "600")))
+    # How long (seconds) to wait for litellm *admin* HTTP calls.
+    request_timeout_s: int = field(default_factory=lambda: int(os.getenv("LLMAO_REQUEST_TIMEOUT_S", "30")))
 
     # --- Budgets ----------------------------------------------------------
     # Default monthly budget (USD) granted to a PMC team on first provision.
@@ -67,9 +65,6 @@ class Settings:
     # mock backend keeps usage. A JSON file keeps Phase 1 dependency-free;
     # swap for a real DB later without touching callers.
     state_path: str = field(default_factory=lambda: os.getenv("LLMAO_STATE_PATH", "./llmao-state.json"))
-
-    # --- Uploads ----------------------------------------------------------
-    max_upload_bytes: int = field(default_factory=lambda: int(os.getenv("LLMAO_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024))))
 
     host: str = field(default_factory=lambda: os.getenv("LLMAO_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("LLMAO_PORT", "8080")))

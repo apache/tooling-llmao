@@ -1,19 +1,17 @@
-"""litellm backend abstraction.
+"""litellm backend abstraction (control plane).
 
 Two implementations behind one interface:
 
 * ``ProxyBackend`` talks to a real litellm proxy. It uses the proxy's admin
   endpoints (/team/new, /key/generate, /team/info) to provision a team and
   mint a scoped key for each ASF project — this is how per-PMC budgets and
-  spend tracking happen natively — and forwards chat to /v1/chat/completions
-  with that team key.
+  spend tracking happen natively.
 
-* ``MockBackend`` fakes all of the above in-process so the app runs with no
-  litellm proxy at all (laptop demos, CI). It tracks per-team spend in the
-  StateStore using a crude token-count cost model, so budgets and the activity
-  view are exercised end to end.
+* ``MockBackend`` fakes team provision and usage in-process so the app runs
+  with no litellm proxy at all (laptop demos, CI).
 
-The seam (seam.py) depends only on this interface, so flipping
+Completion traffic is out of scope: clients call LiteLLM directly with
+virtual keys. The seam depends only on this interface, so flipping
 LLMAO_LITELLM_MODE from "mock" to "proxy" changes nothing upstream.
 """
 from __future__ import annotations
@@ -32,21 +30,7 @@ class BudgetExceeded(Exception):
 
 
 class BackendUnavailable(Exception):
-    """Raised when the model backend times out or can't be reached."""
-
-
-@dataclass
-class Completion:
-    content: str
-    model: str
-    prompt_tokens: int
-    completion_tokens: int
-    cost_usd: float
-    # Populated when the model reasoned. vLLM's reasoning parsers split the
-    # thinking block out of `content` into a separate field, so without this
-    # the portal shows an answer with no sign of the tokens spent producing
-    # it -- and at a low max_tokens, an EMPTY answer with no explanation.
-    reasoning: Optional[str] = None
+    """Raised when the litellm admin API times out or can't be reached."""
 
 
 @dataclass
@@ -60,28 +44,12 @@ class TeamInfo:
 class Backend(Protocol):
     def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo: ...
     def team_info(self, project: str) -> Optional[TeamInfo]: ...
-    def chat(self, project: str, model_backend: str, messages: List[Dict], params: Dict) -> Completion: ...
     def usage(self, project: Optional[str]) -> List[Dict]: ...
 
 
 # ---------------------------------------------------------------------------
 # Mock backend — no network, used for local/dev/CI.
 # ---------------------------------------------------------------------------
-
-def _est_tokens(text: str) -> int:
-    # ~4 chars/token is good enough for a demo cost model.
-    return max(1, len(text) // 4)
-
-
-# Rough per-1k-token USD pricing so the budget math is non-trivial.
-_MOCK_PRICES = {
-    # Self-hosted: no per-token API bill, but GPU time isn't free. Nominal
-    # prices keep budget/metering exercisable in tests.
-    "selfhost/gemma4-26b": 0.0002,
-    "selfhost/qwen3.6-27b": 0.0002,
-    "selfhost/qwen3-8b": 0.0001,
-}
-
 
 class MockBackend:
     def __init__(self, settings: Settings, store: StateStore):
@@ -111,41 +79,6 @@ class MockBackend:
             return None
         return TeamInfo(t["team_id"], t["key"], t["max_budget"], t["spend"])
 
-    def chat(self, project: str, model_backend: str, messages: List[Dict], params: Dict) -> Completion:
-        prompt_text = "\n".join(m.get("content", "") for m in messages)
-        prompt_tokens = _est_tokens(prompt_text)
-
-        # Pre-flight budget check against the team's remaining allowance.
-        info = self.team_info(project)
-        if info is not None and info.max_budget > 0 and info.spend >= info.max_budget:
-            raise BudgetExceeded(f"team for {project} is over budget ({info.spend:.4f}/{info.max_budget:.2f} USD)")
-
-        # Deterministic, clearly-fake completion so demos are legible.
-        last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
-        reply = (
-            f"[mock:{model_backend}] Received {prompt_tokens} prompt tokens. "
-            f"Echoing intent: {last_user[:160]}"
-        )
-        completion_tokens = _est_tokens(reply)
-        price = _MOCK_PRICES.get(model_backend, 0.0005)
-        cost = round((prompt_tokens + completion_tokens) / 1000.0 * price, 6)
-
-        def _mut(data):
-            teams = data.setdefault("teams", {})
-            if project in teams:
-                teams[project]["spend"] = round(teams[project].get("spend", 0.0) + cost, 6)
-            data.setdefault("usage", []).append({
-                "ts": time.time(),
-                "project": project,
-                "model": model_backend,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "cost_usd": cost,
-            })
-        self._store.update(_mut)
-
-        return Completion(reply, model_backend, prompt_tokens, completion_tokens, cost)
-
     def usage(self, project: Optional[str]) -> List[Dict]:
         rows = self._store.snapshot().get("usage", [])
         if project is None:
@@ -160,8 +93,9 @@ class MockBackend:
 class ProxyBackend:
     """Talks to a running litellm proxy. Requires `requests`.
 
-    Team provisioning uses the proxy admin API with the master key; chat uses
-    the per-team key so the proxy attributes spend to the team automatically.
+    Team provisioning uses the proxy admin API with the master key. Inference
+    keys are stored for later key-management work; completions are not proxied
+    through this process.
     """
 
     def __init__(self, settings: Settings, store: StateStore):
@@ -223,54 +157,6 @@ class ProxyBackend:
         except Exception:
             pass
         return TeamInfo(t["team_id"], t["key"], t.get("max_budget", 0.0), spend)
-
-    def chat(self, project: str, model_backend: str, messages: List[Dict], params: Dict) -> Completion:
-        info = self.team_info(project)
-        if info is None:
-            raise RuntimeError(f"no litellm team provisioned for {project}")
-        base = self._s.litellm_base_url.rstrip("/")
-        payload = {"model": model_backend, "messages": messages, **params}
-        try:
-            resp = self._requests.post(
-                f"{base}/v1/chat/completions", json=payload,
-                headers={"Authorization": f"Bearer {info.key}", "Content-Type": "application/json"},
-                timeout=self._s.request_timeout_s,
-            )
-        except self._requests.exceptions.Timeout:
-            raise BackendUnavailable(
-                f"the model timed out after {self._s.request_timeout_s}s — it may still be generating; "
-                f"try a smaller/faster model or raise LLMAO_REQUEST_TIMEOUT_S"
-            )
-        except self._requests.exceptions.ConnectionError:
-            raise BackendUnavailable(
-                f"could not reach the litellm proxy at {base} — is `make proxy` running?"
-            )
-        if resp.status_code in (400, 402, 429) and "budget" in resp.text.lower():
-            raise BudgetExceeded(resp.text)
-        resp.raise_for_status()
-        body = resp.json()
-        message = body["choices"][0]["message"]
-        choice = message.get("content")
-        # vLLM emits `reasoning`; litellm normalises it to `reasoning_content`.
-        # Accept either -- which one arrives depends on the proxy version, and
-        # a silent None here looks identical to "the model didn't think".
-        reasoning = message.get("reasoning_content") or message.get("reasoning")
-        usage = body.get("usage", {})
-        cost = float(body.get("_hidden_params", {}).get("response_cost") or 0.0)
-
-        def _mut(data):
-            data.setdefault("usage", []).append({
-                "ts": time.time(), "project": project, "model": model_backend,
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "cost_usd": cost,
-            })
-        self._store.update(_mut)
-        return Completion(
-            choice, model_backend,
-            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), cost,
-            reasoning=reasoning,
-        )
 
     def usage(self, project: Optional[str]) -> List[Dict]:
         rows = self._store.snapshot().get("usage", [])

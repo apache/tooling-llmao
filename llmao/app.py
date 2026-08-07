@@ -1,34 +1,33 @@
-"""llmao gateway — app factory and routes.
+"""llmao control plane — app factory and routes.
 
 Routes:
-  GET  /                      portal (login state, model picker, prompt box)
+  GET  /                      minimal status page
   GET  /healthz               liveness
   GET  /auth/dev/login        dev-stub login form (dev mode only)
   POST /auth/dev/login        establish a dev session
   GET  /auth/logout           clear session
-  GET  /v1/models             catalog (OpenAI-ish shape + governance metadata)
-  POST /v1/chat/completions   OpenAI-compatible chat, metered per PMC
   GET  /v1/projects/<p>/usage per-project activity (PMC admins only)
   GET  /v1/projects/<p>/budget team budget + spend
 
 In asf mode the app is built via asfquart.construct() so it inherits the
 OAuth gateway at /auth, JWT/PAT support, and LDAP-backed sessions. In dev
 mode it's a plain Quart app with a stub login. Routes are identical.
+
+This process does not proxy chat completions. Clients use LiteLLM virtual
+keys against the proxy directly.
 """
 from __future__ import annotations
 
-import time
 from typing import Optional
 
 from quart import Quart, jsonify, redirect, request, Response
 
-from . import catalog
 from .auth import current_identity, dev_login, dev_logout
 from .config import Settings, settings as default_settings
-from .litellm_client import BudgetExceeded, BackendUnavailable, make_backend
-from .seam import AuthzError, CatalogError, Identity, Seam
+from .litellm_client import make_backend
+from .seam import AuthzError, Identity, Seam
 from .store import StateStore
-from .portal import render_portal, render_dev_login
+from .portal import render_index, render_dev_login
 
 
 def create_app(settings: Optional[Settings] = None) -> Quart:
@@ -47,7 +46,6 @@ def create_app(settings: Optional[Settings] = None) -> Quart:
         app = asfquart.construct("llmao", oauth=True, force_login=False)
         app.token_handler = make_token_handler(s)
 
-    app.config["MAX_CONTENT_LENGTH"] = s.max_upload_bytes
     app.config["LLMAO_SETTINGS"] = s
     app.config["LLMAO_SEAM"] = seam
 
@@ -61,21 +59,20 @@ def create_app(settings: Optional[Settings] = None) -> Quart:
         resp.status_code = status
         return resp
 
-    # Any unhandled exception on an API route should still be JSON, never an
-    # HTML error page — the portal parses responses as JSON.
+    # Any unhandled exception on an API route should still be JSON.
     @app.errorhandler(500)
     async def _on_500(exc):
         from quart import request as _req
         if _req.path.startswith("/v1/"):
-            return _err(500, "internal error in gateway; check the server log")
+            return _err(500, "internal error in control plane; check the server log")
         return exc
 
-    # -- portal -----------------------------------------------------------
+    # -- status -----------------------------------------------------------
 
     @app.route("/")
     async def index():
         ident = await _identity()
-        return Response(render_portal(s, ident, catalog.all_models()), content_type="text/html")
+        return Response(render_index(s, ident), content_type="text/html")
 
     @app.route("/healthz")
     async def healthz():
@@ -108,96 +105,6 @@ def create_app(settings: Optional[Settings] = None) -> Quart:
             dev_logout()
         return redirect("/")
 
-    # -- catalog ----------------------------------------------------------
-
-    @app.route("/v1/models")
-    async def list_models():
-        ident = await _identity()
-        if ident is None:
-            return _err(401, "authentication required")
-        data = [
-            {"id": m["id"], "object": "model", "owned_by": m["provider"], "llmao": m}
-            for m in catalog.all_models()
-        ]
-        return jsonify({"object": "list", "data": data})
-
-    # -- chat (OpenAI-compatible) -----------------------------------------
-
-    @app.route("/v1/chat/completions", methods=["POST"])
-    async def chat_completions():
-        ident = await _identity()
-        if ident is None:
-            return _err(401, "authentication required")
-
-        body = await request.get_json(silent=True) or {}
-        model_id = body.get("model")
-        messages = body.get("messages")
-        if not model_id or not isinstance(messages, list) or not messages:
-            return _err(400, "‘model’ and a non-empty ‘messages’ array are required")
-
-        # Which project pays? Header wins; else the body; else the user's only one.
-        project = (
-            request.headers.get("X-LLMAO-Project")
-            or body.get("project")
-            or _sole_project(ident)
-        )
-        if not project:
-            return _err(400, "no project specified; set X-LLMAO-Project (you are on multiple projects)")
-
-        params = {k: v for k, v in body.items() if k in ("temperature", "top_p", "max_tokens", "stream")}
-        params.pop("stream", None)  # Phase 1 returns non-streamed; streaming is a later toggle.
-
-        # Extended thinking. Sent as vLLM's chat-template kwarg rather than a
-        # sampling parameter, so it needs its own path -- the whitelist above
-        # is deliberately narrow and would drop it.
-        #
-        # Only forwarded when the model declares supports_thinking, and only
-        # when the caller was explicit: passing the kwarg at all overrides the
-        # model's own default, and those defaults differ (gemma4 off, qwen3
-        # on). Omitting it leaves each model's native behaviour intact.
-        think = body.get("thinking")
-        if think is not None:
-            model = catalog.get(model_id)
-            if model is not None and getattr(model, "supports_thinking", False):
-                params["chat_template_kwargs"] = {"enable_thinking": bool(think)}
-
-        try:
-            completion = seam.chat(ident, project, model_id, messages, params)
-        except AuthzError as e:
-            return _err(403, str(e))
-        except CatalogError as e:
-            return _err(404, str(e))
-        except BudgetExceeded as e:
-            return _err(429, f"project budget exceeded: {e}")
-        except BackendUnavailable as e:
-            return _err(504, str(e))
-
-        return jsonify({
-            "id": f"haywd-{int(time.time()*1000)}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": model_id,
-            "llmao_project": project,
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": completion.content,
-                    # Present only when the model reasoned. Rendered collapsed
-                    # in the portal -- diagnostic, not part of the answer.
-                    **({"reasoning_content": completion.reasoning}
-                       if getattr(completion, "reasoning", None) else {}),
-                },
-                "finish_reason": "stop",
-            }],
-            "usage": {
-                "prompt_tokens": completion.prompt_tokens,
-                "completion_tokens": completion.completion_tokens,
-                "total_tokens": completion.prompt_tokens + completion.completion_tokens,
-                "cost_usd": completion.cost_usd,
-            },
-        })
-
     # -- activity + budget ------------------------------------------------
 
     @app.route("/v1/projects/<project>/usage")
@@ -217,8 +124,10 @@ def create_app(settings: Optional[Settings] = None) -> Quart:
         ident = await _identity()
         if ident is None:
             return _err(401, "authentication required")
-        if not (ident.is_site_admin or ident.member_of(project)):
-            return _err(403, f"{ident.uid} is not a member of {project}")
+        try:
+            seam.require_member(ident, project)
+        except AuthzError as e:
+            return _err(403, str(e))
         info = seam.team_status(project)
         if info is None:
             return jsonify({"project": project, "provisioned": False})
@@ -229,12 +138,6 @@ def create_app(settings: Optional[Settings] = None) -> Quart:
         })
 
     return app
-
-
-def _sole_project(ident: Identity) -> Optional[str]:
-    """If the user belongs to exactly one project, default to it."""
-    all_projects = list(dict.fromkeys([*ident.committees, *ident.projects]))
-    return all_projects[0] if len(all_projects) == 1 else None
 
 
 def main() -> None:

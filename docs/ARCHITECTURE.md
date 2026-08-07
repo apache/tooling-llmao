@@ -1,62 +1,63 @@
-# Architecture (Phase 1)
+# Architecture
 
-llmao is intentionally thin. It does not implement a router, a budget engine,
-or an identity system — it composes two things that already do those jobs and
-writes only the join.
+llmao is a **control plane** for ASF access to a LiteLLM proxy. It does not
+implement a chat client, a completion proxy, a budget engine, or a full
+identity system — it composes asfquart and LiteLLM admin APIs and writes only
+the join.
 
 ## The two halves
 
 **asfquart** (front) handles *who you are and what you're allowed to do*. In
 production the app is built with `asfquart.construct("llmao")`, which mounts
-the ASF OAuth gateway at `/auth`, supports bearer PATs via a `token_handler`,
+the ASF OAuth gateway at `/auth`, supports bearer tokens via a `token_handler`,
 and populates a `ClientSession` from LDAP with the user's `uid`, committer
 `projects`, and PMC `committees`. Per-PMC gating is the `@require(R.pmc_member)`
 decorator. None of this is reimplemented here.
 
-**litellm proxy** (backend) handles *the catalog, the call, and what it cost*.
-It exposes an OpenAI-compatible API, tracks spend per *team*, and enforces
-per-team budgets. llmao provisions one team per ASF project.
+**litellm proxy** (backend) holds *teams, virtual keys, budgets, and spend*.
+It exposes an OpenAI-compatible API for **clients** (CLI tools, IDEs, SDKs).
+llmao talks to LiteLLM only over the **admin** surface (master key) to
+provision teams and (soon) mint or revoke virtual keys. Completions never pass
+through this process.
 
 ## The seam
 
-`seam.py` is the Phase 1 code that matters. On each call it:
+`seam.py` is the code that matters. It:
 
-1. **authorizes** — the calling identity must be a member of the project it
-   wants to bill (or a site admin);
+1. **authorizes** — the calling identity must be a member (or site admin) of
+   the project it wants to act on; activity views require PMC admin;
 2. **resolves** the ASF project to a litellm team, provisioning the team with a
-   budget on first use;
-3. **runs** the metered chat through the backend, where the budget is enforced.
-
-The activity view (`/v1/projects/<p>/usage`) is gated to PMC admins, so "for
-each project you can see everyone's activity" is satisfied without exposing one
-project's usage to another.
+   budget on first use.
 
 Keeping the ASF-project ↔ litellm-team mapping correct as PMC membership
-changes is the substance flagged in the plan as "the part that isn't free." In
-Phase 1 the mapping is created lazily and persisted in `store.py`; a production
+changes is the substance flagged in the plan as "the part that isn't free."
+Today the mapping is created lazily and persisted in `store.py`; a production
 deployment should reconcile it against LDAP on a schedule.
 
 ## Why it runs with no infrastructure
 
-So the gateway is reviewable and demoable anywhere, both halves have a local
-stand-in selected by environment variables:
+So the control plane is reviewable and demoable anywhere, both halves have a
+local stand-in selected by environment variables:
 
 - `LLMAO_AUTH_MODE=dev` → a stub login that produces the same `Identity` an
   asfquart session would.
-- `LLMAO_LITELLM_MODE=mock` → an in-process backend that fakes completions and
-  tracks per-team spend with a simple cost model, so budgets and the activity
-  view are exercised end to end.
+- `LLMAO_LITELLM_MODE=mock` → an in-process backend that fakes teams and usage
+  storage, so authz and budget GETs are exercised end to end.
 
 Flipping both to `asf` / `proxy` swaps in the real systems without changing any
 code above the backend interface.
 
-## Request path
+## Request path (control plane)
 
 ```
-client → [asfquart front] → seam.authorize → seam.resolve team
-       → [litellm proxy] budget-check → model → debit team → log usage
-       → response
+operator/browser → [asfquart front] → seam.authorize
+                 → [litellm admin API] team/budget (and soon keys)
 ```
 
-See `../README.md` for the API and quickstart, and the build plan PDF for the
-phase roadmap.
+## Inference path (not llmao)
+
+```
+client tool → [litellm proxy] virtual key → budget check → model
+```
+
+See `../README.md` for the API and quickstart.
