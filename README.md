@@ -1,20 +1,36 @@
 # llmao
 
-**Control plane** for ASF access to LiteLLM, served at `llm.apache.org`.
-asfquart owns identity and per-PMC authorization. LiteLLM owns teams, virtual
-keys, budgets, metering, and the OpenAI-compatible API that **clients** use.
-This repo is the **seam**: who may act on which ASF project, and how that maps
-to LiteLLM admin (teams, budgets; key minting next).
+Tooling’s **implementation** of the ASF LLM gateway seam at `llm.apache.org`:
+asfquart for Apache identity and (soon) PAT lifecycle; admin access to LiteLLM
+for teams, budgets, and virtual keys.
 
-This service does **not** host a chat client or proxy completions. Point Cursor,
-CLIs, and SDKs at the LiteLLM proxy with a project virtual key.
+### Product design (by reference)
+
+The **authoritative product design** is not duplicated here. Committers with
+access: **`apache/rai-private`** → `services/llmao/README.md` (goals, credential
+model, teams/limits, ownership, non-goals, rejected alternatives).
+
+| Tree | Role |
+|------|------|
+| `apache/rai-private` → `services/llmao/` | Master design (RAI) |
+| **this repo** (`apache/tooling-llmao`) | Software Tooling builds |
+| Infra `p6/modules/llmao` | Puppet / production deploy |
+
+asfquart owns identity and per-PMC authorization. **LiteLLM** owns teams,
+**virtual keys** (the PATs), budgets, metering, and the OpenAI-compatible API
+that **clients** use. This process is the **seam** (project → team mapping,
+authz, key management UX next)—not a second completion proxy.
+
+Scripted workloads are primary (design §2 / §5). Point Cursor, CLIs, and SDKs
+at the LiteLLM OpenAI endpoint with a project PAT (`sk-…`), not at a chat form
+in this app.
 
 ```
 ASF id ──oauth/JWT──►  asfquart / llmao     ──admin──►  litellm proxy
                        (who you are,                    (teams, budgets,
-                        what PMCs)                       virtual keys)
+                        what PMCs, PATs)                 virtual keys)
 
-client tools ────────────────────────────────key────►  litellm ──► models
+client tools ────────────────────────────────PAT────►  litellm ──► models
 ```
 
 ---

@@ -1,8 +1,8 @@
-"""llmao — control plane for ASF LiteLLM access.
+"""llmao — Tooling seam for the ASF LLM gateway (llm.apache.org).
 
-ASF identity (asfquart) plus remote LiteLLM admin: project teams, budgets, and
-(soon) virtual keys. Completions are not proxied here — clients call the
-LiteLLM proxy directly with keys this service will manage.
+Product design: apache/rai-private → services/llmao/README.md.
+ASF identity (asfquart) plus LiteLLM admin: teams, budgets, and (soon) PATs
+as virtual keys. Completions go to LiteLLM directly, not through this process.
 """
 
 __version__ = "0.1.0"
