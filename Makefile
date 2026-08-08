@@ -5,10 +5,14 @@
 # Local run needs config.yaml (from config.yaml.example) and, for OAuth,
 # TLS certs under certs/ — see certs/README.md.
 
-.PHONY: install run test config proxy build clean
+.PHONY: install run test config proxy build clean thirdparty
 
 install:
 	uv sync
+
+# Vendor Bootstrap + icons into static/ (see bin/fetch-thirdparty.sh).
+thirdparty:
+	./bin/fetch-thirdparty.sh
 
 run: install
 	uv run python main.py

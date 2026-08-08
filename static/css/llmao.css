@@ -1,0 +1,7 @@
+/* llmao app chrome — keep light; Bootstrap does the rest. */
+body {
+  min-height: 100vh;
+}
+.llmao-lede {
+  max-width: 40rem;
+}

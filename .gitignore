@@ -18,6 +18,9 @@ demo-state.json
 config.yaml
 apptoken.txt
 
+# third-party fetch scratch (bin/fetch-thirdparty.sh)
+bin/*.zip
+
 # Generated litellm proxy config. The repo ships a committed reference copy;
 # uncomment if you'd rather treat it as build output only.
 # litellm/config.yaml

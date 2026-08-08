@@ -13,8 +13,10 @@ metering. Completions are **not** re-proxied through this process.
 ## Always asfquart
 
 There is no “dev auth mode.” The process is always constructed with
-`asfquart.construct("llmao", …)` (see root `main.py`, same idea as Apache
-STeVe’s `server/main.py`):
+`asfquart.construct("llmao", …)` in root `main.py` (same idea as Apache
+STeVe’s `server/main.py`). HTML lives in `pages.py`, JSON API in `api.py`,
+both bind to `asfquart.APP` after construct. Standalone: `python main.py`
+(`runx` + optional TLS). ASGI: `hypercorn main:llmao_app` (`run_asgi`).
 
 - OAuth at `/auth` (oauth.apache.org)
 - Session cookies (`SESSION_COOKIE_SECURE=True` → use HTTPS locally)

@@ -54,6 +54,12 @@ Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
 with ASF, then use the JSON API for budget and (as PMC) usage. Default
 `litellm.mode: mock` needs no real LiteLLM for team/budget plumbing.
 
+Production-style ASGI (no `runx` TLS; put TLS on the reverse proxy):
+
+```bash
+uv run python -m hypercorn main:llmao_app --bind 0.0.0.0:8080
+```
+
 ```bash
 make test          # offline seam/catalog tests (no OAuth session automation yet)
 ```
@@ -177,16 +183,19 @@ so catalog and proxy routes stay aligned. Add a model by adding a
 ## Layout
 
 ```
-main.py             standalone entry (asfquart + TLS runx; Steve-style)
+main.py             entry: create_app, run_standalone / run_asgi (Hypercorn)
+pages.py            HTML routes + /static (APP = asfquart.APP)
+api.py              JSON /healthz and /v1/* routes
+templates/          EZT (header, footer, home, …)
+static/             Bootstrap + icons + llmao.css/js
+bin/fetch-thirdparty.sh   vendor Bootstrap/icons into static/
 config.yaml.example copy to config.yaml (gitignored; secrets)
 certs/              mkcert PEMs (gitignored) + README
 llmao/
-  app.py            asfquart factory + routes
   seam.py           ASF project -> litellm team; project authz
   auth.py           ClientSession -> Identity; token_handler stub
   litellm_client.py ProxyBackend + MockBackend
-  catalog.py        models + governance metadata
-  portal.py         minimal status HTML
+  catalog.py        models + governance metadata (inventory TBD)
   store.py          JSON state store
   config.py         Settings.from_cfg(app.cfg)
 litellm/config.yaml litellm proxy model routes (generated)

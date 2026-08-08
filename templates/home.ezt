@@ -1,0 +1,38 @@
+[include "header.ezt"]
+<div class="container py-4">
+    <div class="mt-2">
+        [include "flashes.ezt"]
+    </div>
+
+    <h1 class="h3 mb-3">llmao</h1>
+    <p class="llmao-lede text-muted">
+        Gateway for ASF access to LiteLLM: project teams, budgets, and
+        (soon) virtual keys (PATs). This service does <strong>not</strong>
+        host a chat client — point tools at the LiteLLM proxy with a project PAT.
+    </p>
+
+    [if-any uid]
+    <div class="card mb-3" style="max-width: 28rem;">
+        <div class="card-body">
+            <h2 class="h6 card-title">Signed in</h2>
+            <p class="card-text mb-0">
+                <span class="font-monospace">[uid]</span>
+                [if-any projects_label]
+                <br><span class="text-muted small">projects: [projects_label]</span>
+                [end]
+            </p>
+        </div>
+    </div>
+    [else]
+    <p>
+        <a class="btn btn-primary" href="/auth?login=/">Sign in with ASF</a>
+    </p>
+    [end]
+
+    <p class="text-muted small mb-0">
+        API: <code>/v1/projects/&lt;project&gt;/budget</code>,
+        <code>/v1/projects/&lt;project&gt;/usage</code>,
+        <code>/healthz</code>
+    </p>
+</div>
+[include "footer.ezt"]
