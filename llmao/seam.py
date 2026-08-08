@@ -1,17 +1,13 @@
 """The seam — ASF identity joined to LiteLLM teams.
 
 asfquart tells us *who the user is and what projects they're on* (LDAP names).
-LiteLLM holds *budgets and virtual keys*. The seam authorizes and resolves a
-project name to a LiteLLM team (provisioning with a budget on first use).
-
-Project strings are session project/committee names — no rename mapping.
+LiteLLM holds *budgets and virtual keys*. ``cfg`` is ``APP.cfg`` (EasyDict).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .config import Settings
 from .litellm_client import Backend, TeamInfo
 
 
@@ -35,16 +31,16 @@ class Identity:
 
 
 class Seam:
-    def __init__(self, settings: Settings, backend: Backend):
-        self._s = settings
+    def __init__(self, cfg: Any, backend: Backend):
+        self._cfg = cfg
         self._backend = backend
 
     async def ensure_project_team(self, project: str) -> TeamInfo:
         """Resolve (provisioning if needed) the LiteLLM team for an ASF project."""
         return await self._backend.ensure_team(
             project,
-            budget_usd=self._s.default_team_budget_usd,
-            duration=self._s.budget_duration,
+            budget_usd=float(self._cfg.budgets.default_team_budget_usd),
+            duration=self._cfg.budgets.duration,
         )
 
     async def team_status(self, project: str) -> Optional[TeamInfo]:

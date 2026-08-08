@@ -26,6 +26,7 @@ both bind to `asfquart.APP` after construct. Standalone: `python main.py`
 
 Local TLS: `config.yaml` `server.certfile` / `keyfile` under `certs/`, typically
 mkcert for **`localhost.apache.org`**. `config.yaml` is gitignored (secrets).
+Loaded as **`APP.cfg`** (EasyDict); use dotted access (`APP.cfg.litellm.mode`).
 
 ## The two halves
 

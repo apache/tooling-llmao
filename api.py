@@ -38,16 +38,14 @@ def _err(status: int, message: str) -> Response:
 
 @APP.get("/healthz")
 async def healthz():
-    s = APP.config["LLMAO_SETTINGS"]
-    return jsonify({"status": "ok", "llm_mode": s.litellm_mode})
+    return jsonify({"status": "ok", "llm_mode": APP.cfg.litellm.mode})
 
 
 @APP.get("/v1/projects/<project>/usage")
 @asfquart.auth.require
 async def project_usage(project: str):
-    s = APP.config["LLMAO_SETTINGS"]
     seam = APP.config["LLMAO_SEAM"]
-    ident = await current_identity(s)
+    ident = await current_identity(APP.cfg)
     assert ident is not None
     try:
         rows = await seam.project_activity(ident, project)
@@ -65,9 +63,8 @@ async def project_usage(project: str):
 @APP.get("/v1/projects/<project>/budget")
 @asfquart.auth.require({R.committer})
 async def project_budget(project: str):
-    s = APP.config["LLMAO_SETTINGS"]
     seam = APP.config["LLMAO_SEAM"]
-    ident = await current_identity(s)
+    ident = await current_identity(APP.cfg)
     assert ident is not None
     try:
         seam.require_member(ident, project)

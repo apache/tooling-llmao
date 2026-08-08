@@ -191,6 +191,6 @@ bin/gen-litellm-master-key.sh   print sk-… for both YAML files
 config.yaml.example      → config.yaml (gitignored)
 litellm.yaml.example     → litellm.yaml (gitignored)
 certs/                   mkcert PEMs + README
-llmao/                   seam, auth, litellm_client, store, config
+llmao/                   seam, auth, litellm_client, store (cfg via APP.cfg)
 tests/                   offline seam/catalog tests
 ```

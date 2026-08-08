@@ -50,17 +50,15 @@ def create_app():
     )
 
     from llmao.auth import make_token_handler
-    from llmao.config import Settings
     from llmao.litellm_client import make_backend
     from llmao.seam import Seam
     from llmao.store import StateStore
 
-    s = Settings.from_cfg(app.cfg)
-    store = StateStore(s.state_path)
-    backend = make_backend(s, store)
-    seam = Seam(s, backend)
-    app.token_handler = make_token_handler(s)
-    app.config["LLMAO_SETTINGS"] = s
+    # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
+    store = StateStore(app.cfg.state_path)
+    backend = make_backend(app.cfg, store)
+    seam = Seam(app.cfg, backend)
+    app.token_handler = make_token_handler(app.cfg)
     app.config["LLMAO_SEAM"] = seam
     app.config["LLMAO_BACKEND"] = backend
 

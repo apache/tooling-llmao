@@ -8,19 +8,18 @@ Two implementations behind one interface:
 
 * ``MockBackend`` fakes team provision and usage in-process (laptop / CI).
 
-Project names are LDAP/session names (asfquart), used as LiteLLM team_alias
-with no rename mapping.
+``cfg`` is the asfquart EasyDict (``APP.cfg``): use dotted access
+(``cfg.litellm.mode``, etc.). Project names are LDAP/session names.
 """
 from __future__ import annotations
 
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 import httpx
 
-from .config import Settings
 from .store import StateStore
 
 
@@ -47,13 +46,9 @@ class Backend(Protocol):
     async def aclose(self) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# Mock backend — no network, used for local/dev/CI.
-# ---------------------------------------------------------------------------
-
 class MockBackend:
-    def __init__(self, settings: Settings, store: StateStore):
-        self._s = settings
+    def __init__(self, cfg: Any, store: StateStore):
+        self._cfg = cfg
         self._store = store
 
     async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
@@ -89,24 +84,21 @@ class MockBackend:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Proxy backend — real litellm proxy over async HTTP.
-# ---------------------------------------------------------------------------
-
 class ProxyBackend:
     """Talks to a running litellm proxy via httpx.AsyncClient."""
 
-    def __init__(self, settings: Settings, store: StateStore):
-        self._s = settings
+    def __init__(self, cfg: Any, store: StateStore):
+        self._cfg = cfg
         self._store = store
-        base = settings.litellm_base_url.rstrip("/") + "/"
+        base = cfg.litellm.base_url.rstrip("/") + "/"
+        timeout_s = int(cfg.litellm.request_timeout_s)
         self._client = httpx.AsyncClient(
             base_url=base,
             headers={
-                "Authorization": f"Bearer {settings.litellm_master_key}",
+                "Authorization": f"Bearer {cfg.litellm.master_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(settings.request_timeout_s),
+            timeout=httpx.Timeout(timeout_s),
         )
 
     async def aclose(self) -> None:
@@ -118,7 +110,6 @@ class ProxyBackend:
             return existing
 
         try:
-            # LDAP/session project name → LiteLLM team_alias (no rename map).
             team_resp = await self._client.post(
                 "team/new",
                 json={
@@ -138,11 +129,11 @@ class ProxyBackend:
             key = key_resp.json().get("key")
         except httpx.TimeoutException as e:
             raise BackendUnavailable(
-                f"LiteLLM admin API timed out after {self._s.request_timeout_s}s"
+                f"LiteLLM admin API timed out after {self._cfg.litellm.request_timeout_s}s"
             ) from e
         except httpx.ConnectError as e:
             raise BackendUnavailable(
-                f"could not reach LiteLLM at {self._s.litellm_base_url}"
+                f"could not reach LiteLLM at {self._cfg.litellm.base_url}"
             ) from e
         except httpx.HTTPStatusError as e:
             raise BackendUnavailable(
@@ -181,7 +172,7 @@ class ProxyBackend:
         return [r for r in rows if r.get("project") == project]
 
 
-def make_backend(settings: Settings, store: StateStore) -> Backend:
-    if settings.is_mock_llm:
-        return MockBackend(settings, store)
-    return ProxyBackend(settings, store)
+def make_backend(cfg: Any, store: StateStore) -> Backend:
+    if cfg.litellm.mode != "proxy":
+        return MockBackend(cfg, store)
+    return ProxyBackend(cfg, store)

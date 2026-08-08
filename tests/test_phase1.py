@@ -10,27 +10,35 @@ import tempfile
 import time
 
 import pytest
+from easydict import EasyDict as edict
 
-from llmao.config import Settings
 from llmao.store import StateStore
 from llmao.litellm_client import MockBackend
 from llmao.seam import Seam, Identity, AuthzError
 from llmao import catalog
 
 
-def _settings(tmp):
-    return Settings(
-        litellm_mode="mock",
-        state_path=os.path.join(tmp, "state.json"),
-        default_team_budget_usd=100.0,
-        site_admins=["root"],
-    )
+def _cfg(tmp):
+    return edict({
+        "litellm": {
+            "mode": "mock",
+            "base_url": "http://127.0.0.1:4000",
+            "master_key": "sk-test",
+            "request_timeout_s": 30,
+        },
+        "budgets": {
+            "default_team_budget_usd": 100.0,
+            "duration": "30d",
+        },
+        "site_admins": ["root"],
+        "state_path": os.path.join(tmp, "state.json"),
+    })
 
 
 def _seam(tmp):
-    s = _settings(tmp)
-    store = StateStore(s.state_path)
-    return Seam(s, MockBackend(s, store)), s, store
+    cfg = _cfg(tmp)
+    store = StateStore(cfg.state_path)
+    return Seam(cfg, MockBackend(cfg, store)), cfg, store
 
 
 def _seed_usage(store: StateStore, project: str, cost: float = 0.01) -> None:
@@ -49,19 +57,19 @@ def _seed_usage(store: StateStore, project: str, cost: float = 0.01) -> None:
     store.update(_mut)
 
 
-def test_settings_from_cfg():
-    s = Settings.from_cfg({
+def test_cfg_dotted_access():
+    cfg = edict({
         "litellm": {"mode": "proxy", "base_url": "http://llm:4000", "master_key": "sk-x"},
         "budgets": {"default_team_budget_usd": 50, "duration": "7d"},
         "site_admins": ["alice"],
         "state_path": "/tmp/s.json",
     })
-    assert s.litellm_mode == "proxy"
-    assert not s.is_mock_llm
-    assert s.litellm_base_url == "http://llm:4000"
-    assert s.default_team_budget_usd == 50
-    assert s.budget_duration == "7d"
-    assert s.site_admins == ["alice"]
+    assert cfg.litellm.mode == "proxy"
+    assert cfg.litellm.mode == "proxy" and cfg.litellm.mode != "mock"
+    assert cfg.litellm.base_url == "http://llm:4000"
+    assert cfg.budgets.default_team_budget_usd == 50
+    assert cfg.budgets.duration == "7d"
+    assert cfg.site_admins == ["alice"]
 
 
 def test_catalog_has_governance_metadata():
@@ -74,11 +82,11 @@ def test_catalog_has_governance_metadata():
 def test_ensure_team_provisions_budget():
     async def run():
         with tempfile.TemporaryDirectory() as tmp:
-            seam, s, _ = _seam(tmp)
+            seam, cfg, _ = _seam(tmp)
             info = await seam.ensure_project_team("airflow")
             assert info.team_id
             assert info.key.startswith("sk-")
-            assert info.max_budget == s.default_team_budget_usd
+            assert info.max_budget == float(cfg.budgets.default_team_budget_usd)
             assert info.spend == 0.0
             again = await seam.ensure_project_team("airflow")
             assert again.team_id == info.team_id

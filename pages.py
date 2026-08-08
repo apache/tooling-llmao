@@ -39,8 +39,7 @@ async def basic_info() -> edict:
     basic.title = "llmao"
     basic.flashes = []
 
-    settings = APP.config["LLMAO_SETTINGS"]
-    basic.llm_mode = settings.litellm_mode
+    basic.llm_mode = APP.cfg.litellm.mode
 
     client_session = await asfquart.session.read()
     if client_session is not None and getattr(client_session, "uid", None):
