@@ -45,16 +45,35 @@ Requires [uv](https://docs.astral.sh/uv/) on your `PATH`.
 
 ```bash
 make install
-cp config.yaml.example config.yaml   # edit secrets; file is gitignored
+cp config.yaml.example config.yaml     # gitignored; edit secrets
 # generate certs under certs/ (mkcert) — certs/README.md
-make run                             # uv run python main.py
+make run                               # uv run python main.py
 ```
 
 Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
-with ASF, then use the JSON API for budget and (as PMC) usage. Default
-`litellm.mode: mock` needs no real LiteLLM for team/budget plumbing.
+with ASF. Default `litellm.mode: mock` needs no LiteLLM process.
 
-Production-style ASGI (no `runx` TLS; put TLS on the reverse proxy):
+### Real LiteLLM (proxy mode)
+
+PAT metadata (alias, user, team, spend) lives in **LiteLLM’s Postgres**, not
+in llmao. The full `sk-…` is returned only at key create; list/info APIs expose
+metadata for the gateway UI later.
+
+```bash
+cp litellm.yaml.example litellm.yaml   # gitignored
+./bin/gen-litellm-master-key.sh        # print sk-…; paste into BOTH:
+#   litellm.yaml  → general_settings.master_key
+#   config.yaml   → litellm.master_key
+# set database_url in litellm.yaml to a real Postgres URL
+# config.yaml → litellm.mode: proxy
+make proxy                             # litellm --config litellm.yaml
+make run
+```
+
+Production secrets come from **hiera/eyaml** into both on-disk YAML files
+(Puppet). Do not rely on environment variables for production secrets.
+
+ASGI (TLS on the reverse proxy):
 
 ```bash
 uv run python -m hypercorn main:llmao_app --bind 0.0.0.0:8080
@@ -73,13 +92,13 @@ make test          # offline seam/catalog tests (no OAuth session automation yet
 | ASF login + PMC authz | asfquart always + `auth.py` | `@asfquart.auth.require`; project scope in seam |
 | Per-PMC budgets & spend (read) | litellm teams / `MockBackend` | one litellm *team* per ASF project |
 | Project ↔ team mapping | `seam.py` | provision team on first use |
-| Model catalog + governance metadata | `catalog.py` | still drives `make config` for the proxy |
-| Per-project activity view | `app.py` `/v1/projects/<p>/usage` | PMC admins / site admins only |
-| Minimal status page | `portal.py` | no chat UI |
-| Local TLS + config | `main.py`, `config.yaml`, `certs/` | Steve-style; config.yaml gitignored |
+| Model inventory | open design | LiteLLM config + future UX/advisor; not dual-owned |
+| Per-project activity view | `api.py` | PMC admins / site admins only |
+| HTML shell | `pages.py` + EZT + `static/` | Bootstrap; PAT UI next |
+| Local TLS + configs | `main.py`, `config.yaml`, `litellm.yaml` | examples committed; secrets gitignored |
 
-**Next:** mint/list/revoke LiteLLM virtual keys for teams, users, and needs;
-budget updates via the control plane.
+**Next:** mint/list/revoke LiteLLM virtual keys (metadata from `/key/list`);
+budget updates via the gateway.
 
 ---
 
@@ -106,29 +125,21 @@ the handler still runs.
 
 1. **asfquart** (dependency via `pyproject.toml`) always provides OAuth at
    `/auth` and LDAP-backed sessions — see
-   <https://github.com/apache/infrastructure-asfquart>. Set `litellm.mode:
-   proxy` and secrets in a mounted `config.yaml` (never commit that file).
+   <https://github.com/apache/infrastructure-asfquart>.
 
-2. **Run the litellm proxy** with the generated config:
+2. **Secrets on disk:** Puppet/hiera/eyaml renders `config.yaml` and
+   `litellm.yaml` with the **same** `master_key` (`sk-…`) and other secrets.
+   No production env-var secret channel.
 
-   ```bash
-   make config        # regenerate litellm/config.yaml from the catalog
-   make proxy         # litellm --config litellm/config.yaml
-   ```
+3. **LiteLLM** with Postgres (`database_url` in `litellm.yaml`) and
+   `litellm --config litellm.yaml`. Model routes and provider keys live in
+   that file (inventory design still open).
 
-   Set the self-host endpoints (one per vLLM model, e.g.
-   `LLMAO_SELFHOST_GEMMA_URL`, `LLMAO_SELFHOST_QWEN_CODER_URL`,
-   `LLMAO_SELFHOST_QWEN8B_URL`) and any external provider keys
-   (`ANTHROPIC_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, etc.). Put the same
-   value as the proxy `master_key` in `config.yaml` → `litellm.master_key`.
+4. **Serve** llmao (`main.py` or Hypercorn). Point client tools at the
+   **LiteLLM** base URL with PATs, not at llmao for chat.
 
-3. **Serve** llmao (`main.py` or Hypercorn) for the control plane with a real
-   `config.yaml`; point client tools at the **LiteLLM** base URL with PATs,
-   not at llmao for chat.
-
-The token handler in `auth.py` (`make_token_handler`) is a stub for calling
-llmao's own API non-interactively; LiteLLM virtual keys are separate and will
-be managed by this control plane.
+The token handler in `auth.py` is a stub for calling llmao’s own API
+non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
@@ -162,43 +173,24 @@ litellm reaches each model through a per-model base-URL env var
 five-container stack (llmao + litellm + three vLLM servers) is defined in
 `infra/docker/docker-compose.yml`.
 
-**Adding or changing a model touches two files that must agree:**
-`llmao/catalog.py` (governance metadata + route inputs) and
-`litellm/config.yaml` (the generated route). Each catalog `backend` string must
-equal a config `model_name`. For a self-host model, set its `served_name` (the
-vLLM `--served-model-name`) and `api_base_env` (the env var holding that
-model's vLLM URL) in the catalog, then `make config` to regenerate.
-
----
-
-## The catalog is the source of truth (for proxy model routes)
-
-`llmao/catalog.py` defines the models and their governance metadata. The
-litellm proxy config is generated from it (`scripts/render_litellm_config.py`),
-so catalog and proxy routes stay aligned. Add a model by adding a
-`CatalogModel`, then `make config`.
+**Model inventory** is an open design (UX / advisor / LiteLLM). For now, model
+routes live in **`litellm.yaml`** (from `litellm.yaml.example`). Legacy
+`llmao/catalog.py` + `scripts/render_litellm_config.py` are not the active path.
 
 ---
 
 ## Layout
 
 ```
-main.py             entry: create_app, run_standalone / run_asgi (Hypercorn)
-pages.py            HTML routes + /static (APP = asfquart.APP)
-api.py              JSON /healthz and /v1/* routes
-templates/          EZT (header, footer, home, …)
-static/             Bootstrap + icons + llmao.css/js
-bin/fetch-thirdparty.sh   vendor Bootstrap/icons into static/
-config.yaml.example copy to config.yaml (gitignored; secrets)
-certs/              mkcert PEMs (gitignored) + README
-llmao/
-  seam.py           ASF project -> litellm team; project authz
-  auth.py           ClientSession -> Identity; token_handler stub
-  litellm_client.py ProxyBackend + MockBackend
-  catalog.py        models + governance metadata (inventory TBD)
-  store.py          JSON state store
-  config.py         Settings.from_cfg(app.cfg)
-litellm/config.yaml litellm proxy model routes (generated)
-scripts/            config renderer
-tests/              offline seam/catalog tests
+main.py                  entry: create_app, run_standalone / run_asgi
+pages.py                 HTML + /static
+api.py                   JSON /healthz and /v1/*
+templates/ static/       EZT + Bootstrap
+bin/fetch-thirdparty.sh  vendor Bootstrap/icons
+bin/gen-litellm-master-key.sh   print sk-… for both YAML files
+config.yaml.example      → config.yaml (gitignored)
+litellm.yaml.example     → litellm.yaml (gitignored)
+certs/                   mkcert PEMs + README
+llmao/                   seam, auth, litellm_client, store, config
+tests/                   offline seam/catalog tests
 ```

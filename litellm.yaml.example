@@ -1,0 +1,28 @@
+# LiteLLM proxy config for llmao.
+# Copy to litellm.yaml (gitignored) and replace CHANGE_ME_* values.
+#
+#   cp litellm.yaml.example litellm.yaml
+#   ./bin/gen-litellm-master-key.sh   # print sk-…; paste into both YAML files
+#   # set database_url to a real Postgres URL
+#   make proxy                       # litellm --config litellm.yaml
+#
+# Production: Puppet/hiera/eyaml writes literal secrets into litellm.yaml on disk.
+# Do not use environment variables for production secrets.
+
+model_list:
+  # Minimal placeholder so the proxy starts. Replace with real routes when ready.
+  # Provider API keys are secrets: put literals in litellm.yaml (from eyaml in prod).
+  - model_name: example-model
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: CHANGE_ME_PROVIDER_KEY
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  # Proxy admin key (must start with sk-). Same value as config.yaml → litellm.master_key.
+  # Used by llmao for /team/* and /key/* admin calls (Authorization: Bearer …).
+  master_key: CHANGE_ME_MASTER_KEY
+  # Required for virtual keys, teams, budgets, and spend tracking.
+  database_url: postgresql://llmao:CHANGE_ME@127.0.0.1:5432/litellm

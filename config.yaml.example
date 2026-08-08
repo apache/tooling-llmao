@@ -1,22 +1,30 @@
 # Copy to config.yaml and edit. config.yaml is gitignored (may hold secrets).
 #
 #   cp config.yaml.example config.yaml
+#   cp litellm.yaml.example litellm.yaml
+#   ./bin/gen-litellm-master-key.sh   # paste same sk-… into both YAML files
+#
+# Production: Puppet/hiera/eyaml writes literal secrets into config.yaml on disk.
+# Do not rely on environment variables for production secrets.
 
 server:
   # Port for the asfquart process. Behind a reverse proxy in production.
   port: 8443
 
   # PEM files relative to certs/ (see certs/README.md), or absolute paths.
-  # Leave both blank for plain HTTP (e.g. Docker behind Apache TLS).
+  # Leave both blank for plain HTTP (e.g. behind a reverse proxy with TLS).
   # Local OAuth needs HTTPS + localhost.apache.org — use mkcert as documented.
   certfile: localhost.apache.org+3.pem
   keyfile: localhost.apache.org+3-key.pem
 
 litellm:
-  # mock = in-process fake teams/usage; proxy = real LiteLLM admin API
+  # mock = in-process fake teams/usage (no LiteLLM process).
+  # proxy = real LiteLLM admin API at base_url (requires litellm.yaml + Postgres).
   mode: mock
-  base_url: http://localhost:4000
-  master_key: CHANGE_ME
+  base_url: http://127.0.0.1:4000
+  # Same value as litellm.yaml → general_settings.master_key (must start with sk-).
+  # Bearer token for /team/* and /key/* from this process.
+  master_key: CHANGE_ME_MASTER_KEY
   request_timeout_s: 30
 
 budgets:

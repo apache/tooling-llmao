@@ -5,7 +5,7 @@
 # Local run needs config.yaml (from config.yaml.example) and, for OAuth,
 # TLS certs under certs/ — see certs/README.md.
 
-.PHONY: install run test config proxy build clean thirdparty
+.PHONY: install run test proxy build clean thirdparty
 
 install:
 	uv sync
@@ -20,18 +20,13 @@ run: install
 test: install
 	uv run pytest tests/ -q
 
-# Regenerate the litellm proxy config from the catalog.
-config: install
-	uv run python scripts/render_litellm_config.py > litellm/config.yaml
-
-# Run the real litellm proxy (production backend).
+# Run the LiteLLM proxy. Requires litellm.yaml (copy from litellm.yaml.example).
 proxy: install
-	uv run litellm --config litellm/config.yaml
+	@test -f litellm.yaml || (echo "Missing litellm.yaml — copy litellm.yaml.example and set secrets" >&2; exit 1)
+	uv run litellm --config litellm.yaml
 
-# Build the production Docker image (used by Puppet: `make build`).
-# Regenerates the litellm config from the catalog first so the image ships
-# a litellm config.yaml that matches the catalog.
-build: config
+# Build the production Docker image (optional; systemd is the preferred deploy).
+build:
 	docker build -t llmao:latest .
 
 clean:
