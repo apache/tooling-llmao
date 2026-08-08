@@ -4,6 +4,7 @@ Authenticated HTTP endpoints require a real asfquart session (OAuth). Those
 paths are not automated while the stack is in flux; expand later if needed.
 Run with: pytest -q
 """
+import asyncio
 import os
 import tempfile
 import time
@@ -71,15 +72,17 @@ def test_catalog_has_governance_metadata():
 
 
 def test_ensure_team_provisions_budget():
-    with tempfile.TemporaryDirectory() as tmp:
-        seam, s, _ = _seam(tmp)
-        info = seam.ensure_project_team("airflow")
-        assert info.team_id
-        assert info.key.startswith("sk-")
-        assert info.max_budget == s.default_team_budget_usd
-        assert info.spend == 0.0
-        again = seam.ensure_project_team("airflow")
-        assert again.team_id == info.team_id
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, s, _ = _seam(tmp)
+            info = await seam.ensure_project_team("airflow")
+            assert info.team_id
+            assert info.key.startswith("sk-")
+            assert info.max_budget == s.default_team_budget_usd
+            assert info.spend == 0.0
+            again = await seam.ensure_project_team("airflow")
+            assert again.team_id == info.team_id
+    asyncio.run(run())
 
 
 def test_require_member_refuses_outsider():
@@ -92,23 +95,27 @@ def test_require_member_refuses_outsider():
 
 
 def test_activity_requires_pmc_admin():
-    with tempfile.TemporaryDirectory() as tmp:
-        seam, _, store = _seam(tmp)
-        member = Identity(uid="jdoe", projects=["airflow"], committees=[])
-        admin = Identity(uid="chair", projects=[], committees=["airflow"])
-        seam.ensure_project_team("airflow")
-        _seed_usage(store, "airflow")
-        with pytest.raises(AuthzError):
-            seam.project_activity(member, "airflow")
-        rows = seam.project_activity(admin, "airflow")
-        assert len(rows) == 1
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, _, store = _seam(tmp)
+            member = Identity(uid="jdoe", projects=["airflow"], committees=[])
+            admin = Identity(uid="chair", projects=[], committees=["airflow"])
+            await seam.ensure_project_team("airflow")
+            _seed_usage(store, "airflow")
+            with pytest.raises(AuthzError):
+                await seam.project_activity(member, "airflow")
+            rows = await seam.project_activity(admin, "airflow")
+            assert len(rows) == 1
+    asyncio.run(run())
 
 
 def test_site_admin_sees_any_project():
-    with tempfile.TemporaryDirectory() as tmp:
-        seam, _, store = _seam(tmp)
-        root = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
-        seam.ensure_project_team("airflow")
-        _seed_usage(store, "airflow")
-        rows = seam.project_activity(root, "airflow")
-        assert len(rows) == 1
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, _, store = _seam(tmp)
+            root = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
+            await seam.ensure_project_team("airflow")
+            _seed_usage(store, "airflow")
+            rows = await seam.project_activity(root, "airflow")
+            assert len(rows) == 1
+    asyncio.run(run())

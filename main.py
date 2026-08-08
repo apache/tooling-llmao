@@ -62,6 +62,7 @@ def create_app():
     app.token_handler = make_token_handler(s)
     app.config["LLMAO_SETTINGS"] = s
     app.config["LLMAO_SEAM"] = seam
+    app.config["LLMAO_BACKEND"] = backend
 
     from quart import jsonify, request as quart_request
 
@@ -78,6 +79,10 @@ def create_app():
             resp.status_code = 500
             return resp
         return exc
+
+    @app.after_serving
+    async def _close_backend():
+        await backend.aclose()
 
     # Register routes (decorators bind to asfquart.APP).
     import pages  # noqa: F401

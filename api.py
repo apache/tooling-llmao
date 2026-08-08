@@ -50,7 +50,7 @@ async def project_usage(project: str):
     ident = await current_identity(s)
     assert ident is not None
     try:
-        rows = seam.project_activity(ident, project)
+        rows = await seam.project_activity(ident, project)
     except AuthzError as e:
         return _err(403, str(e))
     total = round(sum(r.get("cost_usd", 0.0) for r in rows), 6)
@@ -73,7 +73,7 @@ async def project_budget(project: str):
         seam.require_member(ident, project)
     except AuthzError as e:
         return _err(403, str(e))
-    info = seam.team_status(project)
+    info = await seam.team_status(project)
     if info is None:
         return jsonify({"project": project, "provisioned": False})
     return jsonify({

@@ -35,8 +35,9 @@ Foundation level. LDAP-backed `ClientSession` carries `uid`, committer
 
 **LiteLLM proxy** holds *teams, users, virtual keys (PATs), budgets, capacity
 limits, and spend*. Clients call its OpenAI-compatible API with a PAT. This
-process talks to LiteLLM over the **admin** surface (master key) to provision
-teams and (soon) mint or revoke virtual keys—see design §5–6.
+process talks to LiteLLM over the **admin** surface (master key, **async
+httpx**) to provision teams and (soon) mint or revoke virtual keys—see design
+§5–6. Project names are LDAP/session names (asfquart); no rename map.
 
 `litellm.mode: mock` in config is only an offline stand-in for team/usage
 storage in tests and laptop work without a proxy—not a second auth system.

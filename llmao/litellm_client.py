@@ -1,18 +1,15 @@
-"""litellm backend abstraction (control plane).
+"""LiteLLM admin backend (async).
 
 Two implementations behind one interface:
 
-* ``ProxyBackend`` talks to a real litellm proxy. It uses the proxy's admin
-  endpoints (/team/new, /key/generate, /team/info) to provision a team and
-  mint a scoped key for each ASF project — this is how per-PMC budgets and
-  spend tracking happen natively.
+* ``ProxyBackend`` talks to a real LiteLLM proxy over **httpx** (async).
+  Admin endpoints: /team/new, /key/generate, /team/info. Completions are not
+  proxied here — clients call LiteLLM with virtual keys.
 
-* ``MockBackend`` fakes team provision and usage in-process so the app runs
-  with no litellm proxy at all (laptop demos, CI).
+* ``MockBackend`` fakes team provision and usage in-process (laptop / CI).
 
-Completion traffic is out of scope: clients call LiteLLM directly with
-virtual keys. The seam depends only on this interface, so flipping
-LLMAO_LITELLM_MODE from "mock" to "proxy" changes nothing upstream.
+Project names are LDAP/session names (asfquart), used as LiteLLM team_alias
+with no rename mapping.
 """
 from __future__ import annotations
 
@@ -20,6 +17,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Protocol
+
+import httpx
 
 from .config import Settings
 from .store import StateStore
@@ -42,9 +41,10 @@ class TeamInfo:
 
 
 class Backend(Protocol):
-    def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo: ...
-    def team_info(self, project: str) -> Optional[TeamInfo]: ...
-    def usage(self, project: Optional[str]) -> List[Dict]: ...
+    async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo: ...
+    async def team_info(self, project: str) -> Optional[TeamInfo]: ...
+    async def usage(self, project: Optional[str]) -> List[Dict]: ...
+    async def aclose(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ class MockBackend:
         self._s = settings
         self._store = store
 
-    def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
+    async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
         def _mut(data):
             teams = data.setdefault("teams", {})
             if project not in teams:
@@ -72,64 +72,82 @@ class MockBackend:
             return TeamInfo(t["team_id"], t["key"], t["max_budget"], t["spend"])
         return self._store.update(_mut)
 
-    def team_info(self, project: str) -> Optional[TeamInfo]:
+    async def team_info(self, project: str) -> Optional[TeamInfo]:
         teams = self._store.snapshot().get("teams", {})
         t = teams.get(project)
         if not t:
             return None
         return TeamInfo(t["team_id"], t["key"], t["max_budget"], t["spend"])
 
-    def usage(self, project: Optional[str]) -> List[Dict]:
+    async def usage(self, project: Optional[str]) -> List[Dict]:
         rows = self._store.snapshot().get("usage", [])
         if project is None:
             return list(rows)
         return [r for r in rows if r.get("project") == project]
 
+    async def aclose(self) -> None:
+        return None
+
 
 # ---------------------------------------------------------------------------
-# Proxy backend — real litellm proxy over HTTP.
+# Proxy backend — real litellm proxy over async HTTP.
 # ---------------------------------------------------------------------------
 
 class ProxyBackend:
-    """Talks to a running litellm proxy. Requires `requests`.
-
-    Team provisioning uses the proxy admin API with the master key. Inference
-    keys are stored for later key-management work; completions are not proxied
-    through this process.
-    """
+    """Talks to a running litellm proxy via httpx.AsyncClient."""
 
     def __init__(self, settings: Settings, store: StateStore):
         self._s = settings
         self._store = store
-        import requests  # local import so mock mode needs no dependency
-        self._requests = requests
+        base = settings.litellm_base_url.rstrip("/") + "/"
+        self._client = httpx.AsyncClient(
+            base_url=base,
+            headers={
+                "Authorization": f"Bearer {settings.litellm_master_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(settings.request_timeout_s),
+        )
 
-    def _admin_headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {self._s.litellm_master_key}", "Content-Type": "application/json"}
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
-    def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
-        existing = self.team_info(project)
+    async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
+        existing = await self.team_info(project)
         if existing:
             return existing
 
-        base = self._s.litellm_base_url.rstrip("/")
-        # 1. Create a team scoped to this ASF project with a budget.
-        team_resp = self._requests.post(
-            f"{base}/team/new",
-            json={"team_alias": project, "max_budget": budget_usd, "budget_duration": duration},
-            headers=self._admin_headers(), timeout=15,
-        )
-        team_resp.raise_for_status()
-        team_id = team_resp.json().get("team_id")
+        try:
+            # LDAP/session project name → LiteLLM team_alias (no rename map).
+            team_resp = await self._client.post(
+                "team/new",
+                json={
+                    "team_alias": project,
+                    "max_budget": budget_usd,
+                    "budget_duration": duration,
+                },
+            )
+            team_resp.raise_for_status()
+            team_id = team_resp.json().get("team_id")
 
-        # 2. Mint a key bound to that team.
-        key_resp = self._requests.post(
-            f"{base}/key/generate",
-            json={"team_id": team_id, "key_alias": f"llmao-{project}"},
-            headers=self._admin_headers(), timeout=15,
-        )
-        key_resp.raise_for_status()
-        key = key_resp.json().get("key")
+            key_resp = await self._client.post(
+                "key/generate",
+                json={"team_id": team_id, "key_alias": f"llmao-{project}"},
+            )
+            key_resp.raise_for_status()
+            key = key_resp.json().get("key")
+        except httpx.TimeoutException as e:
+            raise BackendUnavailable(
+                f"LiteLLM admin API timed out after {self._s.request_timeout_s}s"
+            ) from e
+        except httpx.ConnectError as e:
+            raise BackendUnavailable(
+                f"could not reach LiteLLM at {self._s.litellm_base_url}"
+            ) from e
+        except httpx.HTTPStatusError as e:
+            raise BackendUnavailable(
+                f"LiteLLM admin error {e.response.status_code}: {e.response.text}"
+            ) from e
 
         def _mut(data):
             data.setdefault("teams", {})[project] = {
@@ -140,25 +158,23 @@ class ProxyBackend:
         self._store.update(_mut)
         return TeamInfo(team_id, key, budget_usd, 0.0)
 
-    def team_info(self, project: str) -> Optional[TeamInfo]:
+    async def team_info(self, project: str) -> Optional[TeamInfo]:
         t = self._store.snapshot().get("teams", {}).get(project)
         if not t:
             return None
-        # Refresh spend from the proxy when possible.
         spend = t.get("spend", 0.0)
         try:
-            base = self._s.litellm_base_url.rstrip("/")
-            resp = self._requests.get(
-                f"{base}/team/info", params={"team_id": t["team_id"]},
-                headers=self._admin_headers(), timeout=10,
+            resp = await self._client.get(
+                "team/info",
+                params={"team_id": t["team_id"]},
             )
-            if resp.ok:
+            if resp.is_success:
                 spend = resp.json().get("team_info", {}).get("spend", spend)
-        except Exception:
+        except httpx.HTTPError:
             pass
         return TeamInfo(t["team_id"], t["key"], t.get("max_budget", 0.0), spend)
 
-    def usage(self, project: Optional[str]) -> List[Dict]:
+    async def usage(self, project: Optional[str]) -> List[Dict]:
         rows = self._store.snapshot().get("usage", [])
         if project is None:
             return list(rows)

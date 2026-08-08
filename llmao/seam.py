@@ -1,12 +1,10 @@
-"""The seam — ASF identity joined to litellm teams.
+"""The seam — ASF identity joined to LiteLLM teams.
 
-asfquart tells us *who the user is and what projects they're on*. litellm
-holds *budgets and virtual keys*. The seam is the join: it resolves an ASF
-project to a litellm team (provisioning the team with a budget on first use)
-and authorizes that the calling identity may act on that project.
+asfquart tells us *who the user is and what projects they're on* (LDAP names).
+LiteLLM holds *budgets and virtual keys*. The seam authorizes and resolves a
+project name to a LiteLLM team (provisioning with a budget on first use).
 
-Keeping the ASF-project <-> litellm-team mapping correct as membership changes
-is the substance flagged in the plan as "the part that isn't free."
+Project strings are session project/committee names — no rename mapping.
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ class AuthzError(Exception):
 class Identity:
     """The subset of an asfquart ClientSession the seam needs."""
     uid: str
-    projects: List[str]      # committer projects
+    projects: List[str]      # committer projects (LDAP names)
     committees: List[str]    # PMC memberships (admin within those projects)
     is_site_admin: bool = False
 
@@ -41,20 +39,16 @@ class Seam:
         self._s = settings
         self._backend = backend
 
-    # -- project / team resolution ----------------------------------------
-
-    def ensure_project_team(self, project: str) -> TeamInfo:
-        """Resolve (provisioning if needed) the litellm team for an ASF project."""
-        return self._backend.ensure_team(
+    async def ensure_project_team(self, project: str) -> TeamInfo:
+        """Resolve (provisioning if needed) the LiteLLM team for an ASF project."""
+        return await self._backend.ensure_team(
             project,
             budget_usd=self._s.default_team_budget_usd,
             duration=self._s.budget_duration,
         )
 
-    def team_status(self, project: str) -> Optional[TeamInfo]:
-        return self._backend.team_info(project)
-
-    # -- authorization helpers --------------------------------------------
+    async def team_status(self, project: str) -> Optional[TeamInfo]:
+        return await self._backend.team_info(project)
 
     def require_member(self, identity: Identity, project: str) -> None:
         if not (identity.is_site_admin or identity.member_of(project)):
@@ -64,9 +58,7 @@ class Seam:
         if not identity.admin_of(project):
             raise AuthzError(f"{identity.uid} is not a PMC admin of {project}")
 
-    # -- activity view ----------------------------------------------------
-
-    def project_activity(self, identity: Identity, project: str) -> List[Dict]:
+    async def project_activity(self, identity: Identity, project: str) -> List[Dict]:
         """Everyone's activity in a project. PMC admins (or site admins) only."""
         self.require_admin(identity, project)
-        return self._backend.usage(project)
+        return await self._backend.usage(project)
