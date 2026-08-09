@@ -63,6 +63,29 @@ Copy three YAMLs from `*.example` → system Postgres + `make db` → matching m
 
 ---
 
+## Planned UX (top nav)
+
+Committed product sketch for signed-in top nav (beside **API keys**). **Not built yet.**
+
+| Nav | Intent |
+|-----|--------|
+| **Models** | Browse **models available to this user** (identity / project / allow-list scoped—not necessarily the full global inventory). |
+| **Reports** | Usage, utilization, governance, and Commons-fairness views (see list below). |
+
+### Reports (examples)
+
+| Report | Audience / purpose |
+|--------|--------------------|
+| **PMC usage by user** | Project leads: spend/usage broken down by committer |
+| **Self-hosted utilization** | Capacity/load on ASF or Infra-hosted open models (not only $) |
+| **Board roll-ups** | Foundation / Board reporting material |
+| **Donated credit burn-down** | Track consumption of donated provider credit pools over time |
+| **Abuse / fairness histograms** | Spot **abusive committers** relative to **the Commons** (outliers vs peers / fair-share) |
+
+Data sources: LiteLLM spend/usage APIs where they apply; Infra / host observability for self-hosted capacity. Product design: rai-private `services/llmao/README.md` §6.3.
+
+---
+
 ## Next steps (detail)
 
 1. Harden PAT against live LiteLLM edge responses (pagination, team_alias, delete ids).  
@@ -70,9 +93,11 @@ Copy three YAMLs from `*.example` → system Postgres + `make db` → matching m
 3. Site admin via **`rai` PMC** (optional keep cfg list).  
 4. PMC notification email on key lifecycle.  
 5. Budgets / capacity limits UX.  
-6. **p6** Puppet: Postgres, eyaml→YAML, systemd, restart LiteLLM on config change.  
-7. Cleanup container paths; optional un-package.  
-8. Advisor / richer model UX.  
+6. **Models** page + top nav: models available *to the user*.  
+7. **Reports** page + top nav: PMC by-user, self-hosted utilization, Board roll-ups, donated credit burn-down, Commons abuse histograms.  
+8. **p6** Puppet: Postgres, eyaml→YAML, systemd, restart LiteLLM on config change.  
+9. Cleanup container paths; optional un-package.  
+10. Advisor / richer routing UX.  
 
 ---
 
