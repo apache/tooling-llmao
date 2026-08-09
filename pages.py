@@ -224,3 +224,8 @@ async def keys_revoke():
 @APP.get("/static/<path:filename>")
 async def serve_static(filename: str):
     return await quart.send_from_directory(STATICDIR, filename)
+
+
+@APP.get("/favicon.ico")
+async def serve_favicon():
+    return await quart.send_from_directory(STATICDIR, "favicon.ico")
