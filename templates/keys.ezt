@@ -1,0 +1,88 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">API keys (PATs)</h1>
+    <a class="btn btn-primary btn-sm" href="/keys/new">
+      <i class="bi bi-plus-lg"></i> Create key
+    </a>
+  </div>
+
+  <p class="text-muted small">
+    Personal keys bind your ASF identity to a project team so usage is attributed
+    to you. Automation keys (admin only) are team-scoped for scripts after a
+    formal request — purpose is required.
+  </p>
+
+  [if-any error]
+  <div class="alert alert-warning">[error]</div>
+  [end]
+
+  [if-any keys]
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Purpose</th>
+          <th>Project</th>
+          <th>Type</th>
+          <th>Last used</th>
+          <th>Spend</th>
+          <th>Limit</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        [for keys]
+        <tr>
+          <td class="font-monospace small">[keys.purpose]</td>
+          <td>[keys.project]</td>
+          <td><span class="badge text-bg-secondary">[keys.kind_label]</span></td>
+          <td class="small text-muted">[keys.last_used]</td>
+          <td class="small font-monospace">[keys.spend]</td>
+          <td class="small font-monospace">[keys.max_budget]</td>
+          <td class="small text-muted">[keys.created_at]</td>
+          <td class="text-end">
+            <button type="button" class="btn btn-outline-danger btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#revokeModal"
+                    data-token="[keys.token]" data-purpose="[keys.purpose]">
+              Revoke
+            </button>
+          </td>
+        </tr>
+        [end]
+      </tbody>
+    </table>
+  </div>
+  [else]
+  [if-any error][else]
+  <p class="text-muted">No keys yet. <a href="/keys/new">Create one</a>.</p>
+  [end]
+  [end]
+</div>
+
+<!-- Revoke confirmation modal -->
+<div class="modal fade" id="revokeModal" tabindex="-1" aria-labelledby="revokeModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/keys/revoke" id="revokeForm">
+        <div class="modal-header">
+          <h2 class="modal-title fs-5" id="revokeModalLabel">Revoke API key?</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="mb-2">This cannot be undone. Clients using this key will fail immediately.</p>
+          <p class="mb-0">Purpose: <strong class="font-monospace" id="revokePurpose"></strong></p>
+          <input type="hidden" name="token" id="revokeToken" value="">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-danger">Revoke key</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+[include "footer.ezt"]

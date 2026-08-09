@@ -114,8 +114,9 @@ make test          # offline seam + model_list tests (no OAuth session automatio
 | HTML shell | `pages.py` + EZT + `static/` | Bootstrap; PAT UI next |
 | Local TLS + configs | `main.py`, `config.yaml`, `litellm.yaml` | examples committed; secrets gitignored |
 
-**Next:** mint/list/revoke LiteLLM virtual keys (metadata from `/key/list`);
-budget updates via the gateway.
+**PATs (proxy mode):** open **API keys** in the nav — create personal keys
+(project + purpose), one-time secret display, list spend/limit, revoke with
+confirm modal. Automation keys are admin/PMC-only with required purpose.
 
 ---
 

@@ -7,7 +7,7 @@
     <h1 class="h3 mb-3">llmao</h1>
     <p class="llmao-lede text-muted">
         Gateway for ASF access to LiteLLM: project teams, budgets, and
-        (soon) virtual keys (PATs). This service does <strong>not</strong>
+        virtual keys (PATs). This service does <strong>not</strong>
         host a chat client — point tools at the LiteLLM proxy with a project PAT.
     </p>
 
@@ -21,6 +21,7 @@
                 <br><span class="text-muted small">projects: [projects_label]</span>
                 [end]
             </p>
+            <a class="btn btn-primary btn-sm mt-3" href="/keys">Manage API keys</a>
         </div>
     </div>
     [else]

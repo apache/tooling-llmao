@@ -77,10 +77,44 @@ def test_ensure_team_provisions_budget():
             seam, cfg, _ = _seam(tmp)
             info = await seam.ensure_project_team("airflow")
             assert info.team_id
-            assert info.key.startswith("sk-")
+            # Team ensure does not mint a product PAT (key stays empty).
             assert info.max_budget == float(cfg.budgets.default_team_budget_usd)
             again = await seam.ensure_project_team("airflow")
             assert again.team_id == info.team_id
+    asyncio.run(run())
+
+
+def test_personal_key_create_list_revoke_mock():
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, _, _ = _seam(tmp)
+            ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
+            # mock mode rejects PAT product path
+            from llmao.seam import ConfigError
+            with pytest.raises(ConfigError):
+                await seam.create_personal_key(ident, "airflow", "laptop")
+            # Force proxy-shaped cfg with MockBackend for unit path:
+            # create_personal_key requires proxy mode; test backend ops via mock backend directly.
+            from llmao.litellm_client import MockBackend
+            from llmao.store import StateStore
+            from easydict import EasyDict as edict
+            cfg = edict({
+                "litellm": {"mode": "proxy", "base_url": "http://x", "master_key": "sk-x", "request_timeout_s": 5},
+                "budgets": {"default_team_budget_usd": 10, "duration": "30d"},
+                "site_admins": [],
+                "state_path": __import__("os").path.join(tmp, "s2.json"),
+            })
+            store = StateStore(cfg.state_path)
+            backend = MockBackend(cfg, store)
+            from llmao.seam import Seam
+            s = Seam(cfg, backend)
+            created = await s.create_personal_key(ident, "airflow", "laptop-cli")
+            assert created.secret.startswith("sk-")
+            assert created.info.key_alias == "laptop-cli"
+            keys = await s.list_my_keys(ident)
+            assert len(keys) == 1
+            await s.revoke_key(ident, keys[0].token)
+            assert await s.list_my_keys(ident) == []
     asyncio.run(run())
 
 

@@ -1,0 +1,20 @@
+[include "header.ezt"]
+<div class="container py-4" style="max-width: 40rem;">
+  <h1 class="h3 mb-3">API key created</h1>
+  <div class="alert alert-warning">
+    Copy this secret now. It will <strong>not</strong> be shown again.
+  </div>
+  <dl class="row small">
+    <dt class="col-sm-3">Type</dt><dd class="col-sm-9">[kind_label]</dd>
+    <dt class="col-sm-3">Project</dt><dd class="col-sm-9">[project]</dd>
+    <dt class="col-sm-3">Purpose</dt><dd class="col-sm-9 font-monospace">[purpose]</dd>
+  </dl>
+  <label class="form-label" for="secret">Secret</label>
+  <input class="form-control font-monospace" id="secret" type="text" readonly
+         value="[secret]" onclick="this.select()">
+  <div class="mt-3 d-flex gap-2">
+    <a class="btn btn-primary" href="/keys">Back to keys</a>
+    <a class="btn btn-outline-secondary" href="/keys/new">Create another</a>
+  </div>
+</div>
+[include "footer.ezt"]
