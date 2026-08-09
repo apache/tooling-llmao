@@ -43,35 +43,46 @@ for `localhost.apache.org` (see `certs/README.md`).
 
 Requires [uv](https://docs.astral.sh/uv/) on your `PATH`.
 
+Required on-disk YAML (copy from `*.example`; app and `make proxy` **fail-fast**
+if missing — same presumption as STeVe-style config):
+
+| File | From | Role |
+|------|------|------|
+| `config.yaml` | `config.yaml.example` | llmao / asfquart |
+| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`include: model_list.yaml`) |
+| `model_list.yaml` | `model_list.yaml.example` | **Model inventory SoT** (routes + UX metadata) |
+
 ```bash
 make install
-cp config.yaml.example config.yaml     # gitignored; edit secrets
+cp config.yaml.example config.yaml
+cp litellm.yaml.example litellm.yaml
+cp model_list.yaml.example model_list.yaml
 # generate certs under certs/ (mkcert) — certs/README.md
 make run                               # uv run python main.py
 ```
 
 Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
-with ASF. Default `litellm.mode: mock` needs no LiteLLM process.
+with ASF. Default `litellm.mode: mock` needs no LiteLLM process (still needs
+`model_list.yaml` for inventory).
 
 ### Real LiteLLM (proxy mode)
 
-PAT metadata (alias, user, team, spend) lives in **LiteLLM’s Postgres**, not
-in llmao. The full `sk-…` is returned only at key create; list/info APIs expose
-metadata for the gateway UI later.
+PAT metadata lives in **LiteLLM’s Postgres**. Model inventory is **only**
+`model_list.yaml` (not DB `STORE_MODEL_IN_DB`). Provider **API keys** in that
+file come from eyaml in production; **`api_base` is cleartext** (not shown in UX).
 
 ```bash
-cp litellm.yaml.example litellm.yaml   # gitignored
 ./bin/gen-litellm-master-key.sh        # print sk-…; paste into BOTH:
 #   litellm.yaml  → general_settings.master_key
 #   config.yaml   → litellm.master_key
-# set database_url in litellm.yaml to a real Postgres URL
+# set database_url in litellm.yaml; set api keys in model_list.yaml
 # config.yaml → litellm.mode: proxy
 make proxy                             # litellm --config litellm.yaml
 make run
 ```
 
-Production secrets come from **hiera/eyaml** into both on-disk YAML files
-(Puppet). Do not rely on environment variables for production secrets.
+After Puppet/VCS updates model list or litellm config, **restart LiteLLM**
+(systemd notify in p6 later). Production secrets are on-disk YAML, not env vars.
 
 ASGI (TLS on the reverse proxy):
 
@@ -80,7 +91,7 @@ uv run python -m hypercorn main:llmao_app --bind 0.0.0.0:8080
 ```
 
 ```bash
-make test          # offline seam/catalog tests (no OAuth session automation yet)
+make test          # offline seam + model_list tests (no OAuth session automation yet)
 ```
 
 ---
@@ -92,7 +103,7 @@ make test          # offline seam/catalog tests (no OAuth session automation yet
 | ASF login + PMC authz | asfquart always + `auth.py` | `@asfquart.auth.require`; project scope in seam |
 | Per-PMC budgets & spend (read) | litellm teams / `MockBackend` | one litellm *team* per ASF project |
 | Project ↔ team mapping | `seam.py` | provision team on first use |
-| Model inventory | open design | LiteLLM config + future UX/advisor; not dual-owned |
+| Model inventory | `model_list.yaml` | LiteLLM `include` + llmao loader; metadata in `model_info` |
 | Per-project activity view | `api.py` | PMC admins / site admins only |
 | HTML shell | `pages.py` + EZT + `static/` | Bootstrap; PAT UI next |
 | Local TLS + configs | `main.py`, `config.yaml`, `litellm.yaml` | examples committed; secrets gitignored |
@@ -167,15 +178,8 @@ docker run --rm --gpus all --ipc=host -p 8003:8003 \
   --model Qwen/Qwen3-8B --served-model-name qwen3-8b --port 8003
 ```
 
-litellm reaches each model through a per-model base-URL env var
-(`LLMAO_SELFHOST_GEMMA_URL`, `LLMAO_SELFHOST_QWEN_CODER_URL`,
-`LLMAO_SELFHOST_QWEN8B_URL`), each pointing at that model's vLLM port. The full
-five-container stack (llmao + litellm + three vLLM servers) is defined in
-`infra/docker/docker-compose.yml`.
-
-**Model inventory** is an open design (UX / advisor / LiteLLM). For now, model
-routes live in **`litellm.yaml`** (from `litellm.yaml.example`). Legacy
-`llmao/catalog.py` + `scripts/render_litellm_config.py` are not the active path.
+Self-host `api_base` values live in **`model_list.yaml`** (cleartext). The
+compose stack under `infra/docker/` is optional reference.
 
 ---
 
@@ -187,10 +191,11 @@ pages.py                 HTML + /static
 api.py                   JSON /healthz and /v1/*
 templates/ static/       EZT + Bootstrap
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
-bin/gen-litellm-master-key.sh   print sk-… for both YAML files
+bin/gen-litellm-master-key.sh   print sk-… for admin key
 config.yaml.example      → config.yaml (gitignored)
-litellm.yaml.example     → litellm.yaml (gitignored)
+litellm.yaml.example     → litellm.yaml (include model_list.yaml)
+model_list.yaml.example  → model_list.yaml (inventory SoT; keys from eyaml)
 certs/                   mkcert PEMs + README
-llmao/                   seam, auth, litellm_client, store (cfg via APP.cfg)
-tests/                   offline seam/catalog tests
+llmao/                   seam, auth, models, litellm_client, store
+tests/                   offline seam + model_list / LiteLLM metadata tests
 ```

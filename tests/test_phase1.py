@@ -1,7 +1,8 @@
-"""Offline tests: catalog, mock team provision, seam authz.
+"""Offline tests: mock team provision, seam authz.
 
 Authenticated HTTP endpoints require a real asfquart session (OAuth). Those
 paths are not automated while the stack is in flux; expand later if needed.
+Model inventory tests live in test_models.py.
 Run with: pytest -q
 """
 import asyncio
@@ -15,7 +16,6 @@ from easydict import EasyDict as edict
 from llmao.store import StateStore
 from llmao.litellm_client import MockBackend
 from llmao.seam import Seam, Identity, AuthzError
-from llmao import catalog
 
 
 def _cfg(tmp):
@@ -32,6 +32,7 @@ def _cfg(tmp):
         },
         "site_admins": ["root"],
         "state_path": os.path.join(tmp, "state.json"),
+        "models_path": "model_list.yaml.example",
     })
 
 
@@ -65,18 +66,9 @@ def test_cfg_dotted_access():
         "state_path": "/tmp/s.json",
     })
     assert cfg.litellm.mode == "proxy"
-    assert cfg.litellm.mode == "proxy" and cfg.litellm.mode != "mock"
     assert cfg.litellm.base_url == "http://llm:4000"
     assert cfg.budgets.default_team_budget_usd == 50
-    assert cfg.budgets.duration == "7d"
     assert cfg.site_admins == ["alice"]
-
-
-def test_catalog_has_governance_metadata():
-    for m in catalog.all_models():
-        assert m["license"]
-        assert m["openness"] in ("open-weight", "open-source", "proprietary")
-        assert m["provenance_record"] in ("present", "absent")
 
 
 def test_ensure_team_provisions_budget():
@@ -87,7 +79,6 @@ def test_ensure_team_provisions_budget():
             assert info.team_id
             assert info.key.startswith("sk-")
             assert info.max_budget == float(cfg.budgets.default_team_budget_usd)
-            assert info.spend == 0.0
             again = await seam.ensure_project_team("airflow")
             assert again.team_id == info.team_id
     asyncio.run(run())

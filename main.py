@@ -55,6 +55,11 @@ def create_app():
     from llmao.store import StateStore
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
+    from llmao.models import load_model_list
+
+    # Fail-fast: model_list.yaml is required (same presumption as config.yaml).
+    load_model_list(cfg=app.cfg)
+
     store = StateStore(app.cfg.state_path)
     backend = make_backend(app.cfg, store)
     seam = Seam(app.cfg, backend)

@@ -2,10 +2,13 @@
 #
 #   cp config.yaml.example config.yaml
 #   cp litellm.yaml.example litellm.yaml
-#   ./bin/gen-litellm-master-key.sh   # paste same sk-… into both YAML files
+#   cp model_list.yaml.example model_list.yaml
+#   ./bin/gen-litellm-master-key.sh   # paste same sk-… into config.yaml + litellm.yaml
 #
-# Production: Puppet/hiera/eyaml writes literal secrets into config.yaml on disk.
+# All three YAML files are required at runtime (copy from *.example). Fail-fast
+# if missing. Production: Puppet/hiera/eyaml writes secrets into on-disk YAML.
 # Do not rely on environment variables for production secrets.
+# Model inventory SoT is model_list.yaml (included by litellm.yaml).
 
 server:
   # Port for the asfquart process. Behind a reverse proxy in production.
@@ -35,3 +38,6 @@ budgets:
 site_admins: []
 
 state_path: ./llmao-state.json
+
+# Shared model inventory (LiteLLM include + llmao UX). Relative to app root.
+models_path: model_list.yaml

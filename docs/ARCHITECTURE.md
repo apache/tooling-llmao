@@ -40,6 +40,12 @@ process talks to LiteLLM over the **admin** surface (master key, **async
 httpx**) to provision teams and (soon) mint or revoke virtual keys—see design
 §5–6. Project names are LDAP/session names (asfquart); no rename map.
 
+**Model inventory** is `model_list.yaml` only (LiteLLM `include`; no
+`STORE_MODEL_IN_DB`). llmao loads the same file for UX (`llmao/models.py`).
+Governance fields live flat under each entry’s `model_info`. API keys in that
+file are secrets (eyaml); `api_base` is cleartext. Restart LiteLLM after
+inventory changes (Puppet/systemd later).
+
 `litellm.mode: mock` in config is only an offline stand-in for team/usage
 storage in tests and laptop work without a proxy—not a second auth system.
 
