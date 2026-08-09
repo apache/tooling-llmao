@@ -5,10 +5,14 @@
 # Local run needs config.yaml (from config.yaml.example) and, for OAuth,
 # TLS certs under certs/ — see certs/README.md.
 
-.PHONY: install run test proxy build clean thirdparty
+.PHONY: install run test proxy db build clean thirdparty
 
 install:
 	uv sync
+
+# System PostgreSQL: create llmao/litellm role+db, prisma generate + db push.
+db: install
+	uv run python bin/setup_litellm_db.py
 
 # Vendor Bootstrap + icons into static/ (see bin/fetch-thirdparty.sh).
 thirdparty:

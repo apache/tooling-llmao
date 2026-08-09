@@ -46,6 +46,10 @@ Governance fields live flat under each entry’s `model_info`. API keys in that
 file are secrets (eyaml); `api_base` is cleartext. Restart LiteLLM after
 inventory changes (Puppet/systemd later).
 
+**LiteLLM virtual keys / teams** need Postgres + Prisma (`litellm[proxy,extra-proxy]`).
+Developers: system PostgreSQL + `make db` (`bin/setup_litellm_db.py`). Production:
+Puppet creates the DB and deploys on-disk `database_url`.
+
 `litellm.mode: mock` in config is only an offline stand-in for team/usage
 storage in tests and laptop work without a proxy—not a second auth system.
 

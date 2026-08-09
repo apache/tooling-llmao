@@ -67,19 +67,25 @@ with ASF. Default `litellm.mode: mock` needs no LiteLLM process (still needs
 
 ### Real LiteLLM (proxy mode)
 
-PAT metadata lives in **LiteLLM’s Postgres**. Model inventory is **only**
-`model_list.yaml` (not DB `STORE_MODEL_IN_DB`). Provider **API keys** in that
-file come from eyaml in production; **`api_base` is cleartext** (not shown in UX).
+Needs **system PostgreSQL** (Ubuntu packages; same idea as production — not
+containers) and the **prisma** client from `litellm[proxy,extra-proxy]`.
 
 ```bash
+# Postgres running (e.g. apt install postgresql; service started)
+make db                                # bin/setup_litellm_db.py
+# paste printed database_url into litellm.yaml general_settings
 ./bin/gen-litellm-master-key.sh        # print sk-…; paste into BOTH:
 #   litellm.yaml  → general_settings.master_key
 #   config.yaml   → litellm.master_key
-# set database_url in litellm.yaml; set api keys in model_list.yaml
+# set api keys in model_list.yaml (eyaml in production)
 # config.yaml → litellm.mode: proxy
 make proxy                             # litellm --config litellm.yaml
 make run
 ```
+
+PAT metadata lives in LiteLLM’s Postgres. Model inventory is **only**
+`model_list.yaml` (not DB `STORE_MODEL_IN_DB`). Provider **API keys** in that
+file come from eyaml in production; **`api_base` is cleartext** (not shown in UX).
 
 After Puppet/VCS updates model list or litellm config, **restart LiteLLM**
 (systemd notify in p6 later). Production secrets are on-disk YAML, not env vars.

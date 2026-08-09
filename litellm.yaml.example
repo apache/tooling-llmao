@@ -23,4 +23,6 @@ general_settings:
   # Proxy admin key (must start with sk-). Same value as config.yaml → litellm.master_key.
   master_key: CHANGE_ME_MASTER_KEY
   # Required for virtual keys, teams, budgets, and spend tracking.
+  # Developer: run `make db` (bin/setup_litellm_db.py) against system Postgres
+  # and paste the printed database_url here. Production: Puppet/eyaml.
   database_url: postgresql://llmao:CHANGE_ME@127.0.0.1:5432/litellm
