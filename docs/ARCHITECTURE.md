@@ -47,8 +47,15 @@ file are secrets (eyaml); `api_base` is cleartext. Restart LiteLLM after
 inventory changes (Puppet/systemd later).
 
 **LiteLLM virtual keys / teams** need Postgres + Prisma (`litellm[proxy,extra-proxy]`).
-Developers: system PostgreSQL + `make db` (`bin/setup_litellm_db.py`). Production:
-Puppet creates the DB and deploys on-disk `database_url`.
+Developers: system PostgreSQL + `make db`. Production: Puppet + on-disk
+`database_url`.
+
+**PATs:** personal keys bind ASF uid + project team + purpose; automation
+keys are team-scoped exceptions (who may create them is an **open RAI
+policy** question — see design + `docs/STATUS.md`). Secrets shown once;
+metadata in LiteLLM.
+
+Build status and backlog: **`docs/STATUS.md`**.
 
 `litellm.mode: mock` in config is only an offline stand-in for team/usage
 storage in tests and laptop work without a proxy—not a second auth system.

@@ -102,21 +102,25 @@ make test          # offline seam + model_list tests (no OAuth session automatio
 
 ---
 
-## What this includes today
+## What works today (summary)
 
-| Capability | Where it lives | Notes |
-|---|---|---|
-| ASF login + PMC authz | asfquart always + `auth.py` | `@asfquart.auth.require`; project scope in seam |
-| Per-PMC budgets & spend (read) | litellm teams / `MockBackend` | one litellm *team* per ASF project |
-| Project ↔ team mapping | `seam.py` | provision team on first use |
-| Model inventory | `model_list.yaml` | LiteLLM `include` + llmao loader; metadata in `model_info` |
-| Per-project activity view | `api.py` | PMC admins / site admins only |
-| HTML shell | `pages.py` + EZT + `static/` | Bootstrap; PAT UI next |
-| Local TLS + configs | `main.py`, `config.yaml`, `litellm.yaml` | examples committed; secrets gitignored |
+ASF login (asfquart), project membership from LDAP, LiteLLM admin via async
+httpx, **`model_list.yaml`** inventory (include + UX), system Postgres + Prisma
+setup, and **PAT UX** in proxy mode (personal keys; provisional automation keys).
 
-**PATs (proxy mode):** open **API keys** in the nav — create personal keys
-(project + purpose), one-time secret display, list spend/limit, revoke with
-confirm modal. Automation keys are admin/PMC-only with required purpose.
+Full status, edge cases, and backlog: **[`docs/STATUS.md`](docs/STATUS.md)**.  
+Architecture: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.  
+Product design: **rai-private** `services/llmao/README.md`.  
+Ops plans: Infra **`p6/modules/llmao/README.md`**.
+
+### Planned (not yet done) — high level only
+
+- Harden PAT flows against live LiteLLM edge cases  
+- **Who may create team-scoped / automation PATs** (RAI policy; may be RAI-only, Chair/VP, or PMC)  
+- Site-admin via `rai` PMC; PMC notification email; budgets/capacity UX  
+- Production Puppet/systemd (p6); cleanup of container-oriented paths  
+
+Details: [`docs/STATUS.md`](docs/STATUS.md).
 
 ---
 
@@ -150,8 +154,8 @@ the handler still runs.
    No production env-var secret channel.
 
 3. **LiteLLM** with Postgres (`database_url` in `litellm.yaml`) and
-   `litellm --config litellm.yaml`. Model routes and provider keys live in
-   that file (inventory design still open).
+   `litellm --config litellm.yaml`. Model routes live in **`model_list.yaml`**
+   (included); provider API keys via eyaml in production.
 
 4. **Serve** llmao (`main.py` or Hypercorn). Point client tools at the
    **LiteLLM** base URL with PATs, not at llmao for chat.
