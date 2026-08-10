@@ -12,7 +12,8 @@
   <p class="text-muted small">
     Personal keys bind your ASF identity to a project team so usage is attributed
     to you. Automation keys (admin only) are team-scoped for scripts after a
-    formal request — purpose is required.
+    formal request — purpose is required. Only the creator sees the secret;
+    <strong>Created by</strong> is who to ask for it.
   </p>
 
   [if-any error]
@@ -27,6 +28,7 @@
           <th>Purpose</th>
           <th>Project</th>
           <th>Type</th>
+          <th>Created by</th>
           <th>Last used</th>
           <th>Spend</th>
           <th>Limit</th>
@@ -40,6 +42,7 @@
           <td class="font-monospace small">[keys.purpose]</td>
           <td>[keys.project]</td>
           <td><span class="badge text-bg-secondary">[keys.kind_label]</span></td>
+          <td class="small font-monospace">[keys.created_by]</td>
           <td class="small text-muted">[keys.last_used]</td>
           <td class="small font-monospace">[keys.spend]</td>
           <td class="small font-monospace">[keys.max_budget]</td>

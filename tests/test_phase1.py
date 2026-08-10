@@ -93,10 +93,30 @@ def test_personal_key_create_list_revoke_mock():
             assert created.info.project == "airflow"
             assert created.info.user == "jdoe"
             assert not created.info.is_automation
+            assert created.info.created_by is None
             keys = await seam.list_my_keys(ident)
             assert len(keys) == 1
             await seam.revoke_key(ident, keys[0].token_id)
             assert await seam.list_my_keys(ident) == []
+    asyncio.run(run())
+
+
+def test_automation_key_records_created_by():
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, _, _ = _seam(tmp)
+            admin = Identity(uid="chair", projects=[], committees=["airflow"])
+            created = await seam.create_automation_key(
+                admin, "airflow", "INFRA-123-ci"
+            )
+            assert created.info.is_automation
+            assert created.info.user is None
+            assert created.info.created_by == "chair"
+            assert created.info.project == "airflow"
+            assert created.info.purpose == "INFRA-123-ci"
+            listed = await seam.list_automation_keys(admin, "airflow")
+            assert len(listed) == 1
+            assert listed[0].created_by == "chair"
     asyncio.run(run())
 
 

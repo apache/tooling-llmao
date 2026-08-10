@@ -31,7 +31,8 @@ Detailed “where we are.” Top-level README stays short and links here.
 | **Automation (team-scoped)** | **Any PMC member of project or site admin** (provisional) | **project + purpose** (user null) |
 
 - Design names on `KeyInfo`: `project`, `user`, `purpose`; `token_id` for list/revoke (not the secret). Automation ⇔ `user is None` (no separate `kind`).
-- Wire map: purpose↔`key_alias`, user↔`user_id`, project↔`metadata.project`, token_id↔LiteLLM `token`.
+- Automation keys store **`metadata.created_by`** (ASF uid who minted and saw the secret); surfaced as `KeyInfo.created_by` so other PMCs know who to ask.
+- Wire map: purpose↔`key_alias`, user↔`user_id`, project↔`metadata.project`, token_id↔LiteLLM `token`, created_by↔`metadata.created_by`.
 - Team ensure → LiteLLM **team** only; **not** a shared product team PAT.
 - Secret `sk-…` shown **once** (`CreatedKey.secret`); not kept on `KeyInfo`.
 

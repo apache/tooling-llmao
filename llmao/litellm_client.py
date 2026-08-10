@@ -50,6 +50,8 @@ class KeyInfo:
     max_budget: Optional[float]
     created_at: Optional[str]
     last_used: Optional[str]
+    # metadata.created_by — who minted and saw the secret (required if automation)
+    created_by: Optional[str] = None
     blocked: bool = False
 
     @property
@@ -111,6 +113,14 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
     if not purpose:
         raise ValueError("key missing key_alias (purpose)")
 
+    created_by_raw = meta.get("created_by")
+    created_by = str(created_by_raw) if created_by_raw else None
+    # Automation keys have no user_id; only the minter saw the secret.
+    if user is None and not created_by:
+        raise ValueError(
+            "automation key missing metadata.created_by (uid who minted the secret)"
+        )
+
     last = (
         raw.get("last_used")
         or raw.get("last_active")
@@ -139,6 +149,7 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
         ),
         created_at=created,
         last_used=last,
+        created_by=created_by,
         blocked=bool(raw.get("blocked")),
     )
 

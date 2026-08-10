@@ -8,7 +8,17 @@
     <dt class="col-sm-3">Type</dt><dd class="col-sm-9">[kind_label]</dd>
     <dt class="col-sm-3">Project</dt><dd class="col-sm-9">[project]</dd>
     <dt class="col-sm-3">Purpose</dt><dd class="col-sm-9 font-monospace">[purpose]</dd>
+    [if-any is_automation]
+    <dt class="col-sm-3">Created by</dt>
+    <dd class="col-sm-9 font-monospace">[created_by]</dd>
+    [end]
   </dl>
+  [if-any is_automation]
+  <p class="small text-muted">
+    You are recorded as <strong>created_by</strong>. Teammates cannot recover this
+    secret from llmao — they will contact you for it.
+  </p>
+  [end]
   <label class="form-label" for="secret">Secret</label>
   <input class="form-control font-monospace" id="secret" type="text" readonly
          value="[secret]" onclick="this.select()">

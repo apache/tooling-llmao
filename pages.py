@@ -103,6 +103,8 @@ def _key_rows(keys: list[KeyInfo]) -> list:
             "purpose": k.purpose,
             "project": k.project,
             "kind_label": "Automation" if k.is_automation else "Personal",
+            "is_automation": k.is_automation,
+            "created_by": k.created_by or "—",
             "spend": f"${k.spend:.6f}",
             "max_budget": budget_s,
             "last_used": k.last_used or "—",
@@ -190,6 +192,8 @@ async def keys_new_submit():
     result.purpose = created.info.purpose
     result.project = created.info.project
     result.kind_label = "Automation" if created.info.is_automation else "Personal"
+    result.is_automation = created.info.is_automation
+    result.created_by = created.info.created_by
     return _render("key_created.ezt", result)
 
 
