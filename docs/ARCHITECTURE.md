@@ -26,7 +26,7 @@ both bind to `asfquart.APP` after construct. Standalone: `python main.py`
 
 Local TLS: `config.yaml` `server.certfile` / `keyfile` under `certs/`, typically
 mkcert for **`localhost.apache.org`**. `config.yaml` is gitignored (secrets).
-Loaded as **`APP.cfg`** (EasyDict); use dotted access (`APP.cfg.litellm.mode`).
+Loaded as **`APP.cfg`** (EasyDict); use dotted access (`APP.cfg.litellm.base_url`).
 
 ## The two halves
 
@@ -57,8 +57,9 @@ metadata in LiteLLM.
 
 Build status and backlog: **`docs/STATUS.md`**.
 
-`litellm.mode: mock` in config is only an offline stand-in for team/usage
-storage in tests and laptop work without a proxy—not a second auth system.
+The app **always** uses **LiteLLMBackend** against a real LiteLLM admin API.
+Offline **MockBackend** lives under `tests/` and is injected only by unit
+tests—not a second runtime mode.
 
 ## The seam
 

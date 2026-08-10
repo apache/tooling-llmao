@@ -1,9 +1,8 @@
 """Minimal JSON-file state store.
 
-Phase 1 keeps the seam's project->team mapping and the mock backend's usage
-log in a single JSON file so the app runs with zero infrastructure. The
-interface is deliberately small (get/set/update under a lock) so it can be
-swapped for a real database later without touching callers.
+LiteLLMBackend uses this as a local project→team_id cache (and legacy usage
+rows). Tests reuse it for MockBackend. Not a second “app mode”—the running
+app still requires LiteLLM for admin APIs.
 """
 from __future__ import annotations
 

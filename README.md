@@ -61,14 +61,9 @@ cp model_list.yaml.example model_list.yaml
 make run                               # uv run python main.py
 ```
 
-Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
-with ASF. Default `litellm.mode: mock` needs no LiteLLM process (still needs
-`model_list.yaml` for inventory).
-
-### Real LiteLLM (proxy mode)
-
-Needs **system PostgreSQL** (Ubuntu packages; same idea as production — not
-containers) and the **prisma** client from `litellm[proxy,extra-proxy]`.
+Local run is **production-shaped**: LiteLLM + system Postgres (not an in-app
+mock mode). Needs **system PostgreSQL** and **prisma** from
+`litellm[proxy,extra-proxy]`.
 
 ```bash
 # Postgres running (e.g. apt install postgresql; service started)
@@ -78,10 +73,12 @@ make db                                # bin/setup_litellm_db.py
 #   litellm.yaml  → general_settings.master_key
 #   config.yaml   → litellm.master_key
 # set api keys in model_list.yaml (eyaml in production)
-# config.yaml → litellm.mode: proxy
 make proxy                             # litellm --config litellm.yaml
 make run
 ```
+
+Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
+with ASF.
 
 PAT metadata lives in LiteLLM’s Postgres. Model inventory is **only**
 `model_list.yaml` (not DB `STORE_MODEL_IN_DB`). Provider **API keys** in that
@@ -106,7 +103,8 @@ make test          # offline seam + model_list tests (no OAuth session automatio
 
 ASF login (asfquart), project membership from LDAP, LiteLLM admin via async
 httpx, **`model_list.yaml`** inventory (include + UX), system Postgres + Prisma
-setup, and **PAT UX** in proxy mode (personal keys; provisional automation keys).
+setup, and **PAT UX** against live LiteLLM (personal keys; provisional automation keys).
+Unit tests use `tests/mock_backend.py` only.
 
 Full status, edge cases, and backlog: **[`docs/STATUS.md`](docs/STATUS.md)**.  
 Architecture: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.  

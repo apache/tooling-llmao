@@ -2,7 +2,6 @@
     <div class="container">
         <p class="text-muted mb-0 small">
             Apache llmao — gateway seam for ASF LiteLLM access.
-            litellm mode: <code>[llm_mode]</code>
         </p>
     </div>
 </footer>

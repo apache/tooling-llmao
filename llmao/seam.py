@@ -16,23 +16,6 @@ class AuthzError(Exception):
     """Caller is not allowed to perform this action on the project."""
 
 
-class ConfigError(Exception):
-    """Wrong runtime mode or configuration for this feature."""
-
-
-def require_proxy_mode(fn):
-    @functools.wraps(fn)
-    async def wrapper(self, *args, **kwargs):
-        if self._cfg.litellm.mode != "proxy":
-            raise ConfigError(
-                "PAT management requires litellm.mode: proxy "
-                "(and a running LiteLLM with database_url)."
-            )
-        return await fn(self, *args, **kwargs)
-
-    return wrapper
-
-
 def require_member(fn):
     """Expects (self, identity, project, ...)."""
     @functools.wraps(fn)
@@ -89,11 +72,9 @@ class Seam:
     async def team_status(self, identity: Identity, project: str) -> Optional[TeamInfo]:
         return await self._backend.team_info(project)
 
-    @require_proxy_mode
     async def list_my_keys(self, identity: Identity) -> List[KeyInfo]:
         return await self._backend.list_keys(user_id=identity.uid, size=100)
 
-    @require_proxy_mode
     @require_admin
     async def list_automation_keys(self, identity: Identity, project: str) -> List[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
@@ -101,7 +82,6 @@ class Seam:
         keys = await self._backend.list_keys(team_id=team.team_id, size=100)
         return [k for k in keys if k.kind == "automation"]
 
-    @require_proxy_mode
     @require_member
     async def create_personal_key(
         self,
@@ -120,7 +100,6 @@ class Seam:
             metadata={"project": project, "kind": "personal"},
         )
 
-    @require_proxy_mode
     @require_admin
     async def create_automation_key(
         self,
@@ -144,7 +123,6 @@ class Seam:
             },
         )
 
-    @require_proxy_mode
     async def revoke_key(self, identity: Identity, token: str) -> None:
         token = (token or "").strip()
         if not token:

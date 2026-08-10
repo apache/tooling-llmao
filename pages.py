@@ -30,7 +30,7 @@ from easydict import EasyDict as edict
 
 from llmao.auth import current_identity
 from llmao.litellm_client import BackendUnavailable, KeyInfo
-from llmao.seam import AuthzError, ConfigError
+from llmao.seam import AuthzError
 
 APP = asfquart.APP
 
@@ -49,8 +49,6 @@ async def basic_info() -> edict:
     basic.title = "llmao"
     basic.flashes = []
     basic.error = None
-    basic.llm_mode = APP.cfg.litellm.mode
-    basic.is_proxy = APP.cfg.litellm.mode == "proxy"
 
     # Form defaults for create page
     basic.form_project = ""
@@ -132,12 +130,6 @@ async def keys_list():
     result.title = "API keys (PATs)"
     result.keys = []
     result.error = None
-    if not result.is_proxy:
-        result.error = (
-            "PAT management requires litellm.mode: proxy and a running LiteLLM "
-            "with Postgres. Set that in config.yaml and run make proxy."
-        )
-        return result
     try:
         ident = await current_identity(APP.cfg)
         assert ident is not None
@@ -152,10 +144,10 @@ async def keys_list():
             try:
                 for k in await seam.list_automation_keys(ident, p):
                     by_tok.setdefault(k.token, k)
-            except (AuthzError, BackendUnavailable, ConfigError):
+            except (AuthzError, BackendUnavailable):
                 continue
         result.keys = _key_rows(list(by_tok.values()))
-    except (ConfigError, AuthzError, BackendUnavailable) as e:
+    except (AuthzError, BackendUnavailable) as e:
         result.error = str(e)
     return result
 
@@ -166,8 +158,6 @@ async def keys_list():
 async def keys_new_form():
     result = await basic_info()
     result.title = "Create API key"
-    if not result.is_proxy:
-        result.error = "PAT management requires litellm.mode: proxy."
     return result
 
 
@@ -187,7 +177,7 @@ async def keys_new_submit():
             created = await seam.create_automation_key(ident, project, purpose)
         else:
             created = await seam.create_personal_key(ident, project, purpose)
-    except (ConfigError, AuthzError, BackendUnavailable) as e:
+    except (AuthzError, BackendUnavailable) as e:
         result = await basic_info()
         result.title = "Create API key"
         result.error = str(e)
@@ -216,7 +206,7 @@ async def keys_revoke():
         seam = APP.config["LLMAO_SEAM"]
         await seam.revoke_key(ident, token)
         await quart.flash("Key revoked.", "success")
-    except (ConfigError, AuthzError, BackendUnavailable) as e:
+    except (AuthzError, BackendUnavailable) as e:
         await quart.flash(str(e), "danger")
     return quart.redirect("/keys")
 

@@ -1,4 +1,4 @@
-"""Offline tests: mock team provision, seam authz.
+"""Offline tests: mock backend + seam authz.
 
 Authenticated HTTP endpoints require a real asfquart session (OAuth). Those
 paths are not automated while the stack is in flux; expand later if needed.
@@ -14,14 +14,13 @@ import pytest
 from easydict import EasyDict as edict
 
 from llmao.store import StateStore
-from llmao.litellm_client import MockBackend
 from llmao.seam import Seam, Identity, AuthzError
+from tests.mock_backend import MockBackend
 
 
 def _cfg(tmp):
     return edict({
         "litellm": {
-            "mode": "mock",
             "base_url": "http://127.0.0.1:4000",
             "master_key": "sk-test",
             "request_timeout_s": 30,
@@ -60,12 +59,11 @@ def _seed_usage(store: StateStore, project: str, cost: float = 0.01) -> None:
 
 def test_cfg_dotted_access():
     cfg = edict({
-        "litellm": {"mode": "proxy", "base_url": "http://llm:4000", "master_key": "sk-x"},
+        "litellm": {"base_url": "http://llm:4000", "master_key": "sk-x"},
         "budgets": {"default_team_budget_usd": 50, "duration": "7d"},
         "site_admins": ["alice"],
         "state_path": "/tmp/s.json",
     })
-    assert cfg.litellm.mode == "proxy"
     assert cfg.litellm.base_url == "http://llm:4000"
     assert cfg.budgets.default_team_budget_usd == 50
     assert cfg.site_admins == ["alice"]
@@ -89,32 +87,13 @@ def test_personal_key_create_list_revoke_mock():
         with tempfile.TemporaryDirectory() as tmp:
             seam, _, _ = _seam(tmp)
             ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
-            # mock mode rejects PAT product path
-            from llmao.seam import ConfigError
-            with pytest.raises(ConfigError):
-                await seam.create_personal_key(ident, "airflow", "laptop")
-            # Force proxy-shaped cfg with MockBackend for unit path:
-            # create_personal_key requires proxy mode; test backend ops via mock backend directly.
-            from llmao.litellm_client import MockBackend
-            from llmao.store import StateStore
-            from easydict import EasyDict as edict
-            cfg = edict({
-                "litellm": {"mode": "proxy", "base_url": "http://x", "master_key": "sk-x", "request_timeout_s": 5},
-                "budgets": {"default_team_budget_usd": 10, "duration": "30d"},
-                "site_admins": [],
-                "state_path": __import__("os").path.join(tmp, "s2.json"),
-            })
-            store = StateStore(cfg.state_path)
-            backend = MockBackend(cfg, store)
-            from llmao.seam import Seam
-            s = Seam(cfg, backend)
-            created = await s.create_personal_key(ident, "airflow", "laptop-cli")
+            created = await seam.create_personal_key(ident, "airflow", "laptop-cli")
             assert created.secret.startswith("sk-")
             assert created.info.key_alias == "laptop-cli"
-            keys = await s.list_my_keys(ident)
+            keys = await seam.list_my_keys(ident)
             assert len(keys) == 1
-            await s.revoke_key(ident, keys[0].token)
-            assert await s.list_my_keys(ident) == []
+            await seam.revoke_key(ident, keys[0].token)
+            assert await seam.list_my_keys(ident) == []
     asyncio.run(run())
 
 

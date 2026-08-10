@@ -21,9 +21,8 @@ server:
   keyfile: localhost.apache.org+3-key.pem
 
 litellm:
-  # mock = in-process fake teams/usage (no LiteLLM process).
-  # proxy = real LiteLLM admin API at base_url (requires litellm.yaml + Postgres).
-  mode: mock
+  # Always talks to a real LiteLLM admin API (same shape as production).
+  # Local: make db && make proxy (system Postgres + litellm.yaml).
   base_url: http://127.0.0.1:4000
   # Same value as litellm.yaml → general_settings.master_key (must start with sk-).
   # Bearer token for /team/* and /key/* from this process.

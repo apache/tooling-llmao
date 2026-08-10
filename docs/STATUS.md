@@ -16,11 +16,12 @@ Detailed “where we are.” Top-level README stays short and links here.
 | asfquart always | OAuth + LDAP session; no auth-mode split |
 | Run | `main.py` (TLS/`certs`) + ASGI `llmao_app` (Hypercorn) |
 | Config | `APP.cfg` EasyDict from `config.yaml` (dotted access) |
-| LiteLLM admin client | Async **httpx** |
+| LiteLLM admin client | Async **httpx** → **LiteLLMBackend** always (no app mock mode) |
 | Model inventory SoT | **`model_list.yaml`** + LiteLLM `include`; flat `model_info`; **no** `STORE_MODEL_IN_DB` for inventory |
 | Secrets | On-disk YAML; prod **hiera/eyaml**; same `master_key` in `config.yaml` + `litellm.yaml`; provider **API keys** in `model_list.yaml`; **api_base** cleartext |
 | Postgres / Prisma | `litellm[proxy,extra-proxy]`; system PostgreSQL; `make db` |
-| **PAT UX (proxy)** | `/keys` list/create/revoke; personal + admin automation; secret once; revoke modal |
+| **PAT UX** | `/keys` list/create/revoke; personal + admin automation; secret once; revoke modal |
+| Tests | Offline **`tests/mock_backend.py`** injected into Seam — not a config mode |
 
 ### Credential rules (as implemented)
 
@@ -37,9 +38,9 @@ Detailed “where we are.” Top-level README stays short and links here.
 
 **RAI decision pending.** Options: (A) RAI / proxy admins only, (B) PMC Chair/VP (or nominated role), (C) any PMC member (**current code**). Documented in design; tooling may tighten after RAI decides.
 
-### Local proxy path
+### Local path (production-shaped)
 
-Copy three YAMLs from `*.example` → system Postgres + `make db` → matching master keys → `litellm.mode: proxy` → `make proxy` + `make run`.
+Copy three YAMLs from `*.example` → system Postgres + `make db` → matching master keys → `make proxy` + `make run`. There is **no** mock app mode; LiteLLM must be up for PAT UX (else `BackendUnavailable`).
 
 ---
 
@@ -47,7 +48,7 @@ Copy three YAMLs from `*.example` → system Postgres + `make db` → matching m
 
 | Issue | Notes |
 |-------|--------|
-| mock mode | PAT pages refuse; need proxy + DB |
+| LiteLLM down | PAT / admin API pages surface `BackendUnavailable` |
 | Last used | Best-effort; may be `—` or `updated_at` |
 | Model cost $0 | LiteLLM default without pricing metadata |
 | Site admin = `rai` PMC | Not automatic; `site_admins` + isRoot |

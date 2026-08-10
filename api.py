@@ -38,7 +38,7 @@ def _err(status: int, message: str) -> Response:
 
 @APP.get("/healthz")
 async def healthz():
-    return jsonify({"status": "ok", "llm_mode": APP.cfg.litellm.mode})
+    return jsonify({"status": "ok"})
 
 
 @APP.get("/v1/projects/<project>/usage")
