@@ -89,10 +89,13 @@ def test_personal_key_create_list_revoke_mock():
             ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
             created = await seam.create_personal_key(ident, "airflow", "laptop-cli")
             assert created.secret.startswith("sk-")
-            assert created.info.key_alias == "laptop-cli"
+            assert created.info.purpose == "laptop-cli"
+            assert created.info.project == "airflow"
+            assert created.info.user == "jdoe"
+            assert not created.info.is_automation
             keys = await seam.list_my_keys(ident)
             assert len(keys) == 1
-            await seam.revoke_key(ident, keys[0].token)
+            await seam.revoke_key(ident, keys[0].token_id)
             assert await seam.list_my_keys(ident) == []
     asyncio.run(run())
 

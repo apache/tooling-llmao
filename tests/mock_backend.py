@@ -43,14 +43,14 @@ class MockBackend:
     async def list_keys(
         self,
         *,
-        user_id: Optional[str] = None,
+        user: Optional[str] = None,
         team_id: Optional[str] = None,
         size: int = 100,
     ) -> List[KeyInfo]:
         keys = self._store.snapshot().get("keys", [])
         out = []
         for k in keys:
-            if user_id is not None and k.get("user_id") != user_id:
+            if user is not None and k.get("user_id") != user:
                 continue
             if team_id is not None and k.get("team_id") != team_id:
                 continue
@@ -63,17 +63,17 @@ class MockBackend:
         self,
         *,
         team_id: str,
-        key_alias: str,
-        user_id: Optional[str] = None,
+        purpose: str,
+        user: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ) -> CreatedKey:
         secret = f"sk-mock-{uuid.uuid4().hex}"
-        token = f"tok-{uuid.uuid4().hex[:16]}"
+        token_id = f"tok-{uuid.uuid4().hex[:16]}"
         row = {
-            "token": token,
-            "key_alias": key_alias,
+            "token": token_id,
+            "key_alias": purpose,
             "team_id": team_id,
-            "user_id": user_id,
+            "user_id": user,
             "spend": 0.0,
             "max_budget": None,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -87,9 +87,11 @@ class MockBackend:
         self._store.update(_mut)
         return CreatedKey(secret=secret, info=_normalize_key_obj(row))
 
-    async def delete_key(self, token: str) -> None:
+    async def delete_key(self, token_id: str) -> None:
         def _mut(data):
-            data["keys"] = [k for k in data.get("keys", []) if k.get("token") != token]
+            data["keys"] = [
+                k for k in data.get("keys", []) if k.get("token") != token_id
+            ]
 
         self._store.update(_mut)
 

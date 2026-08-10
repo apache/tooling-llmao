@@ -1,7 +1,7 @@
 """The seam — ASF identity joined to LiteLLM teams and PATs.
 
-Project names are LDAP/session names. PATs are LiteLLM virtual keys
-(person = user_id + team_id; automation = team_id only, admin-created).
+Project names are LDAP/session names. PATs are project + user + purpose
+(design §5.1); automation keys omit user (team-scoped exception).
 """
 from __future__ import annotations
 
@@ -73,14 +73,14 @@ class Seam:
         return await self._backend.team_info(project)
 
     async def list_my_keys(self, identity: Identity) -> List[KeyInfo]:
-        return await self._backend.list_keys(user_id=identity.uid, size=100)
+        return await self._backend.list_keys(user=identity.uid, size=100)
 
     @require_admin
     async def list_automation_keys(self, identity: Identity, project: str) -> List[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
         team = await self.ensure_project_team(project)
         keys = await self._backend.list_keys(team_id=team.team_id, size=100)
-        return [k for k in keys if k.kind == "automation"]
+        return [k for k in keys if k.is_automation]
 
     @require_member
     async def create_personal_key(
@@ -95,9 +95,9 @@ class Seam:
         team = await self.ensure_project_team(project)
         return await self._backend.create_key(
             team_id=team.team_id,
-            key_alias=purpose,
-            user_id=identity.uid,
-            metadata={"project": project, "kind": "personal"},
+            purpose=purpose,
+            user=identity.uid,
+            metadata={"project": project},
         )
 
     @require_admin
@@ -107,52 +107,49 @@ class Seam:
         project: str,
         purpose: str,
     ) -> CreatedKey:
-        """Admin-only team-scoped key (no user_id) for scripts after formal request."""
+        """Admin-only team-scoped key (no user) for scripts after formal request."""
         purpose = (purpose or "").strip()
         if not purpose:
             raise AuthzError("purpose is required for automation keys")
         team = await self.ensure_project_team(project)
         return await self._backend.create_key(
             team_id=team.team_id,
-            key_alias=purpose,
-            user_id=None,
+            purpose=purpose,
+            user=None,
             metadata={
                 "project": project,
-                "kind": "automation",
                 "created_by": identity.uid,
             },
         )
 
-    async def revoke_key(self, identity: Identity, token: str) -> None:
-        token = (token or "").strip()
-        if not token:
+    async def revoke_key(self, identity: Identity, token_id: str) -> None:
+        token_id = (token_id or "").strip()
+        if not token_id:
             raise AuthzError("key id required")
         # Confirm ownership: personal key belongs to uid, or automation key on
         # a project they admin.
         keys = await self._backend.list_keys(size=100)
-        match = next((k for k in keys if k.token == token), None)
+        match = next((k for k in keys if k.token_id == token_id), None)
         if match is None:
-            # Try listing as user only
-            mine = await self._backend.list_keys(user_id=identity.uid, size=100)
-            match = next((k for k in mine if k.token == token), None)
+            mine = await self._backend.list_keys(user=identity.uid, size=100)
+            match = next((k for k in mine if k.token_id == token_id), None)
         if match is None:
             raise AuthzError("key not found or not visible")
-        if match.user_id == identity.uid:
-            await self._backend.delete_key(token)
+        if match.user == identity.uid:
+            await self._backend.delete_key(token_id)
             return
-        if match.kind == "automation":
-            project = match.project  # LDAP name from metadata.project
+        if match.is_automation:
+            project = match.project
             if identity.is_site_admin:
-                await self._backend.delete_key(token)
+                await self._backend.delete_key(token_id)
                 return
             if project and identity.admin_of(project):
-                await self._backend.delete_key(token)
+                await self._backend.delete_key(token_id)
                 return
-            # Fall back: any PMC membership that matches team_id via local map
             for p in identity.committees:
                 info = await self._backend.team_info(p)
                 if info and info.team_id == match.team_id:
-                    await self._backend.delete_key(token)
+                    await self._backend.delete_key(token_id)
                     return
         raise AuthzError("not allowed to revoke this key")
 

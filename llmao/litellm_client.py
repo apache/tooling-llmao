@@ -35,19 +35,26 @@ class TeamInfo:
 
 @dataclass
 class KeyInfo:
-    """Normalized key metadata for UX (never the full secret after create)."""
-    token: str  # id / hash for delete and list identity
-    key_alias: str
-    team_id: str
-    user_id: Optional[str]
+    """PAT view model: project + user + purpose (design §5.1).
+
+    Maps from LiteLLM wire fields only at the boundary. ``token_id`` is the
+    LiteLLM ``token`` value used for list/delete — not the one-time ``sk-…``
+    secret (that lives on CreatedKey.secret only).
+    """
+    token_id: str
+    project: str                 # metadata.project (LDAP name)
+    user: Optional[str]          # LiteLLM user_id; None = automation
+    purpose: str                 # LiteLLM key_alias
+    team_id: str                 # LiteLLM opaque team id (API only)
     spend: float
     max_budget: Optional[float]
     created_at: Optional[str]
-    last_used: Optional[str]  # best-effort; LiteLLM may not expose true last-use
-    kind: str  # "personal" | "automation"
-    # ASF LDAP project name — always set on create as metadata.project.
-    project: str
+    last_used: Optional[str]
     blocked: bool = False
+
+    @property
+    def is_automation(self) -> bool:
+        return self.user is None
 
 
 @dataclass
@@ -63,7 +70,7 @@ class Backend(Protocol):
     async def list_keys(
         self,
         *,
-        user_id: Optional[str] = None,
+        user: Optional[str] = None,
         team_id: Optional[str] = None,
         size: int = 100,
     ) -> List[KeyInfo]: ...
@@ -71,21 +78,17 @@ class Backend(Protocol):
         self,
         *,
         team_id: str,
-        key_alias: str,
-        user_id: Optional[str] = None,
+        purpose: str,
+        user: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ) -> CreatedKey: ...
-    async def delete_key(self, token: str) -> None: ...
+    async def delete_key(self, token_id: str) -> None: ...
     async def usage(self, project: Optional[str]) -> List[Dict]: ...
     async def aclose(self) -> None: ...
 
 
 def _normalize_key_obj(raw: Any) -> KeyInfo:
-    """Build KeyInfo from a LiteLLM key object.
-
-    Project name is required: we always store metadata.project (LDAP name) on
-    create. Missing project is a contract bug, not an optional field.
-    """
+    """Build KeyInfo from a LiteLLM key object (wire → design names)."""
     if isinstance(raw, str):
         raise ValueError(
             "key object is a bare token string; need full object with metadata.project"
@@ -102,13 +105,12 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
         )
     project = str(project)
 
-    user_id = raw.get("user_id")
-    kind_meta = meta.get("kind")
-    if kind_meta in ("personal", "automation"):
-        kind = kind_meta
-    else:
-        kind = "automation" if not user_id else "personal"
-    # Prefer explicit last-use fields if present; else updated_at.
+    user_raw = raw.get("user_id")
+    user = str(user_raw) if user_raw else None
+    purpose = str(raw.get("key_alias") or "")
+    if not purpose:
+        raise ValueError("key missing key_alias (purpose)")
+
     last = (
         raw.get("last_used")
         or raw.get("last_active")
@@ -120,12 +122,15 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
     created = raw.get("created_at")
     if created is not None and not isinstance(created, str):
         created = str(created)
-    token = raw.get("token") or raw.get("key") or raw.get("token_id") or ""
+    token_id = raw.get("token") or raw.get("token_id") or ""
+    if not token_id:
+        raise ValueError("key missing token / token_id")
     return KeyInfo(
-        token=str(token),
-        key_alias=str(raw.get("key_alias") or ""),
+        token_id=str(token_id),
+        project=project,
+        user=user,
+        purpose=purpose,
         team_id=str(raw.get("team_id") or ""),
-        user_id=str(user_id) if user_id else None,
         spend=float(raw.get("spend") or 0.0),
         max_budget=(
             float(raw["max_budget"])
@@ -134,8 +139,6 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
         ),
         created_at=created,
         last_used=last,
-        kind=kind,
-        project=project,
         blocked=bool(raw.get("blocked")),
     )
 
@@ -262,7 +265,7 @@ class LiteLLMBackend:
     async def list_keys(
         self,
         *,
-        user_id: Optional[str] = None,
+        user: Optional[str] = None,
         team_id: Optional[str] = None,
         size: int = 100,
     ) -> List[KeyInfo]:
@@ -271,8 +274,8 @@ class LiteLLMBackend:
             "size": size,
             "return_full_object": "true",
         }
-        if user_id:
-            params["user_id"] = user_id
+        if user:
+            params["user_id"] = user
         if team_id:
             params["team_id"] = team_id
         resp = await self._request("GET", "key/list", params=params)
@@ -290,33 +293,34 @@ class LiteLLMBackend:
         self,
         *,
         team_id: str,
-        key_alias: str,
-        user_id: Optional[str] = None,
+        purpose: str,
+        user: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ) -> CreatedKey:
+        meta = dict(metadata or {})
+        if not meta.get("project"):
+            raise BackendUnavailable(
+                "create_key requires metadata.project (ASF LDAP project name)"
+            )
         payload: Dict[str, Any] = {
             "team_id": team_id,
-            "key_alias": key_alias,
-            "metadata": metadata or {},
+            "key_alias": purpose,
+            "metadata": meta,
         }
-        if user_id:
-            payload["user_id"] = user_id
+        if user:
+            payload["user_id"] = user
         resp = await self._request("POST", "key/generate", json=payload)
         self._raise_http(resp)
         body = resp.json()
         secret = body.get("key") or body.get("token")
         if not secret:
             raise BackendUnavailable("LiteLLM key/generate returned no key secret")
-        # Prefer structured info; fall back to fields on the response.
         info_src = body.get("info") or body
-        if isinstance(info_src, dict) and not info_src.get("token"):
-            info_src = {**info_src, "token": body.get("token_id") or body.get("token") or secret}
-        # Ensure metadata.project is on the body we normalize (response may omit it).
-        meta = dict(metadata or {})
-        if not meta.get("project"):
-            raise BackendUnavailable(
-                "create_key requires metadata.project (ASF LDAP project name)"
-            )
+        if isinstance(info_src, dict) and not info_src.get("token") and not info_src.get("token_id"):
+            info_src = {
+                **info_src,
+                "token": body.get("token_id") or body.get("token") or secret,
+            }
         if isinstance(info_src, dict):
             merged = {**info_src}
             src_meta = merged.get("metadata")
@@ -324,34 +328,20 @@ class LiteLLMBackend:
                 src_meta = {}
             merged["metadata"] = {**meta, **src_meta, "project": meta["project"]}
             if not merged.get("key_alias"):
-                merged["key_alias"] = key_alias
+                merged["key_alias"] = purpose
             if not merged.get("team_id"):
                 merged["team_id"] = team_id
-            if user_id and not merged.get("user_id"):
-                merged["user_id"] = user_id
+            if user and not merged.get("user_id"):
+                merged["user_id"] = user
             info_src = merged
         try:
             info = _normalize_key_obj(info_src)
         except ValueError as e:
             raise BackendUnavailable(str(e)) from e
-        if not info.key_alias:
-            info = KeyInfo(
-                token=info.token or secret,
-                key_alias=key_alias,
-                team_id=team_id,
-                user_id=user_id,
-                spend=info.spend,
-                max_budget=info.max_budget,
-                created_at=info.created_at,
-                last_used=info.last_used,
-                kind=info.kind,
-                project=info.project,
-                blocked=info.blocked,
-            )
         return CreatedKey(secret=str(secret), info=info)
 
-    async def delete_key(self, token: str) -> None:
-        resp = await self._request("POST", "key/delete", json={"keys": [token]})
+    async def delete_key(self, token_id: str) -> None:
+        resp = await self._request("POST", "key/delete", json={"keys": [token_id]})
         self._raise_http(resp)
 
     async def usage(self, project: Optional[str]) -> List[Dict]:

@@ -96,15 +96,13 @@ async def basic_info() -> edict:
 def _key_rows(keys: list[KeyInfo]) -> list:
     rows = []
     for k in keys:
-        project = k.project
         budget = k.max_budget
         budget_s = f"${budget:.4f}" if budget is not None else "—"
         rows.append(edict({
-            "token": k.token,
-            "purpose": k.key_alias or "—",
-            "project": project,
-            "kind": k.kind,
-            "kind_label": "Personal" if k.kind == "personal" else "Automation",
+            "token_id": k.token_id,
+            "purpose": k.purpose,
+            "project": k.project,
+            "kind_label": "Automation" if k.is_automation else "Personal",
             "spend": f"${k.spend:.6f}",
             "max_budget": budget_s,
             "last_used": k.last_used or "—",
@@ -134,8 +132,8 @@ async def keys_list():
         ident = await current_identity(APP.cfg)
         assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
-        by_tok: dict[str, KeyInfo] = {
-            k.token: k for k in await seam.list_my_keys(ident)
+        by_id: dict[str, KeyInfo] = {
+            k.token_id: k for k in await seam.list_my_keys(ident)
         }
         admin_projects = (
             ident.all_projects() if ident.is_site_admin else list(ident.committees)
@@ -143,10 +141,10 @@ async def keys_list():
         for p in admin_projects:
             try:
                 for k in await seam.list_automation_keys(ident, p):
-                    by_tok.setdefault(k.token, k)
+                    by_id.setdefault(k.token_id, k)
             except (AuthzError, BackendUnavailable):
                 continue
-        result.keys = _key_rows(list(by_tok.values()))
+        result.keys = _key_rows(list(by_id.values()))
     except (AuthzError, BackendUnavailable) as e:
         result.error = str(e)
     return result
@@ -189,9 +187,9 @@ async def keys_new_submit():
     result = await basic_info()
     result.title = "API key created"
     result.secret = created.secret
-    result.purpose = created.info.key_alias
-    result.project = project
-    result.kind_label = "Automation" if automation else "Personal"
+    result.purpose = created.info.purpose
+    result.project = created.info.project
+    result.kind_label = "Automation" if created.info.is_automation else "Personal"
     return _render("key_created.ezt", result)
 
 
@@ -199,12 +197,12 @@ async def keys_new_submit():
 @asfquart.auth.require
 async def keys_revoke():
     form = await quart.request.form
-    token = (form.get("token") or "").strip()
+    token_id = (form.get("token_id") or form.get("token") or "").strip()
     try:
         ident = await current_identity(APP.cfg)
         assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
-        await seam.revoke_key(ident, token)
+        await seam.revoke_key(ident, token_id)
         await quart.flash("Key revoked.", "success")
     except (AuthzError, BackendUnavailable) as e:
         await quart.flash(str(e), "danger")

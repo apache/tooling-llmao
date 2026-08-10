@@ -27,12 +27,13 @@ Detailed “where we are.” Top-level README stays short and links here.
 
 | Kind | Who creates (today) | Binding |
 |------|---------------------|---------|
-| **Personal** | Committer (self), member of project | `user_id` + `team_id` + purpose (`key_alias`) |
-| **Automation (team-scoped)** | **Any PMC member of project or site admin** (provisional) | `team_id` only; purpose required |
+| **Personal** | Committer (self), member of project | **project + user + purpose** |
+| **Automation (team-scoped)** | **Any PMC member of project or site admin** (provisional) | **project + purpose** (user null) |
 
-- Team ensure → LiteLLM **team** (`team_id`) only; **not** a shared product team PAT.
-- Secret `sk-…` shown **once**; not kept in llmao for product PATs.
-- Project names = LDAP session names (no rename map). Team.`team_alias` and Key.`metadata.project` both hold that name; UI uses **`metadata.project`** (required on every key we create).
+- Design names on `KeyInfo`: `project`, `user`, `purpose`; `token_id` for list/revoke (not the secret). Automation ⇔ `user is None` (no separate `kind`).
+- Wire map: purpose↔`key_alias`, user↔`user_id`, project↔`metadata.project`, token_id↔LiteLLM `token`.
+- Team ensure → LiteLLM **team** only; **not** a shared product team PAT.
+- Secret `sk-…` shown **once** (`CreatedKey.secret`); not kept on `KeyInfo`.
 
 ### Open policy: who may create automation PATs?
 
