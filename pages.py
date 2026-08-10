@@ -96,7 +96,7 @@ async def basic_info() -> edict:
 def _key_rows(keys: list[KeyInfo]) -> list:
     rows = []
     for k in keys:
-        project = k.team_alias or k.team_id or "—"
+        project = k.project
         budget = k.max_budget
         budget_s = f"${budget:.4f}" if budget is not None else "—"
         rows.append(edict({

@@ -45,7 +45,8 @@ class KeyInfo:
     created_at: Optional[str]
     last_used: Optional[str]  # best-effort; LiteLLM may not expose true last-use
     kind: str  # "personal" | "automation"
-    team_alias: Optional[str] = None
+    # ASF LDAP project name — always set on create as metadata.project.
+    project: str
     blocked: bool = False
 
 
@@ -80,22 +81,33 @@ class Backend(Protocol):
 
 
 def _normalize_key_obj(raw: Any) -> KeyInfo:
+    """Build KeyInfo from a LiteLLM key object.
+
+    Project name is required: we always store metadata.project (LDAP name) on
+    create. Missing project is a contract bug, not an optional field.
+    """
     if isinstance(raw, str):
-        return KeyInfo(
-            token=raw,
-            key_alias="",
-            team_id="",
-            user_id=None,
-            spend=0.0,
-            max_budget=None,
-            created_at=None,
-            last_used=None,
-            kind="personal",
+        raise ValueError(
+            "key object is a bare token string; need full object with metadata.project"
         )
     if not isinstance(raw, dict):
         raw = dict(raw) if hasattr(raw, "items") else {}
+    meta = raw.get("metadata") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    project = meta.get("project")
+    if not project:
+        raise ValueError(
+            "key missing metadata.project (ASF LDAP project name required on every key)"
+        )
+    project = str(project)
+
     user_id = raw.get("user_id")
-    kind = "automation" if not user_id else "personal"
+    kind_meta = meta.get("kind")
+    if kind_meta in ("personal", "automation"):
+        kind = kind_meta
+    else:
+        kind = "automation" if not user_id else "personal"
     # Prefer explicit last-use fields if present; else updated_at.
     last = (
         raw.get("last_used")
@@ -123,7 +135,7 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
         created_at=created,
         last_used=last,
         kind=kind,
-        team_alias=raw.get("team_alias"),
+        project=project,
         blocked=bool(raw.get("blocked")),
     )
 
@@ -269,7 +281,10 @@ class LiteLLMBackend:
         keys = body.get("keys") if isinstance(body, dict) else body
         if not keys:
             return []
-        return [_normalize_key_obj(k) for k in keys]
+        try:
+            return [_normalize_key_obj(k) for k in keys]
+        except ValueError as e:
+            raise BackendUnavailable(str(e)) from e
 
     async def create_key(
         self,
@@ -296,7 +311,29 @@ class LiteLLMBackend:
         info_src = body.get("info") or body
         if isinstance(info_src, dict) and not info_src.get("token"):
             info_src = {**info_src, "token": body.get("token_id") or body.get("token") or secret}
-        info = _normalize_key_obj(info_src)
+        # Ensure metadata.project is on the body we normalize (response may omit it).
+        meta = dict(metadata or {})
+        if not meta.get("project"):
+            raise BackendUnavailable(
+                "create_key requires metadata.project (ASF LDAP project name)"
+            )
+        if isinstance(info_src, dict):
+            merged = {**info_src}
+            src_meta = merged.get("metadata")
+            if not isinstance(src_meta, dict):
+                src_meta = {}
+            merged["metadata"] = {**meta, **src_meta, "project": meta["project"]}
+            if not merged.get("key_alias"):
+                merged["key_alias"] = key_alias
+            if not merged.get("team_id"):
+                merged["team_id"] = team_id
+            if user_id and not merged.get("user_id"):
+                merged["user_id"] = user_id
+            info_src = merged
+        try:
+            info = _normalize_key_obj(info_src)
+        except ValueError as e:
+            raise BackendUnavailable(str(e)) from e
         if not info.key_alias:
             info = KeyInfo(
                 token=info.token or secret,
@@ -307,8 +344,9 @@ class LiteLLMBackend:
                 max_budget=info.max_budget,
                 created_at=info.created_at,
                 last_used=info.last_used,
-                kind="automation" if not user_id else "personal",
-                team_alias=info.team_alias,
+                kind=info.kind,
+                project=info.project,
+                blocked=info.blocked,
             )
         return CreatedKey(secret=str(secret), info=info)
 

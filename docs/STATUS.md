@@ -32,7 +32,7 @@ Detailed “where we are.” Top-level README stays short and links here.
 
 - Team ensure → LiteLLM **team** (`team_id`) only; **not** a shared product team PAT.
 - Secret `sk-…` shown **once**; not kept in llmao for product PATs.
-- Project names = LDAP session names (no rename map).
+- Project names = LDAP session names (no rename map). Team.`team_alias` and Key.`metadata.project` both hold that name; UI uses **`metadata.project`** (required on every key we create).
 
 ### Open policy: who may create automation PATs?
 

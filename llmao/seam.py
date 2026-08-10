@@ -141,7 +141,7 @@ class Seam:
             await self._backend.delete_key(token)
             return
         if match.kind == "automation":
-            project = match.team_alias  # LDAP project name when LiteLLM returns it
+            project = match.project  # LDAP name from metadata.project
             if identity.is_site_admin:
                 await self._backend.delete_key(token)
                 return
