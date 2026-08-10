@@ -118,13 +118,16 @@ def test_personal_key_create_list_revoke_mock():
     asyncio.run(run())
 
 
-def test_require_member_refuses_outsider():
-    with tempfile.TemporaryDirectory() as tmp:
-        seam, _, _ = _seam(tmp)
-        ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
-        with pytest.raises(AuthzError):
-            seam.require_member(ident, "kafka")
-        seam.require_member(ident, "airflow")
+def test_team_status_requires_member():
+    async def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, _, _ = _seam(tmp)
+            ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
+            with pytest.raises(AuthzError):
+                await seam.team_status(ident, "kafka")
+            # Member of airflow may query; none provisioned yet.
+            assert await seam.team_status(ident, "airflow") is None
+    asyncio.run(run())
 
 
 def test_activity_requires_pmc_admin():

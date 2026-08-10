@@ -67,10 +67,9 @@ async def project_budget(project: str):
     ident = await current_identity(APP.cfg)
     assert ident is not None
     try:
-        seam.require_member(ident, project)
+        info = await seam.team_status(ident, project)
     except AuthzError as e:
         return _err(403, str(e))
-    info = await seam.team_status(project)
     if info is None:
         return jsonify({"project": project, "provisioned": False})
     return jsonify({

@@ -5,10 +5,11 @@ Project names are LDAP/session names. PATs are LiteLLM virtual keys
 """
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from .litellm_client import Backend, BackendUnavailable, CreatedKey, KeyInfo, TeamInfo
+from .litellm_client import Backend, CreatedKey, KeyInfo, TeamInfo
 
 
 class AuthzError(Exception):
@@ -17,6 +18,41 @@ class AuthzError(Exception):
 
 class ConfigError(Exception):
     """Wrong runtime mode or configuration for this feature."""
+
+
+def require_proxy_mode(fn):
+    @functools.wraps(fn)
+    async def wrapper(self, *args, **kwargs):
+        if self._cfg.litellm.mode != "proxy":
+            raise ConfigError(
+                "PAT management requires litellm.mode: proxy "
+                "(and a running LiteLLM with database_url)."
+            )
+        return await fn(self, *args, **kwargs)
+
+    return wrapper
+
+
+def require_member(fn):
+    """Expects (self, identity, project, ...)."""
+    @functools.wraps(fn)
+    async def wrapper(self, identity: Identity, project: str, *args, **kwargs):
+        if not (identity.is_site_admin or identity.member_of(project)):
+            raise AuthzError(f"{identity.uid} is not a member of {project}")
+        return await fn(self, identity, project, *args, **kwargs)
+
+    return wrapper
+
+
+def require_admin(fn):
+    """Expects (self, identity, project, ...)."""
+    @functools.wraps(fn)
+    async def wrapper(self, identity: Identity, project: str, *args, **kwargs):
+        if not identity.admin_of(project):
+            raise AuthzError(f"{identity.uid} is not a PMC admin of {project}")
+        return await fn(self, identity, project, *args, **kwargs)
+
+    return wrapper
 
 
 @dataclass
@@ -42,13 +78,6 @@ class Seam:
         self._cfg = cfg
         self._backend = backend
 
-    def require_proxy_mode(self) -> None:
-        if self._cfg.litellm.mode != "proxy":
-            raise ConfigError(
-                "PAT management requires litellm.mode: proxy "
-                "(and a running LiteLLM with database_url)."
-            )
-
     async def ensure_project_team(self, project: str) -> TeamInfo:
         return await self._backend.ensure_team(
             project,
@@ -56,40 +85,33 @@ class Seam:
             duration=self._cfg.budgets.duration,
         )
 
-    async def team_status(self, project: str) -> Optional[TeamInfo]:
+    @require_member
+    async def team_status(self, identity: Identity, project: str) -> Optional[TeamInfo]:
         return await self._backend.team_info(project)
 
-    def require_member(self, identity: Identity, project: str) -> None:
-        if not (identity.is_site_admin or identity.member_of(project)):
-            raise AuthzError(f"{identity.uid} is not a member of {project}")
-
-    def require_admin(self, identity: Identity, project: str) -> None:
-        if not identity.admin_of(project):
-            raise AuthzError(f"{identity.uid} is not a PMC admin of {project}")
-
+    @require_proxy_mode
     async def list_my_keys(self, identity: Identity) -> List[KeyInfo]:
-        self.require_proxy_mode()
         return await self._backend.list_keys(user_id=identity.uid, size=100)
 
+    @require_proxy_mode
+    @require_admin
     async def list_automation_keys(self, identity: Identity, project: str) -> List[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
-        self.require_proxy_mode()
-        self.require_admin(identity, project)
         team = await self.ensure_project_team(project)
         keys = await self._backend.list_keys(team_id=team.team_id, size=100)
         return [k for k in keys if k.kind == "automation"]
 
+    @require_proxy_mode
+    @require_member
     async def create_personal_key(
         self,
         identity: Identity,
         project: str,
         purpose: str,
     ) -> CreatedKey:
-        self.require_proxy_mode()
         purpose = (purpose or "").strip()
         if not purpose:
             raise AuthzError("purpose is required")
-        self.require_member(identity, project)
         team = await self.ensure_project_team(project)
         return await self._backend.create_key(
             team_id=team.team_id,
@@ -98,6 +120,8 @@ class Seam:
             metadata={"project": project, "kind": "personal"},
         )
 
+    @require_proxy_mode
+    @require_admin
     async def create_automation_key(
         self,
         identity: Identity,
@@ -105,11 +129,9 @@ class Seam:
         purpose: str,
     ) -> CreatedKey:
         """Admin-only team-scoped key (no user_id) for scripts after formal request."""
-        self.require_proxy_mode()
         purpose = (purpose or "").strip()
         if not purpose:
             raise AuthzError("purpose is required for automation keys")
-        self.require_admin(identity, project)
         team = await self.ensure_project_team(project)
         return await self._backend.create_key(
             team_id=team.team_id,
@@ -122,8 +144,8 @@ class Seam:
             },
         )
 
+    @require_proxy_mode
     async def revoke_key(self, identity: Identity, token: str) -> None:
-        self.require_proxy_mode()
         token = (token or "").strip()
         if not token:
             raise AuthzError("key id required")
@@ -156,6 +178,6 @@ class Seam:
                     return
         raise AuthzError("not allowed to revoke this key")
 
+    @require_admin
     async def project_activity(self, identity: Identity, project: str) -> List[Dict]:
-        self.require_admin(identity, project)
         return await self._backend.usage(project)
