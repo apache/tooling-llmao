@@ -103,7 +103,8 @@ def run_standalone() -> None:
         datefmt=DATE_FORMAT,
     )
 
-    for modname in { "selector_events", "hpack", "httpcore.http11", "sslproto", "asyncio" }:
+    for modname in { "selector_events", "hpack", "sslproto", "asyncio",
+                     "httpcore.http11", "httpcore.connection", }:
         logging.getLogger(modname).setLevel(logging.INFO)
 
     _LOGGER.info(" ** Run-mode: Standalone")
