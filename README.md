@@ -205,6 +205,6 @@ config.yaml.example      → config.yaml (gitignored)
 litellm.yaml.example     → litellm.yaml (include model_list.yaml)
 model_list.yaml.example  → model_list.yaml (inventory SoT; keys from eyaml)
 certs/                   mkcert PEMs + README
-llmao/                   seam, auth, models, litellm_client, store
+llmao/                   seam, auth, models, litellm_client
 tests/                   offline seam + model_list / LiteLLM metadata tests
 ```

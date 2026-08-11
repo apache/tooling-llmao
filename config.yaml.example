@@ -36,7 +36,6 @@ budgets:
 # uids that may view any project's activity (plus asfquart isRoot)
 site_admins: []
 
-state_path: ./llmao-state.json
 
 # Shared model inventory (LiteLLM include + llmao UX). Relative to app root.
 models_path: model_list.yaml

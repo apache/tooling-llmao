@@ -61,12 +61,18 @@ The app **always** uses **LiteLLMBackend** against a real LiteLLM admin API.
 Offline **MockBackend** lives under `tests/` and is injected only by unit
 tests—not a second runtime mode.
 
+**Team ids:** in-process cache `project (team_alias) → team_id` only (immutable
+under our rules). Warmed at startup (`before_serving` + `warm()`, fail-fast if
+LiteLLM is down). Spend/budget always from live `team/info` when the id is
+known; after a cache-miss `team/list`, use list-row fields (no redundant
+`team/info`). No on-disk state store.
+
 ## The seam
 
 `seam.py`:
 
 1. **authorizes** project membership / PMC admin after asfquart has authenticated;
-2. **resolves** the ASF project to a LiteLLM team (budget on first use).
+2. **delegates** project-scoped team/key ops to the backend (product API speaks project).
 
 ## Request path (this process)
 

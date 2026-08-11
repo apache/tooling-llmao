@@ -8,13 +8,10 @@ LiteLLM opaque team_id is internal to LiteLLMBackend only.
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
 
 import httpx
-
-from .store import StateStore
 
 
 class BudgetExceeded(Exception):
@@ -155,11 +152,15 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
 
 
 class LiteLLMBackend:
-    """Talks to a running litellm proxy via httpx.AsyncClient."""
+    """Talks to a running litellm proxy via httpx.AsyncClient.
 
-    def __init__(self, cfg: Any, store: StateStore):
+    In-process cache is only project (team_alias) → team_id. Spend/budget are
+    never taken from the cache. Call ``warm()`` at process start (fail-fast).
+    """
+
+    def __init__(self, cfg: Any):
         self._cfg = cfg
-        self._store = store
+        self._team_ids: Dict[str, str] = {}  # project → team_id
         base = cfg.litellm.base_url.rstrip("/") + "/"
         timeout_s = int(cfg.litellm.request_timeout_s)
         self._client = httpx.AsyncClient(
@@ -195,43 +196,60 @@ class LiteLLMBackend:
                 f"LiteLLM admin error {e.response.status_code}: {e.response.text}"
             ) from e
 
-    def _remember_team(self, project: str, team_id: str, budget_usd: float) -> None:
-        def _mut(data):
-            data.setdefault("teams", {})[project] = {
-                "team_id": team_id,
-                "max_budget": budget_usd,
-                "spend": 0.0,
-                "created_at": time.time(),
-            }
-        self._store.update(_mut)
+    def _ingest_team_list(self, teams: List[Any]) -> List[Dict[str, Any]]:
+        """Update project→team_id cache from team/list rows; return dict rows."""
+        rows: List[Dict[str, Any]] = []
+        for t in teams:
+            if hasattr(t, "model_dump"):
+                d = t.model_dump()
+            elif hasattr(t, "dict"):
+                d = t.dict()
+            elif isinstance(t, dict):
+                d = t
+            else:
+                continue
+            rows.append(d)
+            alias = d.get("team_alias")
+            tid = d.get("team_id")
+            if alias and tid:
+                self._team_ids[str(alias)] = str(tid)
+        return rows
 
-    async def _find_team_id_by_alias(self, project: str) -> Optional[str]:
+    async def _team_list_rows(self) -> List[Dict[str, Any]]:
         resp = await self._request("GET", "team/list")
-        if not resp.is_success:
-            return None
+        self._raise_http(resp)
         body = resp.json()
         teams = body if isinstance(body, list) else body.get("teams") or body.get("data") or []
-        for t in teams:
-            if isinstance(t, dict) and t.get("team_alias") == project:
-                return t.get("team_id")
-            if hasattr(t, "team_alias") and getattr(t, "team_alias", None) == project:
-                return getattr(t, "team_id", None)
-        return None
+        if not isinstance(teams, list):
+            teams = []
+        return self._ingest_team_list(teams)
 
-    async def _ensure_team_id(self, project: str) -> str:
+    @staticmethod
+    def _team_info_from_row(row: Dict[str, Any]) -> TeamInfo:
+        return TeamInfo(
+            str(row.get("team_id") or ""),
+            float(row.get("max_budget") or 0),
+            float(row.get("spend") or 0),
+        )
+
+    async def warm(self) -> None:
+        """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
+        await self._team_list_rows()
+
+    async def ensure_team_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
+        project = (project or "").strip()
+        if not project:
+            raise BackendUnavailable("project is required")
+        if project in self._team_ids:
+            return self._team_ids[project]
+
+        rows = await self._team_list_rows()
+        if project in self._team_ids:
+            return self._team_ids[project]
+
         budget_usd = float(self._cfg.budgets.default_team_budget_usd)
         duration = self._cfg.budgets.duration
-
-        existing = await self.team_info(project)
-        if existing:
-            return existing.team_id
-
-        found = await self._find_team_id_by_alias(project)
-        if found:
-            self._remember_team(project, found, budget_usd)
-            return found
-
         resp = await self._request(
             "POST",
             "team/new",
@@ -242,38 +260,50 @@ class LiteLLMBackend:
             },
         )
         if resp.status_code >= 400:
-            found = await self._find_team_id_by_alias(project)
-            if found:
-                self._remember_team(project, found, budget_usd)
-                return found
+            await self._team_list_rows()
+            if project in self._team_ids:
+                return self._team_ids[project]
             self._raise_http(resp)
 
         team_id = resp.json().get("team_id")
         if not team_id:
             raise BackendUnavailable("LiteLLM team/new returned no team_id")
-        self._remember_team(project, team_id, budget_usd)
+        self._team_ids[project] = str(team_id)
         return str(team_id)
 
     async def team_info(self, project: str) -> Optional[TeamInfo]:
-        t = self._store.snapshot().get("teams", {}).get(project)
-        if not t:
+        """Live team spend/budget. Cache holds ids only; spend is never cached.
+
+        Cache hit → team/info. Cache miss → team/list (fills cache + returns
+        list-row fields; no second team/info).
+        """
+        project = (project or "").strip()
+        if not project:
             return None
-        spend = t.get("spend", 0.0)
-        max_budget = t.get("max_budget", 0.0)
-        try:
+
+        if project in self._team_ids:
+            team_id = self._team_ids[project]
             resp = await self._request(
                 "GET",
                 "team/info",
-                params={"team_id": t["team_id"]},
+                params={"team_id": team_id},
             )
-            if resp.is_success:
-                info = resp.json().get("team_info") or resp.json()
-                if isinstance(info, dict):
-                    spend = info.get("spend", spend)
-                    max_budget = info.get("max_budget", max_budget)
-        except BackendUnavailable:
-            pass
-        return TeamInfo(t["team_id"], float(max_budget or 0), float(spend or 0))
+            self._raise_http(resp)
+            body = resp.json()
+            info = body.get("team_info") or body
+            if not isinstance(info, dict):
+                info = {}
+            return TeamInfo(
+                team_id,
+                float(info.get("max_budget") or 0),
+                float(info.get("spend") or 0),
+            )
+
+        rows = await self._team_list_rows()
+        for row in rows:
+            if str(row.get("team_alias") or "") == project:
+                return self._team_info_from_row(row)
+        return None
 
     async def list_keys(
         self,
@@ -290,11 +320,9 @@ class LiteLLMBackend:
         if user:
             params["user_id"] = user
         if project:
-            # Resolve project → team_id for LiteLLM filter (no ensure/create).
-            team_id = await self._find_team_id_by_alias(project)
-            if not team_id:
-                cached = self._store.snapshot().get("teams", {}).get(project)
-                team_id = cached.get("team_id") if cached else None
+            if project not in self._team_ids:
+                await self._team_list_rows()
+            team_id = self._team_ids.get(project)
             if not team_id:
                 return []
             params["team_id"] = team_id
@@ -320,7 +348,7 @@ class LiteLLMBackend:
         project = (project or "").strip()
         if not project:
             raise BackendUnavailable("create_key requires project")
-        team_id = await self._ensure_team_id(project)
+        team_id = await self.ensure_team_id(project)
         meta = dict(metadata or {})
         meta["project"] = project
         payload: Dict[str, Any] = {
@@ -366,11 +394,5 @@ class LiteLLMBackend:
         self._raise_http(resp)
 
     async def usage(self, project: Optional[str]) -> List[Dict]:
-        rows = self._store.snapshot().get("usage", [])
-        if project is None:
-            return list(rows)
-        return [r for r in rows if r.get("project") == project]
-
-
-def make_backend(cfg: Any, store: StateStore) -> Backend:
-    return LiteLLMBackend(cfg, store)
+        # Spend APIs not wired yet.
+        return []

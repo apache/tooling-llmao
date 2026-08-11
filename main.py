@@ -50,9 +50,8 @@ def create_app():
     )
 
     from llmao.auth import make_token_handler
-    from llmao.litellm_client import make_backend
+    from llmao.litellm_client import LiteLLMBackend
     from llmao.seam import Seam
-    from llmao.store import StateStore
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
     from llmao.models import load_model_list
@@ -60,8 +59,7 @@ def create_app():
     # Fail-fast: model_list.yaml is required (same presumption as config.yaml).
     load_model_list(cfg=app.cfg)
 
-    store = StateStore(app.cfg.state_path)
-    backend = make_backend(app.cfg, store)
+    backend = LiteLLMBackend(app.cfg)
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
     app.config["LLMAO_SEAM"] = seam
@@ -82,6 +80,15 @@ def create_app():
             resp.status_code = 500
             return resp
         return exc
+
+    @app.before_serving
+    async def _warm_backend():
+        # Fail-fast if LiteLLM is down (puppet starts proxy first; local: make proxy).
+        await backend.warm()
+        _LOGGER.info(
+            "LiteLLM team cache warmed (%d project→team_id mappings)",
+            len(backend._team_ids),
+        )
 
     @app.after_serving
     async def _close_backend():
