@@ -32,8 +32,8 @@ Detailed “where we are.” Top-level README stays short and links here.
 
 - Design names on `KeyInfo`: `project`, `user`, `purpose`; `token_id` for list/revoke (not the secret). Automation ⇔ `user is None` (no separate `kind`).
 - Automation keys store **`metadata.created_by`** (ASF uid who minted and saw the secret); surfaced as `KeyInfo.created_by` so other PMCs know who to ask.
-- Wire map: purpose↔`key_alias`, user↔`user_id`, project↔`metadata.project`, token_id↔LiteLLM `token`, created_by↔`metadata.created_by`.
-- Team ensure → LiteLLM **team** only; **not** a shared product team PAT.
+- Seam/Backend product API speaks **project** (LDAP); LiteLLM `team_id` is resolved only inside `LiteLLMBackend`.
+- Wire map: purpose↔`key_alias`, user↔`user_id`, project↔`metadata.project` + team_alias, token_id↔LiteLLM `token`, created_by↔`metadata.created_by`.
 - Secret `sk-…` shown **once** (`CreatedKey.secret`); not kept on `KeyInfo`.
 
 ### Open policy: who may create automation PATs?

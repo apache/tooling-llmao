@@ -62,15 +62,19 @@ def test_cfg_dotted_access():
     assert cfg.site_admins == ["alice"]
 
 
-def test_ensure_team_provisions_budget():
+def test_create_key_provisions_project_team():
+    """create_key ensures project team exists (mock: team_id == project)."""
     async def run():
-        seam, cfg, _ = _seam()
-        info = await seam.ensure_project_team("airflow")
-        assert info.team_id
-        # Team ensure does not mint a product PAT (key stays empty).
+        seam, cfg, backend = _seam()
+        ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
+        assert await seam.team_status(ident, "airflow") is None
+        created = await seam.create_personal_key(ident, "airflow", "cli")
+        assert created.info.project == "airflow"
+        assert created.info.team_id == "airflow"
+        info = await seam.team_status(ident, "airflow")
+        assert info is not None
+        assert info.team_id == "airflow"
         assert info.max_budget == float(cfg.budgets.default_team_budget_usd)
-        again = await seam.ensure_project_team("airflow")
-        assert again.team_id == info.team_id
     asyncio.run(run())
 
 
@@ -126,7 +130,7 @@ def test_activity_requires_pmc_admin():
         seam, _, backend = _seam()
         member = Identity(uid="jdoe", projects=["airflow"], committees=[])
         admin = Identity(uid="chair", projects=[], committees=["airflow"])
-        await seam.ensure_project_team("airflow")
+        backend._touch_team("airflow")
         _seed_usage(backend, "airflow")
         with pytest.raises(AuthzError):
             await seam.project_activity(member, "airflow")
@@ -139,7 +143,7 @@ def test_site_admin_sees_any_project():
     async def run():
         seam, _, backend = _seam()
         root = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
-        await seam.ensure_project_team("airflow")
+        backend._touch_team("airflow")
         _seed_usage(backend, "airflow")
         rows = await seam.project_activity(root, "airflow")
         assert len(rows) == 1

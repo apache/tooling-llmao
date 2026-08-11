@@ -2,8 +2,9 @@
 
 LiteLLMBackend talks to a real LiteLLM proxy. The running app always uses this
 client. Tests inject a mock from tests/mock_backend.py — never selected by config.
-PATs are virtual keys; list/create/delete go through admin APIs. Team ensure
-stores team_id only (not a product PAT).
+
+Product API speaks LDAP **project** names. Mapping project (team_alias) →
+LiteLLM opaque team_id is internal to LiteLLMBackend only.
 """
 from __future__ import annotations
 
@@ -67,19 +68,18 @@ class CreatedKey:
 
 
 class Backend(Protocol):
-    async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo: ...
     async def team_info(self, project: str) -> Optional[TeamInfo]: ...
     async def list_keys(
         self,
         *,
         user: Optional[str] = None,
-        team_id: Optional[str] = None,
+        project: Optional[str] = None,
         size: int = 100,
     ) -> List[KeyInfo]: ...
     async def create_key(
         self,
         *,
-        team_id: str,
+        project: str,
         purpose: str,
         user: Optional[str] = None,
         metadata: Optional[Dict] = None,
@@ -218,16 +218,19 @@ class LiteLLMBackend:
                 return getattr(t, "team_id", None)
         return None
 
-    async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
+    async def _ensure_team_id(self, project: str) -> str:
+        """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
+        budget_usd = float(self._cfg.budgets.default_team_budget_usd)
+        duration = self._cfg.budgets.duration
+
         existing = await self.team_info(project)
         if existing:
-            return existing
+            return existing.team_id
 
-        # Already on LiteLLM but not in local map?
         found = await self._find_team_id_by_alias(project)
         if found:
             self._remember_team(project, found, budget_usd)
-            return TeamInfo(found, budget_usd, 0.0)
+            return found
 
         resp = await self._request(
             "POST",
@@ -239,18 +242,17 @@ class LiteLLMBackend:
             },
         )
         if resp.status_code >= 400:
-            # Race / already exists
             found = await self._find_team_id_by_alias(project)
             if found:
                 self._remember_team(project, found, budget_usd)
-                return TeamInfo(found, budget_usd, 0.0)
+                return found
             self._raise_http(resp)
 
         team_id = resp.json().get("team_id")
         if not team_id:
             raise BackendUnavailable("LiteLLM team/new returned no team_id")
         self._remember_team(project, team_id, budget_usd)
-        return TeamInfo(team_id, budget_usd, 0.0)
+        return str(team_id)
 
     async def team_info(self, project: str) -> Optional[TeamInfo]:
         t = self._store.snapshot().get("teams", {}).get(project)
@@ -277,7 +279,7 @@ class LiteLLMBackend:
         self,
         *,
         user: Optional[str] = None,
-        team_id: Optional[str] = None,
+        project: Optional[str] = None,
         size: int = 100,
     ) -> List[KeyInfo]:
         params: Dict[str, Any] = {
@@ -287,7 +289,14 @@ class LiteLLMBackend:
         }
         if user:
             params["user_id"] = user
-        if team_id:
+        if project:
+            # Resolve project → team_id for LiteLLM filter (no ensure/create).
+            team_id = await self._find_team_id_by_alias(project)
+            if not team_id:
+                cached = self._store.snapshot().get("teams", {}).get(project)
+                team_id = cached.get("team_id") if cached else None
+            if not team_id:
+                return []
             params["team_id"] = team_id
         resp = await self._request("GET", "key/list", params=params)
         self._raise_http(resp)
@@ -303,16 +312,17 @@ class LiteLLMBackend:
     async def create_key(
         self,
         *,
-        team_id: str,
+        project: str,
         purpose: str,
         user: Optional[str] = None,
         metadata: Optional[Dict] = None,
     ) -> CreatedKey:
+        project = (project or "").strip()
+        if not project:
+            raise BackendUnavailable("create_key requires project")
+        team_id = await self._ensure_team_id(project)
         meta = dict(metadata or {})
-        if not meta.get("project"):
-            raise BackendUnavailable(
-                "create_key requires metadata.project (ASF LDAP project name)"
-            )
+        meta["project"] = project
         payload: Dict[str, Any] = {
             "team_id": team_id,
             "key_alias": purpose,
@@ -337,7 +347,7 @@ class LiteLLMBackend:
             src_meta = merged.get("metadata")
             if not isinstance(src_meta, dict):
                 src_meta = {}
-            merged["metadata"] = {**meta, **src_meta, "project": meta["project"]}
+            merged["metadata"] = {**meta, **src_meta, "project": project}
             if not merged.get("key_alias"):
                 merged["key_alias"] = purpose
             if not merged.get("team_id"):

@@ -2,6 +2,8 @@
 
 Project names are LDAP/session names. PATs are project + user + purpose
 (design §5.1); automation keys omit user (team-scoped exception).
+
+The seam speaks **project** only; mapping to LiteLLM team_id is the backend's job.
 """
 from __future__ import annotations
 
@@ -61,13 +63,6 @@ class Seam:
         self._cfg = cfg
         self._backend = backend
 
-    async def ensure_project_team(self, project: str) -> TeamInfo:
-        return await self._backend.ensure_team(
-            project,
-            budget_usd=float(self._cfg.budgets.default_team_budget_usd),
-            duration=self._cfg.budgets.duration,
-        )
-
     @require_member
     async def team_status(self, identity: Identity, project: str) -> Optional[TeamInfo]:
         return await self._backend.team_info(project)
@@ -78,8 +73,7 @@ class Seam:
     @require_admin
     async def list_automation_keys(self, identity: Identity, project: str) -> List[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
-        team = await self.ensure_project_team(project)
-        keys = await self._backend.list_keys(team_id=team.team_id, size=100)
+        keys = await self._backend.list_keys(project=project, size=100)
         return [k for k in keys if k.is_automation]
 
     @require_member
@@ -92,12 +86,10 @@ class Seam:
         purpose = (purpose or "").strip()
         if not purpose:
             raise AuthzError("purpose is required")
-        team = await self.ensure_project_team(project)
         return await self._backend.create_key(
-            team_id=team.team_id,
+            project=project,
             purpose=purpose,
             user=identity.uid,
-            metadata={"project": project},
         )
 
     @require_admin
@@ -111,15 +103,11 @@ class Seam:
         purpose = (purpose or "").strip()
         if not purpose:
             raise AuthzError("purpose is required for automation keys")
-        team = await self.ensure_project_team(project)
         return await self._backend.create_key(
-            team_id=team.team_id,
+            project=project,
             purpose=purpose,
             user=None,
-            metadata={
-                "project": project,
-                "created_by": identity.uid,
-            },
+            metadata={"created_by": identity.uid},
         )
 
     async def revoke_key(self, identity: Identity, token_id: str) -> None:
@@ -146,11 +134,6 @@ class Seam:
             if project and identity.admin_of(project):
                 await self._backend.delete_key(token_id)
                 return
-            for p in identity.committees:
-                info = await self._backend.team_info(p)
-                if info and info.team_id == match.team_id:
-                    await self._backend.delete_key(token_id)
-                    return
         raise AuthzError("not allowed to revoke this key")
 
     @require_admin
