@@ -5,10 +5,10 @@ credential rules, ownership, and non-goals live in the **master design**:
 
 - **Committers:** `apache/rai-private` → `services/llmao/README.md`
 
-This app is the **asfquart / Tooling half** of the gateway: identity, ASF
-project ↔ LiteLLM team mapping, authorization, and (next) PAT lifecycle UX.
-**LiteLLM** is the OpenAI-compatible inference path, budgets, virtual keys, and
-metering. Completions are **not** re-proxied through this process.
+This app is the **asfquart / Tooling half** of the gateway: identity, project
+vocabulary, PAT UX, and (planned) project envelope UX. **LiteLLM** is the
+inference pipe and meter. Completions are **not** re-proxied through this process.
+Product concepts: rai-private design; planned UI work: `docs/STATUS.md`.
 
 ## Always asfquart
 

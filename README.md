@@ -1,36 +1,26 @@
 # llmao
 
-Tooling’s **implementation** of the ASF LLM gateway seam at `llm.apache.org`:
-asfquart for Apache identity and (soon) PAT lifecycle; admin access to LiteLLM
-for teams, budgets, and virtual keys.
+Tooling’s **implementation** of the ASF LLM gateway seam at `llm.apache.org`.
 
-### Product design (by reference)
+**What this app is for:** Apache-facing control plane for **shared, attributed,
+limited** access to Foundation-sanctioned inference. You sign in with ASF,
+manage **PATs** (and later project envelopes), and browse the model catalog.
+**Inference** goes to the **LiteLLM proxy** with a PAT — not through a chat UI
+here.
 
-The **authoritative product design** is not duplicated here. Committers with
-access: **`apache/rai-private`** → `services/llmao/README.md` (goals, credential
-model, teams/limits, ownership, non-goals, rejected alternatives).
-
-| Tree | Role |
-|------|------|
-| `apache/rai-private` → `services/llmao/` | Master design (RAI) |
-| **this repo** (`apache/tooling-llmao`) | Software Tooling builds |
-| Infra `p6/modules/llmao` | Puppet / production deploy |
-
-asfquart owns identity and per-PMC authorization. **LiteLLM** owns teams,
-**virtual keys** (the PATs), budgets, metering, and the OpenAI-compatible API
-that **clients** use. This process is the **seam** (project → team mapping,
-authz, key management UX next)—not a second completion proxy.
-
-Scripted workloads are primary (design §2 / §5). Point Cursor, CLIs, and SDKs
-at the LiteLLM OpenAI endpoint with a project PAT (`sk-…`), not at a chat form
-in this app.
+| Doc | Role |
+|-----|------|
+| **`apache/rai-private` → `services/llmao/README.md`** | Product design (concepts, policy) |
+| **[`docs/STATUS.md`](docs/STATUS.md)** | Build status + **planned UX** backlog |
+| **This README** | How to run and use the software |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
+| Infra `p6/modules/llmao` | Production deploy |
 
 ```
-ASF id ──oauth/JWT──►  asfquart / llmao     ──admin──►  litellm proxy
-                       (who you are,                    (teams, budgets,
-                        what PMCs, PATs)                 virtual keys)
-
-client tools ────────────────────────────────PAT────►  litellm ──► models
+ASF id ──oauth──►  llmao (identity, PAT UX, project governance UI)
+                         │ admin
+                         ▼
+client tools ──PAT──►  LiteLLM proxy ──► models
 ```
 
 ---
@@ -99,26 +89,20 @@ make test          # offline seam + model_list tests (no OAuth session automatio
 
 ---
 
-## What works today (summary)
+## Using the gateway (after sign-in)
 
-ASF login (asfquart), project membership from LDAP, LiteLLM admin via async
-httpx, **`model_list.yaml`** inventory (include + UX), system Postgres + Prisma
-setup, and **PAT UX** against live LiteLLM (personal keys; provisional automation keys).
-Unit tests use `tests/mock_backend.py` only.
+1. **My Keys** — create a personal PAT for a project you belong to (purpose optional).  
+   Copy the secret **once**.  
+2. Point your client at the LiteLLM OpenAI-compatible base URL with that `sk-…` key.  
+   Use a **model id** from **Models** as the `model` parameter.  
+3. **Other Keys** (PMC / site admin) — automation keys; who minted them is recorded as `created_by`.  
+4. **Models** — sanctioned inventory (supply-path details for site admins only).
 
-Full status, edge cases, and backlog: **[`docs/STATUS.md`](docs/STATUS.md)**.  
-Architecture: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.  
+**Projects** (envelopes, member caps, by-person usage) and **Reports** are product intent — see design §6 and the UX backlog in [`docs/STATUS.md`](docs/STATUS.md).
+
+Full status and phased UI plan: **[`docs/STATUS.md`](docs/STATUS.md)**.  
 Product design: **rai-private** `services/llmao/README.md`.  
-Ops plans: Infra **`p6/modules/llmao/README.md`**.
-
-### Planned (not yet done) — high level only
-
-- Harden PAT flows against live LiteLLM edge cases  
-- **Who may create team-scoped / automation PATs** (RAI policy; may be RAI-only, Chair/VP, or PMC)  
-- Site-admin via `rai` PMC; PMC notification email; budgets/capacity UX  
-- Production Puppet/systemd (p6); cleanup of container-oriented paths  
-
-Details: [`docs/STATUS.md`](docs/STATUS.md).
+Ops: Infra **`p6/modules/llmao/README.md`**.
 
 ---
 
