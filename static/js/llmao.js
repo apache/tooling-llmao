@@ -33,10 +33,11 @@ document.addEventListener("DOMContentLoaded", function () {
       set("mdLicense", btn.getAttribute("data-license"));
       set("mdModality", btn.getAttribute("data-modality"));
       set("mdOpenness", btn.getAttribute("data-openness"));
-      var thinking = btn.getAttribute("data-thinking") === "True" ||
-        btn.getAttribute("data-thinking") === "true";
-      var thinksDefault = btn.getAttribute("data-thinks-default") === "True" ||
-        btn.getAttribute("data-thinks-default") === "true";
+      function truthy(v) {
+        return v === "True" || v === "true" || v === "1" || v === "yes";
+      }
+      var thinking = truthy(btn.getAttribute("data-thinking"));
+      var thinksDefault = truthy(btn.getAttribute("data-thinks-default"));
       var thinkText = thinking
         ? (thinksDefault ? "Supported (on by default)" : "Supported (off by default)")
         : "Not advertised";
@@ -44,8 +45,7 @@ document.addEventListener("DOMContentLoaded", function () {
       set("mdNotes", btn.getAttribute("data-notes"));
 
       var supply = document.getElementById("mdSupplyBlock");
-      var reveal = btn.getAttribute("data-reveal-supply") === "True" ||
-        btn.getAttribute("data-reveal-supply") === "true";
+      var reveal = truthy(btn.getAttribute("data-reveal-supply"));
       if (supply) {
         if (reveal) {
           supply.classList.remove("d-none");

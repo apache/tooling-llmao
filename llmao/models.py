@@ -59,7 +59,15 @@ _SUPPLY_PATH_KEYS = frozenset({
 })
 
 
+def _oneline(s: Any) -> str:
+    """Collapse whitespace so values stay safe in single-line HTML attributes."""
+    if s is None or s is False:
+        return ""
+    return " ".join(str(s).split())
+
+
 def _hosting_label(m: Dict[str, Any]) -> str:
+    """Public hosting class (not partnership detail). Prefer self_hosted flag."""
     if m.get("self_hosted") is True:
         return "Self-hosted"
     if m.get("self_hosted") is False:
@@ -82,40 +90,40 @@ def ux_models(
 
     When ``reveal_supply`` is False (normal committers), omit fields that
     describe procurement, weight paths, or commercial partnerships.
+
+    Free-text is collapsed to one line for HTML data-* attributes (EZT
+    HTML-escapes quotes; embedded newlines still break attributes).
     """
     rows = []
     for m in public_models(path, cfg=cfg):
         if not reveal_supply:
             m = {k: v for k, v in m.items() if k not in _SUPPLY_PATH_KEYS}
-        name = m.get("model_name") or ""
-        display = m.get("display_name") or name
+        name = _oneline(m.get("model_name"))
+        display = _oneline(m.get("display_name")) or name
         ctx = m.get("context_window")
         rows.append({
             "model_name": name,
             "display_name": display,
-            "hosting_label": _hosting_label(m if reveal_supply else {
-                **m,
-                "self_hosted": m.get("self_hosted"),
-            }),
+            "hosting_label": _hosting_label(m),
             "self_hosted": bool(m.get("self_hosted")),
             "context_window": ctx if ctx is not None else "—",
-            "license": m.get("license") or "—",
-            "modality": m.get("modality") or "",
+            "license": _oneline(m.get("license")) or "—",
+            "modality": _oneline(m.get("modality")),
             "supports_thinking": bool(m.get("supports_thinking")),
             "thinks_by_default": bool(m.get("thinks_by_default")),
-            "openness": m.get("openness") or "",
-            "notes": m.get("notes") or "",
+            "openness": _oneline(m.get("openness")),
+            "notes": _oneline(m.get("notes")),
             "reveal_supply": reveal_supply,
             # Admin-only supply fields (empty strings when redacted)
-            "provider": (m.get("provider") or "") if reveal_supply else "",
+            "provider": _oneline(m.get("provider")) if reveal_supply else "",
             "weights_distribution": (
-                m.get("weights_distribution") or ""
-            ) if reveal_supply else "",
+                _oneline(m.get("weights_distribution")) if reveal_supply else ""
+            ),
             "training_data_provenance": (
-                m.get("training_data_provenance") or ""
-            ) if reveal_supply else "",
+                _oneline(m.get("training_data_provenance")) if reveal_supply else ""
+            ),
             "provenance_record": (
-                m.get("provenance_record") or ""
-            ) if reveal_supply else "",
+                _oneline(m.get("provenance_record")) if reveal_supply else ""
+            ),
         })
     return rows

@@ -56,9 +56,12 @@ def test_ux_models_redacts_supply_path_for_non_admins():
         assert r["provider"] == ""
         assert r["weights_distribution"] == ""
         assert r["hosting_label"] in ("Self-hosted", "External", "—")
+        # Free-text flattened for data-* attributes (no raw newlines).
+        assert "\n" not in r["notes"]
     for f in full:
         # Example inventory includes weights_distribution for self-host models.
         assert f.get("weights_distribution") or f.get("provider")
+        assert "\n" not in f["notes"]
 
 
 def test_litellm_deployment_preserves_model_info_extras():
