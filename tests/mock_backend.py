@@ -1,7 +1,8 @@
 """In-process LiteLLM stand-in for the test suite only.
 
 The running app always uses LiteLLMBackend against a real proxy. Tests inject
-this mock so seam authz and PAT flows can run offline.
+this mock so seam authz and PAT flows can run offline. State lives in a plain
+in-memory dict — no StateStore / disk.
 """
 from __future__ import annotations
 
@@ -10,32 +11,32 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from llmao.litellm_client import CreatedKey, KeyInfo, TeamInfo, _normalize_key_obj
-from llmao.store import StateStore
 
 
 class MockBackend:
-    def __init__(self, cfg: Any, store: StateStore):
+    def __init__(self, cfg: Any):
         self._cfg = cfg
-        self._store = store
+        self._data: Dict[str, Any] = {
+            "teams": {},
+            "keys": [],
+            "usage": [],
+        }
 
     async def ensure_team(self, project: str, budget_usd: float, duration: str) -> TeamInfo:
-        def _mut(data):
-            teams = data.setdefault("teams", {})
-            if project not in teams:
-                teams[project] = {
-                    "team_id": f"team-{uuid.uuid4().hex[:12]}",
-                    "max_budget": budget_usd,
-                    "spend": 0.0,
-                    "duration": duration,
-                    "created_at": time.time(),
-                }
-            t = teams[project]
-            return TeamInfo(t["team_id"], t.get("max_budget", 0.0), t.get("spend", 0.0))
-
-        return self._store.update(_mut)
+        teams = self._data.setdefault("teams", {})
+        if project not in teams:
+            teams[project] = {
+                "team_id": f"team-{uuid.uuid4().hex[:12]}",
+                "max_budget": budget_usd,
+                "spend": 0.0,
+                "duration": duration,
+                "created_at": time.time(),
+            }
+        t = teams[project]
+        return TeamInfo(t["team_id"], t.get("max_budget", 0.0), t.get("spend", 0.0))
 
     async def team_info(self, project: str) -> Optional[TeamInfo]:
-        t = self._store.snapshot().get("teams", {}).get(project)
+        t = self._data.get("teams", {}).get(project)
         if not t:
             return None
         return TeamInfo(t["team_id"], t.get("max_budget", 0.0), t.get("spend", 0.0))
@@ -47,9 +48,8 @@ class MockBackend:
         team_id: Optional[str] = None,
         size: int = 100,
     ) -> List[KeyInfo]:
-        keys = self._store.snapshot().get("keys", [])
         out = []
-        for k in keys:
+        for k in self._data.get("keys", []):
             if user is not None and k.get("user_id") != user:
                 continue
             if team_id is not None and k.get("team_id") != team_id:
@@ -80,23 +80,16 @@ class MockBackend:
             "last_used": None,
             "metadata": metadata or {},
         }
-
-        def _mut(data):
-            data.setdefault("keys", []).append(row)
-
-        self._store.update(_mut)
+        self._data.setdefault("keys", []).append(row)
         return CreatedKey(secret=secret, info=_normalize_key_obj(row))
 
     async def delete_key(self, token_id: str) -> None:
-        def _mut(data):
-            data["keys"] = [
-                k for k in data.get("keys", []) if k.get("token") != token_id
-            ]
-
-        self._store.update(_mut)
+        self._data["keys"] = [
+            k for k in self._data.get("keys", []) if k.get("token") != token_id
+        ]
 
     async def usage(self, project: Optional[str]) -> List[Dict]:
-        rows = self._store.snapshot().get("usage", [])
+        rows = self._data.get("usage", [])
         if project is None:
             return list(rows)
         return [r for r in rows if r.get("project") == project]

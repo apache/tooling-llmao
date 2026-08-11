@@ -1,8 +1,7 @@
 """Minimal JSON-file state store.
 
 LiteLLMBackend uses this as a local project→team_id cache (and legacy usage
-rows). Tests reuse it for MockBackend. Not a second “app mode”—the running
-app still requires LiteLLM for admin APIs.
+rows). Unit tests use MockBackend’s in-memory dict, not this store.
 """
 from __future__ import annotations
 
