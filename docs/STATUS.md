@@ -30,11 +30,11 @@ Detailed “where we are.” Top-level README stays short and links here.
 | **Personal** | Committer (self), member of project | **project + user + purpose** |
 | **Automation (team-scoped)** | **Any PMC member of project or site admin** (provisional) | **project + purpose** (user null) |
 
-- Design names on `KeyInfo`: `project`, `user`, `purpose`; `token_id` for list/revoke (not the secret). Automation ⇔ `user is None` (no separate `kind`).
+- Design names on `KeyInfo`: `project`, `user`, `purpose` (optional); `token_id` for list/revoke (not the secret). Automation ⇔ `user is None`.
 - Automation keys store **`metadata.created_by`** (ASF uid who minted and saw the secret); surfaced as `KeyInfo.created_by` so other PMCs know who to ask.
 - Seam/Backend product API speaks **project** (LDAP); LiteLLM `team_id` is resolved only inside `LiteLLMBackend`.
 - In-process **project→team_id** cache only (immutable pair); warmed at startup via `before_serving` + `LiteLLMBackend.warm()` (**fail-fast** if LiteLLM is down). Spend always from live `team/info` when id is known.
-- Wire map: purpose↔`key_alias`, user↔`user_id`, project↔`metadata.project` + team_alias, token_id↔LiteLLM `token`, created_by↔`metadata.created_by`.
+- Wire map: purpose↔**`metadata.purpose`** (optional; not `key_alias` — LiteLLM aliases are globally unique), user↔`user_id`, project↔`metadata.project` + team_alias, token_id↔LiteLLM `token`, created_by↔`metadata.created_by`.
 - No on-disk `StateStore` / `state_path`.
 - Secret `sk-…` shown **once** (`CreatedKey.secret`); not kept on `KeyInfo`.
 

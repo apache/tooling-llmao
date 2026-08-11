@@ -42,7 +42,7 @@ class KeyInfo:
     token_id: str
     project: str                 # metadata.project (LDAP name)
     user: Optional[str]          # LiteLLM user_id; None = automation
-    purpose: str                 # LiteLLM key_alias
+    purpose: str                 # metadata.purpose (optional label; may be "")
     team_id: str                 # LiteLLM opaque team id (API only)
     spend: float
     max_budget: Optional[float]
@@ -106,9 +106,7 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
 
     user_raw = raw.get("user_id")
     user = str(user_raw) if user_raw else None
-    purpose = str(raw.get("key_alias") or "")
-    if not purpose:
-        raise ValueError("key missing key_alias (purpose)")
+    purpose = str(meta.get("purpose") or "")
 
     created_by_raw = meta.get("created_by")
     created_by = str(created_by_raw) if created_by_raw else None
@@ -349,12 +347,15 @@ class LiteLLMBackend:
         if not project:
             raise BackendUnavailable("create_key requires project")
         team_id = await self.ensure_team_id(project)
+        purpose = (purpose or "").strip()
         meta = dict(metadata or {})
         meta["project"] = project
+        if purpose:
+            meta["purpose"] = purpose
         payload: Dict[str, Any] = {
             "team_id": team_id,
-            "key_alias": purpose,
             "metadata": meta,
+            # key_alias is globally unique in LiteLLM — do not put purpose there.
         }
         if user:
             payload["user_id"] = user
@@ -376,8 +377,8 @@ class LiteLLMBackend:
             if not isinstance(src_meta, dict):
                 src_meta = {}
             merged["metadata"] = {**meta, **src_meta, "project": project}
-            if not merged.get("key_alias"):
-                merged["key_alias"] = purpose
+            if purpose:
+                merged["metadata"]["purpose"] = purpose
             if not merged.get("team_id"):
                 merged["team_id"] = team_id
             if user and not merged.get("user_id"):

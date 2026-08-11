@@ -69,14 +69,16 @@ class MockBackend:
         metadata: Optional[Dict] = None,
     ) -> CreatedKey:
         project = (project or "").strip()
+        purpose = (purpose or "").strip()
         self._touch_team(project)
         secret = f"sk-mock-{uuid.uuid4().hex}"
         token_id = f"tok-{uuid.uuid4().hex[:16]}"
         meta = dict(metadata or {})
         meta["project"] = project
+        if purpose:
+            meta["purpose"] = purpose
         row = {
             "token": token_id,
-            "key_alias": purpose,
             "team_id": project,
             "user_id": user,
             "spend": 0.0,

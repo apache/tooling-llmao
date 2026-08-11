@@ -84,8 +84,6 @@ class Seam:
         purpose: str,
     ) -> CreatedKey:
         purpose = (purpose or "").strip()
-        if not purpose:
-            raise AuthzError("purpose is required")
         return await self._backend.create_key(
             project=project,
             purpose=purpose,
@@ -101,8 +99,6 @@ class Seam:
     ) -> CreatedKey:
         """Admin-only team-scoped key (no user) for scripts after formal request."""
         purpose = (purpose or "").strip()
-        if not purpose:
-            raise AuthzError("purpose is required for automation keys")
         return await self._backend.create_key(
             project=project,
             purpose=purpose,

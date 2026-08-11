@@ -23,11 +23,11 @@
       </select>
     </div>
     <div>
-      <label class="form-label" for="purpose">Purpose</label>
+      <label class="form-label" for="purpose">Purpose <span class="text-muted">(optional)</span></label>
       <input class="form-control" type="text" name="purpose" id="purpose"
-             required maxlength="128" placeholder="e.g. laptop-cli, local-dev"
+             maxlength="128" placeholder="e.g. laptop-cli, local-dev"
              value="[form_purpose]">
-      <div class="form-text">Short label for this key (required).</div>
+      <div class="form-text">Optional label to distinguish multiple keys for the same project.</div>
     </div>
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-primary">Create key</button>

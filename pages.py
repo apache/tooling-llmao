@@ -108,7 +108,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
         budget_s = f"${budget:.4f}" if budget is not None else "—"
         rows.append(edict({
             "token_id": k.token_id,
-            "purpose": k.purpose,
+            "purpose": k.purpose or "—",
             "project": k.project,
             "kind_label": "Automation" if k.is_automation else "Personal",
             "is_automation": k.is_automation,
