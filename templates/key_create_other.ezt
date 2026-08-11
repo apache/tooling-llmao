@@ -1,0 +1,41 @@
+[include "header.ezt"]
+<div class="container py-4" style="max-width: 36rem;">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <h1 class="h3 mb-3">Create automation key</h1>
+  <p class="text-muted small">
+    Team-scoped key with no personal user binding. Uncommon — typically for
+    scripts after a formal request. The secret is shown <strong>once</strong>;
+    you will be recorded as <code>created_by</code>.
+  </p>
+
+  [if-any error]
+  <div class="alert alert-danger">[error]</div>
+  [end]
+
+  [if-any can_create_automation]
+  <form method="post" action="/keys/other/new" class="vstack gap-3">
+    <div>
+      <label class="form-label" for="project">Project</label>
+      <select class="form-select" name="project" id="project" required>
+        <option value="">Select project…</option>
+        [for admin_projects]
+        <option value="[admin_projects.name]">[admin_projects.name]</option>
+        [end]
+      </select>
+    </div>
+    <div>
+      <label class="form-label" for="purpose">Purpose</label>
+      <input class="form-control" type="text" name="purpose" id="purpose"
+             required maxlength="128" placeholder="e.g. INFRA-1234-nightly"
+             value="[form_purpose]">
+      <div class="form-text">Include a ticket id when possible.</div>
+    </div>
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-primary">Create automation key</button>
+      <a class="btn btn-outline-secondary" href="/keys/other">Cancel</a>
+    </div>
+  </form>
+  [end]
+</div>
+[include "footer.ezt"]

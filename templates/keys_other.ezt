@@ -3,15 +3,19 @@
   <div class="mt-2">[include "flashes.ezt"]</div>
 
   <div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">My Keys</h1>
-    <a class="btn btn-primary btn-sm" href="/keys/new">
-      <i class="bi bi-plus-lg"></i> Create key
+    <h1 class="h3 mb-0">Other Keys</h1>
+    [if-any can_create_automation]
+    <a class="btn btn-outline-primary btn-sm" href="/keys/other/new">
+      <i class="bi bi-plus-lg"></i> Create automation key
     </a>
+    [end]
   </div>
 
   <p class="text-muted small">
-    Personal access tokens bind your ASF identity to a project so usage is
-    attributed to you. The secret is shown once when you create the key.
+    Team-scoped <strong>automation</strong> keys (no personal user). These are
+    uncommon — typically issued by RAI or a project admin for scripts after a
+    formal request. The secret is shown only once at creation;
+    <strong>Created by</strong> is who saw it and who teammates should ask.
   </p>
 
   [if-any error]
@@ -25,6 +29,7 @@
         <tr>
           <th>Purpose</th>
           <th>Project</th>
+          <th>Created by</th>
           <th>Last used</th>
           <th>Spend</th>
           <th>Limit</th>
@@ -37,6 +42,7 @@
         <tr>
           <td class="font-monospace small">[keys.purpose]</td>
           <td>[keys.project]</td>
+          <td class="small font-monospace">[keys.created_by]</td>
           <td class="small text-muted">[keys.last_used]</td>
           <td class="small font-monospace">[keys.spend]</td>
           <td class="small font-monospace">[keys.max_budget]</td>
@@ -56,7 +62,11 @@
   </div>
   [else]
   [if-any error][else]
-  <p class="text-muted">No personal keys yet. <a href="/keys/new">Create one</a>.</p>
+  <p class="text-muted">No automation keys for your admin projects yet.
+    [if-any can_create_automation]
+    <a href="/keys/other/new">Create one</a>.
+    [end]
+  </p>
   [end]
   [end]
 </div>
@@ -66,14 +76,14 @@
     <div class="modal-content">
       <form method="post" action="/keys/revoke" id="revokeForm">
         <div class="modal-header">
-          <h2 class="modal-title fs-5" id="revokeModalLabel">Revoke personal key?</h2>
+          <h2 class="modal-title fs-5" id="revokeModalLabel">Revoke automation key?</h2>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <p class="mb-2">This cannot be undone. Clients using this key will fail immediately.</p>
+          <p class="mb-2">This cannot be undone. Scripts using this key will fail immediately.</p>
           <p class="mb-0">Purpose: <strong class="font-monospace" id="revokePurpose"></strong></p>
           <input type="hidden" name="token_id" id="revokeTokenId" value="">
-          <input type="hidden" name="after_path" id="revokeAfterPath" value="/keys">
+          <input type="hidden" name="after_path" id="revokeAfterPath" value="/keys/other">
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

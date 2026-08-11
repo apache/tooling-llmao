@@ -21,7 +21,7 @@
                 <br><span class="text-muted small">projects: [projects_label]</span>
                 [end]
             </p>
-            <a class="btn btn-primary btn-sm mt-3" href="/keys">Manage API keys</a>
+            <a class="btn btn-primary btn-sm mt-3" href="/keys">Manage my keys</a>
         </div>
     </div>
     [else]

@@ -2,7 +2,7 @@
 <div class="container py-4" style="max-width: 36rem;">
   <div class="mt-2">[include "flashes.ezt"]</div>
 
-  <h1 class="h3 mb-3">Create API key</h1>
+  <h1 class="h3 mb-3">Create personal key</h1>
   <p class="text-muted small">
     The secret is shown <strong>once</strong> after creation. Store it in your
     password manager or secrets system.
@@ -25,21 +25,10 @@
     <div>
       <label class="form-label" for="purpose">Purpose</label>
       <input class="form-control" type="text" name="purpose" id="purpose"
-             required maxlength="128" placeholder="e.g. laptop-cli, INFRA-1234-nightly"
+             required maxlength="128" placeholder="e.g. laptop-cli, local-dev"
              value="[form_purpose]">
-      <div class="form-text">Stored as the key alias; required for personal and automation keys.</div>
+      <div class="form-text">Short label for this key (required).</div>
     </div>
-    [if-any can_create_automation]
-    <div class="form-check">
-      <input class="form-check-input" type="checkbox" name="automation" id="automation" value="on">
-      <label class="form-check-label" for="automation">
-        Automation key (team-scoped, no personal user — admin / PMC only)
-      </label>
-      <div class="form-text">
-        Use only for scripts after a formal request (include ticket id in purpose).
-      </div>
-    </div>
-    [end]
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-primary">Create key</button>
       <a class="btn btn-outline-secondary" href="/keys">Cancel</a>

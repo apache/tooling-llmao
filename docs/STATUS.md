@@ -20,7 +20,7 @@ Detailed “where we are.” Top-level README stays short and links here.
 | Model inventory SoT | **`model_list.yaml`** + LiteLLM `include`; flat `model_info`; **no** `STORE_MODEL_IN_DB` for inventory |
 | Secrets | On-disk YAML; prod **hiera/eyaml**; same `master_key` in `config.yaml` + `litellm.yaml`; provider **API keys** in `model_list.yaml`; **api_base** cleartext |
 | Postgres / Prisma | `litellm[proxy,extra-proxy]`; system PostgreSQL; `make db` |
-| **PAT UX** | `/keys` list/create/revoke; personal + admin automation; secret once; revoke modal |
+| **PAT UX** | **My Keys** `/keys` (personal, one list call); **Other Keys** `/keys/other` (automation, PMC/admin); create/revoke split; secret once |
 | Tests | Offline **`tests/mock_backend.py`** injected into Seam — not a config mode |
 
 ### Credential rules (as implemented)

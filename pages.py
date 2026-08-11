@@ -50,10 +50,11 @@ async def basic_info() -> edict:
     basic.flashes = []
     basic.error = None
 
-    # Form defaults for create page
+    # Form defaults for create pages
     basic.form_project = ""
     basic.form_purpose = ""
-    basic.form_automation = False
+    basic.keys_back = "/keys"
+    basic.keys_create_another = "/keys/new"
 
     try:
         msgs = quart.get_flashed_messages(with_categories=True)
@@ -80,7 +81,13 @@ async def basic_info() -> edict:
             client_session.uid in site_admins
             or bool(getattr(client_session, "isRoot", False))
         )
+        # Other Keys nav + automation mint (provisional: PMC or site admin).
         basic.can_create_automation = basic.is_site_admin or bool(committees)
+        if basic.is_site_admin:
+            admin_names = projects
+        else:
+            admin_names = committees
+        basic.admin_projects = [edict({"name": p}) for p in admin_names]
     else:
         basic.uid = None
         basic.name = None
@@ -89,11 +96,12 @@ async def basic_info() -> edict:
         basic.committees = []
         basic.is_site_admin = False
         basic.can_create_automation = False
+        basic.admin_projects = []
 
     return basic
 
 
-def _key_rows(keys: list[KeyInfo]) -> list:
+def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
     rows = []
     for k in keys:
         budget = k.max_budget
@@ -110,6 +118,7 @@ def _key_rows(keys: list[KeyInfo]) -> list:
             "last_used": k.last_used or "—",
             "created_at": k.created_at or "—",
             "blocked": k.blocked,
+            "after_path": after_path,
         }))
     return rows
 
@@ -122,31 +131,60 @@ async def home_page():
     return result
 
 
+def _safe_after_path(raw: str | None, default: str = "/keys") -> str:
+    """Only allow in-app keys paths as post-revoke/create redirects."""
+    if raw in ("/keys", "/keys/other"):
+        return raw
+    return default
+
+
 @APP.get("/keys")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "keys.ezt")
 async def keys_list():
+    """My Keys — personal PATs only (one list_keys call)."""
     result = await basic_info()
-    result.title = "API keys (PATs)"
+    result.title = "My Keys"
     result.keys = []
     result.error = None
     try:
         ident = await current_identity(APP.cfg)
         assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
-        by_id: dict[str, KeyInfo] = {
-            k.token_id: k for k in await seam.list_my_keys(ident)
-        }
+        my_keys = await seam.list_my_keys(ident)
+        result.keys = _key_rows(my_keys, after_path="/keys")
+    except (AuthzError, BackendUnavailable) as e:
+        result.error = str(e)
+    return result
+
+
+@APP.get("/keys/other")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "keys_other.ezt")
+async def keys_other_list():
+    """Other Keys — automation / team-scoped (PMC / site admin)."""
+    result = await basic_info()
+    result.title = "Other Keys"
+    result.keys = []
+    result.error = None
+    if not result.can_create_automation:
+        result.error = "Other Keys is limited to PMC members and site admins."
+        return result
+    try:
+        ident = await current_identity(APP.cfg)
+        assert ident is not None
+        seam = APP.config["LLMAO_SEAM"]
         admin_projects = (
             ident.all_projects() if ident.is_site_admin else list(ident.committees)
         )
+        by_id: dict[str, KeyInfo] = {}
         for p in admin_projects:
             try:
                 for k in await seam.list_automation_keys(ident, p):
                     by_id.setdefault(k.token_id, k)
             except (AuthzError, BackendUnavailable):
                 continue
-        result.keys = _key_rows(list(by_id.values()))
+        result.keys = _key_rows(list(by_id.values()), after_path="/keys/other")
     except (AuthzError, BackendUnavailable) as e:
         result.error = str(e)
     return result
@@ -157,7 +195,7 @@ async def keys_list():
 @APP.use_template(TEMPLATES / "key_create.ezt")
 async def keys_new_form():
     result = await basic_info()
-    result.title = "Create API key"
+    result.title = "Create personal key"
     return result
 
 
@@ -167,23 +205,18 @@ async def keys_new_submit():
     form = await quart.request.form
     project = (form.get("project") or "").strip()
     purpose = (form.get("purpose") or "").strip()
-    automation = form.get("automation") == "on"
 
     try:
         ident = await current_identity(APP.cfg)
         assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
-        if automation:
-            created = await seam.create_automation_key(ident, project, purpose)
-        else:
-            created = await seam.create_personal_key(ident, project, purpose)
+        created = await seam.create_personal_key(ident, project, purpose)
     except (AuthzError, BackendUnavailable) as e:
         result = await basic_info()
-        result.title = "Create API key"
+        result.title = "Create personal key"
         result.error = str(e)
         result.form_project = project
         result.form_purpose = purpose
-        result.form_automation = automation
         return _render("key_create.ezt", result)
 
     result = await basic_info()
@@ -191,9 +224,61 @@ async def keys_new_submit():
     result.secret = created.secret
     result.purpose = created.info.purpose
     result.project = created.info.project
-    result.kind_label = "Automation" if created.info.is_automation else "Personal"
-    result.is_automation = created.info.is_automation
+    result.kind_label = "Personal"
+    result.is_automation = False
+    result.created_by = None
+    result.keys_back = "/keys"
+    result.keys_create_another = "/keys/new"
+    return _render("key_created.ezt", result)
+
+
+@APP.get("/keys/other/new")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "key_create_other.ezt")
+async def keys_other_new_form():
+    result = await basic_info()
+    result.title = "Create automation key"
+    if not result.can_create_automation:
+        result.error = "Only PMC members and site admins may create automation keys."
+    return result
+
+
+@APP.post("/keys/other/new")
+@asfquart.auth.require
+async def keys_other_new_submit():
+    form = await quart.request.form
+    project = (form.get("project") or "").strip()
+    purpose = (form.get("purpose") or "").strip()
+
+    result = await basic_info()
+    if not result.can_create_automation:
+        result.title = "Create automation key"
+        result.error = "Only PMC members and site admins may create automation keys."
+        result.form_project = project
+        result.form_purpose = purpose
+        return _render("key_create_other.ezt", result)
+
+    try:
+        ident = await current_identity(APP.cfg)
+        assert ident is not None
+        seam = APP.config["LLMAO_SEAM"]
+        created = await seam.create_automation_key(ident, project, purpose)
+    except (AuthzError, BackendUnavailable) as e:
+        result.title = "Create automation key"
+        result.error = str(e)
+        result.form_project = project
+        result.form_purpose = purpose
+        return _render("key_create_other.ezt", result)
+
+    result.title = "API key created"
+    result.secret = created.secret
+    result.purpose = created.info.purpose
+    result.project = created.info.project
+    result.kind_label = "Automation"
+    result.is_automation = True
     result.created_by = created.info.created_by
+    result.keys_back = "/keys/other"
+    result.keys_create_another = "/keys/other/new"
     return _render("key_created.ezt", result)
 
 
@@ -202,6 +287,7 @@ async def keys_new_submit():
 async def keys_revoke():
     form = await quart.request.form
     token_id = (form.get("token_id") or form.get("token") or "").strip()
+    after_path = _safe_after_path(form.get("after_path"))
     try:
         ident = await current_identity(APP.cfg)
         assert ident is not None
@@ -210,7 +296,7 @@ async def keys_revoke():
         await quart.flash("Key revoked.", "success")
     except (AuthzError, BackendUnavailable) as e:
         await quart.flash(str(e), "danger")
-    return quart.redirect("/keys")
+    return quart.redirect(after_path)
 
 
 @APP.get("/static/<path:filename>")

@@ -23,8 +23,8 @@
   <input class="form-control font-monospace" id="secret" type="text" readonly
          value="[secret]" onclick="this.select()">
   <div class="mt-3 d-flex gap-2">
-    <a class="btn btn-primary" href="/keys">Back to keys</a>
-    <a class="btn btn-outline-secondary" href="/keys/new">Create another</a>
+    <a class="btn btn-primary" href="[keys_back]">Back to keys</a>
+    <a class="btn btn-outline-secondary" href="[keys_create_another]">Create another</a>
   </div>
 </div>
 [include "footer.ezt"]
