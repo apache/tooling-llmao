@@ -10,7 +10,7 @@ import yaml
 from easydict import EasyDict as edict
 from litellm.types.router import Deployment
 
-from llmao.models import load_model_list, public_models, models_path_from_cfg
+from llmao.models import load_model_list, public_models, models_path_from_cfg, ux_models
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "model_list.yaml.example"
@@ -43,6 +43,22 @@ def test_models_path_from_cfg():
     p = models_path_from_cfg(cfg)
     assert p.name == "model_list.yaml.example"
     assert p.is_file()
+
+
+def test_ux_models_redacts_supply_path_for_non_admins():
+    redacted = ux_models(EXAMPLE, reveal_supply=False)
+    full = ux_models(EXAMPLE, reveal_supply=True)
+    assert len(redacted) >= 2
+    assert len(full) == len(redacted)
+    for r in redacted:
+        assert r["model_name"]
+        assert r["display_name"]
+        assert r["provider"] == ""
+        assert r["weights_distribution"] == ""
+        assert r["hosting_label"] in ("Self-hosted", "External", "—")
+    for f in full:
+        # Example inventory includes weights_distribution for self-host models.
+        assert f.get("weights_distribution") or f.get("provider")
 
 
 def test_litellm_deployment_preserves_model_info_extras():

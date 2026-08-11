@@ -48,3 +48,74 @@ def public_models(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> Li
         # Never surface api credentials or api_base in the public catalog.
         out.append({"model_name": name, **info})
     return out
+
+
+# Fields that describe how/where we obtain or serve a model (partnerships, HF paths).
+_SUPPLY_PATH_KEYS = frozenset({
+    "weights_distribution",
+    "training_data_provenance",
+    "provenance_record",
+    "provider",  # may name commercial partners; generic hosting badge is separate
+})
+
+
+def _hosting_label(m: Dict[str, Any]) -> str:
+    if m.get("self_hosted") is True:
+        return "Self-hosted"
+    if m.get("self_hosted") is False:
+        return "External"
+    prov = (m.get("provider") or "").lower()
+    if prov in ("self-host", "selfhost", "self-hosted"):
+        return "Self-hosted"
+    if prov:
+        return "External"
+    return "—"
+
+
+def ux_models(
+    path: Optional[pathlib.Path] = None,
+    *,
+    cfg: Any = None,
+    reveal_supply: bool = False,
+) -> List[Dict[str, Any]]:
+    """Shape inventory for the Models page (table + detail modal).
+
+    When ``reveal_supply`` is False (normal committers), omit fields that
+    describe procurement, weight paths, or commercial partnerships.
+    """
+    rows = []
+    for m in public_models(path, cfg=cfg):
+        if not reveal_supply:
+            m = {k: v for k, v in m.items() if k not in _SUPPLY_PATH_KEYS}
+        name = m.get("model_name") or ""
+        display = m.get("display_name") or name
+        ctx = m.get("context_window")
+        rows.append({
+            "model_name": name,
+            "display_name": display,
+            "hosting_label": _hosting_label(m if reveal_supply else {
+                **m,
+                "self_hosted": m.get("self_hosted"),
+            }),
+            "self_hosted": bool(m.get("self_hosted")),
+            "context_window": ctx if ctx is not None else "—",
+            "license": m.get("license") or "—",
+            "modality": m.get("modality") or "",
+            "supports_thinking": bool(m.get("supports_thinking")),
+            "thinks_by_default": bool(m.get("thinks_by_default")),
+            "openness": m.get("openness") or "",
+            "notes": m.get("notes") or "",
+            "reveal_supply": reveal_supply,
+            # Admin-only supply fields (empty strings when redacted)
+            "provider": (m.get("provider") or "") if reveal_supply else "",
+            "weights_distribution": (
+                m.get("weights_distribution") or ""
+            ) if reveal_supply else "",
+            "training_data_provenance": (
+                m.get("training_data_provenance") or ""
+            ) if reveal_supply else "",
+            "provenance_record": (
+                m.get("provenance_record") or ""
+            ) if reveal_supply else "",
+        })
+    return rows

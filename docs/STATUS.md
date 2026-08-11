@@ -68,14 +68,23 @@ Copy three YAMLs from `*.example` → system Postgres + `make db` → matching m
 
 ---
 
+## Models page (v1)
+
+| Item | Notes |
+|------|--------|
+| Route | `/models` (nav for signed-in users) |
+| Data | `model_list.yaml` via `public_models` / `ux_models` — no secrets or `api_base` |
+| UX | Overview table + Details modal; badges for modality / thinking / hosting |
+| Supply path | **Site admins only** (`is_site_admin`): weights, provider, provenance fields. Redacted for others (partnerships / ops). |
+| Not yet | Per-team/key model allow-list filtering (“available *to you*” hard filter) |
+
 ## Planned UX (top nav)
 
-Committed product sketch for signed-in top nav (beside **API keys**). **Not built yet.**
+| Nav | Intent | Status |
+|-----|--------|--------|
+| **Models** | Inventory (+ later allow-list scoped) | **v1 done** |
+| **Reports** | Usage, utilization, governance, Commons fairness | Not built |
 
-| Nav | Intent |
-|-----|--------|
-| **Models** | Browse **models available to this user** (identity / project / allow-list scoped—not necessarily the full global inventory). |
-| **Reports** | Usage, utilization, governance, and Commons-fairness views (see list below). |
 
 ### Reports (examples)
 
@@ -98,7 +107,7 @@ Data sources: LiteLLM spend/usage APIs where they apply; Infra / host observabil
 3. Site admin via **`rai` PMC** (optional keep cfg list).  
 4. PMC notification email on key lifecycle.  
 5. Budgets / capacity limits UX.  
-6. **Models** page + top nav: models available *to the user*.  
+6. Models: per-team/key allow-list scoping when configured.  
 7. **Reports** page + top nav: PMC by-user, self-hosted utilization, Board roll-ups, donated credit burn-down, Commons abuse histograms.  
 8. **p6** Puppet: Postgres, eyaml→YAML, systemd, restart LiteLLM on config change.  
 9. Cleanup container paths; optional un-package.  

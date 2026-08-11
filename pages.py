@@ -30,6 +30,7 @@ from easydict import EasyDict as edict
 
 from llmao.auth import current_identity
 from llmao.litellm_client import BackendUnavailable, KeyInfo
+from llmao.models import ux_models
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -128,6 +129,24 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
 async def home_page():
     result = await basic_info()
     result.title = "Home"
+    return result
+
+
+@APP.get("/models")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "models.ezt")
+async def models_page():
+    """Gateway model inventory (public fields; supply path for site admins)."""
+    result = await basic_info()
+    result.title = "Models"
+    result.models = []
+    result.error = None
+    result.reveal_supply = bool(result.is_site_admin)
+    try:
+        raw = ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply)
+        result.models = [edict(m) for m in raw]
+    except (FileNotFoundError, ValueError, OSError) as e:
+        result.error = str(e)
     return result
 
 
