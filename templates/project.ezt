@@ -7,12 +7,8 @@
   </p>
   <h1 class="h3 mb-3">[project]</h1>
 
-  [if-any error]
-  <div class="alert alert-warning">[error]</div>
-  [else]
   <p class="text-muted">
     Project overview (budget meters, by-person usage) is next.
   </p>
-  [end]
 </div>
 [include "footer.ezt"]

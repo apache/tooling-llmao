@@ -10,10 +10,6 @@
     can call when configured.
   </p>
 
-  [if-any error]
-  <div class="alert alert-warning">[error]</div>
-  [end]
-
   [if-any models]
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle">
@@ -76,9 +72,7 @@
     </table>
   </div>
   [else]
-  [if-any error][else]
   <p class="text-muted">No models in the inventory.</p>
-  [end]
   [end]
 </div>
 

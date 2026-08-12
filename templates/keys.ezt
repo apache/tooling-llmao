@@ -14,10 +14,6 @@
     attributed to you. The secret is shown once when you create the key.
   </p>
 
-  [if-any error]
-  <div class="alert alert-warning">[error]</div>
-  [end]
-
   [if-any keys]
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle">
@@ -55,9 +51,7 @@
     </table>
   </div>
   [else]
-  [if-any error][else]
   <p class="text-muted">No personal keys yet. <a href="/keys/new">Create one</a>.</p>
-  [end]
   [end]
 </div>
 

@@ -9,10 +9,6 @@
     you will be recorded as <code>created_by</code>.
   </p>
 
-  [if-any error]
-  <div class="alert alert-danger">[error]</div>
-  [end]
-
   [if-any can_create_automation]
   <form method="post" action="/do-create-other-key" class="vstack gap-3">
     <div>

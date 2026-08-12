@@ -8,10 +8,6 @@
     <strong>stewards</strong> for that project.
   </p>
 
-  [if-any error]
-  <div class="alert alert-warning">[error]</div>
-  [end]
-
   [if-any project_rows]
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle">
@@ -52,9 +48,7 @@
     </table>
   </div>
   [else]
-  [if-any error][else]
   <p class="text-muted">You're not listed on any ASF project.</p>
-  [end]
   [end]
 </div>
 [include "footer.ezt"]

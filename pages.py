@@ -54,24 +54,57 @@ def _render(template_name: str, data) -> str:
     return asfquart.utils.render(APP.load_template(TEMPLATES / template_name), data)
 
 
+def _flash_rows():
+    """Drain Quart flashes for EZT. Call immediately before use_template render."""
+    try:
+        msgs = quart.get_flashed_messages(with_categories=True)
+    except Exception:
+        return []
+    return [edict(category=c, message=m) for c, m in msgs]
+
+
+def page_errors(*extra_exc, category: str = "warning", title: str | None = None):
+    """Catch page failures, flash them, attach flashes after the view returns.
+
+    Innermost under ``@APP.use_template`` so ``flash()`` happens before EZT.
+    ``basic_info()`` does not drain flashes — this decorator does, last.
+    """
+    types = (AuthzError, BackendUnavailable) + extra_exc
+
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                data = await fn(*args, **kwargs)
+            except types as e:
+                await quart.flash(str(e), category)
+                data = await basic_info()
+                if title:
+                    data.title = title
+                if "project" in kwargs:
+                    data.project = kwargs["project"]
+                    if not title:
+                        data.title = kwargs["project"]
+            if data is not None and hasattr(data, "update"):
+                data.flashes = _flash_rows()
+            return data
+
+        return wrapper
+
+    return deco
+
+
 async def basic_info() -> edict:
     """Base-level EZT template data shared by HTML pages."""
     basic = edict()
     basic.title = "llmao"
     basic.flashes = []
-    basic.error = None
 
     # Form defaults for create pages
     basic.form_project = ""
     basic.form_purpose = ""
     basic.keys_back = "/keys"
     basic.keys_create_another = "/keys/new"
-
-    try:
-        msgs = quart.get_flashed_messages(with_categories=True)
-        basic.flashes = [edict({"category": c, "message": m}) for c, m in msgs]
-    except Exception:
-        basic.flashes = []
 
     client_session = await asfquart.session.read()
     if client_session is not None and getattr(client_session, "uid", None):
@@ -141,6 +174,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
 
 @APP.get("/")
 @APP.use_template(TEMPLATES / "home.ezt")
+@page_errors()
 async def home_page():
     result = await basic_info()
     result.title = "Home"
@@ -150,18 +184,15 @@ async def home_page():
 @APP.get("/models")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "models.ezt")
+@page_errors(FileNotFoundError, ValueError, OSError, title="Models")
 async def models_page():
     """Gateway model inventory (public fields; supply path for site admins)."""
     result = await basic_info()
     result.title = "Models"
     result.models = []
-    result.error = None
     result.reveal_supply = bool(result.is_site_admin)
-    try:
-        raw = ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply)
-        result.models = [edict(m) for m in raw]
-    except (FileNotFoundError, ValueError, OSError) as e:
-        result.error = str(e)
+    raw = ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply)
+    result.models = [edict(m) for m in raw]
     return result
 
 
@@ -193,40 +224,34 @@ def _project_list_rows(rows) -> list:
 @APP.get("/projects")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "projects.ezt")
+@page_errors(title="Projects")
 async def projects_list():
     """Projects you belong to, with project-budget summary."""
     result = await basic_info()
     result.title = "Projects"
     result.project_rows = []
-    result.error = None
-    try:
-        ident = await current_identity(APP.cfg)
-        assert ident is not None
-        seam = APP.config["LLMAO_SEAM"]
-        result.project_rows = _project_list_rows(
-            await seam.list_projects_for(ident)
-        )
-    except (AuthzError, BackendUnavailable) as e:
-        result.error = str(e)
+    ident = await current_identity(APP.cfg)
+    assert ident is not None
+    seam = APP.config["LLMAO_SEAM"]
+    result.project_rows = _project_list_rows(
+        await seam.list_projects_for(ident)
+    )
     return result
 
 
 @APP.get("/projects/<project>")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "project.ezt")
+@page_errors()
 async def project_stub(project: str):
     """Member-gated stub until P0.3 overview."""
     result = await basic_info()
     result.title = project
     result.project = project
-    result.error = None
-    try:
-        ident = await current_identity(APP.cfg)
-        assert ident is not None
-        seam = APP.config["LLMAO_SEAM"]
-        await seam.team_status(ident, project)
-    except (AuthzError, BackendUnavailable) as e:
-        result.error = str(e)
+    ident = await current_identity(APP.cfg)
+    assert ident is not None
+    seam = APP.config["LLMAO_SEAM"]
+    await seam.team_status(ident, project)
     return result
 
 
@@ -261,58 +286,52 @@ async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_c
 @APP.get("/keys")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "keys.ezt")
+@page_errors(title="My Keys")
 async def keys_list():
     """My Keys — personal PATs only (one list_keys call)."""
     result = await basic_info()
     result.title = "My Keys"
     result.keys = []
-    result.error = None
-    try:
-        ident = await current_identity(APP.cfg)
-        assert ident is not None
-        seam = APP.config["LLMAO_SEAM"]
-        my_keys = await seam.list_my_keys(ident)
-        result.keys = _key_rows(my_keys, after_path="/keys")
-    except (AuthzError, BackendUnavailable) as e:
-        result.error = str(e)
+    ident = await current_identity(APP.cfg)
+    assert ident is not None
+    seam = APP.config["LLMAO_SEAM"]
+    my_keys = await seam.list_my_keys(ident)
+    result.keys = _key_rows(my_keys, after_path="/keys")
     return result
 
 
 @APP.get("/keys/other")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "keys_other.ezt")
+@page_errors(title="Other Keys")
 async def keys_other_list():
     """Other Keys — automation / team-scoped (PMC / site admin)."""
     result = await basic_info()
     result.title = "Other Keys"
     result.keys = []
-    result.error = None
     if not result.can_create_automation:
-        result.error = "Other Keys is limited to PMC members and site admins."
-        return result
-    try:
-        ident = await current_identity(APP.cfg)
-        assert ident is not None
-        seam = APP.config["LLMAO_SEAM"]
-        admin_projects = (
-            ident.all_projects() if ident.is_site_admin else list(ident.committees)
-        )
-        by_id: dict[str, KeyInfo] = {}
-        for p in admin_projects:
-            try:
-                for k in await seam.list_automation_keys(ident, p):
-                    by_id.setdefault(k.token_id, k)
-            except (AuthzError, BackendUnavailable):
-                continue
-        result.keys = _key_rows(list(by_id.values()), after_path="/keys/other")
-    except (AuthzError, BackendUnavailable) as e:
-        result.error = str(e)
+        raise AuthzError("Other Keys is limited to PMC members and site admins.")
+    ident = await current_identity(APP.cfg)
+    assert ident is not None
+    seam = APP.config["LLMAO_SEAM"]
+    admin_projects = (
+        ident.all_projects() if ident.is_site_admin else list(ident.committees)
+    )
+    by_id: dict[str, KeyInfo] = {}
+    for p in admin_projects:
+        try:
+            for k in await seam.list_automation_keys(ident, p):
+                by_id.setdefault(k.token_id, k)
+        except (AuthzError, BackendUnavailable):
+            continue
+    result.keys = _key_rows(list(by_id.values()), after_path="/keys/other")
     return result
 
 
 @APP.get("/keys/new")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "key_create.ezt")
+@page_errors(title="Create personal key")
 async def keys_new_form():
     result = await basic_info()
     result.title = "Create personal key"
@@ -345,11 +364,12 @@ async def do_create_key():
 @APP.get("/keys/other/new")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "key_create_other.ezt")
+@page_errors(title="Create automation key")
 async def keys_other_new_form():
     result = await basic_info()
     result.title = "Create automation key"
     if not result.can_create_automation:
-        result.error = "Only PMC members and site admins may create automation keys."
+        raise AuthzError("Only PMC members and site admins may create automation keys.")
     return result
 
 
