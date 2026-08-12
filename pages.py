@@ -27,6 +27,7 @@ import asfquart.session
 import asfquart.utils
 import quart
 from easydict import EasyDict as edict
+from dunamai import Version
 
 from llmao.auth import current_identity
 from llmao.litellm_client import BackendUnavailable, KeyInfo
@@ -38,6 +39,8 @@ APP = asfquart.APP
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 TEMPLATES = THIS_DIR / "templates"
 STATICDIR = THIS_DIR / "static"
+
+REPO_URL = "https://github.com/apache/tooling-llmao"
 
 
 def _render(template_name: str, data) -> str:
@@ -98,6 +101,10 @@ async def basic_info() -> edict:
         basic.is_site_admin = False
         basic.can_create_automation = False
         basic.admin_projects = []
+
+    version = Version.from_git()
+    basic.commit = version.commit
+    basic.repo = REPO_URL
 
     return basic
 
