@@ -1,25 +1,34 @@
-<h2 class="h5 mb-2">API key created</h2>
-<p class="mb-2">
-  Copy this secret now. It will <strong>not</strong> be shown again.
-</p>
-<dl class="row small mb-2">
-  <dt class="col-sm-3">Type</dt><dd class="col-sm-9">[kind_label]</dd>
-  <dt class="col-sm-3">Project</dt><dd class="col-sm-9">[project]</dd>
-  <dt class="col-sm-3">Purpose</dt><dd class="col-sm-9 font-monospace">[purpose]</dd>
+<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+
+<h4 class="alert-heading d-flex align-items-center gap-2 mb-1">
+  <i class="bi bi-key-fill" style="font-size:18px"></i>
   [if-any is_automation]
-  <dt class="col-sm-3">Created by</dt>
-  <dd class="col-sm-9 font-monospace">[created_by]</dd>
+    Automation
+  [else]
+    Personal
   [end]
-</dl>
+  API key created
+</h4>
+<p class="mb-3">Copy this secret now. It <strong>will not be shown again</strong>.</p>
+
+<div class="input-group mb-1">
+  <input type="text" readonly class="form-control font-monospace bg-white js-secret-field"
+         value="[secret]" onclick="this.select()">
+  <button class="btn btn-outline-dark d-flex align-items-center gap-1 js-copy-btn" type="button">
+    <i class="bi bi-clipboard js-copy-icon"></i>
+    <span class="js-copy-label">Copy</span>
+  </button>
+</div>
+<div class="small mb-3 js-copy-status" role="status" aria-live="polite" style="min-height: 18px; color: #146c43;"></div>
+
 [if-any is_automation]
-<p class="small mb-2">
-  You are recorded as <strong>created_by</strong>. Teammates cannot recover this
+<div class="small mb-2">
+  You are recorded as <strong>created_by: [created_by]</strong>. Teammates cannot recover this
   secret from llmao — they will contact you for it.
-</p>
+</div>
 [end]
-<label class="form-label" for="created-secret">Secret</label>
-<input class="form-control font-monospace" id="created-secret" type="text" readonly
-       value="[secret]" onclick="this.select()">
-<div class="mt-3 d-flex gap-2">
-  <a class="btn btn-sm btn-outline-secondary" href="[keys_create_another]">Create another</a>
+
+<div class="small text-muted border-top pt-2" style="border-color: rgba(0,0,0,.15) !important;">
+  <span class="me-3"><strong>Project</strong> [project]</span>
+  <span><strong>Purpose</strong> [purpose]</span>
 </div>

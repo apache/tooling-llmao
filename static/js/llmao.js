@@ -59,4 +59,32 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     });
   }
+
+  var copyBtn = document.querySelector(".js-copy-btn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", function () {
+      var field = document.querySelector(".js-secret-field");
+      var icon = document.querySelector(".js-copy-icon");
+      var label = document.querySelector(".js-copy-label");
+      var status = document.querySelector(".js-copy-status");
+      if (!field) return;
+
+      navigator.clipboard.writeText(field.value).then(function () {
+        label.textContent = "Copied";
+        icon.className = "bi bi-check-lg";
+        copyBtn.classList.remove("btn-outline-dark");
+        copyBtn.classList.add("btn-success");
+        status.textContent = "Secret copied to clipboard.";
+
+        setTimeout(function () {
+          label.textContent = "Copy";
+          icon.className = "bi bi-clipboard";
+          copyBtn.classList.remove("btn-success");
+          copyBtn.classList.add("btn-outline-dark");
+          status.textContent = "";
+        }, 2000);
+      });
+    });
+  }
+
 });
