@@ -1,0 +1,60 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <h1 class="h3 mb-3">Projects</h1>
+  <p class="text-muted small">
+    Project budgets for ASF projects you belong to. PMC members are
+    <strong>stewards</strong> for that project.
+  </p>
+
+  [if-any error]
+  <div class="alert alert-warning">[error]</div>
+  [end]
+
+  [if-any project_rows]
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Role</th>
+          <th>Used</th>
+          <th>Budget</th>
+          <th>%</th>
+          <th>Period</th>
+          <th>Type</th>
+        </tr>
+      </thead>
+      <tbody>
+        [for project_rows]
+        <tr>
+          <td>
+            <a href="[project_rows.href]">[project_rows.name]</a>
+          </td>
+          <td>
+            [if-any project_rows.is_steward]
+            <span class="badge text-bg-primary">Steward</span>
+            [else]
+            <span class="badge text-bg-secondary">Member</span>
+            [end]
+          </td>
+          <td class="font-monospace small">[project_rows.spend]</td>
+          <td class="font-monospace small">[project_rows.max_budget]</td>
+          <td class="small">[project_rows.pct_label]</td>
+          <td class="small text-muted">[project_rows.budget_duration]</td>
+          <td>
+            <span class="badge text-bg-light text-muted">[project_rows.budget_type]</span>
+          </td>
+        </tr>
+        [end]
+      </tbody>
+    </table>
+  </div>
+  [else]
+  [if-any error][else]
+  <p class="text-muted">You're not listed on any ASF project.</p>
+  [end]
+  [end]
+</div>
+[include "footer.ezt"]

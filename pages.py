@@ -157,6 +157,71 @@ async def models_page():
     return result
 
 
+def _money(amount: float) -> str:
+    return f"${amount:,.2f}"
+
+
+def _project_list_rows(rows) -> list:
+    out = []
+    for r in rows:
+        if r.pct_used is None:
+            pct_label = "—"
+        else:
+            pct_label = f"{r.pct_used:.0f}%"
+        out.append(edict({
+            "name": r.project,
+            "href": f"/projects/{r.project}",
+            "is_steward": r.is_steward,
+            "spend": _money(r.spend),
+            "max_budget": _money(r.max_budget),
+            "remaining": _money(r.remaining),
+            "pct_label": pct_label,
+            "budget_duration": r.budget_duration,
+            "budget_type": r.budget_type,
+        }))
+    return out
+
+
+@APP.get("/projects")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "projects.ezt")
+async def projects_list():
+    """Projects you belong to, with project-budget summary."""
+    result = await basic_info()
+    result.title = "Projects"
+    result.project_rows = []
+    result.error = None
+    try:
+        ident = await current_identity(APP.cfg)
+        assert ident is not None
+        seam = APP.config["LLMAO_SEAM"]
+        result.project_rows = _project_list_rows(
+            await seam.list_projects_for(ident)
+        )
+    except (AuthzError, BackendUnavailable) as e:
+        result.error = str(e)
+    return result
+
+
+@APP.get("/projects/<project>")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "project.ezt")
+async def project_stub(project: str):
+    """Member-gated stub until P0.3 overview."""
+    result = await basic_info()
+    result.title = project
+    result.project = project
+    result.error = None
+    try:
+        ident = await current_identity(APP.cfg)
+        assert ident is not None
+        seam = APP.config["LLMAO_SEAM"]
+        await seam.team_status(ident, project)
+    except (AuthzError, BackendUnavailable) as e:
+        result.error = str(e)
+    return result
+
+
 def _safe_after_path(raw: str | None, default: str = "/keys") -> str:
     """Only allow in-app keys paths as post-revoke/create redirects."""
     if raw in ("/keys", "/keys/other"):
