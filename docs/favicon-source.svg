@@ -1,0 +1,23 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="darkSide" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#152a47"/>
+      <stop offset="100%" stop-color="#040810"/>
+    </linearGradient>
+    <linearGradient id="blueSide" x1="15%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6fc6ff"/>
+      <stop offset="55%" stop-color="#2e8ff2"/>
+      <stop offset="100%" stop-color="#0d57c9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed fill, no transparent corners -->
+  <rect x="0" y="0" width="512" height="512" fill="url(#darkSide)"/>
+
+  <!-- Blue "LLM side" corner wedge, ~1/3 of the tile -->
+  <polygon points="94,0 512,0 512,418" fill="url(#blueSide)"/>
+
+  <!-- Single bold arrow: request flowing from the client (dark) side into the LLM (blue) side -->
+  <line x1="160" y1="316" x2="336" y2="138" stroke="#ffffff" stroke-width="34" stroke-linecap="round"/>
+  <polygon points="385.2,88.2 361.7,177.4 343.1,130.9 296.3,112.8" fill="#ffffff"/>
+</svg>
