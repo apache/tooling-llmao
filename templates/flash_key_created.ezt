@@ -1,0 +1,25 @@
+<h2 class="h5 mb-2">API key created</h2>
+<p class="mb-2">
+  Copy this secret now. It will <strong>not</strong> be shown again.
+</p>
+<dl class="row small mb-2">
+  <dt class="col-sm-3">Type</dt><dd class="col-sm-9">[kind_label]</dd>
+  <dt class="col-sm-3">Project</dt><dd class="col-sm-9">[project]</dd>
+  <dt class="col-sm-3">Purpose</dt><dd class="col-sm-9 font-monospace">[purpose]</dd>
+  [if-any is_automation]
+  <dt class="col-sm-3">Created by</dt>
+  <dd class="col-sm-9 font-monospace">[created_by]</dd>
+  [end]
+</dl>
+[if-any is_automation]
+<p class="small mb-2">
+  You are recorded as <strong>created_by</strong>. Teammates cannot recover this
+  secret from llmao — they will contact you for it.
+</p>
+[end]
+<label class="form-label" for="created-secret">Secret</label>
+<input class="form-control font-monospace" id="created-secret" type="text" readonly
+       value="[secret]" onclick="this.select()">
+<div class="mt-3 d-flex gap-2">
+  <a class="btn btn-sm btn-outline-secondary" href="[keys_create_another]">Create another</a>
+</div>

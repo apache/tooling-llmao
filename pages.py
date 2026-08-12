@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import functools
 import pathlib
 
 import asfquart
@@ -41,6 +42,11 @@ TEMPLATES = THIS_DIR / "templates"
 STATICDIR = THIS_DIR / "static"
 
 REPO_URL = "https://github.com/apache/tooling-llmao"
+
+# STeVe-style flash helpers (Bootstrap alert categories).
+flash_success = functools.partial(quart.flash, category="success")
+flash_danger = functools.partial(quart.flash, category="danger")
+flash_warning = functools.partial(quart.flash, category="warning")
 
 
 def _render(template_name: str, data) -> str:
@@ -229,6 +235,27 @@ def _safe_after_path(raw: str | None, default: str = "/keys") -> str:
     return default
 
 
+def _see_other(path: str):
+    """303 See Other — next request is GET (STeVe mutation pattern)."""
+    return quart.redirect(path, code=303)
+
+
+async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_create_another: str) -> None:
+    """Render the created-key fragment and stash it as a raw HTML flash."""
+    data = edict({
+        "secret": created.secret,
+        "purpose": created.info.purpose or "—",
+        "project": created.info.project,
+        "kind_label": kind_label,
+        "is_automation": created.info.is_automation,
+        "created_by": created.info.created_by or "",
+        "keys_back": keys_back,
+        "keys_create_another": keys_create_another,
+    })
+    html = _render("flash_key_created.ezt", data)
+    await quart.flash(html, "raw")
+
+
 @APP.get("/keys")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "keys.ezt")
@@ -290,37 +317,27 @@ async def keys_new_form():
     return result
 
 
-@APP.post("/keys/new")
+@APP.post("/do-create-key")
 @asfquart.auth.require
-async def keys_new_submit():
+async def do_create_key():
     form = await quart.request.form
     project = (form.get("project") or "").strip()
     purpose = (form.get("purpose") or "").strip()
-
     try:
         ident = await current_identity(APP.cfg)
         assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
         created = await seam.create_personal_key(ident, project, purpose)
     except (AuthzError, BackendUnavailable) as e:
-        result = await basic_info()
-        result.title = "Create personal key"
-        result.error = str(e)
-        result.form_project = project
-        result.form_purpose = purpose
-        return _render("key_create.ezt", result)
-
-    result = await basic_info()
-    result.title = "API key created"
-    result.secret = created.secret
-    result.purpose = created.info.purpose
-    result.project = created.info.project
-    result.kind_label = "Personal"
-    result.is_automation = False
-    result.created_by = None
-    result.keys_back = "/keys"
-    result.keys_create_another = "/keys/new"
-    return _render("key_created.ezt", result)
+        await flash_danger(str(e))
+        return _see_other("/keys/new")
+    await _flash_key_created(
+        created,
+        kind_label="Personal",
+        keys_back="/keys",
+        keys_create_another="/keys/new",
+    )
+    return _see_other("/keys")
 
 
 @APP.get("/keys/other/new")
@@ -334,48 +351,37 @@ async def keys_other_new_form():
     return result
 
 
-@APP.post("/keys/other/new")
+@APP.post("/do-create-other-key")
 @asfquart.auth.require
-async def keys_other_new_submit():
+async def do_create_other_key():
     form = await quart.request.form
     project = (form.get("project") or "").strip()
     purpose = (form.get("purpose") or "").strip()
-
-    result = await basic_info()
-    if not result.can_create_automation:
-        result.title = "Create automation key"
-        result.error = "Only PMC members and site admins may create automation keys."
-        result.form_project = project
-        result.form_purpose = purpose
-        return _render("key_create_other.ezt", result)
-
+    ident = await current_identity(APP.cfg)
+    assert ident is not None
+    if not (ident.is_site_admin or ident.committees):
+        await flash_danger(
+            "Only PMC members and site admins may create automation keys."
+        )
+        return _see_other("/keys/other/new")
     try:
-        ident = await current_identity(APP.cfg)
-        assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
         created = await seam.create_automation_key(ident, project, purpose)
     except (AuthzError, BackendUnavailable) as e:
-        result.title = "Create automation key"
-        result.error = str(e)
-        result.form_project = project
-        result.form_purpose = purpose
-        return _render("key_create_other.ezt", result)
-
-    result.title = "API key created"
-    result.secret = created.secret
-    result.purpose = created.info.purpose
-    result.project = created.info.project
-    result.kind_label = "Automation"
-    result.is_automation = True
-    result.created_by = created.info.created_by
-    result.keys_back = "/keys/other"
-    result.keys_create_another = "/keys/other/new"
-    return _render("key_created.ezt", result)
+        await flash_danger(str(e))
+        return _see_other("/keys/other/new")
+    await _flash_key_created(
+        created,
+        kind_label="Automation",
+        keys_back="/keys/other",
+        keys_create_another="/keys/other/new",
+    )
+    return _see_other("/keys/other")
 
 
-@APP.post("/keys/revoke")
+@APP.post("/do-revoke-key")
 @asfquart.auth.require
-async def keys_revoke():
+async def do_revoke_key():
     form = await quart.request.form
     token_id = (form.get("token_id") or form.get("token") or "").strip()
     after_path = _safe_after_path(form.get("after_path"))
@@ -384,10 +390,10 @@ async def keys_revoke():
         assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
         await seam.revoke_key(ident, token_id)
-        await quart.flash("Key revoked.", "success")
+        await flash_success("Key revoked.")
     except (AuthzError, BackendUnavailable) as e:
-        await quart.flash(str(e), "danger")
-    return quart.redirect(after_path)
+        await flash_danger(str(e))
+    return _see_other(after_path)
 
 
 @APP.get("/static/<path:filename>")

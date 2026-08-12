@@ -14,7 +14,7 @@
   [end]
 
   [if-any can_create_automation]
-  <form method="post" action="/keys/other/new" class="vstack gap-3">
+  <form method="post" action="/do-create-other-key" class="vstack gap-3">
     <div>
       <label class="form-label" for="project">Project</label>
       <select class="form-select" name="project" id="project" required>

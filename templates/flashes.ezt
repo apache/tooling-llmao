@@ -1,8 +1,15 @@
 [if-any flashes]
 [for flashes]
-<div class="alert alert-[flashes.category] alert-dismissible fade show" role="alert">
+[is flashes.category "raw"]
+<div class="alert alert-warning alert-dismissible show" role="alert">
+  [format "raw"][flashes.message][end]
+  <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+[else]
+<div class="alert alert-[flashes.category] alert-dismissible show" role="alert">
   [flashes.message]
   <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
 </div>
+[end]
 [end]
 [end]

@@ -74,7 +74,7 @@
 <div class="modal fade" id="revokeModal" tabindex="-1" aria-labelledby="revokeModalLabel" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="post" action="/keys/revoke" id="revokeForm">
+      <form method="post" action="/do-revoke-key" id="revokeForm">
         <div class="modal-header">
           <h2 class="modal-title fs-5" id="revokeModalLabel">Revoke automation key?</h2>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>

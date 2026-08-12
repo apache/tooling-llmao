@@ -83,6 +83,8 @@ browser → HTTPS (local mkcert or prod proxy)
        → LiteLLM admin API (team/budget; soon PATs)
 ```
 
+HTML mutations are `POST /do-*` only, then **303** to a GET display (flash for status; created-key secret is a `raw` HTML flash). JSON API is separate.
+
 ## Inference path (LiteLLM)
 
 ```
