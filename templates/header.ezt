@@ -11,10 +11,10 @@
 </head>
 <body>
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+<nav class="navbar navbar-expand-lg navbar-dark llmao-navbar">
     <div class="container-fluid">
-        <a class="navbar-brand" href="/">
-            <i class="bi bi-cpu me-1"></i>
+        <a class="navbar-brand d-flex align-items-center" href="/">
+            <img src="/static/llmao-logo.svg" alt="" width="28" height="28" class="me-2">
             llmao
         </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent"
