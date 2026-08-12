@@ -26,6 +26,7 @@ import asfquart
 import asfquart.auth
 import asfquart.session
 import asfquart.utils
+import ezt
 import quart
 from easydict import EasyDict as edict
 from dunamai import Version
@@ -87,13 +88,14 @@ async def basic_info() -> edict:
         committees = list(getattr(client_session, "committees", None) or [])
         basic.committees = committees
         site_admins = list(APP.cfg.site_admins or [])
-        basic.is_site_admin = (
+        is_site_admin = (
             client_session.uid in site_admins
             or bool(getattr(client_session, "isRoot", False))
         )
+        basic.is_site_admin = ezt.boolean(is_site_admin)
         # Other Keys nav + automation mint (provisional: PMC or site admin).
-        basic.can_create_automation = basic.is_site_admin or bool(committees)
-        if basic.is_site_admin:
+        basic.can_create_automation = ezt.boolean(is_site_admin or bool(committees))
+        if is_site_admin:
             admin_names = projects
         else:
             admin_names = committees
@@ -104,8 +106,8 @@ async def basic_info() -> edict:
         basic.projects = []
         basic.projects_label = None
         basic.committees = []
-        basic.is_site_admin = False
-        basic.can_create_automation = False
+        basic.is_site_admin = ezt.boolean(False)
+        basic.can_create_automation = ezt.boolean(False)
         basic.admin_projects = []
 
     version = Version.from_git()
@@ -125,7 +127,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
             "purpose": k.purpose or "—",
             "project": k.project,
             "kind_label": "Automation" if k.is_automation else "Personal",
-            "is_automation": k.is_automation,
+            "is_automation": ezt.boolean(k.is_automation),
             "created_by": k.created_by or "—",
             "spend": f"${k.spend:.6f}",
             "max_budget": budget_s,
@@ -177,7 +179,7 @@ def _project_list_rows(rows) -> list:
         out.append(edict({
             "name": r.project,
             "href": f"/projects/{r.project}",
-            "is_steward": r.is_steward,
+            "is_steward": ezt.boolean(r.is_steward),
             "spend": _money(r.spend),
             "max_budget": _money(r.max_budget),
             "remaining": _money(r.remaining),
@@ -247,7 +249,7 @@ async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_c
         "purpose": created.info.purpose or "—",
         "project": created.info.project,
         "kind_label": kind_label,
-        "is_automation": created.info.is_automation,
+        "is_automation": ezt.boolean(created.info.is_automation),
         "created_by": created.info.created_by or "",
         "keys_back": keys_back,
         "keys_create_another": keys_create_another,

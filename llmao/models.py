@@ -8,6 +8,7 @@ from __future__ import annotations
 import pathlib
 from typing import Any, Dict, List, Optional
 
+import ezt
 import yaml
 
 # Default path: repo / install root (next to main.py).
@@ -105,12 +106,12 @@ def ux_models(
             "model_name": name,
             "display_name": display,
             "hosting_label": _hosting_label(m),
-            "self_hosted": bool(m.get("self_hosted")),
+            "self_hosted": ezt.boolean(m.get("self_hosted")),
             "context_window": ctx if ctx is not None else "—",
             "license": _oneline(m.get("license")) or "—",
             "modality": _oneline(m.get("modality")),
-            "supports_thinking": bool(m.get("supports_thinking")),
-            "thinks_by_default": bool(m.get("thinks_by_default")),
+            "supports_thinking": ezt.boolean(m.get("supports_thinking")),
+            "thinks_by_default": ezt.boolean(m.get("thinks_by_default")),
             "openness": _oneline(m.get("openness")),
             "notes": _oneline(m.get("notes")),
             "reveal_supply": reveal_supply,
