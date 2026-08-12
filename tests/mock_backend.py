@@ -9,7 +9,13 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from llmao.litellm_client import CreatedKey, KeyInfo, TeamInfo, _normalize_key_obj
+from llmao.litellm_client import (
+    CreatedKey,
+    KeyInfo,
+    TeamInfo,
+    _normalize_key_obj,
+    resolve_budget_duration,
+)
 
 
 class MockBackend:
@@ -27,8 +33,12 @@ class MockBackend:
             return None
         return TeamInfo(
             t.get("team_id", project),
-            t.get("max_budget", 0.0),
-            t.get("spend", 0.0),
+            float(t.get("max_budget", 0.0)),
+            float(t.get("spend", 0.0)),
+            budget_duration=resolve_budget_duration(
+                t.get("budget_duration") or t.get("duration"),
+                self._cfg,
+            ),
         )
 
     def _touch_team(self, project: str) -> None:
@@ -38,9 +48,19 @@ class MockBackend:
                 "team_id": project,  # project is the opaque id in the mock
                 "max_budget": float(self._cfg.budgets.default_team_budget_usd),
                 "spend": 0.0,
-                "duration": self._cfg.budgets.duration,
+                "duration": str(self._cfg.budgets.duration),
+                "budget_duration": str(self._cfg.budgets.duration),
                 "created_at": time.time(),
             }
+
+    async def ensure_team(self, project: str) -> TeamInfo:
+        project = (project or "").strip()
+        if not project:
+            raise ValueError("project is required")
+        self._touch_team(project)
+        info = await self.team_info(project)
+        assert info is not None
+        return info
 
     async def list_keys(
         self,
@@ -70,7 +90,7 @@ class MockBackend:
     ) -> CreatedKey:
         project = (project or "").strip()
         purpose = (purpose or "").strip()
-        self._touch_team(project)
+        await self.ensure_team(project)
         secret = f"sk-mock-{uuid.uuid4().hex}"
         token_id = f"tok-{uuid.uuid4().hex[:16]}"
         meta = dict(metadata or {})
@@ -89,6 +109,17 @@ class MockBackend:
         }
         self._data.setdefault("keys", []).append(row)
         return CreatedKey(secret=secret, info=_normalize_key_obj(row))
+
+    def set_key_spend(self, token_id: str, spend: float) -> None:
+        for k in self._data.get("keys", []):
+            if k.get("token") == token_id:
+                k["spend"] = float(spend)
+                return
+        raise KeyError(token_id)
+
+    def set_team_spend(self, project: str, spend: float) -> None:
+        self._touch_team(project)
+        self._data["teams"][project]["spend"] = float(spend)
 
     async def delete_key(self, token_id: str) -> None:
         self._data["keys"] = [

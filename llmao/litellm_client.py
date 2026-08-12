@@ -24,11 +24,37 @@ class BackendUnavailable(Exception):
 
 @dataclass
 class TeamInfo:
+    """LiteLLM team budget facts for an ASF project (mapped via team_alias).
+
+    ``budget_duration`` is always a concrete string (e.g. ``30d``), resolved
+    with ``resolve_budget_duration`` (LiteLLM field → cfg.budgets.duration).
+
+    TODO(investigate): confirm LiteLLM team/info always returns budget_duration
+    (or equivalent); keep cfg fallback required so product never sees Optional.
+    """
     team_id: str
     max_budget: float = 0.0
     spend: float = 0.0
+    budget_duration: str = ""
     # Optional legacy field; product PATs are not stored here.
     key: str = ""
+
+
+def resolve_budget_duration(raw: Any, cfg: Any) -> str:
+    """Prefer LiteLLM team field; fall back to cfg.budgets.duration. Fail-fast if both empty."""
+    if raw is not None:
+        s = str(raw).strip()
+        if s:
+            return s
+    budgets = getattr(cfg, "budgets", None)
+    fallback = getattr(budgets, "duration", None) if budgets is not None else None
+    if fallback is not None:
+        s = str(fallback).strip()
+        if s:
+            return s
+    raise BackendUnavailable(
+        "budget_duration missing from LiteLLM team and cfg.budgets.duration is unset"
+    )
 
 
 @dataclass
@@ -66,6 +92,7 @@ class CreatedKey:
 
 class Backend(Protocol):
     async def team_info(self, project: str) -> Optional[TeamInfo]: ...
+    async def ensure_team(self, project: str) -> TeamInfo: ...
     async def list_keys(
         self,
         *,
@@ -222,12 +249,16 @@ class LiteLLMBackend:
             teams = []
         return self._ingest_team_list(teams)
 
-    @staticmethod
-    def _team_info_from_row(row: Dict[str, Any]) -> TeamInfo:
+    def _team_info_from_dict(self, d: Dict[str, Any], *, team_id: Optional[str] = None) -> TeamInfo:
+        tid = team_id if team_id is not None else str(d.get("team_id") or "")
+        raw_dur = d.get("budget_duration")
+        if raw_dur is None or raw_dur == "":
+            raw_dur = d.get("duration")
         return TeamInfo(
-            str(row.get("team_id") or ""),
-            float(row.get("max_budget") or 0),
-            float(row.get("spend") or 0),
+            tid,
+            float(d.get("max_budget") or 0),
+            float(d.get("spend") or 0),
+            budget_duration=resolve_budget_duration(raw_dur, self._cfg),
         )
 
     async def warm(self) -> None:
@@ -236,18 +267,21 @@ class LiteLLMBackend:
 
     async def ensure_team_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
+        info = await self.ensure_team(project)
+        return info.team_id
+
+    async def ensure_team(self, project: str) -> TeamInfo:
+        """Ensure a LiteLLM team exists for the project; return live budget facts."""
         project = (project or "").strip()
         if not project:
             raise BackendUnavailable("project is required")
-        if project in self._team_ids:
-            return self._team_ids[project]
 
-        rows = await self._team_list_rows()
-        if project in self._team_ids:
-            return self._team_ids[project]
+        existing = await self.team_info(project)
+        if existing is not None:
+            return existing
 
         budget_usd = float(self._cfg.budgets.default_team_budget_usd)
-        duration = self._cfg.budgets.duration
+        duration = resolve_budget_duration(None, self._cfg)
         resp = await self._request(
             "POST",
             "team/new",
@@ -258,16 +292,29 @@ class LiteLLMBackend:
             },
         )
         if resp.status_code >= 400:
-            await self._team_list_rows()
-            if project in self._team_ids:
-                return self._team_ids[project]
+            again = await self.team_info(project)
+            if again is not None:
+                return again
             self._raise_http(resp)
 
-        team_id = resp.json().get("team_id")
+        body = resp.json() if resp.content else {}
+        if not isinstance(body, dict):
+            body = {}
+        team_id = body.get("team_id")
         if not team_id:
             raise BackendUnavailable("LiteLLM team/new returned no team_id")
         self._team_ids[project] = str(team_id)
-        return str(team_id)
+        live = await self.team_info(project)
+        if live is not None:
+            return live
+        return self._team_info_from_dict(
+            {
+                **body,
+                "max_budget": body.get("max_budget", budget_usd),
+                "spend": body.get("spend", 0),
+            },
+            team_id=str(team_id),
+        )
 
     async def team_info(self, project: str) -> Optional[TeamInfo]:
         """Live team spend/budget. Cache holds ids only; spend is never cached.
@@ -291,16 +338,12 @@ class LiteLLMBackend:
             info = body.get("team_info") or body
             if not isinstance(info, dict):
                 info = {}
-            return TeamInfo(
-                team_id,
-                float(info.get("max_budget") or 0),
-                float(info.get("spend") or 0),
-            )
+            return self._team_info_from_dict(info, team_id=team_id)
 
         rows = await self._team_list_rows()
         for row in rows:
             if str(row.get("team_alias") or "") == project:
-                return self._team_info_from_row(row)
+                return self._team_info_from_dict(row)
         return None
 
     async def list_keys(
@@ -346,7 +389,8 @@ class LiteLLMBackend:
         project = (project or "").strip()
         if not project:
             raise BackendUnavailable("create_key requires project")
-        team_id = await self.ensure_team_id(project)
+        team = await self.ensure_team(project)
+        team_id = team.team_id
         purpose = (purpose or "").strip()
         meta = dict(metadata or {})
         meta["project"] = project

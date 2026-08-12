@@ -8,14 +8,20 @@ The seam speaks **project** only; mapping to LiteLLM team_id is the backend's jo
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 from .litellm_client import Backend, CreatedKey, KeyInfo, TeamInfo
 
 
 class AuthzError(Exception):
     """Caller is not allowed to perform this action on the project."""
+
+
+# Provisional product label for budget classification. Always set on project
+# view models so UI can show something. Reconsider later (may drop, rename, or
+# replace with RAI-stored Trial/Free/Allocated/Unlimited).
+BUDGET_TYPE_UNKNOWN = "unknown"
 
 
 def require_member(fn):
@@ -58,10 +64,151 @@ class Identity:
         return list(dict.fromkeys([*self.committees, *self.projects]))
 
 
+@dataclass
+class ProjectListRow:
+    """One project on the Projects list (budget summary)."""
+    project: str
+    is_steward: bool
+    max_budget: float
+    spend: float
+    remaining: float
+    pct_used: Optional[float]
+    budget_duration: str
+    budget_type: str  # provisional; see BUDGET_TYPE_UNKNOWN
+
+
+@dataclass
+class PersonSpendRow:
+    uid: str
+    spend: float
+    key_count: int
+
+
+@dataclass
+class AutomationKeyRow:
+    """Secret-free automation key summary for project overview."""
+    token_id: str
+    purpose: str
+    spend: float
+    created_by: Optional[str]
+    blocked: bool
+
+
+@dataclass
+class ProjectOverview:
+    """Read-only project budget + people/automation usage (key spend aggregates)."""
+    project: str
+    is_steward: bool
+    max_budget: float
+    spend: float
+    remaining: float
+    pct_used: Optional[float]
+    budget_duration: str
+    budget_type: str  # provisional; see BUDGET_TYPE_UNKNOWN
+    people_spend: float
+    automation_spend: float
+    by_person: List[PersonSpendRow] = field(default_factory=list)
+    automation_keys: List[AutomationKeyRow] = field(default_factory=list)
+    automation_key_count: int = 0
+
+
+def _pct_used(spend: float, max_budget: float) -> Optional[float]:
+    if max_budget <= 0:
+        return None
+    return round(100.0 * spend / max_budget, 2)
+
+
+def _remaining(spend: float, max_budget: float) -> float:
+    return round(max(0.0, max_budget - spend), 6)
+
+
+def _aggregate_keys(
+    keys: List[KeyInfo],
+) -> Tuple[float, float, List[PersonSpendRow], List[AutomationKeyRow]]:
+    people = 0.0
+    automation = 0.0
+    by_uid: Dict[str, list] = {}
+    auto_rows: List[AutomationKeyRow] = []
+    for k in keys:
+        if k.is_automation:
+            automation += k.spend
+            auto_rows.append(
+                AutomationKeyRow(
+                    token_id=k.token_id,
+                    purpose=k.purpose or "",
+                    spend=k.spend,
+                    created_by=k.created_by,
+                    blocked=k.blocked,
+                )
+            )
+        else:
+            people += k.spend
+            uid = k.user or ""
+            if uid not in by_uid:
+                by_uid[uid] = [0.0, 0]
+            by_uid[uid][0] += k.spend
+            by_uid[uid][1] += 1
+    by_person = [
+        PersonSpendRow(uid=uid, spend=round(vals[0], 6), key_count=vals[1])
+        for uid, vals in by_uid.items()
+    ]
+    by_person.sort(key=lambda r: (-r.spend, r.uid))
+    auto_rows.sort(key=lambda r: (-r.spend, r.token_id))
+    return round(people, 6), round(automation, 6), by_person, auto_rows
+
+
 class Seam:
     def __init__(self, cfg: Any, backend: Backend):
         self._cfg = cfg
         self._backend = backend
+
+    def _row_from_team(
+        self, project: str, identity: Identity, info: TeamInfo
+    ) -> ProjectListRow:
+        return ProjectListRow(
+            project=project,
+            is_steward=identity.admin_of(project),
+            max_budget=info.max_budget,
+            spend=info.spend,
+            remaining=_remaining(info.spend, info.max_budget),
+            pct_used=_pct_used(info.spend, info.max_budget),
+            budget_duration=info.budget_duration,
+            budget_type=BUDGET_TYPE_UNKNOWN,
+        )
+
+    async def list_projects_for(self, identity: Identity) -> List[ProjectListRow]:
+        """Projects from identity membership; ensures LiteLLM team (project budget)."""
+        names = sorted(identity.all_projects())
+        rows: List[ProjectListRow] = []
+        for project in names:
+            info = await self._backend.ensure_team(project)
+            rows.append(self._row_from_team(project, identity, info))
+        return rows
+
+    @require_member
+    async def project_overview(
+        self, identity: Identity, project: str
+    ) -> ProjectOverview:
+        """Read-only project budget + key-based people/automation breakdown."""
+        project = (project or "").strip()
+        info = await self._backend.ensure_team(project)
+        keys = await self._backend.list_keys(project=project, size=100)
+        people, automation, by_person, auto_keys = _aggregate_keys(keys)
+        return ProjectOverview(
+            project=project,
+            is_steward=identity.admin_of(project),
+            max_budget=info.max_budget,
+            spend=info.spend,
+            remaining=_remaining(info.spend, info.max_budget),
+            pct_used=_pct_used(info.spend, info.max_budget),
+            budget_duration=info.budget_duration,
+            budget_type=BUDGET_TYPE_UNKNOWN,
+            people_spend=people,
+            automation_spend=automation,
+            by_person=by_person,
+            automation_keys=auto_keys,
+            automation_key_count=len(auto_keys),
+        )
 
     @require_member
     async def team_status(self, identity: Identity, project: str) -> Optional[TeamInfo]:
