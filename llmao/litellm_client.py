@@ -22,12 +22,19 @@ class BackendUnavailable(Exception):
     """Raised when the litellm admin API times out or can't be reached."""
 
 
+# Who authorized the project's dollar ceiling. First cfg default → Free Tier.
+GRANTOR_FREE_TIER = "Free Tier"
+
+
 @dataclass
 class TeamInfo:
     """LiteLLM team budget facts for an ASF project (mapped via team_alias).
 
     ``budget_duration`` is always a concrete string (e.g. ``30d``), resolved
     with ``resolve_budget_duration`` (LiteLLM field → cfg.budgets.duration).
+
+    ``grantor`` is ``metadata.grantor`` on the team (LiteLLM /team/new accepts
+    metadata, same as keys). Missing → Free Tier.
 
     TODO(investigate): confirm LiteLLM team/info always returns budget_duration
     (or equivalent); keep cfg fallback required so product never sees Optional.
@@ -36,8 +43,20 @@ class TeamInfo:
     max_budget: float = 0.0
     spend: float = 0.0
     budget_duration: str = ""
+    grantor: str = GRANTOR_FREE_TIER
     # Optional legacy field; product PATs are not stored here.
     key: str = ""
+
+
+def resolve_grantor(raw: Any, metadata: Any = None) -> str:
+    """Team metadata.grantor, or Free Tier if unset."""
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    if isinstance(metadata, dict):
+        g = metadata.get("grantor")
+        if g is not None and str(g).strip():
+            return str(g).strip()
+    return GRANTOR_FREE_TIER
 
 
 def resolve_budget_duration(raw: Any, cfg: Any) -> str:
@@ -254,11 +273,15 @@ class LiteLLMBackend:
         raw_dur = d.get("budget_duration")
         if raw_dur is None or raw_dur == "":
             raw_dur = d.get("duration")
+        meta = d.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
         return TeamInfo(
             tid,
             float(d.get("max_budget") or 0),
             float(d.get("spend") or 0),
             budget_duration=resolve_budget_duration(raw_dur, self._cfg),
+            grantor=resolve_grantor(d.get("grantor"), meta),
         )
 
     async def warm(self) -> None:
@@ -289,6 +312,7 @@ class LiteLLMBackend:
                 "team_alias": project,
                 "max_budget": budget_usd,
                 "budget_duration": duration,
+                "metadata": {"grantor": GRANTOR_FREE_TIER},
             },
         )
         if resp.status_code >= 400:

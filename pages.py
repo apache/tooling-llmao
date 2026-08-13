@@ -208,7 +208,7 @@ def _project_list_rows(rows) -> list:
             "remaining": _money(r.remaining),
             "pct_label": pct_label,
             "budget_duration": r.budget_duration,
-            "budget_type": r.budget_type,
+            "grantor": r.grantor,
         }))
     return out
 

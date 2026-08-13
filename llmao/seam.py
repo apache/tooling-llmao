@@ -11,17 +11,17 @@ import functools
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .litellm_client import Backend, CreatedKey, KeyInfo, TeamInfo
+from .litellm_client import (
+    GRANTOR_FREE_TIER,
+    Backend,
+    CreatedKey,
+    KeyInfo,
+    TeamInfo,
+)
 
 
 class AuthzError(Exception):
     """Caller is not allowed to perform this action on the project."""
-
-
-# Provisional product label for budget classification. Always set on project
-# view models so UI can show something. Reconsider later (may drop, rename, or
-# replace with RAI-stored Trial/Free/Allocated/Unlimited).
-BUDGET_TYPE_UNKNOWN = "unknown"
 
 
 def require_member(fn):
@@ -74,7 +74,7 @@ class ProjectListRow:
     remaining: float
     pct_used: Optional[float]
     budget_duration: str
-    budget_type: str  # provisional; see BUDGET_TYPE_UNKNOWN
+    grantor: str = GRANTOR_FREE_TIER
 
 
 @dataclass
@@ -104,7 +104,7 @@ class ProjectOverview:
     remaining: float
     pct_used: Optional[float]
     budget_duration: str
-    budget_type: str  # provisional; see BUDGET_TYPE_UNKNOWN
+    grantor: str
     people_spend: float
     automation_spend: float
     by_person: List[PersonSpendRow] = field(default_factory=list)
@@ -173,7 +173,7 @@ class Seam:
             remaining=_remaining(info.spend, info.max_budget),
             pct_used=_pct_used(info.spend, info.max_budget),
             budget_duration=info.budget_duration,
-            budget_type=BUDGET_TYPE_UNKNOWN,
+            grantor=info.grantor,
         )
 
     async def list_projects_for(self, identity: Identity) -> List[ProjectListRow]:
@@ -202,7 +202,7 @@ class Seam:
             remaining=_remaining(info.spend, info.max_budget),
             pct_used=_pct_used(info.spend, info.max_budget),
             budget_duration=info.budget_duration,
-            budget_type=BUDGET_TYPE_UNKNOWN,
+            grantor=info.grantor,
             people_spend=people,
             automation_spend=automation,
             by_person=by_person,

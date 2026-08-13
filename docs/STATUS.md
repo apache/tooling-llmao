@@ -46,7 +46,7 @@ Home = role-aware launchpad (not keys-only)
 - **Project overview** (`/projects/<name>` or equivalent):
   - Money meters: **People** vs **Automation** spend split (display split OK if one team budget under the hood)
   - Period label (e.g. monthly · reset date)
-  - Envelope type badge when known: Trial / Free / Allocated / Unlimited
+  - Grantor of the dollar ceiling (v1: Free Tier on first cfg default; later RAI / Security / …)
   - By-person spend this period (**transparent to project members**)
   - Export CSV (steward+)
   - Automation summary + link toward Other Keys for that project

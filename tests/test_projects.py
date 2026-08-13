@@ -5,8 +5,8 @@ import pytest
 from easydict import EasyDict as edict
 
 from llmao.litellm_client import BackendUnavailable, resolve_budget_duration
+from llmao.litellm_client import GRANTOR_FREE_TIER
 from llmao.seam import (
-    BUDGET_TYPE_UNKNOWN,
     AuthzError,
     Identity,
     Seam,
@@ -69,7 +69,7 @@ def test_list_projects_ensures_team_and_budget():
         assert r.remaining == r.max_budget
         assert r.pct_used == 0.0
         assert r.budget_duration == "30d"
-        assert r.budget_type == BUDGET_TYPE_UNKNOWN
+        assert r.grantor == GRANTOR_FREE_TIER
         info = await backend.team_info("airflow")
         assert info is not None
         assert info.budget_duration == "30d"
@@ -109,7 +109,7 @@ def test_overview_ensures_team():
         assert ov.project == "airflow"
         assert ov.max_budget == float(cfg.budgets.default_team_budget_usd)
         assert ov.budget_duration == "30d"
-        assert ov.budget_type == BUDGET_TYPE_UNKNOWN
+        assert ov.grantor == GRANTOR_FREE_TIER
         assert ov.people_spend == 0.0
         assert ov.automation_spend == 0.0
         assert ov.by_person == []
@@ -150,7 +150,7 @@ def test_overview_people_automation_and_by_person():
         assert ov.automation_key_count == 1
         assert ov.automation_keys[0].created_by == "chair"
         assert ov.automation_keys[0].spend == 2.5
-        assert ov.budget_type == BUDGET_TYPE_UNKNOWN
+        assert ov.grantor == GRANTOR_FREE_TIER
     asyncio.run(run())
 
 
@@ -163,5 +163,5 @@ def test_site_admin_overview_without_membership():
         ov = await seam.project_overview(root, "airflow")
         assert ov.project == "airflow"
         assert ov.is_steward is True  # site admin
-        assert ov.budget_type == BUDGET_TYPE_UNKNOWN
+        assert ov.grantor == GRANTOR_FREE_TIER
     asyncio.run(run())

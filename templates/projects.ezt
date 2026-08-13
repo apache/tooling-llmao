@@ -19,7 +19,7 @@
           <th>Budget</th>
           <th>%</th>
           <th>Period</th>
-          <th>Type</th>
+          <th>Grantor</th>
         </tr>
       </thead>
       <tbody>
@@ -40,7 +40,7 @@
           <td class="small">[project_rows.pct_label]</td>
           <td class="small text-muted">[project_rows.budget_duration]</td>
           <td>
-            <span class="badge text-bg-light text-muted">[project_rows.budget_type]</span>
+            <span class="badge text-bg-light text-muted">[project_rows.grantor]</span>
           </td>
         </tr>
         [end]

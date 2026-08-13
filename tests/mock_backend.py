@@ -10,11 +10,13 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from llmao.litellm_client import (
+    GRANTOR_FREE_TIER,
     CreatedKey,
     KeyInfo,
     TeamInfo,
     _normalize_key_obj,
     resolve_budget_duration,
+    resolve_grantor,
 )
 
 
@@ -31,6 +33,7 @@ class MockBackend:
         t = self._data.get("teams", {}).get(project)
         if not t:
             return None
+        meta = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
         return TeamInfo(
             t.get("team_id", project),
             float(t.get("max_budget", 0.0)),
@@ -39,6 +42,7 @@ class MockBackend:
                 t.get("budget_duration") or t.get("duration"),
                 self._cfg,
             ),
+            grantor=resolve_grantor(t.get("grantor"), meta),
         )
 
     def _touch_team(self, project: str) -> None:
@@ -50,6 +54,7 @@ class MockBackend:
                 "spend": 0.0,
                 "duration": str(self._cfg.budgets.duration),
                 "budget_duration": str(self._cfg.budgets.duration),
+                "metadata": {"grantor": GRANTOR_FREE_TIER},
                 "created_at": time.time(),
             }
 
