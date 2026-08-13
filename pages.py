@@ -231,7 +231,6 @@ async def projects_list():
     result.title = "Projects"
     result.project_rows = []
     ident = await current_identity(APP.cfg)
-    assert ident is not None
     seam = APP.config["LLMAO_SEAM"]
     result.project_rows = _project_list_rows(
         await seam.list_projects_for(ident)
@@ -249,7 +248,6 @@ async def project_stub(project: str):
     result.title = project
     result.project = project
     ident = await current_identity(APP.cfg)
-    assert ident is not None
     seam = APP.config["LLMAO_SEAM"]
     await seam.team_status(ident, project)
     return result
@@ -293,7 +291,6 @@ async def keys_list():
     result.title = "My Keys"
     result.keys = []
     ident = await current_identity(APP.cfg)
-    assert ident is not None
     seam = APP.config["LLMAO_SEAM"]
     my_keys = await seam.list_my_keys(ident)
     result.keys = _key_rows(my_keys, after_path="/keys")
@@ -312,7 +309,6 @@ async def keys_other_list():
     if not result.can_create_automation:
         raise AuthzError("Other Keys is limited to PMC members and site admins.")
     ident = await current_identity(APP.cfg)
-    assert ident is not None
     seam = APP.config["LLMAO_SEAM"]
     admin_projects = (
         ident.all_projects() if ident.is_site_admin else list(ident.committees)
@@ -346,7 +342,6 @@ async def do_create_key():
     purpose = (form.get("purpose") or "").strip()
     try:
         ident = await current_identity(APP.cfg)
-        assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
         created = await seam.create_personal_key(ident, project, purpose)
     except (AuthzError, BackendUnavailable) as e:
@@ -380,7 +375,6 @@ async def do_create_other_key():
     project = (form.get("project") or "").strip()
     purpose = (form.get("purpose") or "").strip()
     ident = await current_identity(APP.cfg)
-    assert ident is not None
     if not (ident.is_site_admin or ident.committees):
         await flash_danger(
             "Only PMC members and site admins may create automation keys."
@@ -409,7 +403,6 @@ async def do_revoke_key():
     after_path = _safe_after_path(form.get("after_path"))
     try:
         ident = await current_identity(APP.cfg)
-        assert ident is not None
         seam = APP.config["LLMAO_SEAM"]
         await seam.revoke_key(ident, token_id)
         await flash_success("Key revoked.")

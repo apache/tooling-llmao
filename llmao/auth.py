@@ -4,18 +4,22 @@
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import asfquart.session as asf_session
 
-from .seam import Identity
+from .seam import AuthzError, Identity
 
 
-async def current_identity(cfg: Any) -> Optional[Identity]:
-    """Resolve the calling identity from the asfquart session (if any)."""
+async def current_identity(cfg: Any) -> Identity:
+    """Resolve the calling identity from the asfquart session.
+
+    Raises AuthzError if there is no signed-in session (callers sit behind
+    ``@asfquart.auth.require``; this is a last-line check, not a login page).
+    """
     client_session = await asf_session.read()
     if client_session is None or not getattr(client_session, "uid", None):
-        return None
+        raise AuthzError("not signed in")
     return identity_from_session(client_session, cfg)
 
 

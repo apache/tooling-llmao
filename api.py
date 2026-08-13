@@ -45,9 +45,8 @@ async def healthz():
 @asfquart.auth.require
 async def project_usage(project: str):
     seam = APP.config["LLMAO_SEAM"]
-    ident = await current_identity(APP.cfg)
-    assert ident is not None
     try:
+        ident = await current_identity(APP.cfg)
         rows = await seam.project_activity(ident, project)
     except AuthzError as e:
         return _err(403, str(e))
@@ -64,9 +63,8 @@ async def project_usage(project: str):
 @asfquart.auth.require({R.committer})
 async def project_budget(project: str):
     seam = APP.config["LLMAO_SEAM"]
-    ident = await current_identity(APP.cfg)
-    assert ident is not None
     try:
+        ident = await current_identity(APP.cfg)
         info = await seam.team_status(ident, project)
     except AuthzError as e:
         return _err(403, str(e))
