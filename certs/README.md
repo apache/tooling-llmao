@@ -39,9 +39,14 @@ Then open `https://localhost.apache.org:<port>/` (port from `config.yaml`).
 
 ## Browser trust
 
-If the browser still warns, import the **mkcert root CA** (not only the site
-cert) into the browser trust store. On Chrome: Settings → Privacy and security
+If the browser still warns, import the **mkcert** site
+cert into the browser trust store (usually named something like
+`${HOSTNAME}+2.pem`). On Chrome: Settings → Privacy and security
 → Security → Manage certificates [^1] → Local Certificates → Installed by you -> {Import}
 the `.pem` file created by mkcert (plain `.pem`, not `*-key.pem`).
 
-[^1]: or jump straight there with [chrome://certificate-manager/](chrome://certificate-manager/)
+There may be a way to import just the CAROOT, but the site.pem file should have
+the entire trust chain, which Chrome can properly use.
+
+
+[^1]: or jump straight there with `chrome://certificate-manager/`
