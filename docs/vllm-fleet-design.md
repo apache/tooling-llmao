@@ -230,6 +230,11 @@ The template itself is identical for every box; only the two env vars change.
 
 ## 11. Implementation Order (suggested)
 
+Box-side files: `hosting/` (runbooks next to scripts). Control plane stays
+in the Quart app. v1: stock Vast vLLM template + pinned on-start, not a
+derived image — see `hosting/vast/README.md`.
+
+
 1. Finalise `servers.yaml` schema and endpoint contract.
 2. Implement asfquart endpoint (auth + YAML generation from existing LiteLLM/model data).
 3. Implement Python launcher + fetch logic.

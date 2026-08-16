@@ -55,6 +55,11 @@ keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
+**GPU fleet (vLLM on Vast, later RunPod):** design in
+`docs/vllm-fleet-design.md`. Box-side fetch/launcher/runbooks live in
+`hosting/` (stock provider vLLM image + on-start; no derived image in v1).
+The asfquart config endpoint is not in that tree.
+
 Build status and backlog: **`docs/STATUS.md`**.
 
 The app **always** uses **LiteLLMBackend** against a real LiteLLM admin API.
