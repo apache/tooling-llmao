@@ -1,5 +1,10 @@
 #!/bin/bash
 set -eo pipefail
+
+### for now. echo what we're trying to do:
+set -x
+
+mkdir /workspace
 cd /workspace
 
 # fetch launcher if needed
