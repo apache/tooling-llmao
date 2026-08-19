@@ -51,8 +51,6 @@ def test_build_argv(monkeypatch):
         "0.0.0.0",
         "--port",
         "8000",
-        "--api-key",
-        "sk-aaa",
         "--gpu-memory-utilization",
         "0.42",
         "--max-model-len",
@@ -88,8 +86,12 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     text = written[0].read_text()
     assert "[program:vllm-model-a]" in text
     assert "vllm serve org/model-a" in text
+    assert "--api-key" not in text
+    assert "sk-aaa" not in text.split("environment=", 1)[0]
+    assert 'VLLM_API_KEY="sk-aaa"' in text
     assert "autorestart=true" in text
     assert f'HF_HOME="{tmp_path / "hf"}"' in text
+    assert written[0].stat().st_mode & 0o777 == 0o600
 
 
 def test_fetch_json(monkeypatch):

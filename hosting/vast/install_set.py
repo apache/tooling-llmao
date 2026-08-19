@@ -119,8 +119,6 @@ def build_argv(spec: dict[str, Any]) -> list[str]:
         "0.0.0.0",
         "--port",
         str(spec["port"]),
-        "--api-key",
-        spec["api_key"],
     ]
     if spec.get("gpu_memory_utilization") is not None:
         cmd.extend(["--gpu-memory-utilization", str(spec["gpu_memory_utilization"])])
@@ -143,6 +141,10 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str) -> str:
     name = program_name(spec["name"])
     command = shlex.join(build_argv(spec))
     log = str(Path(log_dir) / f"{spec['name']}.log")
+    env = (
+        f'HF_HOME="{_ini_escape(hf_home)}",'
+        f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"'
+    )
     return (
         f"[program:{name}]\n"
         f"command={_ini_escape(command)}\n"
@@ -150,7 +152,7 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str) -> str:
         f"autostart=true\n"
         f"autorestart=true\n"
         f"startretries=5\n"
-        f'environment=HF_HOME="{_ini_escape(hf_home)}"\n'
+        f"environment={env}\n"
         f"stdout_logfile={_ini_escape(log)}\n"
         f"stderr_logfile={_ini_escape(log)}\n"
     )
@@ -166,6 +168,7 @@ def write_units(data: dict[str, Any], conf_dir: Path) -> list[Path]:
     for spec in servers_from_config(data):
         path = conf_dir / f"{program_name(spec['name'])}.conf"
         path.write_text(program_ini(spec, hf_home=hf_home, log_dir=log_dir))
+        path.chmod(0o600)
         written.append(path)
         print(f"wrote {path}", file=sys.stderr)
     return written
