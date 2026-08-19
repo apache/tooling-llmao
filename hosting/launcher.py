@@ -1,17 +1,76 @@
-"""Launch vLLM processes from servers.yaml. No GPU required to import/test."""
+"""Fetch set JSON from asfquart and launch vLLM. No GPU required to import/test."""
 
 from __future__ import annotations
 
+import json
 import os
 import signal
+import ssl
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+CONFIG_PATH = "/vllm/config/{set_id}"
+
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise SystemExit(f"missing required environment variable: {name}")
+    return value
+
+
+def config_url(asfquart_url: str, set_id: str) -> str:
+    return asfquart_url.rstrip("/") + CONFIG_PATH.format(set_id=set_id)
+
+
+def ssl_context() -> ssl.SSLContext:
+    # SSL_VERIFY=0 is a stopgap while llm.apache.org is on :8443 with a
+    # self-signed/mkcert cert. Drop it when that host serves :443 with a
+    # public CA (Let's Encrypt / ASF).
+    raw = os.environ.get("SSL_VERIFY", "1").strip().lower()
+    if raw in ("0", "false", "no"):
+        ctx = ssl._create_unverified_context()
+        print(
+            "SSL_VERIFY=0: skipping TLS verify (remove when llm.apache.org is on :443)",
+            file=sys.stderr,
+        )
+        return ctx
+    return ssl.create_default_context()
+
+
+def fetch_config(url: str, fleet_key: str, timeout_s: float = 30.0) -> dict[str, Any]:
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {fleet_key}", "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s, context=ssl_context()) as resp:
+            status = getattr(resp, "status", 200)
+            if status != 200:
+                raise SystemExit(f"config fetch HTTP {status} from {url}")
+            body = resp.read()
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"config fetch HTTP {exc.code} from {url}") from exc
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"config fetch failed: {exc.reason}") from exc
+    if not body.strip():
+        raise SystemExit("config fetch returned empty body")
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"config fetch is not JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit("config JSON must be an object")
+    if "error" in data and "servers" not in data:
+        raise SystemExit(f"config fetch error: {data['error']}")
+    return data
 
 
 @dataclass(frozen=True)
@@ -59,15 +118,10 @@ def parse_server(raw: dict[str, Any]) -> ServerSpec:
     )
 
 
-def load_config(path: Path) -> FleetConfig:
-    if not path.is_file():
-        raise SystemExit(f"servers.yaml not found: {path}")
-    data = yaml.safe_load(path.read_text())
-    if not isinstance(data, dict):
-        raise SystemExit("servers.yaml must be a mapping")
+def load_config(data: dict[str, Any]) -> FleetConfig:
     servers = data.get("servers")
     if not servers:
-        raise SystemExit("servers.yaml has no servers")
+        raise SystemExit("config JSON has no servers")
     return FleetConfig(
         hf_home=str(data.get("hf_home") or "/workspace/hf-cache"),
         log_dir=str(data.get("log_dir") or "/workspace/logs"),
@@ -167,7 +221,6 @@ class Supervisor:
                 self._spawn(child)
             if all(c.proc is None for c in self.children):
                 print("all servers given up; supervisor idle", file=sys.stderr)
-                # Stay up so SSH still works; wait for signal.
                 while not self._stop:
                     time.sleep(poll_s)
         self._terminate_all()
@@ -194,9 +247,12 @@ class Supervisor:
 
 def main(argv: list[str] | None = None) -> int:
     del argv
-    path = Path(os.environ.get("SERVERS_YAML", "/workspace/servers.yaml"))
+    fleet_key = require_env("FLEET_KEY")
+    set_id = require_env("VLLM_SET")
+    asfquart_url = require_env("ASFQUART_URL")
     max_restarts = int(os.environ.get("LAUNCHER_MAX_RESTARTS", "5"))
-    cfg = load_config(path)
+    url = config_url(asfquart_url, set_id)
+    cfg = load_config(fetch_config(url, fleet_key))
     return Supervisor(cfg, max_restarts=max_restarts).run()
 
 

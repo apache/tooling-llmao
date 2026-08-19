@@ -39,3 +39,8 @@ site_admins: []
 
 # Shared model inventory (LiteLLM include + llmao UX). Relative to app root.
 models_path: model_list.yaml
+
+# Shared secret GPU boxes present as Authorization: Bearer when fetching
+# GET /vllm/config/<model_set>. Same value as box env FLEET_KEY.
+fleet:
+  key: CHANGE_ME_FLEET_KEY

@@ -4,46 +4,43 @@ Artifacts that run **on** a GPU instance (Vast.ai now, RunPod later). They
 are not part of the asfquart process.
 
 **Design (why):** [`docs/vllm-fleet-design.md`](../docs/vllm-fleet-design.md).
-`servers.yaml` schema is defined there (§5); this tree does not duplicate it.
 
-**Control plane:** asfquart serves `GET /vllm/config/{set_id}` with the fleet
-key. That endpoint is application code (`api.py` / `llmao/`), not here.
+**Control plane:** asfquart serves `GET /vllm/config/{set_id}` as JSON, built
+from `model_list.yaml` for that `model_set`. Fleet key Bearer auth.
+
+There is **no `servers.yaml`**. vLLM processes are long-lived; fetching a
+file at provision time does not save anything. The launcher fetches JSON
+when **it** starts.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `fetch_config.py` | `FLEET_KEY` + `VLLM_SET` + `ASFQUART_URL` → write `servers.yaml` |
-| `launcher.py` | parse YAML, spawn/monitor `vllm serve`, SIGTERM |
-| `onstart.sh` | provider on-start: fetch then exec launcher |
-| `vast/README.md` | Vast.ai runbook (stock vLLM template + env) |
-
-Same scripts for every provider. Only the runbook (how to set env / on-start)
-differs.
+| `launcher.py` | fetch JSON, spawn/monitor `vllm serve`, SIGTERM |
+| `vast/provision.sh` | Vast on-create: install launcher + supervisor (no config fetch) |
+| `vast/README.md` | Vast.ai runbook |
 
 ## Box environment
 
 Required:
 
 - `FLEET_KEY` — shared secret; `Authorization: Bearer`
-- `VLLM_SET` — set id (semantic or `box-a`; control plane owns names)
-- `ASFQUART_URL` — origin only, e.g. `https://llmao.apache.org` (no trailing
-  path). **Required.** Not hard-coded; dev and prod hosts differ.
+- `VLLM_SET` — `model_set` id from `model_list.yaml`
+- `ASFQUART_URL` — origin only, e.g. `https://llm.apache.org:8443`
 
 Optional:
 
-- `SERVERS_YAML` — default `/workspace/servers.yaml`
+- `SSL_VERIFY` — `0` skips TLS verify. **Stopgap** while llm.apache.org is
+  on **:8443** with a self-signed cert. **Drop `SSL_VERIFY=0` when that
+  host moves to :443** with a public CA.
 - `LAUNCHER_MAX_RESTARTS` — default `5` (per server); then stay up for SSH
 
 ## Boot
 
 ```text
-onstart.sh → fetch_config.py → launcher.py
+provision.sh → supervisor → launcher.py → GET JSON → vllm serve …
 ```
 
-v1 uses the **stock Vast vLLM image** plus this on-start. A derived image is
-not justified until the layer is more than these three files (see Vast
-runbook).
-
-Pin the git **tag or commit** in the provider on-start snippet. Do not
-`curl` floating `main`.
+v1 uses the stock Vast vLLM image plus `provision.sh`. Pin a git tag or
+commit when curling `launcher.py` in production; `main` is a convenience
+for now.

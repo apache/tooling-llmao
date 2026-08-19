@@ -56,9 +56,9 @@ policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
 **GPU fleet (vLLM on Vast, later RunPod):** design in
-`docs/vllm-fleet-design.md`. Box-side fetch/launcher/runbooks live in
-`hosting/` (stock provider vLLM image + on-start; no derived image in v1).
-The asfquart config endpoint is not in that tree.
+`docs/vllm-fleet-design.md`. Boxes run `hosting/launcher.py` (JSON from
+`GET /vllm/config/{set}` at launcher start; no `servers.yaml`).
+`hosting/vast/provision.sh` only installs launcher + supervisor.
 
 Build status and backlog: **`docs/STATUS.md`**.
 

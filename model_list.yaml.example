@@ -14,6 +14,12 @@ model_list:
       api_base: http://127.0.0.1:8001
       api_key: CHANGE_ME_SELFHOST_API_KEY
     model_info:
+      model_set: primary
+      vllm:
+        model: google/gemma-4-26B-A4B-it
+        port: 8001
+        gpu_memory_utilization: 0.55
+        args: []
       display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
       provider: self-host
       context_window: 131072
@@ -36,6 +42,14 @@ model_list:
       api_base: http://127.0.0.1:8003
       api_key: CHANGE_ME_SELFHOST_API_KEY
     model_info:
+      model_set: primary
+      vllm:
+        model: Qwen/Qwen3-8B-FP8
+        port: 8003
+        gpu_memory_utilization: 0.40
+        args:
+          - --reasoning-parser
+          - qwen3
       display_name: "Qwen3 8B (self-hosted, fast)"
       provider: self-host
       context_window: 40960

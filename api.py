@@ -19,12 +19,15 @@
 
 from __future__ import annotations
 
+import hmac
+
 import asfquart
 import asfquart.auth
 from asfquart.auth import Requirements as R
-from quart import jsonify, Response
+from quart import jsonify, request, Response
 
 from llmao.auth import current_identity
+from llmao.fleet import UnknownSet, config_for_set
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -39,6 +42,36 @@ def _err(status: int, message: str) -> Response:
 @APP.get("/healthz")
 async def healthz():
     return jsonify({"status": "ok"})
+
+
+def _fleet_key() -> str:
+    fleet = getattr(APP.cfg, "fleet", None)
+    key = ""
+    if fleet is not None:
+        key = str(getattr(fleet, "key", "") or "")
+    return key.strip()
+
+
+@APP.get("/vllm/config/<set_id>")
+async def vllm_config(set_id: str):
+    """JSON for one model_set. Bearer fleet key; no OAuth (GPU boxes)."""
+    expected = _fleet_key()
+    if not expected or expected.startswith("CHANGE_ME"):
+        return _err(503, "fleet.key is not configured")
+    auth = request.headers.get("Authorization") or ""
+    prefix = "Bearer "
+    if not auth.startswith(prefix):
+        return _err(403, "missing fleet key")
+    presented = auth[len(prefix):].strip()
+    if not hmac.compare_digest(presented, expected):
+        return _err(403, "invalid fleet key")
+    try:
+        payload = config_for_set(set_id, cfg=APP.cfg)
+    except UnknownSet:
+        return _err(404, f"unknown model_set: {set_id}")
+    except ValueError as e:
+        return _err(500, str(e))
+    return jsonify(payload)
 
 
 @APP.get("/v1/projects/<project>/usage")
