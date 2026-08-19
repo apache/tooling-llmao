@@ -1,6 +1,6 @@
 """Build a vLLM set config JSON from model_list.yaml.
 
-The GPU-box launcher fetches this at process start (no servers.yaml).
+GPU boxes fetch this JSON at provision/install time (no servers.yaml).
 """
 from __future__ import annotations
 

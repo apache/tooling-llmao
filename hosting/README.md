@@ -5,19 +5,18 @@ are not part of the asfquart process.
 
 **Design (why):** [`docs/vllm-fleet-design.md`](../docs/vllm-fleet-design.md).
 
-**Control plane:** asfquart serves `GET /vllm/config/{set_id}` as JSON, built
-from `model_list.yaml` for that `model_set`. Fleet key Bearer auth.
+**Control plane (all providers):** asfquart serves `GET /vllm/config/{set_id}`
+as JSON from `model_list.yaml` for that `model_set`. Bearer fleet key.
 
-There is **no `servers.yaml`**. vLLM processes are long-lived; fetching a
-file at provision time does not save anything. The launcher fetches JSON
-when **it** starts.
+Provider-specific: how that JSON becomes running vLLM. Vast writes
+Supervisor units at box-start. There is no long-lived Python launcher.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `launcher.py` | fetch JSON, spawn/monitor `vllm serve`, SIGTERM |
-| `vast/provision.sh` | Vast on-create: install launcher + supervisor (no config fetch) |
+| `vast/provision.sh` | Vast on-create |
+| `vast/install_set.py` | GET JSON, write `/etc/supervisor/conf.d/vllm-*.conf`, `supervisorctl update` |
 | `vast/README.md` | Vast.ai runbook |
 
 ## Box environment
@@ -33,14 +32,9 @@ Optional:
 - `SSL_VERIFY` — `0` skips TLS verify. **Stopgap** while llm.apache.org is
   on **:8443** with a self-signed cert. **Drop `SSL_VERIFY=0` when that
   host moves to :443** with a public CA.
-- `LAUNCHER_MAX_RESTARTS` — default `5` (per server); then stay up for SSH
 
-## Boot
+## Boot (Vast)
 
 ```text
-provision.sh → supervisor → launcher.py → GET JSON → vllm serve …
+provision.sh → install_set.py → GET JSON → supervisor units → vllm serve …
 ```
-
-v1 uses the stock Vast vLLM image plus `provision.sh`. Pin a git tag or
-commit when curling `launcher.py` in production; `main` is a convenience
-for now.

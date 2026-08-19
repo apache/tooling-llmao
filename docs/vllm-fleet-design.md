@@ -1,6 +1,6 @@
 # Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
 
-**Status:** Implementation in progress (JSON at launcher start; no servers.yaml)
+**Status:** Implementation in progress (JSON → Supervisor units at box-start)
 **Date:** 2026-08-17
 **Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
 
@@ -58,10 +58,9 @@ flowchart TB
   - The real API keys used between LiteLLM and each vLLM server
   - Logical **sets** (groupings of models that should run together on one GPU box)
 - Each GPU box receives only two pieces of bootstrap information: the **fleet key** and a **set identifier**.
-- When the launcher process starts (not at provision time), it fetches JSON
-  for its `model_set` and launches the corresponding vLLM processes.
-  There is no on-disk `servers.yaml`; vLLM is long-lived so a provision-time
-  file does not save anything.
+- At box-start, the provider installer fetches JSON for its `model_set` and
+  installs native process units (Vast: Supervisor). There is no on-disk
+  `servers.yaml` and no Python process manager.
 
 ---
 
@@ -88,8 +87,8 @@ asfquart owns the mapping from set → list of models (plus ports, vLLM argument
 ### 3.3 Set config JSON
 
 asfquart builds JSON from `model_list.yaml` (entries whose `model_info.model_set`
-matches the requested set). The launcher fetches it at process start. Same
-payload as the former YAML draft; never written to disk on the box.
+matches the requested set). Vast `install_set.py` fetches it at box-start
+and writes Supervisor programs. Same payload; never a `servers.yaml`.
 
 ---
 
@@ -138,7 +137,7 @@ Inventory fields (under each `model_list` entry’s `model_info`, so LiteLLM
 - `api_key` comes from `litellm_params` (same secret LiteLLM presents)
 
 Notes:
-- `args` may be a list of strings or a single string; the launcher normalises either form.
+- `args` may be a list of strings or a single string; the installer normalises either form.
 - `SSL_VERIFY=0` is a stopgap while **llm.apache.org is on :8443**. Drop it
   when that host serves **:443** with a public CA.
 
@@ -155,14 +154,10 @@ Notes:
 
    plus the usual image, ports (8000–8002), disk size, SSH, etc.
 
-2. Provisioning (`hosting/vast/provision.sh`):
-   - Installs `launcher.py` and a supervisor unit.
-   - Does **not** fetch model config.
-
-3. Launcher (when supervisor starts it):
-   - Reads `FLEET_KEY`, `VLLM_SET`, `ASFQUART_URL`.
+2. Provisioning (`hosting/vast/provision.sh` → `install_set.py`):
    - GETs JSON from asfquart.
-   - For each server entry builds and runs:
+   - Writes one Supervisor `[program:vllm-<name>]` per server.
+   - `supervisorctl update`. supervisord runs:
 
      ```bash
      vllm serve <model> --host 0.0.0.0 --port <port> \
@@ -172,11 +167,10 @@ Notes:
        <extra args…>
      ```
 
-   - Redirects logs to `/workspace/logs/<name>.log`.
-   - Monitors processes; optional restart-on-exit.
-   - Handles SIGTERM/SIGINT cleanly.
+   Logs go to `/workspace/logs/<name>.log`. Restart is Supervisor
+   `autorestart` / `startretries`.
 
-4. LiteLLM (managed by asfquart) is configured with matching `api_base` values and the same API keys, so it can reach each vLLM server.
+3. LiteLLM (managed by asfquart) is configured with matching `api_base` values and the same API keys, so it can reach each vLLM server.
 
 ---
 
@@ -190,7 +184,7 @@ Notes:
   - `FLEET_KEY`
   - `VLLM_SET`
   - (optional) `ASFQUART_URL` if not hard-coded / discoverable
-- On-create: `provision.sh` (launcher + supervisor; JSON fetch is later).
+- On-create: `provision.sh` → `install_set.py` (JSON → Supervisor units).
 
 The template itself is identical for every box; only the two env vars change.
 
@@ -221,7 +215,7 @@ The template itself is identical for every box; only the two env vars change.
 ## 10. Open Points / Decisions Still Soft
 
 - Exact URL path and HTTP method for the config endpoint.
-- (Resolved) No on-disk set config; launcher fetches JSON at start.
+- (Resolved) No on-disk set config; Vast writes Supervisor units from JSON at box-start.
 - Restart policy details (always restart, restart with backoff, give up after N failures, …).
 - Naming of sets (`box-a` vs semantic names vs both).
 - How `ASFQUART_URL` is supplied (env var, hard-coded, DNS, …).
@@ -230,14 +224,13 @@ The template itself is identical for every box; only the two env vars change.
 
 ## 11. Implementation Order (suggested)
 
-Box-side files: `hosting/` (runbooks next to scripts). Control plane stays
-in the Quart app. v1: stock Vast vLLM template + pinned on-start, not a
-derived image — see `hosting/vast/README.md`.
+Box-side: `hosting/vast/` (Supervisor installer). Control plane stays
+in the Quart app. v1: stock Vast vLLM template + `provision.sh`.
 
 
 1. Finalise JSON schema and endpoint contract.
 2. Implement asfquart endpoint (auth + JSON from `model_list.yaml`).
-3. Implement Python launcher fetch + spawn.
+3. Vast `install_set.py` (JSON → Supervisor); no launcher.
 4. Create / adjust Vast.ai template.
 5. Wire LiteLLM model entries to the running vLLM ports.
 6. Smoke-test with one set on one box, then expand.

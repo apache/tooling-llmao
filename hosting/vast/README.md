@@ -2,8 +2,9 @@
 
 Use Vast’s **stock vLLM template**. Do not maintain a derived image in v1.
 
-`provision.sh` installs `launcher.py` and a supervisor unit. It does **not**
-fetch model config. The launcher GETs JSON from asfquart when it starts.
+`provision.sh` curls `install_set.py`, which fetches set JSON and writes
+one Supervisor program per model. supervisord runs `vllm serve`. There is
+no Python process manager.
 
 ## Instance
 
@@ -18,20 +19,17 @@ fetch model config. The launcher GETs JSON from asfquart when it starts.
   ASFQUART_URL=https://llm.apache.org:8443
   ```
 
-  Template is identical for every box; only these values change.
-
 ## On-create
 
-Point Vast on-start at `hosting/vast/provision.sh` (or curl it, then run).
-Today the script pulls `launcher.py` from `main`; pin a commit when this
-is no longer a moving target.
+Point Vast on-start at `hosting/vast/provision.sh`. Today it pulls
+`install_set.py` from `main`; pin a commit when this is no longer a moving
+target.
 
-`SSL_VERIFY=0` is set in the supervisor unit because asfquart is still on
-**:8443** with a self-signed cert. **Remove that env when llm.apache.org
-serves :443** with a public CA; the launcher defaults to verifying TLS.
+`SSL_VERIFY=0` is the default in `provision.sh` because asfquart is still
+on **:8443** with a self-signed cert. **Remove that when llm.apache.org
+serves :443** with a public CA.
 
 ## Smoke
 
-1. SSH; `tail -f /var/log/vllm-launcher.log`.
+1. `supervisorctl status`
 2. `curl -sS -H "Authorization: Bearer <api_key>" http://127.0.0.1:<port>/v1/models`
-3. LiteLLM `api_base` is already the public URL in `model_list.yaml`; same `api_key`.

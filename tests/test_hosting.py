@@ -1,16 +1,17 @@
-"""GPU-free tests for hosting/launcher (JSON fetch, no vLLM process)."""
+"""GPU-free tests for hosting/vast/install_set.py (no vLLM, no supervisord)."""
 import http.server
 import json
 import ssl
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 
-HOSTING = Path(__file__).resolve().parents[1] / "hosting"
-sys.path.insert(0, str(HOSTING))
+VAST = Path(__file__).resolve().parents[1] / "hosting" / "vast"
+sys.path.insert(0, str(VAST))
 
-import launcher  # noqa: E402
+import install_set as inst  # noqa: E402
 
 SAMPLE = {
     "set_id": "primary",
@@ -37,12 +38,12 @@ SAMPLE = {
 }
 
 
-def test_parse_and_argv():
-    cfg = launcher.load_config(SAMPLE)
-    assert cfg.hf_home == "/tmp/hf"
-    assert len(cfg.servers) == 2
-    a = cfg.servers[0]
-    assert launcher.build_argv(a) == [
+def test_build_argv(monkeypatch):
+    monkeypatch.setenv("VLLM_BIN", "vllm")
+    # re-import uses module-level VLLM_BIN captured at load; call with patched attr
+    monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
+    spec = inst.parse_server(SAMPLE["servers"][0])
+    assert inst.build_argv(spec) == [
         "vllm",
         "serve",
         "org/model-a",
@@ -59,19 +60,36 @@ def test_parse_and_argv():
         "--dtype",
         "auto",
     ]
-    b = cfg.servers[1]
-    assert "--enable-prefix-caching" in launcher.build_argv(b)
-    assert "--gpu-memory-utilization" not in launcher.build_argv(b)
+    b = inst.parse_server(SAMPLE["servers"][1])
+    argv = inst.build_argv(b)
+    assert "--enable-prefix-caching" in argv
+    assert "--gpu-memory-utilization" not in argv
 
 
 def test_missing_required_field():
     with pytest.raises(SystemExit, match="api_key"):
-        launcher.load_config({"servers": [{"name": "x", "model": "m", "port": 1}]})
+        inst.parse_server({"name": "x", "model": "m", "port": 1})
 
 
 def test_empty_servers():
     with pytest.raises(SystemExit, match="no servers"):
-        launcher.load_config({"servers": []})
+        inst.servers_from_config({"servers": []})
+
+
+def test_program_ini_and_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
+    data = {
+        **SAMPLE,
+        "hf_home": str(tmp_path / "hf"),
+        "log_dir": str(tmp_path / "logs"),
+    }
+    written = inst.write_units(data, tmp_path / "conf.d")
+    assert len(written) == 2
+    text = written[0].read_text()
+    assert "[program:vllm-model-a]" in text
+    assert "vllm serve org/model-a" in text
+    assert "autorestart=true" in text
+    assert f'HF_HOME="{tmp_path / "hf"}"' in text
 
 
 def test_fetch_json(monkeypatch):
@@ -95,31 +113,22 @@ def test_fetch_json(monkeypatch):
 
     httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     port = httpd.server_address[1]
-    import threading
-
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     monkeypatch.setenv("SSL_VERIFY", "1")
     url = f"http://127.0.0.1:{port}/vllm/config/primary"
-    data = launcher.fetch_config(url, "fleet-secret")
+    data = inst.fetch_config(url, "fleet-secret")
     httpd.shutdown()
     assert data["servers"][0]["name"] == "model-a"
 
 
-def test_fetch_missing_env(monkeypatch):
-    for key in ("FLEET_KEY", "VLLM_SET", "ASFQUART_URL"):
-        monkeypatch.delenv(key, raising=False)
-    with pytest.raises(SystemExit, match="FLEET_KEY"):
-        launcher.require_env("FLEET_KEY")
-
-
 def test_config_url_strips_slash():
-    assert launcher.config_url("https://x.example/", "box-a") == (
+    assert inst.config_url("https://x.example/", "box-a") == (
         "https://x.example/vllm/config/box-a"
     )
 
 
 def test_ssl_verify_off(monkeypatch):
     monkeypatch.setenv("SSL_VERIFY", "0")
-    ctx = launcher.ssl_context()
+    ctx = inst.ssl_context()
     assert ctx.check_hostname is False
     assert ctx.verify_mode == ssl.CERT_NONE

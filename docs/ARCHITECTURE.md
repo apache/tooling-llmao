@@ -56,9 +56,9 @@ policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
 **GPU fleet (vLLM on Vast, later RunPod):** design in
-`docs/vllm-fleet-design.md`. Boxes run `hosting/launcher.py` (JSON from
-`GET /vllm/config/{set}` at launcher start; no `servers.yaml`).
-`hosting/vast/provision.sh` only installs launcher + supervisor.
+`docs/vllm-fleet-design.md`. Shared: `GET /vllm/config/{set}` JSON.
+Vast: `hosting/vast/install_set.py` writes Supervisor units at box-start
+(no Python launcher).
 
 Build status and backlog: **`docs/STATUS.md`**.
 
