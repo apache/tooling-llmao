@@ -20,7 +20,7 @@ from typing import Any
 
 CONFIG_PATH = "/vllm/config/{set_id}"
 CONF_DIR = Path(os.environ.get("SUPERVISOR_CONF_DIR", "/etc/supervisor/conf.d"))
-VLLM_BIN = os.environ.get("VLLM_BIN", "/venv/main/bin/vllm")
+VLLM_BIN = os.environ.get("VLLM_BIN", "/usr/local/bin/vllm")
 
 
 def require_env(name: str) -> str:
