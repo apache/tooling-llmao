@@ -19,7 +19,9 @@
 
 from __future__ import annotations
 
+import functools
 import hmac
+import logging
 
 import asfquart
 import asfquart.auth
@@ -31,6 +33,15 @@ from llmao.fleet import UnknownSet, config_for_set
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
+_LOGGER = logging.getLogger(__name__)
+
+
+class HttpError(Exception):
+    """Expected HTTP error from an API handler (not AuthzError)."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 
 
 def _err(status: int, message: str) -> Response:
@@ -39,9 +50,29 @@ def _err(status: int, message: str) -> Response:
     return resp
 
 
+def api(fn):
+    """JSON handlers: jsonify the return value; AuthzError → 403; else log + 500."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            result = await fn(*args, **kwargs)
+        except AuthzError as e:
+            return _err(403, str(e))
+        except HttpError as e:
+            return _err(e.status, str(e))
+        except Exception:
+            _LOGGER.exception(f'unhandled error in {fn.__name__}')
+            return _err(500, 'internal error in gateway; check the server log')
+        return jsonify(result)
+
+    return wrapper
+
+
 @APP.get("/healthz")
+@api
 async def healthz():
-    return jsonify({"status": "ok"})
+    return {"status": "ok"}
 
 
 def _fleet_key() -> str:
@@ -53,60 +84,54 @@ def _fleet_key() -> str:
 
 
 @APP.get("/vllm/config/<set_id>")
+@api
 async def vllm_config(set_id: str):
     """JSON for one model_set. Bearer fleet key; no OAuth (GPU boxes)."""
     expected = _fleet_key()
     if not expected or expected.startswith("CHANGE_ME"):
-        return _err(503, "fleet.key is not configured")
+        raise HttpError(503, "fleet.key is not configured")
     auth = request.headers.get("Authorization") or ""
     prefix = "Bearer "
     if not auth.startswith(prefix):
-        return _err(403, "missing fleet key")
+        raise HttpError(403, "missing fleet key")
     presented = auth[len(prefix):].strip()
     if not hmac.compare_digest(presented, expected):
-        return _err(403, "invalid fleet key")
+        raise HttpError(403, "invalid fleet key")
     try:
-        payload = config_for_set(set_id, cfg=APP.cfg)
+        return config_for_set(set_id, cfg=APP.cfg)
     except UnknownSet:
-        return _err(404, f"unknown model_set: {set_id}")
-    except ValueError as e:
-        return _err(500, str(e))
-    return jsonify(payload)
+        raise HttpError(404, f"unknown model_set: {set_id}")
 
 
 @APP.get("/v1/projects/<project>/usage")
 @asfquart.auth.require
+@api
 async def project_usage(project: str):
     seam = APP.config["LLMAO_SEAM"]
-    try:
-        ident = await current_identity(APP.cfg)
-        rows = await seam.project_activity(ident, project)
-    except AuthzError as e:
-        return _err(403, str(e))
+    ident = await current_identity(APP.cfg)
+    rows = await seam.project_activity(ident, project)
     total = round(sum(r.get("cost_usd", 0.0) for r in rows), 6)
-    return jsonify({
+    return {
         "project": project,
         "entries": rows,
         "total_cost_usd": total,
         "count": len(rows),
-    })
+    }
 
 
 @APP.get("/v1/projects/<project>/budget")
 @asfquart.auth.require({R.committer})
+@api
 async def project_budget(project: str):
     seam = APP.config["LLMAO_SEAM"]
-    try:
-        ident = await current_identity(APP.cfg)
-        info = await seam.team_status(ident, project)
-    except AuthzError as e:
-        return _err(403, str(e))
+    ident = await current_identity(APP.cfg)
+    info = await seam.team_status(ident, project)
     if info is None:
-        return jsonify({"project": project, "provisioned": False})
-    return jsonify({
+        return {"project": project, "provisioned": False}
+    return {
         "project": project,
         "provisioned": True,
         "max_budget_usd": info.max_budget,
         "spend_usd": info.spend,
         "remaining_usd": round(max(0.0, info.max_budget - info.spend), 6),
-    })
+    }
