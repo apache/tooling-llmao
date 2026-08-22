@@ -26,7 +26,7 @@ import logging
 import asfquart
 import asfquart.auth
 from asfquart.auth import Requirements as R
-from quart import jsonify, request, Response
+from quart import jsonify, request
 
 from llmao.auth import current_identity
 from llmao.fleet import UnknownSet, config_for_set
@@ -44,26 +44,57 @@ class HttpError(Exception):
         self.status = status
 
 
-def _err(status: int, message: str) -> Response:
-    resp = jsonify({"error": {"message": message, "type": "llmao_error", "code": status}})
-    resp.status_code = status
-    return resp
+def _ok_extras(result) -> str:
+    """Short success extras from a JSON-ish dict; never includes secrets."""
+    if not isinstance(result, dict):
+        return ''
+    parts = []
+    if result.get('set_id') is not None:
+        parts.append(f'set_id={result["set_id"]}')
+    servers = result.get('servers')
+    if isinstance(servers, list):
+        models = ','.join(
+            f'{s.get("name")}:{s.get("port")}' if isinstance(s, dict) else str(s)
+            for s in servers
+        )
+        parts.append(f'models={models}')
+    if result.get('project') is not None:
+        parts.append(f'project={result["project"]}')
+    if 'count' in result:
+        parts.append(f'count={result["count"]}')
+    if 'provisioned' in result:
+        parts.append(f'provisioned={result["provisioned"]}')
+    return (' ' + ' '.join(parts)) if parts else ''
 
 
 def api(fn):
     """JSON handlers: jsonify the return value; AuthzError → 403; else log + 500."""
+
+    def err(status, message):
+        body = {"error": {"message": message, "type": "llmao_error", "code": status}}
+        return jsonify(body), status
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         try:
             result = await fn(*args, **kwargs)
         except AuthzError as e:
-            return _err(403, str(e))
+            _LOGGER.warning(f'{fn.__name__}: {e}')
+            return err(403, str(e))
         except HttpError as e:
-            return _err(e.status, str(e))
+            msg = f'{fn.__name__}: {e.status} {e}'
+            if e.status >= 500:
+                _LOGGER.error(msg)
+            else:
+                _LOGGER.warning(msg)
+            return err(e.status, str(e))
         except Exception:
             _LOGGER.exception(f'unhandled error in {fn.__name__}')
-            return _err(500, 'internal error in gateway; check the server log')
+            return err(500, 'internal error in gateway; check the server log')
+        if fn.__name__ == 'healthz':
+            _LOGGER.debug(f'{fn.__name__} ok')
+        else:
+            _LOGGER.info(f'{fn.__name__} ok{_ok_extras(result)}')
         return jsonify(result)
 
     return wrapper
