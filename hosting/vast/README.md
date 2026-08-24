@@ -29,6 +29,27 @@ target.
 on **:8443** with a self-signed cert. **Remove that when llm.apache.org
 serves :443** with a public CA.
 
+## Operator env helper
+
+Laptop tool (not on the GPU box). Needs the Vast Python SDK:
+
+```bash
+pip install vastai
+```
+
+API key: `~/.config/vastai/vast_api_key` (SDK default). Do not put `FLEET_KEY` on the command line.
+
+```bash
+python3 hosting/vast/env.py                 # list (default)
+python3 hosting/vast/env.py list
+python3 hosting/vast/env.py show INSTANCE_ID
+python3 hosting/vast/env.py set INSTANCE_ID --vllm-set primary
+```
+
+`show` prints account secrets, template docker env, and instance `extra_env` with real values (the CLI masks them).
+
+`set` reads `fleet.key` from repo `config.yaml`, checks `--vllm-set` exists in `model_list.yaml`, prints the models that box will fetch from llm.apache.org, writes `FLEET_KEY` + `VLLM_SET` on the instance, then asks `Ready to reboot? [Y/n]` so on-start re-runs `install_set.py`.
+
 ## Smoke
 
 1. `supervisorctl status`

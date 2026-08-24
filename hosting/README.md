@@ -17,6 +17,7 @@ Supervisor units at box-start. There is no long-lived Python launcher.
 |------|------|
 | `vast/provision.sh` | Vast on-create |
 | `vast/install_set.py` | GET JSON, write `/etc/supervisor/conf.d/vllm-*.conf`, `supervisorctl update` |
+| `vast/env.py` | Operator: list/show/set instance env (`pip install vastai`) |
 | `vast/README.md` | Vast.ai runbook |
 
 ## Box environment
