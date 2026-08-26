@@ -45,7 +45,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from llmao.fleet import UnknownSet, config_for_set  # noqa: E402
-from llmao.models import load_model_list, models_path_from_cfg  # noqa: E402
+from llmao.models import load_model_list  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -267,11 +267,11 @@ def print_set_plan(set_id: str, cfg: edict) -> None:
     try:
         payload = config_for_set(set_id, entries=load_model_list(cfg=cfg), cfg=cfg)
     except UnknownSet:
-        path = models_path_from_cfg(cfg)
-        raise SystemExit(f"unknown model_set {set_id!r} (not in {path})") from None
-    print(f"set {set_id} will install (from model_list.yaml / GET /vllm/config/{set_id}):")
+        raise SystemExit(f"unknown model_set {set_id!r} (not in config.yaml fleet.sets)") from None
+    print(f"set {set_id} will install (from fleet.sets / GET /vllm/config/{set_id}):")
     for srv in payload["servers"]:
-        print(f"  {srv['name']}\t{srv['model']}\t:{srv['port']}")
+        host = srv.get("host") or ""
+        print(f"  {srv['name']}\t{srv['model']}\t{host}:{srv['port']}")
 
 
 def confirm_reboot() -> bool:
@@ -340,7 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     setp = sub.add_parser("set", help="set FLEET_KEY (from config.yaml) and VLLM_SET")
     setp.add_argument("instance_id", type=int)
-    setp.add_argument("--vllm-set", required=True, help="model_set id from model_list.yaml")
+    setp.add_argument("--vllm-set", required=True, help="set id from config.yaml fleet.sets")
     setp.add_argument(
         "--config",
         type=Path,

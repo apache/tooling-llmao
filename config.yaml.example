@@ -41,6 +41,15 @@ site_admins: []
 models_path: model_list.yaml
 
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
-# GET /vllm/config/<model_set>. Same value as box env FLEET_KEY.
+# GET /vllm/config/<set_id>. Same value as box env FLEET_KEY.
+# Placement (host/port per vLLM process) lives here, not on model_list.
 fleet:
   key: CHANGE_ME_FLEET_KEY
+  sets:
+    primary:
+      - model: gemma4-26b
+        host: 127.0.0.1
+        port: 8001
+      - model: qwen3-8b
+        host: 127.0.0.1
+        port: 8003

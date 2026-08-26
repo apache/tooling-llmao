@@ -21,6 +21,12 @@ sys.path.insert(0, str(VAST))
 import env as vast_env  # noqa: E402
 
 EXAMPLE_MODELS = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
+PRIMARY_SETS = {
+    "primary": [
+        {"model": "gemma4-26b", "host": "127.0.0.1", "port": 8001},
+        {"model": "qwen3-8b", "host": "127.0.0.1", "port": 8003},
+    ]
+}
 
 
 def test_parse_docker_env_string():
@@ -38,7 +44,7 @@ def test_parse_docker_env_dict():
 
 def test_merge_keeps_port_keys(tmp_path, monkeypatch, capsys):
     cfg = {
-        "fleet": {"key": "sk-fleet"},
+        "fleet": {"key": "sk-fleet", "sets": PRIMARY_SETS},
         "models_path": str(EXAMPLE_MODELS),
     }
     cfg_path = tmp_path / "config.yaml"
@@ -71,7 +77,7 @@ def test_merge_keeps_port_keys(tmp_path, monkeypatch, capsys):
 
 def test_unknown_set_fails(tmp_path):
     cfg = {
-        "fleet": {"key": "sk-fleet"},
+        "fleet": {"key": "sk-fleet", "sets": PRIMARY_SETS},
         "models_path": str(EXAMPLE_MODELS),
     }
     cfg_path = tmp_path / "config.yaml"
@@ -100,7 +106,7 @@ def test_vllm_set_required():
 
 def test_reboot_yes(tmp_path, monkeypatch):
     cfg = {
-        "fleet": {"key": "sk-fleet"},
+        "fleet": {"key": "sk-fleet", "sets": PRIMARY_SETS},
         "models_path": str(EXAMPLE_MODELS),
     }
     cfg_path = tmp_path / "config.yaml"
@@ -169,7 +175,7 @@ def test_default_command_is_list():
 
 def test_set_requires_image(tmp_path):
     cfg = {
-        "fleet": {"key": "sk-fleet"},
+        "fleet": {"key": "sk-fleet", "sets": PRIMARY_SETS},
         "models_path": str(EXAMPLE_MODELS),
     }
     cfg_path = tmp_path / "config.yaml"
@@ -183,7 +189,7 @@ def test_set_requires_image(tmp_path):
 
 def test_set_http_400_prints_body(tmp_path, monkeypatch):
     cfg = {
-        "fleet": {"key": "sk-fleet"},
+        "fleet": {"key": "sk-fleet", "sets": PRIMARY_SETS},
         "models_path": str(EXAMPLE_MODELS),
     }
     cfg_path = tmp_path / "config.yaml"

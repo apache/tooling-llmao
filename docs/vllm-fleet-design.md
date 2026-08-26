@@ -58,8 +58,8 @@ flowchart TB
   - The real API keys used between LiteLLM and each vLLM server
   - Logical **sets** (groupings of models that should run together on one GPU box)
 - Each GPU box receives only two pieces of bootstrap information: the **fleet key** and a **set identifier**.
-- At box-start, the provider installer fetches JSON for its `model_set` and
-  installs native process units (Vast: Supervisor). There is no on-disk
+- At box-start, the provider installer fetches JSON for its set id (`VLLM_SET`)
+  and installs native process units (Vast: Supervisor). There is no on-disk
   `servers.yaml` and no Python process manager.
 
 ---
@@ -75,20 +75,24 @@ flowchart TB
 
 ### 3.2 Sets (Groupings)
 
-A **set** is a named collection of models that are intended to run on the same GPU instance.
+A **set** is a named collection of **vLLM processes** that share a GPU instance
+(and the box env `VLLM_SET`). The same catalog model may appear in many sets
+and more than once in a set.
 
 Examples:
-- `box-a` → model-a + model-b
-- `box-b` → model-c + model-d + model-e
-- `coding` / `heavy` / `fast` (semantic names are also fine)
+- `primary` → gemma4-26b @ host:8001 + qwen3-8b @ host:8003
+- `overflow` → gemma4-26b again on another host
 
-asfquart owns the mapping from set → list of models (plus ports, vLLM arguments, etc.). Changing which models run where is a control-plane change only; GPU templates stay identical.
+asfquart owns placement in `config.yaml` → `fleet.sets` (model + host + port
+per process). `model_list.yaml` is how to serve (HF id, vLLM args, api_key),
+not where. Changing placement is a control-plane change only; GPU templates
+stay identical.
 
 ### 3.3 Set config JSON
 
-asfquart builds JSON from `model_list.yaml` (entries whose `model_info.model_set`
-matches the requested set). Vast `install_set.py` fetches it at box-start
-and writes Supervisor programs. Same payload; never a `servers.yaml`.
+asfquart builds JSON from `fleet.sets.<id>` joined to the catalog. Vast
+`install_set.py` fetches it at box-start and writes Supervisor programs.
+Same payload; never a `servers.yaml`.
 
 ---
 
@@ -102,8 +106,8 @@ Response: 200 application/json
 ```
 
 - asfquart validates the fleet key (not OAuth).
-- Filters `model_list.yaml` by `model_info.model_set`.
-- Emits JSON (models, ports, args, API keys).
+- Looks up `fleet.sets.<set_id>` and joins catalog vLLM args.
+- Emits JSON (models, host, ports, args, API keys).
 - Optional future hardening: bind the request to a known instance ID / label.
 
 ---
@@ -119,6 +123,7 @@ Response: 200 application/json
     {
       "name": "model-a",
       "model": "org/model-name",
+      "host": "127.0.0.1",
       "port": 8000,
       "api_key": "sk-...",
       "gpu_memory_utilization": 0.42,
@@ -129,12 +134,9 @@ Response: 200 application/json
 }
 ```
 
-Inventory fields (under each `model_list` entry’s `model_info`, so LiteLLM
-`Deployment` still accepts extras):
-
-- `model_set` — box env `VLLM_SET`
-- `vllm.model` / `vllm.port` / optional util, max len, `args`
-- `api_key` comes from `litellm_params` (same secret LiteLLM presents)
+Catalog (`model_list` `model_info.vllm`): HF `model`, optional util, max len, `args`.
+Placement (`config.yaml` `fleet.sets`): `model` (catalog name), `host`, `port`, optional `name`.
+`api_key` comes from `litellm_params` (same secret LiteLLM presents).
 
 Notes:
 - `args` may be a list of strings or a single string; the installer normalises either form.

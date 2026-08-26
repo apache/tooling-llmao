@@ -6,7 +6,7 @@ are not part of the asfquart process.
 **Design (why):** [`docs/vllm-fleet-design.md`](../docs/vllm-fleet-design.md).
 
 **Control plane (all providers):** asfquart serves `GET /vllm/config/{set_id}`
-as JSON from `model_list.yaml` for that `model_set`. Bearer fleet key.
+as JSON from `config.yaml` `fleet.sets` plus the model catalog. Bearer fleet key.
 
 Provider-specific: how that JSON becomes running vLLM. Vast writes
 Supervisor units at box-start. There is no long-lived Python launcher.
@@ -25,7 +25,7 @@ Supervisor units at box-start. There is no long-lived Python launcher.
 Required:
 
 - `FLEET_KEY` — shared secret; `Authorization: Bearer`
-- `VLLM_SET` — `model_set` id from `model_list.yaml`
+- `VLLM_SET` — set id under `fleet.sets` in `config.yaml`
 - `ASFQUART_URL` — origin only, e.g. `https://llm.apache.org:8443`
 
 Optional:
