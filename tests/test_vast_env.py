@@ -29,7 +29,7 @@ def test_parse_docker_env_string():
     assert got["FOO"] == "bar"
     assert got["BAZ"] == "quux"
     assert got["EMPTY"] == ""
-    assert "-p" not in got
+    assert got["-p 8001:8001"] == "1"
 
 
 def test_parse_docker_env_dict():
@@ -55,18 +55,18 @@ def test_merge_keeps_port_keys(tmp_path, monkeypatch, capsys):
 
     vast_env.cmd_set(vast, 42, vllm_set="primary", config_path=cfg_path)
     kw = vast.update_instance.call_args.kwargs
-    env = kw["env"]
+    args = kw["args"]
     assert kw["image"] == "vllm/vllm-openai:latest"
     assert kw["template_hash_id"] == "abc"
-    assert env["KEEP"] == "1"
-    assert env["-p 8001:8001"] == "1"
-    assert env["FLEET_KEY"] == "sk-fleet"
-    assert env["VLLM_SET"] == "primary"
+    assert "env" not in kw
+    assert "-p 8001:8001" in args
+    assert "-e KEEP=1" in args
+    assert "-e FLEET_KEY=" in args
+    assert "-e VLLM_SET=primary" in args
     vast.reboot_instance.assert_not_called()
     out = capsys.readouterr().out
     assert "gemma4-26b" in out
     assert "qwen3-8b" in out
-    assert "sk-fleet" not in out or "FLEET_KEY" in env  # printed plan has no api_key
 
 
 def test_unknown_set_fails(tmp_path):
@@ -142,6 +142,7 @@ def test_list_header_fleet_and_set(capsys):
             "actual_status": "exited",
             "template_hash_id": "def",
             "extra_env": {},
+            "image_args": "-e FLEET_KEY=from-args -e VLLM_SET=llmao-1",
         },
     ]
     vast_env.cmd_list(vast)
@@ -156,7 +157,9 @@ def test_list_header_fleet_and_set(capsys):
     assert out[1][fleet_at] == "✓"
     assert out[1][set_at:].startswith("primary")
     assert "secret" not in out[1]
-    assert "✓" not in out[2]
+    assert out[2][fleet_at] == "✓"
+    assert "llmao-1" in out[2]
+    assert "from-args" not in out[2]
 
 
 def test_default_command_is_list():

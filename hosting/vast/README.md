@@ -48,7 +48,7 @@ python3 hosting/vast/env.py set INSTANCE_ID --vllm-set primary
 
 `show` prints account secrets, template docker env, and instance `extra_env` with real values (the CLI masks them).
 
-`set` reads `fleet.key` from repo `config.yaml`, checks `--vllm-set` exists in `model_list.yaml`, prints the models that box will fetch from llm.apache.org, writes `FLEET_KEY` + `VLLM_SET` on the instance, then asks `Ready to reboot? [Y/n]` so on-start re-runs `install_set.py`.
+`set` reads `fleet.key` from repo `config.yaml`, checks `--vllm-set` exists in `model_list.yaml`, prints the models that box will fetch from llm.apache.org, writes `FLEET_KEY` + `VLLM_SET` as Docker create options (`-e …`, via `args` — instance `extra_env` does not enter the container), then asks `Ready to reboot? [Y/n]` so on-start re-runs `install_set.py`.
 
 ## Smoke
 

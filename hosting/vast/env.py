@@ -84,7 +84,55 @@ def parse_docker_env(raw: Any) -> dict[str, str]:
             key, _, val = tok[2:].partition("=")
             if key:
                 out[key] = val
+            i += 1
+            continue
+        if tok == "-p" and i + 1 < len(tokens):
+            out[f"-p {tokens[i + 1]}"] = "1"
+            i += 2
+            continue
+        if tok.startswith("-p") and len(tok) > 2:
+            out[tok if tok.startswith("-p ") else f"-p {tok[2:]}"] = "1"
         i += 1
+    return out
+
+
+def looks_like_docker_options(raw: Any) -> bool:
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    tokens = shlex.split(raw)
+    return any(t == "-e" or t == "-p" or t.startswith("-e") or t.startswith("-p") for t in tokens)
+
+
+def format_docker_options(env: dict[str, str]) -> str:
+    parts = []
+    for key, val in env.items():
+        if key.startswith("-p"):
+            parts.append(key)
+        else:
+            parts.append(f"-e {key}={shlex.quote(val)}")
+    if not parts:
+        raise SystemExit("no docker options to send")
+    return " ".join(parts)
+
+
+def image_args_of(row: dict) -> str:
+    raw = row.get("image_args")
+    if raw is None:
+        raw = row.get("args")
+    if raw is None:
+        return ""
+    if isinstance(raw, list):
+        return " ".join(str(x) for x in raw)
+    return str(raw)
+
+
+def docker_options_env(row: dict) -> dict[str, str]:
+    """Env that docker actually gets: options string plus extra_env overlay."""
+    out: dict[str, str] = {}
+    raw = image_args_of(row)
+    if looks_like_docker_options(raw):
+        out.update(parse_docker_env(raw))
+    out.update(extra_env_of(row))
     return out
 
 
@@ -164,12 +212,12 @@ def cmd_list(vast: VastAI) -> None:
     rows = vast.show_instances() or []
     records = []
     for row in rows:
-        extra = extra_env_of(row)
+        opts = docker_options_env(row)
         records.append((
             str(row.get("id") or ""),
             str(row.get("actual_status") or row.get("status") or row.get("cur_state") or ""),
-            "✓" if extra.get("FLEET_KEY", "").strip() else "",
-            extra.get("VLLM_SET", "") or "",
+            "✓" if opts.get("FLEET_KEY", "").strip() else "",
+            opts.get("VLLM_SET", "") or "",
             template_hash_of(row),
             str(row.get("label") or ""),
         ))
@@ -205,6 +253,14 @@ def cmd_show(vast: VastAI, instance_id: int) -> None:
     _print_env_block("template", t_env)
     print()
     _print_env_block("instance extra_env", extra)
+    print()
+    raw_args = image_args_of(row)
+    print("--- docker args ---")
+    print(raw_args or "(none)")
+    parsed = parse_docker_env(raw_args) if looks_like_docker_options(raw_args) else {}
+    if parsed:
+        print()
+        _print_env_block("docker args (parsed)", parsed)
 
 
 def print_set_plan(set_id: str, cfg: edict) -> None:
@@ -247,10 +303,11 @@ def cmd_set(
         raise SystemExit(
             f"instance {instance_id} has no image_uuid; Vast update_template requires image"
         )
-    merged = extra_env_of(row)
+    merged = docker_options_env(row)
     merged["FLEET_KEY"] = key
     merged["VLLM_SET"] = vllm_set
-    update_kw = {"id": instance_id, "env": merged, "image": image}
+    args = format_docker_options(merged)
+    update_kw = {"id": instance_id, "args": args, "image": image}
     hash_id = template_hash_of(row)
     if hash_id:
         update_kw["template_hash_id"] = hash_id
