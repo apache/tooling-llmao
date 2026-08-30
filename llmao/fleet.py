@@ -122,8 +122,6 @@ def config_for_set(
     ]
     return {
         "set_id": set_id,
-        "hf_home": "/workspace/hf-cache",
-        "log_dir": "/workspace/logs",
         "servers": servers,
     }
 

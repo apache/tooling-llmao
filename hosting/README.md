@@ -27,6 +27,8 @@ Required:
 - `FLEET_KEY` — shared secret; `Authorization: Bearer`
 - `VLLM_SET` — set id under `fleet.sets` in `config.yaml`
 - `ASFQUART_URL` — origin only, e.g. `https://llm.apache.org:8443`
+- `DATA_DIRECTORY` — Vast template workspace (typically `/workspace`). HF cache
+  and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
 
 Optional:
 

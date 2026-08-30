@@ -137,7 +137,7 @@ def _ini_escape(value: str) -> str:
     return value.replace("%", "%%")
 
 
-def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str) -> str:
+def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str, data_dir: str) -> str:
     name = program_name(spec["name"])
     command = shlex.join(build_argv(spec))
     log = str(Path(log_dir) / f"{spec['name']}.log")
@@ -148,7 +148,7 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str) -> str:
     return (
         f"[program:{name}]\n"
         f"command={_ini_escape(command)}\n"
-        f"directory=/workspace\n"
+        f"directory={_ini_escape(data_dir)}\n"
         f"autostart=true\n"
         f"autorestart=true\n"
         f"startretries=5\n"
@@ -159,15 +159,23 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str) -> str:
 
 
 def write_units(data: dict[str, Any], conf_dir: Path) -> list[Path]:
-    hf_home = str(data.get("hf_home") or "/workspace/hf-cache")
-    log_dir = str(data.get("log_dir") or "/workspace/logs")
-    Path(hf_home).mkdir(parents=True, exist_ok=True)
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    data_dir = Path(require_env("DATA_DIRECTORY"))
+    hf_home = data_dir / "hf-cache"
+    log_dir = data_dir / "logs"
+    hf_home.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
     conf_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for spec in servers_from_config(data):
         path = conf_dir / f"{program_name(spec['name'])}.conf"
-        path.write_text(program_ini(spec, hf_home=hf_home, log_dir=log_dir))
+        path.write_text(
+            program_ini(
+                spec,
+                hf_home=str(hf_home),
+                log_dir=str(log_dir),
+                data_dir=str(data_dir),
+            )
+        )
         path.chmod(0o600)
         written.append(path)
         print(f"wrote {path}", file=sys.stderr)

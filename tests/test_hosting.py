@@ -15,8 +15,6 @@ import install_set as inst  # noqa: E402
 
 SAMPLE = {
     "set_id": "primary",
-    "hf_home": "/tmp/hf",
-    "log_dir": "/tmp/logs",
     "servers": [
         {
             "name": "model-a",
@@ -76,12 +74,8 @@ def test_empty_servers():
 
 def test_program_ini_and_write(tmp_path, monkeypatch):
     monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
-    data = {
-        **SAMPLE,
-        "hf_home": str(tmp_path / "hf"),
-        "log_dir": str(tmp_path / "logs"),
-    }
-    written = inst.write_units(data, tmp_path / "conf.d")
+    monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
+    written = inst.write_units(SAMPLE, tmp_path / "conf.d")
     assert len(written) == 2
     text = written[0].read_text()
     assert "[program:vllm-model-a]" in text
@@ -90,7 +84,8 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     assert "sk-aaa" not in text.split("environment=", 1)[0]
     assert 'VLLM_API_KEY="sk-aaa"' in text
     assert "autorestart=true" in text
-    assert f'HF_HOME="{tmp_path / "hf"}"' in text
+    assert f'HF_HOME="{tmp_path / "hf-cache"}"' in text
+    assert f"directory={tmp_path}" in text
     assert written[0].stat().st_mode & 0o777 == 0o600
 
 

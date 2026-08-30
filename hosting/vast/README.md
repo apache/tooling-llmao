@@ -10,7 +10,8 @@ no Python process manager.
 
 - Launch mode: SSH (or Jupyter + SSH).
 - Map ports used by the set (example inventory: 8001, 8003).
-- Disk: large enough for HF cache under `/workspace/hf-cache`.
+- Disk: large enough for HF cache under `$DATA_DIRECTORY/hf-cache`
+  (`DATA_DIRECTORY` is typically `/workspace`).
 - Environment:
 
   ```bash

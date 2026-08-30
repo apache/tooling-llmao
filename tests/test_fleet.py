@@ -35,6 +35,9 @@ def test_example_primary_set():
     validate_fleet(cfg, models=models)
     payload = config_for_set("primary", models=models, cfg=cfg)
     assert payload["set_id"] == "primary"
+    assert "hf_home" not in payload
+    assert "log_dir" not in payload
+    assert "entries" not in payload
     names = [s["name"] for s in payload["servers"]]
     assert "gemma4-26b" in names
     assert "qwen3-8b" in names

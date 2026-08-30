@@ -122,8 +122,6 @@ Response: 200 application/json
 ```json
 {
   "set_id": "primary",
-  "hf_home": "/workspace/hf-cache",
-  "log_dir": "/workspace/logs",
   "servers": [
     {
       "name": "model-a",
@@ -174,7 +172,7 @@ Notes:
        <extra args…>
      ```
 
-   Logs go to `/workspace/logs/<name>.log`. Restart is Supervisor
+   Logs go to `$DATA_DIRECTORY/logs/<name>.log` on Vast. Restart is Supervisor
    `autorestart` / `startretries`.
 
 3. LiteLLM (managed by asfquart) is configured with matching `api_base` values and the same API keys, so it can reach each vLLM server.
