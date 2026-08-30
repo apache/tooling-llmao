@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import ezt
 import yaml
+from easydict import EasyDict as edict
 
 # Default path: repo / install root (next to main.py).
 DEFAULT_MODELS_PATH = pathlib.Path(__file__).resolve().parent.parent / "model_list.yaml"
@@ -33,11 +34,10 @@ def load_model_list(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> 
             f"Missing {path}. Copy model_list.yaml.example to model_list.yaml "
             f"(same pattern as config.yaml and litellm.yaml)."
         )
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    models = data.get("model_list")
-    if not isinstance(models, list):
+    data = edict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    if "model_list" not in data or not isinstance(data.model_list, list):
         raise ValueError(f"{path}: expected top-level model_list: [ ... ]")
-    return models
+    return data.model_list
 
 
 def public_models(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> List[Dict[str, Any]]:

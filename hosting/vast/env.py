@@ -44,7 +44,7 @@ REPO = THIS_DIR.parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from llmao.fleet import UnknownSet, config_for_set  # noqa: E402
+from llmao.fleet import UnknownSet, config_for_set, validate_fleet  # noqa: E402
 from llmao.models import load_model_list  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
@@ -296,6 +296,7 @@ def cmd_set(
 ) -> None:
     cfg = load_cfg(config_path)
     key = fleet_key_from_cfg(cfg)
+    validate_fleet(cfg)
     print_set_plan(vllm_set, cfg)
     row = require_instance(vast, instance_id)
     image = str(row.get("image_uuid") or row.get("image") or "").strip()

@@ -19,7 +19,8 @@ EXAMPLE = ROOT / "model_list.yaml.example"
 def test_example_model_list_loads_for_ux():
     models = load_model_list(EXAMPLE)
     assert len(models) >= 2
-    names = {m["model_name"] for m in models}
+    names = {m.model_name for m in models}
+    assert models[0].model_info.vllm.model
     assert "gemma4-26b" in names
     assert "qwen3-8b" in names
     pub = public_models(EXAMPLE)

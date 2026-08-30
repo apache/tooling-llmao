@@ -1,6 +1,6 @@
-"""Build a vLLM set config JSON from config.yaml fleet.sets + model_list.
+"""vLLM set JSON: validate at process start, join catalog at request time.
 
-GPU boxes fetch this JSON at provision/install time (no servers.yaml).
+GPU boxes fetch GET /vllm/config/{set_id} (no servers.yaml).
 """
 from __future__ import annotations
 
@@ -13,142 +13,100 @@ class UnknownSet(KeyError):
     """No fleet.sets entry for this set id."""
 
 
-def _vllm_block(entry: dict[str, Any]) -> dict[str, Any]:
-    info = entry.get("model_info") or {}
-    block = info.get("vllm")
-    if not isinstance(block, dict) or not block:
-        raise ValueError(
-            f"{entry.get('model_name')}: model_info.vllm is required for fleet models"
-        )
-    return block
+def _item_name(item: Any) -> str:
+    return str(item.get("name") or item.model)
 
 
-def _mapping(obj: Any) -> dict[str, Any] | None:
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        return obj
-    if hasattr(obj, "items"):
-        return dict(obj.items())
-    return None
-
-
-def _sets_from_cfg(cfg: Any) -> dict[str, Any]:
-    if cfg is None:
-        raise ValueError("config_for_set requires cfg (fleet.sets)")
-    fleet = getattr(cfg, "fleet", None)
-    if fleet is None and isinstance(cfg, dict):
-        fleet = cfg.get("fleet")
-    raw = None
-    if fleet is not None:
-        raw = fleet.get("sets") if hasattr(fleet, "get") else getattr(fleet, "sets", None)
-    sets = _mapping(raw)
-    if not sets:
-        return {}
-    return {str(k): v for k, v in sets.items()}
-
-
-def _catalog_by_name(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        name = entry.get("model_name")
-        if not name:
-            raise ValueError("model_list entry missing model_name")
-        key = str(name)
-        if key in out:
-            raise ValueError(f"duplicate model_name in model_list: {key}")
-        out[key] = entry
-    return out
-
-
-def _server_from_catalog(
-    entry: dict[str, Any],
-    *,
-    name: str,
-    host: str,
-    port: int,
-) -> dict[str, Any]:
-    catalog = entry.get("model_name")
-    params = entry.get("litellm_params") or {}
-    api_key = params.get("api_key")
-    if not api_key:
-        raise ValueError(f"{catalog}: litellm_params.api_key is required")
-    vllm = _vllm_block(entry)
-    model = vllm.get("model")
-    if not model:
-        raise ValueError(f"{catalog}: model_info.vllm needs model")
-    server: dict[str, Any] = {
-        "name": str(name),
-        "model": str(model),
-        "host": str(host),
-        "port": int(port),
-        "api_key": str(api_key),
-    }
-    if vllm.get("gpu_memory_utilization") is not None:
-        server["gpu_memory_utilization"] = float(vllm["gpu_memory_utilization"])
-    if vllm.get("max_model_len") is not None:
-        server["max_model_len"] = int(vllm["max_model_len"])
+def _server_from_catalog(entry: Any, item: Any) -> dict[str, Any]:
+    vllm = entry.model_info.vllm
     args = vllm.get("args") or []
     if isinstance(args, str):
         args = args.split()
-    server["args"] = [str(a) for a in args]
+    server = {
+        "name": _item_name(item),
+        "model": str(vllm.model),
+        "host": str(item.host),
+        "port": int(item.port),
+        "api_key": str(entry.litellm_params.api_key),
+        "args": [str(a) for a in args],
+    }
+    if vllm.get("gpu_memory_utilization") is not None:
+        server["gpu_memory_utilization"] = float(vllm.gpu_memory_utilization)
+    if vllm.get("max_model_len") is not None:
+        server["max_model_len"] = int(vllm.max_model_len)
     return server
 
 
-def _set_item(item: Any, index: int) -> dict[str, Any]:
-    row = _mapping(item)
-    if row is None:
-        raise ValueError(f"fleet.sets item {index} must be a mapping with model, host, port")
-    model = str(row.get("model") or "").strip()
-    host = str(row.get("host") or "").strip()
-    port = row.get("port")
-    if not model or not host or port is None or str(port).strip() == "":
-        raise ValueError(f"fleet.sets item {index} needs model, host, and port")
-    name = str(row.get("name") or model).strip()
-    if not name:
-        raise ValueError(f"fleet.sets item {index} has empty name")
-    return {"model": model, "host": host, "port": int(port), "name": name}
+def validate_fleet(cfg: Any, entries: list | None = None) -> None:
+    """Fail-fast if fleet.sets or the catalog cannot be joined. Call at startup."""
+    if "fleet" not in cfg:
+        raise ValueError("config.yaml: missing fleet")
+    if "sets" not in cfg.fleet:
+        raise ValueError("config.yaml: missing fleet.sets")
+    sets = cfg.fleet.sets
+    if not hasattr(sets, "items"):
+        raise ValueError("config.yaml: fleet.sets must be a mapping")
+
+    rows = entries if entries is not None else load_model_list(cfg=cfg)
+    catalog_names: list[str] = []
+    for entry in rows:
+        if "model_name" not in entry or not entry.model_name:
+            raise ValueError("model_list entry missing model_name")
+        name = str(entry.model_name)
+        if name in catalog_names:
+            raise ValueError(f"duplicate model_name in model_list: {name}")
+        catalog_names.append(name)
+        if "model_info" not in entry or "vllm" not in entry.model_info:
+            raise ValueError(f"{name}: model_info.vllm is required")
+        vllm = entry.model_info.vllm
+        if "model" not in vllm or not vllm.model:
+            raise ValueError(f"{name}: model_info.vllm.model is required")
+        if "litellm_params" not in entry or not entry.litellm_params.api_key:
+            raise ValueError(f"{name}: litellm_params.api_key is required")
+
+    catalog = set(catalog_names)
+    for set_id, items in sets.items():
+        if not isinstance(items, (list, tuple)):
+            raise ValueError(f"fleet.sets.{set_id} must be a list of servers")
+        seen_names: set[str] = set()
+        seen_places: set[tuple[str, int]] = set()
+        for i, item in enumerate(items):
+            if "model" not in item or "host" not in item or "port" not in item:
+                raise ValueError(
+                    f"fleet.sets.{set_id}[{i}] needs model, host, and port"
+                )
+            model = str(item.model).strip()
+            host = str(item.host).strip()
+            if not model or not host or item.port is None or str(item.port).strip() == "":
+                raise ValueError(
+                    f"fleet.sets.{set_id}[{i}] needs model, host, and port"
+                )
+            if model not in catalog:
+                raise ValueError(f"fleet.sets.{set_id}[{i}]: unknown model {model!r}")
+            label = _item_name(item)
+            if label in seen_names:
+                raise ValueError(f"fleet.sets.{set_id}: duplicate name {label!r}")
+            place = (host, item.port)
+            if place in seen_places:
+                raise ValueError(f"fleet.sets.{set_id}: duplicate {host}:{item.port}")
+            seen_names.add(label)
+            seen_places.add(place)
 
 
-def config_for_set(set_id: str, *, entries: list[dict[str, Any]] | None = None, cfg: Any = None) -> dict[str, Any]:
-    """JSON object for one set. Raises UnknownSet if the id is missing."""
-    if not set_id:
+def config_for_set(
+    set_id: str,
+    *,
+    entries: list | None = None,
+    cfg: Any = None,
+) -> dict[str, Any]:
+    """JSON for one set. Requires validate_fleet() already ran on cfg."""
+    if not set_id or set_id not in cfg.fleet.sets:
         raise UnknownSet(set_id)
-    sets = _sets_from_cfg(cfg)
-    if set_id not in sets:
-        raise UnknownSet(set_id)
-    items = sets[set_id]
-    if items is None:
-        raise UnknownSet(set_id)
-    if hasattr(items, "values") and not isinstance(items, (list, tuple, str)):
-        raise ValueError(f"fleet.sets.{set_id} must be a list of servers")
-    rows = list(items)
-    if not rows:
-        raise UnknownSet(set_id)
-
-    catalog = _catalog_by_name(entries if entries is not None else load_model_list(cfg=cfg))
-    servers = []
-    names: set[str] = set()
-    places: set[tuple[str, int]] = set()
-    for i, raw in enumerate(rows):
-        spec = _set_item(raw, i)
-        entry = catalog.get(spec["model"])
-        if entry is None:
-            raise ValueError(f"fleet.sets.{set_id}[{i}]: unknown model {spec['model']!r}")
-        if spec["name"] in names:
-            raise ValueError(f"fleet.sets.{set_id}: duplicate name {spec['name']!r}")
-        place = (spec["host"], spec["port"])
-        if place in places:
-            raise ValueError(
-                f"fleet.sets.{set_id}: duplicate {spec['host']}:{spec['port']}"
-            )
-        names.add(spec["name"])
-        places.add(place)
-        servers.append(
-            _server_from_catalog(
-                entry, name=spec["name"], host=spec["host"], port=spec["port"]
-            )
-        )
+    rows = entries if entries is not None else load_model_list(cfg=cfg)
+    catalog = {entry.model_name: entry for entry in rows}
+    servers = [
+        _server_from_catalog(catalog[item.model], item) for item in cfg.fleet.sets[set_id]
+    ]
     return {
         "set_id": set_id,
         "hf_home": "/workspace/hf-cache",

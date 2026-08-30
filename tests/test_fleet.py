@@ -5,7 +5,7 @@ import pytest
 import yaml
 from easydict import EasyDict as edict
 
-from llmao.fleet import UnknownSet, config_for_set
+from llmao.fleet import UnknownSet, config_for_set, validate_fleet
 from llmao.models import load_model_list
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
@@ -21,7 +21,9 @@ def _cfg(sets, entries_path=EXAMPLE):
 
 def test_example_primary_set():
     cfg = edict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
-    payload = config_for_set("primary", entries=load_model_list(EXAMPLE), cfg=cfg)
+    entries = load_model_list(EXAMPLE)
+    validate_fleet(cfg, entries=entries)
+    payload = config_for_set("primary", entries=entries, cfg=cfg)
     assert payload["set_id"] == "primary"
     names = [s["name"] for s in payload["servers"]]
     assert "gemma4-26b" in names
@@ -37,31 +39,33 @@ def test_example_primary_set():
 
 def test_unknown_set():
     cfg = _cfg({"primary": [{"model": "gemma4-26b", "host": "127.0.0.1", "port": 8001}]})
+    entries = load_model_list(EXAMPLE)
+    validate_fleet(cfg, entries=entries)
     with pytest.raises(UnknownSet):
-        config_for_set("no-such-set", entries=load_model_list(EXAMPLE), cfg=cfg)
+        config_for_set("no-such-set", entries=entries, cfg=cfg)
 
 
 def test_missing_vllm_block():
-    entries = [{
+    entries = [edict({
         "model_name": "x",
         "litellm_params": {"api_key": "sk-x"},
         "model_info": {},
-    }]
+    })]
     cfg = _cfg({"s": [{"model": "x", "host": "10.0.0.1", "port": 9}]})
     with pytest.raises(ValueError, match="model_info.vllm"):
-        config_for_set("s", entries=entries, cfg=cfg)
+        validate_fleet(cfg, entries=entries)
 
 
 def test_unknown_catalog_model():
     cfg = _cfg({"s": [{"model": "nope", "host": "10.0.0.1", "port": 9}]})
     with pytest.raises(ValueError, match="unknown model"):
-        config_for_set("s", entries=load_model_list(EXAMPLE), cfg=cfg)
+        validate_fleet(cfg, entries=load_model_list(EXAMPLE))
 
 
 def test_missing_host():
     cfg = _cfg({"s": [{"model": "gemma4-26b", "port": 8001}]})
     with pytest.raises(ValueError, match="model, host, and port"):
-        config_for_set("s", entries=load_model_list(EXAMPLE), cfg=cfg)
+        validate_fleet(cfg, entries=load_model_list(EXAMPLE))
 
 
 def test_two_copies_different_ports():
@@ -71,7 +75,9 @@ def test_two_copies_different_ports():
             {"model": "gemma4-26b", "host": "10.0.0.1", "port": 8011, "name": "gemma4-26b-b"},
         ]
     })
-    payload = config_for_set("dual", entries=load_model_list(EXAMPLE), cfg=cfg)
+    entries = load_model_list(EXAMPLE)
+    validate_fleet(cfg, entries=entries)
+    payload = config_for_set("dual", entries=entries, cfg=cfg)
     assert [s["name"] for s in payload["servers"]] == ["gemma4-26b", "gemma4-26b-b"]
     assert [s["port"] for s in payload["servers"]] == [8001, 8011]
     assert payload["servers"][0]["model"] == payload["servers"][1]["model"]
@@ -85,7 +91,7 @@ def test_duplicate_name():
         ]
     })
     with pytest.raises(ValueError, match="duplicate name"):
-        config_for_set("s", entries=load_model_list(EXAMPLE), cfg=cfg)
+        validate_fleet(cfg, entries=load_model_list(EXAMPLE))
 
 
 def test_duplicate_host_port():
@@ -96,7 +102,7 @@ def test_duplicate_host_port():
         ]
     })
     with pytest.raises(ValueError, match="duplicate"):
-        config_for_set("s", entries=load_model_list(EXAMPLE), cfg=cfg)
+        validate_fleet(cfg, entries=load_model_list(EXAMPLE))
 
 
 def test_catalog_has_no_port():
