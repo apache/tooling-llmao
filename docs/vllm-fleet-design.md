@@ -66,6 +66,11 @@ flowchart TB
 
 ## 3. Core Concepts
 
+**Catalog** — `model_list.yaml`: how to serve each recipe. **Model** — one
+catalog recipe (`model_name`, e.g. `gemma4-26b`). **Server** — one vLLM
+process in a set (`host` + `port`). Box JSON `servers[].model` is the **HF
+weights id** (`model_info.vllm.model`); that field name is deferred.
+
 ### 3.1 Fleet Key
 
 - A single shared secret known to asfquart and to every GPU box.
@@ -75,16 +80,16 @@ flowchart TB
 
 ### 3.2 Sets (Groupings)
 
-A **set** is a named collection of **vLLM processes** that share a GPU instance
-(and the box env `VLLM_SET`). The same catalog model may appear in many sets
-and more than once in a set.
+A **set** is a named collection of **servers** (vLLM processes) that share a
+GPU instance (and the box env `VLLM_SET`). The same model may appear in many
+sets and more than once in a set.
 
 Examples:
 - `primary` → gemma4-26b @ host:8001 + qwen3-8b @ host:8003
 - `overflow` → gemma4-26b again on another host
 
 asfquart owns placement in `config.yaml` → `fleet.sets` (model + host + port
-per process). `model_list.yaml` is how to serve (HF id, vLLM args, api_key),
+per server). The catalog is how to serve (HF weights id, vLLM args, api_key),
 not where. Changing placement is a control-plane change only; GPU templates
 stay identical.
 
@@ -106,8 +111,8 @@ Response: 200 application/json
 ```
 
 - asfquart validates the fleet key (not OAuth).
-- Looks up `fleet.sets.<set_id>` and joins catalog vLLM args.
-- Emits JSON (models, host, ports, args, API keys).
+- Looks up `fleet.sets.<set_id>` and joins each server spec to its model.
+- Emits JSON (servers: name, HF weights id, host, port, args, API keys).
 - Optional future hardening: bind the request to a known instance ID / label.
 
 ---
@@ -134,8 +139,8 @@ Response: 200 application/json
 }
 ```
 
-Catalog (`model_list` `model_info.vllm`): HF `model`, optional util, max len, `args`.
-Placement (`config.yaml` `fleet.sets`): `model` (catalog name), `host`, `port`, optional `name`.
+Catalog model (`model_info.vllm`): HF weights id, optional util, max len, `args`.
+Server spec (`fleet.sets`): `model` (`model_name`), `host`, `port`, optional `name`.
 `api_key` comes from `litellm_params` (same secret LiteLLM presents).
 
 Notes:
@@ -234,7 +239,7 @@ in the Quart app. v1: stock Vast vLLM template + `provision.sh`.
 2. Implement asfquart endpoint (auth + JSON from `model_list.yaml`).
 3. Vast `install_set.py` (JSON → Supervisor); no launcher.
 4. Create / adjust Vast.ai template.
-5. Wire LiteLLM model entries to the running vLLM ports.
+5. Wire LiteLLM models to the running vLLM ports.
 6. Smoke-test with one set on one box, then expand.
 
 ---

@@ -46,7 +46,7 @@ def public_models(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> Li
     for entry in load_model_list(path, cfg=cfg):
         name = entry.get("model_name")
         info = dict(entry.get("model_info") or {})
-        # Never surface api credentials or api_base in the public catalog.
+        # Never surface api credentials or api_base in the catalog UX.
         out.append({"model_name": name, **info})
     return out
 

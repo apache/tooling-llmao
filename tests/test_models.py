@@ -103,7 +103,7 @@ def test_litellm_deployment_preserves_model_info_extras():
 
 
 def test_roundtrip_yaml_through_deployment():
-    """Example inventory entries must construct as LiteLLM Deployments."""
+    """Example catalog models must construct as LiteLLM Deployments."""
     data = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
     for entry in data["model_list"]:
         # Deployment requires api_key etc.; example has CHANGE_ME placeholders — fine.

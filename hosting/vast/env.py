@@ -265,7 +265,7 @@ def cmd_show(vast: VastAI, instance_id: int) -> None:
 
 def print_set_plan(set_id: str, cfg: edict) -> None:
     try:
-        payload = config_for_set(set_id, entries=load_model_list(cfg=cfg), cfg=cfg)
+        payload = config_for_set(set_id, models=load_model_list(cfg=cfg), cfg=cfg)
     except UnknownSet:
         raise SystemExit(f"unknown model_set {set_id!r} (not in config.yaml fleet.sets)") from None
     print(f"set {set_id} will install (from fleet.sets / GET /vllm/config/{set_id}):")

@@ -147,9 +147,9 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
-The self-host catalog entries are served by **vLLM** — one vLLM process per
-model, each exposing an OpenAI-compatible endpoint — with the litellm proxy in
-front for per-PMC budgets (budgets live in litellm; vLLM has none). Each model
+Self-host catalog models are served by **vLLM** — one vLLM process per
+server, each exposing an OpenAI-compatible endpoint — with the litellm proxy in
+front for per-PMC budgets (budgets live in litellm; vLLM has none). Each server
 runs on its own port; litellm routes to the right one by `model_name`
 (Option A), so there is no model-swap latency.
 
