@@ -45,6 +45,18 @@ models_path: model_list.yaml
 # Placement (host/port per vLLM process) lives here, not on model_list.
 fleet:
   key: CHANGE_ME_FLEET_KEY
+  # Seconds between vLLM GET /health probes (unauthenticated; private path only).
+  health_interval_s: 45
+  # Per-probe HTTP timeout for vLLM /health.
+  health_timeout_s: 3
+  # After first observation, stay "starting" this long before treating never-up as down.
+  health_grace_s: 1800
+  # Consecutive failed probes before a previously healthy server is marked down.
+  health_fail_threshold: 3
+  # Seconds between LiteLLM /model/info vs fleet.sets config-skew checks.
+  skew_interval_s: 180
+  # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
+  litellm_health_interval_s: 14400
   sets:
     primary:
       - model: gemma4-26b

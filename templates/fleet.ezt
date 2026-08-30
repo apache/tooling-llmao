@@ -1,0 +1,61 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <h1 class="h3 mb-3">Fleet</h1>
+  <p class="text-muted small">
+    vLLM <code>/health</code> probes (no API key; private network).
+    Proxy-level model checks:
+    <a href="[litellm_ui]">LiteLLM Admin UI</a>
+    (real completions; not used as the boot probe).
+  </p>
+
+  [if-any servers]
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Set</th>
+          <th>Server</th>
+          <th>Host</th>
+          <th>State</th>
+          <th>Last ok</th>
+          <th>Config request</th>
+          <th>Skew</th>
+        </tr>
+      </thead>
+      <tbody>
+        [for servers]
+        <tr>
+          <td class="font-monospace small">[servers.set_id]</td>
+          <td>[servers.name]</td>
+          <td class="font-monospace small">[servers.host_port]</td>
+          <td>
+            [if-any servers.healthy]
+            <span class="badge text-bg-success">[servers.state]</span>
+            [end]
+            [if-any servers.starting]
+            <span class="badge text-bg-secondary">[servers.state]</span>
+            [end]
+            [if-any servers.down]
+            <span class="badge text-bg-danger">[servers.state]</span>
+            [end]
+            [if-any servers.healthy][else]
+            [if-any servers.starting][else]
+            [if-any servers.down][else]
+            <span class="badge text-bg-light text-dark">[servers.state]</span>
+            [end][end][end]
+          </td>
+          <td class="small">[servers.last_ok]</td>
+          <td class="small">[servers.config_ago]</td>
+          <td class="small">[servers.skew]</td>
+        </tr>
+        [end]
+      </tbody>
+    </table>
+  </div>
+  [else]
+  <p class="text-muted">No fleet servers in config.yaml.</p>
+  [end]
+</div>
+[include "footer.ezt"]

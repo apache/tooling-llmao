@@ -8,9 +8,25 @@ one catalog recipe (`model_name`). A **server** is one vLLM process in a set
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from typing import Any
 
+import httpx
+
 from llmao.models import load_model_list
+
+_LOGGER = logging.getLogger(__name__)
+
+_FLEET_NUMBERS = (
+    "health_interval_s",
+    "health_timeout_s",
+    "health_grace_s",
+    "health_fail_threshold",
+    "skew_interval_s",
+    "litellm_health_interval_s",
+)
 
 
 class UnknownSet(KeyError):
@@ -19,26 +35,6 @@ class UnknownSet(KeyError):
 
 def _spec_name(spec: Any) -> str:
     return str(spec.get("name") or spec.model)
-
-
-def _server(model: Any, spec: Any) -> dict[str, Any]:
-    vllm = model.model_info.vllm
-    args = vllm.get("args") or []
-    if isinstance(args, str):
-        args = args.split()
-    server = {
-        "name": _spec_name(spec),
-        "model": str(vllm.model),
-        "host": str(spec.host),
-        "port": int(spec.port),
-        "api_key": str(model.litellm_params.api_key),
-        "args": [str(a) for a in args],
-    }
-    if vllm.get("gpu_memory_utilization") is not None:
-        server["gpu_memory_utilization"] = float(vllm.gpu_memory_utilization)
-    if vllm.get("max_model_len") is not None:
-        server["max_model_len"] = int(vllm.max_model_len)
-    return server
 
 
 def validate_fleet(cfg: Any, models: list | None = None) -> None:
@@ -50,6 +46,16 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
     sets = cfg.fleet.sets
     if not hasattr(sets, "items"):
         raise ValueError("config.yaml: fleet.sets must be a mapping")
+    for key in _FLEET_NUMBERS:
+        if key not in cfg.fleet:
+            raise ValueError(f"config.yaml: missing fleet.{key}")
+        raw = cfg.fleet[key]
+        try:
+            val = int(raw) if key == "health_fail_threshold" else float(raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"config.yaml: fleet.{key} must be a number") from e
+        if val <= 0:
+            raise ValueError(f"config.yaml: fleet.{key} must be > 0")
 
     models = models if models is not None else load_model_list(cfg=cfg)
     names: list[str] = []
@@ -111,7 +117,8 @@ def config_for_set(
     models = models if models is not None else load_model_list(cfg=cfg)
     by_name = {model.model_name: model for model in models}
     servers = [
-        _server(by_name[spec.model], spec) for spec in cfg.fleet.sets[set_id]
+        Server.from_spec(str(set_id), spec, by_name[spec.model]).box_json()
+        for spec in cfg.fleet.sets[set_id]
     ]
     return {
         "set_id": set_id,
@@ -119,3 +126,208 @@ def config_for_set(
         "log_dir": "/workspace/logs",
         "servers": servers,
     }
+
+
+class Server:
+    """One vLLM process from fleet.sets (live health + box JSON)."""
+
+    UNKNOWN = "unknown"
+    STARTING = "starting"
+    HEALTHY = "healthy"
+    DOWN = "down"
+
+    def __init__(
+        self,
+        *,
+        set_id: str,
+        model_name: str,
+        name: str,
+        host: str,
+        port: int,
+        hf_model: str,
+        api_key: str,
+        args: list[str],
+        gpu_memory_utilization: float | None = None,
+        max_model_len: int | None = None,
+    ):
+        self.set_id = set_id
+        self.model_name = model_name
+        self.name = name
+        self.host = host
+        self.port = int(port)
+        self.hf_model = hf_model
+        self.api_key = api_key
+        self.args = args
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.max_model_len = max_model_len
+        self.state = self.UNKNOWN
+        self.seen_at = time.time()
+        self.last_ok = None
+        self.last_error = None
+        self.fails = 0
+        self.skew: list[str] = []
+
+    @classmethod
+    def from_spec(cls, set_id: str, spec: Any, model: Any) -> Server:
+        vllm = model.model_info.vllm
+        args = vllm.get("args") or []
+        if isinstance(args, str):
+            args = args.split()
+        util = vllm.get("gpu_memory_utilization")
+        maxlen = vllm.get("max_model_len")
+        return cls(
+            set_id=set_id,
+            model_name=str(spec.model).strip(),
+            name=_spec_name(spec),
+            host=str(spec.host).strip(),
+            port=int(spec.port),
+            hf_model=str(vllm.model),
+            api_key=str(model.litellm_params.api_key),
+            args=[str(a) for a in args],
+            gpu_memory_utilization=float(util) if util is not None else None,
+            max_model_len=int(maxlen) if maxlen is not None else None,
+        )
+
+    @property
+    def health_url(self) -> str:
+        return f"http://{self.host}:{self.port}/health"
+
+    @property
+    def api_base(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+    def box_json(self) -> dict[str, Any]:
+        """Wire payload for GET /vllm/config (servers[].model is the HF weights id)."""
+        out: dict[str, Any] = {
+            "name": self.name,
+            "model": self.hf_model,
+            "host": self.host,
+            "port": self.port,
+            "api_key": self.api_key,
+            "args": list(self.args),
+        }
+        if self.gpu_memory_utilization is not None:
+            out["gpu_memory_utilization"] = self.gpu_memory_utilization
+        if self.max_model_len is not None:
+            out["max_model_len"] = self.max_model_len
+        return out
+
+    def record_probe(
+        self,
+        ok: bool,
+        *,
+        now: float,
+        grace_s: float,
+        fail_threshold: int,
+        err: str | None = None,
+    ) -> None:
+        if ok:
+            if self.state != self.HEALTHY:
+                _LOGGER.info(f"fleet server {self.name}@{self.api_base} healthy")
+            self.state = self.HEALTHY
+            self.last_ok = now
+            self.last_error = None
+            self.fails = 0
+            return
+        self.fails += 1
+        self.last_error = err or "unhealthy"
+        if self.state == self.HEALTHY:
+            if self.fails >= fail_threshold:
+                self.state = self.DOWN
+                _LOGGER.warning(
+                    f"fleet server {self.name}@{self.api_base} down ({self.last_error})"
+                )
+            return
+        if (now - self.seen_at) < grace_s:
+            self.state = self.STARTING
+            return
+        if self.state != self.DOWN:
+            _LOGGER.warning(
+                f"fleet server {self.name}@{self.api_base} still not healthy after grace ({self.last_error})"
+            )
+        self.state = self.DOWN
+
+
+class Fleet:
+    """Live fleet: servers from config, health from probes, config-fetch stamps."""
+
+    BADGE_UP = "up"
+    BADGE_STARTING = "starting"
+    BADGE_DOWN = "down"
+    BADGE_MIXED = "mixed"
+
+    def __init__(self, cfg: Any, servers: list[Server]):
+        self.cfg = cfg
+        self.servers = servers
+        self.config_fetch_at: dict[str, float] = {}
+
+    @classmethod
+    def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
+        models = models if models is not None else load_model_list(cfg=cfg)
+        by_name = {model.model_name: model for model in models}
+        servers = []
+        for set_id, specs in cfg.fleet.sets.items():
+            for spec in specs:
+                servers.append(Server.from_spec(str(set_id), spec, by_name[spec.model]))
+        return cls(cfg, servers)
+
+    def note_config_fetch(self, set_id: str, *, now: float | None = None) -> None:
+        self.config_fetch_at[set_id] = now if now is not None else time.time()
+
+    def model_health(self, model_name: str) -> str:
+        """Aggregate: up / starting / down / mixed, or empty if no servers."""
+        states = [s.state for s in self.servers if s.model_name == model_name]
+        if not states:
+            return ""
+        uniq = set(states)
+        if uniq == {Server.HEALTHY}:
+            return self.BADGE_UP
+        if uniq <= {Server.STARTING, Server.UNKNOWN}:
+            return self.BADGE_STARTING
+        if uniq == {Server.DOWN}:
+            return self.BADGE_DOWN
+        if Server.HEALTHY in uniq and uniq <= {Server.HEALTHY, Server.STARTING, Server.UNKNOWN}:
+            return self.BADGE_UP
+        return self.BADGE_MIXED
+
+    async def probe_all(
+        self,
+        *,
+        client: httpx.AsyncClient | None = None,
+        now: float | None = None,
+    ) -> None:
+        timeout = float(self.cfg.fleet.health_timeout_s)
+        grace = float(self.cfg.fleet.health_grace_s)
+        threshold = int(self.cfg.fleet.health_fail_threshold)
+        stamp = now if now is not None else time.time()
+        own = client is None
+        if own:
+            client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        try:
+            for srv in self.servers:
+                ok, err = await _get_health(client, srv.health_url)
+                srv.record_probe(
+                    ok, now=stamp, grace_s=grace, fail_threshold=threshold, err=err
+                )
+        finally:
+            if own:
+                await client.aclose()
+
+    async def run_health(self) -> None:
+        interval = float(self.cfg.fleet.health_interval_s)
+        while True:
+            try:
+                await self.probe_all()
+            except Exception:
+                _LOGGER.exception("fleet health probe failed")
+            await asyncio.sleep(interval)
+
+
+async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, str | None]:
+    try:
+        resp = await client.get(url)
+    except httpx.HTTPError as e:
+        return False, str(e)
+    if resp.status_code == 200:
+        return True, None
+    return False, f"HTTP {resp.status_code}"

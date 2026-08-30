@@ -12,9 +12,19 @@ EXAMPLE = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
 
 
+FLEET_KNOBS = {
+    "health_interval_s": 45,
+    "health_timeout_s": 3,
+    "health_grace_s": 1800,
+    "health_fail_threshold": 3,
+    "skew_interval_s": 180,
+    "litellm_health_interval_s": 14400,
+}
+
+
 def _cfg(sets, models_path=EXAMPLE):
     return edict({
-        "fleet": {"sets": sets},
+        "fleet": {"sets": sets, **FLEET_KNOBS},
         "models_path": str(models_path),
     })
 

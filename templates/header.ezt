@@ -38,6 +38,11 @@
                 <li class="nav-item">
                     <a class="nav-link" href="/projects">Projects</a>
                 </li>
+                [if-any is_site_admin]
+                <li class="nav-item">
+                    <a class="nav-link" href="/fleet">Fleet</a>
+                </li>
+                [end]
                 [end]
             </ul>
             <ul class="navbar-nav ms-auto mb-2 mb-lg-0">

@@ -203,6 +203,8 @@ The template itself is identical for every box; only the two env vars change.
 - Real model API keys exist only inside asfquart and in the short-lived YAML that is fetched at boot.
 - Endpoint must be served over HTTPS.
 - Recommended: restrict endpoint reachability (private network, Tailscale, Cloudflare Access, IP allow-list, etc.).
+- vLLM `GET /health` has **no API key**. `fleet.sets` host:port must be on a
+  private path (Tailscale / WireGuard / allow-list). Tunnels are out of scope for v1.
 - Future hardening options (not required for v1):
   - Instance-ID binding
   - Short-lived bootstrap tokens
@@ -214,8 +216,12 @@ The template itself is identical for every box; only the two env vars change.
 
 - Same endpoint + fleet key used by RunPod (or any other provider) instances.
 - Additional set metadata (preferred GPU type, minimum VRAM, etc.) for scheduling.
-- Health / readiness reporting back to asfquart.
 - Automatic re-fetch of configuration on SIGHUP or periodic interval.
+- Health-gated LiteLLM `api_base` add/remove (YAML remains SoT; no
+  `STORE_MODEL_IN_DB`). Spike a reload path before coding.
+- Do **not** use LiteLLM `GET /health` as the vLLM boot probe (it runs real
+  completions). asfquart already probes vLLM `/health` and, rarely, LiteLLM
+  `/health` only to detect **skew**.
 
 ---
 

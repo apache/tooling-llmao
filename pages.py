@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import pathlib
+import time
 
 import asfquart
 import asfquart.auth
@@ -32,6 +33,7 @@ from easydict import EasyDict as edict
 from dunamai import Version
 
 from llmao.auth import current_identity
+from llmao.fleet import Fleet, Server
 from llmao.litellm_client import BackendUnavailable, KeyInfo
 from llmao.models import ux_models
 from llmao.seam import AuthzError
@@ -182,9 +184,58 @@ async def home_page(result):
 async def models_page(result):
     """Gateway model inventory (public fields; supply path for site admins)."""
     result.reveal_supply = bool(result.is_site_admin)
-    result.models = [
-        edict(m) for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply)
-    ]
+    fleet = APP.fleet
+    rows = []
+    for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
+        row = edict(m)
+        row.health = fleet.model_health(row.model_name)
+        row.health_up = ezt.boolean(row.health == Fleet.BADGE_UP)
+        row.health_starting = ezt.boolean(row.health == Fleet.BADGE_STARTING)
+        row.health_down = ezt.boolean(row.health == Fleet.BADGE_DOWN)
+        row.health_mixed = ezt.boolean(row.health == Fleet.BADGE_MIXED)
+        rows.append(row)
+    result.models = rows
+    return result
+
+
+def _ago(ts, now: float) -> str:
+    if ts is None:
+        return "never"
+    sec = max(0, int(now - ts))
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m"
+    return f"{sec // 3600}h"
+
+
+@APP.get("/fleet")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "fleet.ezt")
+@page(title="Fleet")
+async def fleet_page(result):
+    if not result.is_site_admin:
+        raise AuthzError("site admin only")
+    now = time.time()
+    fleet = APP.fleet
+    litellm = APP.cfg.litellm.base_url.rstrip("/")
+    result.litellm_ui = f"{litellm}/ui"
+    rows = []
+    for srv in fleet.servers:
+        fetched = fleet.config_fetch_at.get(srv.set_id)
+        rows.append(edict({
+            "set_id": srv.set_id,
+            "name": srv.name,
+            "host_port": f"{srv.host}:{srv.port}",
+            "state": srv.state,
+            "last_ok": _ago(srv.last_ok, now),
+            "config_ago": _ago(fetched, now),
+            "skew": "; ".join(srv.skew) if srv.skew else "",
+            "healthy": ezt.boolean(srv.state == Server.HEALTHY),
+            "starting": ezt.boolean(srv.state == Server.STARTING),
+            "down": ezt.boolean(srv.state == Server.DOWN),
+        }))
+    result.servers = rows
     return result
 
 

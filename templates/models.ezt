@@ -17,6 +17,7 @@
         <tr>
           <th>Name</th>
           <th>ID</th>
+          <th>Status</th>
           <th>Hosting</th>
           <th>Context</th>
           <th>License</th>
@@ -36,6 +37,20 @@
             [end]
           </td>
           <td class="font-monospace small">[models.model_name]</td>
+          <td>
+            [if-any models.health_up]
+            <span class="badge text-bg-success">Up</span>
+            [end]
+            [if-any models.health_starting]
+            <span class="badge text-bg-secondary">Starting</span>
+            [end]
+            [if-any models.health_down]
+            <span class="badge text-bg-danger">Down</span>
+            [end]
+            [if-any models.health_mixed]
+            <span class="badge text-bg-warning text-dark">Mixed</span>
+            [end]
+          </td>
           <td>
             [if-any models.self_hosted]
             <span class="badge text-bg-success">[models.hosting_label]</span>

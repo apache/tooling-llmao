@@ -129,9 +129,11 @@ async def vllm_config(set_id: str):
     if not hmac.compare_digest(presented, expected):
         raise HttpError(403, "invalid fleet key")
     try:
-        return config_for_set(set_id, cfg=APP.cfg)
+        payload = config_for_set(set_id, cfg=APP.cfg)
     except UnknownSet:
         raise HttpError(404, f"unknown model_set: {set_id}")
+    APP.fleet.note_config_fetch(set_id)
+    return payload
 
 
 @APP.get("/v1/projects/<project>/usage")

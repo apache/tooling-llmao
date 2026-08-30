@@ -57,12 +57,16 @@ def create_app():
     from llmao.models import load_model_list
 
     # Fail-fast: model_list.yaml is required (same presumption as config.yaml).
-    from llmao.fleet import validate_fleet
+    from llmao.fleet import Fleet, validate_fleet
 
-    load_model_list(cfg=app.cfg)
-    validate_fleet(app.cfg)
+    catalog = load_model_list(cfg=app.cfg)
+    validate_fleet(app.cfg, models=catalog)
+    fleet = Fleet.from_cfg(app.cfg, models=catalog)
 
-    backend = LiteLLMBackend(app.cfg)
+    backend = LiteLLMBackend(app.cfg, fleet)
+    app.fleet = fleet
+    app.add_runner(fleet.run_health, name="fleet-health")
+    app.add_runner(backend.run_skew, name="litellm-skew")
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
     app.config["LLMAO_SEAM"] = seam

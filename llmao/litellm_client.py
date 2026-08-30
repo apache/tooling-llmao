@@ -8,10 +8,17 @@ LiteLLM opaque team_id is internal to LiteLLMBackend only.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
 
 import httpx
+
+from llmao.fleet import Server
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class BudgetExceeded(Exception):
@@ -202,8 +209,9 @@ class LiteLLMBackend:
     never taken from the cache. Call ``warm()`` at process start (fail-fast).
     """
 
-    def __init__(self, cfg: Any):
+    def __init__(self, cfg: Any, fleet: Any):
         self._cfg = cfg
+        self.fleet = fleet
         self._team_ids: Dict[str, str] = {}  # project → team_id
         base = cfg.litellm.base_url.rstrip("/") + "/"
         timeout_s = int(cfg.litellm.request_timeout_s)
@@ -465,3 +473,80 @@ class LiteLLMBackend:
     async def usage(self, project: Optional[str]) -> List[Dict]:
         # Spend APIs not wired yet.
         return []
+
+    async def run_skew(self) -> None:
+        """Config skew often; LiteLLM GET /health (tokens) on a long interval."""
+        skew_s = float(self._cfg.fleet.skew_interval_s)
+        health_s = float(self._cfg.fleet.litellm_health_interval_s)
+        last_health = 0.0
+        first = True
+        while True:
+            try:
+                await self.check_config_skew()
+                now = time.time()
+                if first or (now - last_health) >= health_s:
+                    await self.check_health_skew()
+                    last_health = now
+                    first = False
+            except Exception:
+                _LOGGER.exception("LiteLLM skew check failed")
+            await asyncio.sleep(skew_s)
+
+    async def check_config_skew(self) -> None:
+        resp = await self._request("GET", "model/info")
+        self._raise_http(resp)
+        bases = _api_bases_from_model_info(resp.json())
+        fleet_bases = {s.api_base for s in self.fleet.servers}
+        for srv in self.fleet.servers:
+            note = "missing from LiteLLM"
+            if srv.api_base in bases:
+                srv.skew = [n for n in srv.skew if n != note]
+            elif note not in srv.skew:
+                srv.skew.append(note)
+                _LOGGER.warning(f"skew: {srv.name}@{srv.api_base} {note}")
+        extra = bases - fleet_bases
+        if extra:
+            _LOGGER.warning(f"skew: LiteLLM api_base not in fleet.sets: {sorted(extra)}")
+
+    async def check_health_skew(self) -> None:
+        resp = await self._request("GET", "health")
+        self._raise_http(resp)
+        body = resp.json() if resp.content else {}
+        healthy = {_norm_base(x.get("api_base")) for x in (body.get("healthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
+        unhealthy = {_norm_base(x.get("api_base")) for x in (body.get("unhealthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
+        for srv in self.fleet.servers:
+            litellm_up = srv.api_base in healthy
+            litellm_down = srv.api_base in unhealthy
+            note = "LiteLLM health disagrees"
+            disagrees = (
+                (srv.state == Server.HEALTHY and litellm_down)
+                or (srv.state == Server.DOWN and litellm_up)
+            )
+            if disagrees:
+                if note not in srv.skew:
+                    srv.skew.append(note)
+                _LOGGER.warning(
+                    f"health skew: {srv.name}@{srv.api_base} fleet={srv.state} litellm_up={litellm_up}"
+                )
+            else:
+                srv.skew = [n for n in srv.skew if n != note]
+
+
+def _norm_base(url: Any) -> str:
+    return str(url or "").rstrip("/")
+
+
+def _api_bases_from_model_info(body: Any) -> set[str]:
+    rows = []
+    if isinstance(body, list):
+        rows = body
+    elif isinstance(body, dict):
+        rows = body.get("data") or body.get("models") or []
+    bases: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        params = row.get("litellm_params") or {}
+        if isinstance(params, dict) and params.get("api_base"):
+            bases.add(_norm_base(params["api_base"]))
+    return bases
