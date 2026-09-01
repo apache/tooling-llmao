@@ -15,9 +15,9 @@
     <table class="table table-sm table-hover align-middle">
       <thead>
         <tr>
-          <th>Set</th>
-          <th>Server</th>
           <th>Host</th>
+          <th>Server</th>
+          <th>Listen</th>
           <th>State</th>
           <th>Last ok</th>
           <th>Config request</th>
@@ -27,7 +27,7 @@
       <tbody>
         [for servers]
         <tr>
-          <td class="font-monospace small">[servers.set_id]</td>
+          <td class="font-monospace small">[servers.host]</td>
           <td>[servers.name]</td>
           <td class="font-monospace small">[servers.host_port]</td>
           <td>

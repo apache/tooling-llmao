@@ -222,9 +222,9 @@ async def fleet_page(result):
     result.litellm_ui = f"{litellm}/ui"
     rows = []
     for srv in fleet.servers:
-        fetched = fleet.config_fetch_at.get(srv.set_id)
+        fetched = fleet.config_fetch_at.get(srv.host)
         rows.append(edict({
-            "set_id": srv.set_id,
+            "host": srv.host,
             "name": srv.name,
             "host_port": f"{srv.host}:{srv.port}",
             "state": srv.state,

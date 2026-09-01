@@ -1,7 +1,7 @@
 """Vast box-start: fetch set JSON, write Supervisor units, exit.
 
 Not a process manager. supervisord owns vllm serve. Other providers GET
-the same /vllm/config/<set> JSON and emit their own artifacts.
+the same /vllm/config JSON and emit their own artifacts.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH = "/vllm/config/{set_id}"
+CONFIG_PATH = "/vllm/config"
 CONF_DIR = Path(os.environ.get("SUPERVISOR_CONF_DIR", "/etc/supervisor/conf.d"))
 VLLM_BIN = os.environ.get("VLLM_BIN", "/usr/local/bin/vllm")
 
@@ -30,8 +30,8 @@ def require_env(name: str) -> str:
     return value
 
 
-def config_url(asfquart_url: str, set_id: str) -> str:
-    return asfquart_url.rstrip("/") + CONFIG_PATH.format(set_id=set_id)
+def config_url(asfquart_url: str) -> str:
+    return asfquart_url.rstrip("/") + CONFIG_PATH
 
 
 def ssl_context() -> ssl.SSLContext:
@@ -190,9 +190,8 @@ def supervisorctl_update() -> None:
 def main(argv: list[str] | None = None) -> int:
     del argv
     fleet_key = require_env("FLEET_KEY")
-    set_id = require_env("VLLM_SET")
     asfquart_url = require_env("ASFQUART_URL")
-    url = config_url(asfquart_url, set_id)
+    url = config_url(asfquart_url)
     data = fetch_config(url, fleet_key)
     write_units(data, CONF_DIR)
     if os.environ.get("INSTALL_SET_DRY_RUN", "").strip() in ("1", "true"):

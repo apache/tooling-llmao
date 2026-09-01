@@ -4,7 +4,6 @@ from llmao.fleet import Fleet, Server
 
 def _server(**kwargs):
     defaults = dict(
-        set_id="primary",
         model_name="gemma4-26b",
         name="gemma4-26b",
         host="10.0.0.1",

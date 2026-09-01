@@ -506,7 +506,7 @@ class LiteLLMBackend:
                 _LOGGER.warning(f"skew: {srv.name}@{srv.api_base} {note}")
         extra = bases - fleet_bases
         if extra:
-            _LOGGER.warning(f"skew: LiteLLM api_base not in fleet.sets: {sorted(extra)}")
+            _LOGGER.warning(f"skew: LiteLLM api_base not in fleet.hosts: {sorted(extra)}")
 
     async def check_health_skew(self) -> None:
         resp = await self._request("GET", "health")

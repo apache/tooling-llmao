@@ -1,10 +1,11 @@
-"""vLLM set JSON: validate at process start, join catalog at request time.
+"""vLLM host JSON: validate at process start, join catalog at request time.
 
-GPU boxes fetch GET /vllm/config/{set_id} (no servers.yaml).
+GPU boxes fetch GET /vllm/config (no servers.yaml). Placement is fleet.hosts
+keyed by client IP.
 
 Terminology: the **catalog** is model_list.yaml (how to serve). A **model** is
-one catalog recipe (`model_name`). A **server** is one vLLM process in a set
-(host + port). Box JSON `servers[].model` is still the HF weights id.
+one catalog recipe (`model_name`). A **server** is one vLLM process on a host
+(port). Box JSON `servers[].model` is still the HF weights id.
 """
 from __future__ import annotations
 
@@ -29,23 +30,42 @@ _FLEET_NUMBERS = (
 )
 
 
-class UnknownSet(KeyError):
-    """No fleet.sets entry for this set id."""
+class UnknownHost(KeyError):
+    """No fleet.hosts entry for this client IP."""
 
 
-def _spec_name(spec: Any) -> str:
-    return str(spec.get("name") or spec.model)
+def normalize_peer_ip(addr: str | None) -> str:
+    ip = (addr or "").strip()
+    if ip.startswith("::ffff:"):
+        ip = ip[7:]
+    return ip
+
+
+def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str]:
+    if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3):
+        raise ValueError(
+            f"fleet.hosts.{host}[{index}] must be [model, port] or [model, port, name]"
+        )
+    model_name = str(raw[0]).strip()
+    try:
+        port = int(raw[1])
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"fleet.hosts.{host}[{index}] port must be an int") from e
+    name = str(raw[2]).strip() if len(raw) == 3 else model_name
+    if not model_name or not name:
+        raise ValueError(f"fleet.hosts.{host}[{index}] needs model and name")
+    return model_name, port, name
 
 
 def validate_fleet(cfg: Any, models: list | None = None) -> None:
-    """Fail-fast if fleet.sets or the catalog cannot be joined. Call at startup."""
+    """Fail-fast if fleet.hosts or the catalog cannot be joined. Call at startup."""
     if "fleet" not in cfg:
         raise ValueError("config.yaml: missing fleet")
-    if "sets" not in cfg.fleet:
-        raise ValueError("config.yaml: missing fleet.sets")
-    sets = cfg.fleet.sets
-    if not hasattr(sets, "items"):
-        raise ValueError("config.yaml: fleet.sets must be a mapping")
+    if "hosts" not in cfg.fleet:
+        raise ValueError("config.yaml: missing fleet.hosts")
+    hosts = cfg.fleet.hosts
+    if not hasattr(hosts, "items"):
+        raise ValueError("config.yaml: fleet.hosts must be a mapping")
     for key in _FLEET_NUMBERS:
         if key not in cfg.fleet:
             raise ValueError(f"config.yaml: missing fleet.{key}")
@@ -75,59 +95,52 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             raise ValueError(f"{name}: litellm_params.api_key is required")
 
     catalog = set(names)
-    for set_id, specs in sets.items():
-        if not isinstance(specs, (list, tuple)):
-            raise ValueError(f"fleet.sets.{set_id} must be a list of servers")
+    for host, rows in hosts.items():
+        host = str(host).strip()
+        if not host:
+            raise ValueError("fleet.hosts has an empty IP key")
+        if not isinstance(rows, (list, tuple)):
+            raise ValueError(f"fleet.hosts.{host} must be a list of [model, port] rows")
         seen_names: set[str] = set()
-        seen_places: set[tuple[str, int]] = set()
-        for i, spec in enumerate(specs):
-            if "model" not in spec or "host" not in spec or "port" not in spec:
-                raise ValueError(
-                    f"fleet.sets.{set_id}[{i}] needs model, host, and port"
-                )
-            model_name = str(spec.model).strip()
-            host = str(spec.host).strip()
-            if not model_name or not host or spec.port is None or str(spec.port).strip() == "":
-                raise ValueError(
-                    f"fleet.sets.{set_id}[{i}] needs model, host, and port"
-                )
+        seen_ports: set[int] = set()
+        for i, raw in enumerate(rows):
+            model_name, port, label = parse_host_row(raw, host, i)
             if model_name not in catalog:
-                raise ValueError(
-                    f"fleet.sets.{set_id}[{i}]: unknown model {model_name!r}"
-                )
-            label = _spec_name(spec)
+                raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
             if label in seen_names:
-                raise ValueError(f"fleet.sets.{set_id}: duplicate name {label!r}")
-            place = (host, spec.port)
-            if place in seen_places:
-                raise ValueError(f"fleet.sets.{set_id}: duplicate {host}:{spec.port}")
+                raise ValueError(f"fleet.hosts.{host}: duplicate name {label!r}")
+            if port in seen_ports:
+                raise ValueError(f"fleet.hosts.{host}: duplicate port {port}")
             seen_names.add(label)
-            seen_places.add(place)
+            seen_ports.add(port)
 
 
-def config_for_set(
-    set_id: str,
+def config_for_host(
+    host: str,
     *,
     models: list | None = None,
     cfg: Any = None,
 ) -> dict[str, Any]:
-    """JSON for one set. Requires validate_fleet() already ran on cfg."""
-    if not set_id or set_id not in cfg.fleet.sets:
-        raise UnknownSet(set_id)
+    """JSON for one host IP. Requires validate_fleet() already ran on cfg."""
+    host = normalize_peer_ip(host)
+    if not host or host not in cfg.fleet.hosts:
+        raise UnknownHost(host)
     models = models if models is not None else load_model_list(cfg=cfg)
     by_name = {model.model_name: model for model in models}
-    servers = [
-        Server.from_spec(str(set_id), spec, by_name[spec.model]).box_json()
-        for spec in cfg.fleet.sets[set_id]
-    ]
+    servers = []
+    for i, raw in enumerate(cfg.fleet.hosts[host]):
+        model_name, port, name = parse_host_row(raw, host, i)
+        servers.append(
+            Server.from_row(host, model_name, port, name, by_name[model_name]).box_json()
+        )
     return {
-        "set_id": set_id,
+        "host": host,
         "servers": servers,
     }
 
 
 class Server:
-    """One vLLM process from fleet.sets (live health + box JSON)."""
+    """One vLLM process from fleet.hosts (live health + box JSON)."""
 
     UNKNOWN = "unknown"
     STARTING = "starting"
@@ -137,7 +150,6 @@ class Server:
     def __init__(
         self,
         *,
-        set_id: str,
         model_name: str,
         name: str,
         host: str,
@@ -148,7 +160,6 @@ class Server:
         gpu_memory_utilization: float | None = None,
         max_model_len: int | None = None,
     ):
-        self.set_id = set_id
         self.model_name = model_name
         self.name = name
         self.host = host
@@ -166,7 +177,7 @@ class Server:
         self.skew: list[str] = []
 
     @classmethod
-    def from_spec(cls, set_id: str, spec: Any, model: Any) -> Server:
+    def from_row(cls, host: str, model_name: str, port: int, name: str, model: Any) -> Server:
         vllm = model.model_info.vllm
         args = vllm.get("args") or []
         if isinstance(args, str):
@@ -174,11 +185,10 @@ class Server:
         util = vllm.get("gpu_memory_utilization")
         maxlen = vllm.get("max_model_len")
         return cls(
-            set_id=set_id,
-            model_name=str(spec.model).strip(),
-            name=_spec_name(spec),
-            host=str(spec.host).strip(),
-            port=int(spec.port),
+            model_name=model_name,
+            name=name,
+            host=host,
+            port=port,
             hf_model=str(vllm.model),
             api_key=str(model.litellm_params.api_key),
             args=[str(a) for a in args],
@@ -264,13 +274,15 @@ class Fleet:
         models = models if models is not None else load_model_list(cfg=cfg)
         by_name = {model.model_name: model for model in models}
         servers = []
-        for set_id, specs in cfg.fleet.sets.items():
-            for spec in specs:
-                servers.append(Server.from_spec(str(set_id), spec, by_name[spec.model]))
+        for host, rows in cfg.fleet.hosts.items():
+            host = str(host).strip()
+            for i, raw in enumerate(rows):
+                model_name, port, name = parse_host_row(raw, host, i)
+                servers.append(Server.from_row(host, model_name, port, name, by_name[model_name]))
         return cls(cfg, servers)
 
-    def note_config_fetch(self, set_id: str, *, now: float | None = None) -> None:
-        self.config_fetch_at[set_id] = now if now is not None else time.time()
+    def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
+        self.config_fetch_at[host] = now if now is not None else time.time()
 
     def model_health(self, model_name: str) -> str:
         """Aggregate: up / starting / down / mixed, or empty if no servers."""

@@ -26,17 +26,17 @@
 
 ```mermaid
 flowchart TB
-    A["asfquart application<br/>(LiteLLM config + secrets + sets)"]
-    B["GET /vllm/config/{set_id}<br/>Authorization: Bearer &lt;fleet-key&gt;"]
+    A["asfquart application<br/>(LiteLLM config + secrets + hosts)"]
+    B["GET /vllm/config<br/>Authorization: Bearer &lt;fleet-key&gt;<br/>host = client IP"]
     C["JSON response<br/>(with secrets)"]
 
-    subgraph BoxA["Vast.ai box A — VLLM_SET=box-a"]
+    subgraph BoxA["Vast.ai box A — IP in fleet.hosts"]
         A1["vllm :8000 (model)"]
         A2["vllm :8001 (model)"]
         A3["vllm :8002 (model)"]
     end
 
-    subgraph BoxB["Vast.ai box B — VLLM_SET=box-b"]
+    subgraph BoxB["Vast.ai box B — IP in fleet.hosts"]
         B1["vllm :8000 (model)"]
         B2["vllm :8001 (model)"]
     end
@@ -56,9 +56,11 @@ flowchart TB
   - Which models exist
   - Their LiteLLM configuration
   - The real API keys used between LiteLLM and each vLLM server
-  - Logical **sets** (groupings of models that should run together on one GPU box)
-- Each GPU box receives only two pieces of bootstrap information: the **fleet key** and a **set identifier**.
-- At box-start, the provider installer fetches JSON for its set id (`VLLM_SET`)
+  - Logical **hosts** (models + ports on one GPU box, keyed by public IP)
+- Each GPU box receives the **fleet key** on the template. asfquart maps
+  `request.remote_addr` (ProxyFix / X-Forwarded-For behind Hypercorn or Apache)
+  to `fleet.hosts`.
+- At box-start, the provider installer fetches JSON for that IP
   and installs native process units (Vast: Supervisor). There is no on-disk
   `servers.yaml` and no Python process manager.
 
@@ -68,7 +70,7 @@ flowchart TB
 
 **Catalog** — `model_list.yaml`: how to serve each recipe. **Model** — one
 catalog recipe (`model_name`, e.g. `gemma4-26b`). **Server** — one vLLM
-process in a set (`host` + `port`). Box JSON `servers[].model` is the **HF
+process on a host (`port`). Box JSON `servers[].model` is the **HF
 weights id** (`model_info.vllm.model`); that field name is deferred.
 
 ### 3.1 Fleet Key
@@ -78,42 +80,36 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
 - Chosen over per-instance secrets for operational simplicity (one value to manage, works across providers).
 - Acceptable risk for a small, operator-controlled fleet. Can be hardened later (instance binding, short-lived tokens, etc.) without changing the rest of the design.
 
-### 3.2 Sets (Groupings)
+### 3.2 Hosts
 
-A **set** is a named collection of **servers** (vLLM processes) that share a
-GPU instance (and the box env `VLLM_SET`). The same model may appear in many
-sets and more than once in a set.
+A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
+`[model, port, name]` rows. Optional **name** lets two processes share a
+catalog model (e.g. two qwen3 on one box).
 
-Examples:
-- `primary` → gemma4-26b @ host:8001 + qwen3-8b @ host:8003
-- `overflow` → gemma4-26b again on another host
+asfquart owns placement in `config.yaml` → `fleet.hosts`. The catalog is how
+to serve, not where. Changing placement is a control-plane change only; GPU
+templates stay identical (shared `FLEET_KEY`).
 
-asfquart owns placement in `config.yaml` → `fleet.sets` (model + host + port
-per server). The catalog is how to serve (HF weights id, vLLM args, api_key),
-not where. Changing placement is a control-plane change only; GPU templates
-stay identical.
+### 3.3 Host config JSON
 
-### 3.3 Set config JSON
-
-asfquart builds JSON from `fleet.sets.<id>` joined to the catalog. Vast
-`install_set.py` fetches it at box-start and writes Supervisor programs.
-Same payload; never a `servers.yaml`.
+asfquart builds JSON from `fleet.hosts.<client-ip>` joined to the catalog. Vast
+`install_set.py` fetches `GET /vllm/config` at box-start and writes Supervisor
+programs. Same payload; never a `servers.yaml`.
 
 ---
 
 ## 4. Endpoint Contract
 
 ```
-GET /vllm/config/{set_id}
+GET /vllm/config
 Authorization: Bearer <fleet-key>
 
 Response: 200 application/json
 ```
 
 - asfquart validates the fleet key (not OAuth).
-- Looks up `fleet.sets.<set_id>` and joins each server spec to its model.
-- Emits JSON (servers: name, HF weights id, host, port, args, API keys).
-- Optional future hardening: bind the request to a known instance ID / label.
+- Looks up `fleet.hosts` by client IP (`request.remote_addr` after ProxyFix).
+- Emits JSON (host, servers: name, HF weights id, host, port, args, API keys).
 
 ---
 
@@ -121,7 +117,7 @@ Response: 200 application/json
 
 ```json
 {
-  "set_id": "primary",
+  "host": "127.0.0.1",
   "servers": [
     {
       "name": "model-a",
@@ -138,7 +134,7 @@ Response: 200 application/json
 ```
 
 Catalog model (`model_info.vllm`): HF weights id, optional util, max len, `args`.
-Server spec (`fleet.sets`): `model` (`model_name`), `host`, `port`, optional `name`.
+Host row (`fleet.hosts`): `[model_name, port]` or `[model_name, port, name]`.
 `api_key` comes from `litellm_params` (same secret LiteLLM presents).
 
 Notes:
@@ -154,7 +150,6 @@ Notes:
 
    ```bash
    -e FLEET_KEY=<shared-secret>
-   -e VLLM_SET=box-a
    ```
 
    plus the usual image, ports (8000–8002), disk size, SSH, etc.
@@ -186,12 +181,11 @@ Notes:
 - Ports: 8000, 8001, 8002 mapped.
 - Disk: large enough for the heaviest set of models that will be assigned.
 - Environment:
-  - `FLEET_KEY`
-  - `VLLM_SET`
-  - (optional) `ASFQUART_URL` if not hard-coded / discoverable
+  - `FLEET_KEY` (template)
+  - `ASFQUART_URL`
 - On-create: `provision.sh` → `install_set.py` (JSON → Supervisor units).
 
-The template itself is identical for every box; only the two env vars change.
+The template is identical for every box. Placement is `fleet.hosts` by public IP.
 
 ---
 
@@ -201,7 +195,7 @@ The template itself is identical for every box; only the two env vars change.
 - Real model API keys exist only inside asfquart and in the short-lived YAML that is fetched at boot.
 - Endpoint must be served over HTTPS.
 - Recommended: restrict endpoint reachability (private network, Tailscale, Cloudflare Access, IP allow-list, etc.).
-- vLLM `GET /health` has **no API key**. `fleet.sets` host:port must be on a
+- vLLM `GET /health` has **no API key**. `fleet.hosts` host:port must be on a
   private path (Tailscale / WireGuard / allow-list). Tunnels are out of scope for v1.
 - Future hardening options (not required for v1):
   - Instance-ID binding

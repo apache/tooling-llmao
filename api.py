@@ -29,7 +29,7 @@ from asfquart.auth import Requirements as R
 from quart import jsonify, request
 
 from llmao.auth import current_identity
-from llmao.fleet import UnknownSet, config_for_set
+from llmao.fleet import UnknownHost, config_for_host, normalize_peer_ip
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -49,8 +49,8 @@ def _ok_extras(result) -> str:
     if not isinstance(result, dict):
         return ''
     parts = []
-    if result.get('set_id') is not None:
-        parts.append(f'set_id={result["set_id"]}')
+    if result.get('host') is not None:
+        parts.append(f'host={result["host"]}')
     servers = result.get('servers')
     if isinstance(servers, list):
         models = ','.join(
@@ -114,10 +114,10 @@ def _fleet_key() -> str:
     return key.strip()
 
 
-@APP.get("/vllm/config/<set_id>")
+@APP.get("/vllm/config")
 @api
-async def vllm_config(set_id: str):
-    """JSON for one model_set. Bearer fleet key; no OAuth (GPU boxes)."""
+async def vllm_config():
+    """JSON for the calling box. Bearer fleet key; host from peer IP (ProxyFix)."""
     expected = _fleet_key()
     if not expected or expected.startswith("CHANGE_ME"):
         raise HttpError(503, "fleet.key is not configured")
@@ -128,11 +128,12 @@ async def vllm_config(set_id: str):
     presented = auth[len(prefix):].strip()
     if not hmac.compare_digest(presented, expected):
         raise HttpError(403, "invalid fleet key")
+    host = normalize_peer_ip(request.remote_addr)
     try:
-        payload = config_for_set(set_id, cfg=APP.cfg)
-    except UnknownSet:
-        raise HttpError(404, f"unknown model_set: {set_id}")
-    APP.fleet.note_config_fetch(set_id)
+        payload = config_for_host(host, cfg=APP.cfg)
+    except UnknownHost:
+        raise HttpError(404, f"unknown fleet host: {host}")
+    APP.fleet.note_config_fetch(host)
     return payload
 
 

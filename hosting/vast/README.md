@@ -2,9 +2,9 @@
 
 Use Vast’s **stock vLLM template**. Do not maintain a derived image in v1.
 
-`provision.sh` curls `install_set.py`, which fetches set JSON and writes
-one Supervisor program per model. supervisord runs `vllm serve`. There is
-no Python process manager.
+`provision.sh` curls `install_set.py`, which fetches host JSON (by client
+IP) and writes one Supervisor program per model. supervisord runs `vllm serve`.
+There is no Python process manager.
 
 ## Instance
 
@@ -15,10 +15,12 @@ no Python process manager.
 - Environment:
 
   ```bash
-  FLEET_KEY=<shared-secret>
-  VLLM_SET=<set id from config.yaml fleet.sets>
+  FLEET_KEY=<shared-secret>   # bake into the template
   ASFQUART_URL=https://llm.apache.org:8443
   ```
+
+  Put the instance public IP under `fleet.hosts` in `config.yaml`. Do not set
+  per-instance docker env for the fleet key or a set id.
 
 ## On-create
 
@@ -29,27 +31,6 @@ target.
 `SSL_VERIFY=0` is the default in `provision.sh` because asfquart is still
 on **:8443** with a self-signed cert. **Remove that when llm.apache.org
 serves :443** with a public CA.
-
-## Operator env helper
-
-Laptop tool (not on the GPU box). Needs the Vast Python SDK:
-
-```bash
-pip install vastai
-```
-
-API key: `~/.config/vastai/vast_api_key` (SDK default). Do not put `FLEET_KEY` on the command line.
-
-```bash
-python3 hosting/vast/env.py                 # list (default)
-python3 hosting/vast/env.py list
-python3 hosting/vast/env.py show INSTANCE_ID
-python3 hosting/vast/env.py set INSTANCE_ID --vllm-set primary
-```
-
-`show` prints account secrets, template docker env, and instance `extra_env` with real values (the CLI masks them).
-
-`set` reads `fleet.key` from repo `config.yaml`, checks `--vllm-set` exists in `config.yaml` `fleet.sets`, prints the models that box will fetch from llm.apache.org, writes `FLEET_KEY` + `VLLM_SET` as Docker create options (`-e …`, via `args` — instance `extra_env` does not enter the container), then asks `Ready to reboot? [Y/n]` so on-start re-runs `install_set.py`.
 
 ## Smoke
 

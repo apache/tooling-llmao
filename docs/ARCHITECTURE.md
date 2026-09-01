@@ -56,7 +56,7 @@ policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
 **GPU fleet (vLLM on Vast, later RunPod):** design in
-`docs/vllm-fleet-design.md`. Shared: `GET /vllm/config/{set}` JSON.
+`docs/vllm-fleet-design.md`. Shared: `GET /vllm/config` JSON (by client IP).
 Vast: `hosting/vast/install_set.py` writes Supervisor units at box-start
 (no Python launcher).
 

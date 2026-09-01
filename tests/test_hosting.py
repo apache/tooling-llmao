@@ -14,7 +14,7 @@ sys.path.insert(0, str(VAST))
 import install_set as inst  # noqa: E402
 
 SAMPLE = {
-    "set_id": "primary",
+    "host": "127.0.0.1",
     "servers": [
         {
             "name": "model-a",
@@ -97,7 +97,7 @@ def test_fetch_json(monkeypatch):
             if self.headers.get("Authorization") != "Bearer fleet-secret":
                 self.send_error(403)
                 return
-            if self.path != "/vllm/config/primary":
+            if self.path != "/vllm/config":
                 self.send_error(404)
                 return
             self.send_response(200)
@@ -112,16 +112,14 @@ def test_fetch_json(monkeypatch):
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     monkeypatch.setenv("SSL_VERIFY", "1")
-    url = f"http://127.0.0.1:{port}/vllm/config/primary"
+    url = f"http://127.0.0.1:{port}/vllm/config"
     data = inst.fetch_config(url, "fleet-secret")
     httpd.shutdown()
     assert data["servers"][0]["name"] == "model-a"
 
 
 def test_config_url_strips_slash():
-    assert inst.config_url("https://x.example/", "box-a") == (
-        "https://x.example/vllm/config/box-a"
-    )
+    assert inst.config_url("https://x.example/") == "https://x.example/vllm/config"
 
 
 def test_ssl_verify_off(monkeypatch):

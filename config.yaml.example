@@ -41,8 +41,8 @@ site_admins: []
 models_path: model_list.yaml
 
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
-# GET /vllm/config/<set_id>. Same value as box env FLEET_KEY.
-# Placement (host/port per vLLM process) lives here, not on model_list.
+# GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
+# Placement is keyed by the box public IP (request.remote_addr / X-Forwarded-For).
 fleet:
   key: CHANGE_ME_FLEET_KEY
   # Seconds between vLLM GET /health probes (unauthenticated; private path only).
@@ -53,15 +53,11 @@ fleet:
   health_grace_s: 1800
   # Consecutive failed probes before a previously healthy server is marked down.
   health_fail_threshold: 3
-  # Seconds between LiteLLM /model/info vs fleet.sets config-skew checks.
+  # Seconds between LiteLLM /model/info vs fleet.hosts config-skew checks.
   skew_interval_s: 180
   # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
   litellm_health_interval_s: 14400
-  sets:
-    primary:
-      - model: gemma4-26b
-        host: 127.0.0.1
-        port: 8001
-      - model: qwen3-8b
-        host: 127.0.0.1
-        port: 8003
+  hosts:
+    127.0.0.1:
+      - [gemma4-26b, 8001]
+      - [qwen3-8b, 8003]
