@@ -58,7 +58,7 @@ flowchart TB
   - The real API keys used between LiteLLM and each vLLM server
   - Logical **hosts** (models + ports on one GPU box, keyed by public IP)
 - Each GPU box receives the **fleet key** on the template. asfquart maps
-  `request.remote_addr` (ProxyFix / X-Forwarded-For behind Hypercorn or Apache)
+  leftmost `X-Forwarded-For` if present, else `request.remote_addr` (Apache/Hypercorn in front)
   to `fleet.hosts`.
 - At box-start, the provider installer fetches JSON for that IP
   and installs native process units (Vast: Supervisor). There is no on-disk
@@ -108,7 +108,7 @@ Response: 200 application/json
 ```
 
 - asfquart validates the fleet key (not OAuth).
-- Looks up `fleet.hosts` by client IP (`request.remote_addr` after ProxyFix).
+- Looks up `fleet.hosts` by client IP (`X-Forwarded-For` or `request.remote_addr`).
 - Emits JSON (host, servers: name, HF weights id, host, port, args, API keys).
 
 ---

@@ -41,6 +41,20 @@ def normalize_peer_ip(addr: str | None) -> str:
     return ip
 
 
+def client_ip(*, remote_addr: str | None, forwarded_for: str | None) -> str:
+    """Box public IP: leftmost X-Forwarded-For (one reverse proxy), else peer.
+
+    Werkzeug ProxyFix is WSGI and cannot wrap Quart asgi_app (ASGI).
+    """
+    if forwarded_for and forwarded_for.strip():
+        chosen = normalize_peer_ip(forwarded_for.split(",")[0])
+        _LOGGER.info(
+            f"X-Forwarded-For={forwarded_for!r} remote_addr={remote_addr!r} client_ip={chosen}"
+        )
+        return chosen
+    return normalize_peer_ip(remote_addr)
+
+
 def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str]:
     if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3):
         raise ValueError(

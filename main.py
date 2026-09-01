@@ -49,12 +49,6 @@ def create_app():
         force_login=True,
     )
 
-    # Hypercorn and/or Apache sit in front; one trusted hop so
-    # request.remote_addr is the GPU box public IP (fleet.hosts key).
-    from werkzeug.middleware.proxy_fix import ProxyFix
-
-    app.asgi_app = ProxyFix(app.asgi_app, x_for=1, x_proto=1)
-
     from llmao.auth import make_token_handler
     from llmao.litellm_client import LiteLLMBackend
     from llmao.seam import Seam

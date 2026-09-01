@@ -7,6 +7,7 @@ from easydict import EasyDict as edict
 
 from llmao.fleet import (
     UnknownHost,
+    client_ip,
     config_for_host,
     normalize_peer_ip,
     validate_fleet,
@@ -102,3 +103,12 @@ def test_unknown_model():
 def test_normalize_peer_ip():
     assert normalize_peer_ip("::ffff:203.0.113.10") == "203.0.113.10"
     assert normalize_peer_ip("203.0.113.10") == "203.0.113.10"
+
+
+def test_client_ip_xff_leftmost():
+    assert client_ip(remote_addr="10.0.0.1", forwarded_for="203.0.113.10, 10.0.0.1") == "203.0.113.10"
+
+
+def test_client_ip_no_xff():
+    assert client_ip(remote_addr="203.0.113.10", forwarded_for=None) == "203.0.113.10"
+    assert client_ip(remote_addr="::ffff:203.0.113.10", forwarded_for="") == "203.0.113.10"
