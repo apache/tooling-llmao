@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-08-11  
+**As of:** 2026-09-02  
 **Repo:** `apache/tooling-llmao`  
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`  
 **How to run/use this software:** repo [`README.md`](../README.md)  
@@ -20,6 +20,8 @@
 ## Done (today — thin)
 
 Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `model_list.yaml` inventory; PAT UX (**My Keys** / **Other Keys**); **Models** catalog (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
+
+**GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY`; Vast `install_set.py` → Supervisor; `APP.fleet` health/skew runners; `/models` badges and `/fleet` admin. Remaining: box nits, health-gated LiteLLM `api_base`, long vLLM boot.
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 

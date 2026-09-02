@@ -55,10 +55,13 @@ keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
-**GPU fleet (vLLM on Vast, later RunPod):** design in
-`docs/vllm-fleet-design.md`. Shared: `GET /vllm/config` JSON (by client IP).
-Vast: `hosting/vast/install_set.py` writes Supervisor units at box-start
-(no Python launcher).
+**GPU fleet (vLLM on Vast, later RunPod):** `docs/vllm-fleet-design.md`.
+`APP.fleet` (`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
+`fleet.key`) maps client IP (`X-Forwarded-For` or peer) to `fleet.hosts`.
+JSON `{host, servers[]}` — no `hf_home`/`log_dir`. Vast
+`hosting/vast/install_set.py` writes Supervisor units. Health/skew:
+`app.add_runner`. JSON handlers use `@api` in `api.py`. Do not wrap Quart
+`asgi_app` with Werkzeug ProxyFix.
 
 Build status and backlog: **`docs/STATUS.md`**.
 

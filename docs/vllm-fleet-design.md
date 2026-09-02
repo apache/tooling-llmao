@@ -1,7 +1,8 @@
 # Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
 
-**Status:** Implementation in progress (JSON → Supervisor units at box-start)
-**Date:** 2026-08-17
+**Status:** Operating — boxes fetch `GET /vllm/config` by client IP. Remaining:
+LiteLLM static `api_base`, long vLLM boot, health-gated mix.
+**Date:** 2026-09-02
 **Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
 
 ---
@@ -219,26 +220,21 @@ The template is identical for every box. Placement is `fleet.hosts` by public IP
 
 ## 10. Open Points / Decisions Still Soft
 
-- Exact URL path and HTTP method for the config endpoint.
-- (Resolved) No on-disk set config; Vast writes Supervisor units from JSON at box-start.
-- Restart policy details (always restart, restart with backoff, give up after N failures, …).
-- Naming of sets (`box-a` vs semantic names vs both).
-- How `ASFQUART_URL` is supplied (env var, hard-coded, DNS, …).
+- Restart policy details (Supervisor `autorestart` / give up after N, …).
+- Health-gated LiteLLM `api_base` add/remove (YAML SoT; no `STORE_MODEL_IN_DB`).
+- Remaining Vast operational nits (framework works; boxes fetch config).
+
+**Resolved:** `GET /vllm/config` (no path); host = IP in `fleet.hosts`;
+`ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk `servers.yaml`;
+no Werkzeug ProxyFix on Quart ASGI.
 
 ---
 
-## 11. Implementation Order (suggested)
+## 11. Leftover implementation
 
-Box-side: `hosting/vast/` (Supervisor installer). Control plane stays
-in the Quart app. v1: stock Vast vLLM template + `provision.sh`.
-
-
-1. Finalise JSON schema and endpoint contract.
-2. Implement asfquart endpoint (auth + JSON from `model_list.yaml`).
-3. Vast `install_set.py` (JSON → Supervisor); no launcher.
-4. Create / adjust Vast.ai template.
-5. Wire LiteLLM models to the running vLLM ports.
-6. Smoke-test with one set on one box, then expand.
+1. Smoke remaining box issues.
+2. Wire LiteLLM `api_base` to healthy `fleet.hosts` ports (reload path TBD).
+3. Optional: health-gated overlay so boot delay does not 502 users.
 
 ---
 

@@ -147,32 +147,18 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
-Self-host catalog models are served by **vLLM** — one vLLM process per
-server, each exposing an OpenAI-compatible endpoint — with the litellm proxy in
-front for per-PMC budgets (budgets live in litellm; vLLM has none). Each server
-runs on its own port; litellm routes to the right one by `model_name`
-(Option A), so there is no model-swap latency.
+Self-host catalog models run as **vLLM** processes on GPU boxes (Vast today).
+LiteLLM stays in front for PATs and project budgets. Placement is
+`config.yaml` → `fleet.hosts` (public IP → `[model, port]` or
+`[model, port, name]`). Boxes fetch `GET /vllm/config` with template
+`FLEET_KEY`; asfquart keys the host from `X-Forwarded-For` or the peer IP.
+See [`hosting/README.md`](hosting/README.md) and
+[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md).
 
-The PoC self-host tier (sized for a single 48GB GPU, e.g. an L40S) is three
-Apache-2.0 open-weight models:
-
-| Catalog model | vLLM served name | HF weights | Role |
-|---|---|---|---|
-| Gemma 4 26B-A4B | `gemma4-26b` | `google/gemma-4-26b-a4b` | general / multimodal / agentic |
-| Qwen 3.6-27B | `qwen3.6-27b` | `Qwen/Qwen3.6-27B` | coding |
-| Qwen3-8B | `qwen3-8b` | `Qwen/Qwen3-8B` | fast / routine calls |
-
-Each model is served by a vLLM container, for example:
-
-```bash
-docker run --rm --gpus all --ipc=host -p 8003:8003 \
-  -v ~/.cache/huggingface:/root/.cache/huggingface -e HF_TOKEN=$HF_TOKEN \
-  vllm/vllm-openai:v0.6.6 \
-  --model Qwen/Qwen3-8B --served-model-name qwen3-8b --port 8003
-```
-
-Self-host `api_base` values live in **`model_list.yaml`** (cleartext). The
-compose stack under `infra/docker/` is optional reference.
+Example inventory today (`model_list.yaml.example`): `gemma4-26b`, `qwen3-8b`.
+LiteLLM `api_base` is still static in `model_list.yaml` (health-gated mix is
+future). Cache/logs live under `$DATA_DIRECTORY` on the box (typically
+`/workspace`), not in the config JSON.
 
 ---
 
@@ -181,14 +167,15 @@ compose stack under `infra/docker/` is optional reference.
 ```
 main.py                  entry: create_app, run_standalone / run_asgi
 pages.py                 HTML + /static
-api.py                   JSON /healthz and /v1/*
-templates/ static/       EZT + Bootstrap
+api.py                   JSON /healthz, /vllm/config, /v1/*
+templates/ static/       EZT + Bootstrap (`fleet.ezt` site-admin)
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
 bin/gen-litellm-master-key.sh   print sk-… for admin key
-config.yaml.example      → config.yaml (gitignored)
+config.yaml.example      → config.yaml (gitignored; `fleet.hosts`)
 litellm.yaml.example     → litellm.yaml (include model_list.yaml)
 model_list.yaml.example  → model_list.yaml (inventory SoT; keys from eyaml)
 certs/                   mkcert PEMs + README
-llmao/                   seam, auth, models, litellm_client
-tests/                   offline seam + model_list / LiteLLM metadata tests
+llmao/                   seam, auth, models, litellm_client, fleet
+hosting/vast/            provision.sh + install_set.py
+tests/                   offline seam, fleet, hosting installer
 ```
