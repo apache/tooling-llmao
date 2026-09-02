@@ -87,13 +87,17 @@ A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
 `[model, port, name]` rows. Optional **name** lets two processes share a
 catalog model (e.g. two qwen3 on one box).
 
-asfquart owns placement in `config.yaml` → `fleet.hosts`. The catalog is how
-to serve, not where. Changing placement is a control-plane change only; GPU
-templates stay identical (shared `FLEET_KEY`).
+asfquart owns placement. The catalog is how to serve, not where. Changing
+placement is a control-plane change only; GPU templates stay identical (shared
+`FLEET_KEY`).
+
+Membership lives in `fleet_path` (`/etc/llmao/fleet.yaml`), not `config.yaml`,
+so it can be edited at runtime without a Puppet run. See
+[fleet-state.md](fleet-state.md) for ownership, lifecycle, and recovery.
 
 ### 3.3 Host config JSON
 
-asfquart builds JSON from `fleet.hosts.<client-ip>` joined to the catalog. Vast
+asfquart builds JSON from `hosts.<client-ip>` joined to the catalog. Vast
 `install_set.py` fetches `GET /vllm/config` at box-start and writes Supervisor
 programs. Same payload; never a `servers.yaml`.
 
@@ -224,9 +228,10 @@ The template is identical for every box. Placement is `fleet.hosts` by public IP
 - Health-gated LiteLLM `api_base` add/remove (YAML SoT; no `STORE_MODEL_IN_DB`).
 - Remaining Vast operational nits (framework works; boxes fetch config).
 
-**Resolved:** `GET /vllm/config` (no path); host = IP in `fleet.hosts`;
-`ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk `servers.yaml`;
-no Werkzeug ProxyFix on Quart ASGI.
+**Resolved:** `GET /vllm/config` (no path); host = IP in `fleet_path` → `hosts`
+(a runtime-owned file, not `config.yaml` and not the database); retirement is a
+soft delete; `ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
+`servers.yaml`; no Werkzeug ProxyFix on Quart ASGI.
 
 ---
 

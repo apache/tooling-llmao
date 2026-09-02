@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# Hayward — generated, runtime, and local-only files
+# llmao — generated, runtime, and local-only files
 # ---------------------------------------------------------------------------
 
 # Runtime state written by the app (StateStore) and its atomic-write temp files.
-# Default path is ./hayward-state.json; HAYWARD_STATE_PATH may point elsewhere.
-hayward-state.json
+# Default path is ./llmao-state.json; LLMAO_STATE_PATH may point elsewhere.
+llmao-state.json
 demo-state.json
 *-state.json
 *.tmp
@@ -24,6 +24,10 @@ litellm.yaml
 # Model inventory with provider keys (api_base is cleartext; keys from eyaml)
 # use model_list.yaml.example
 model_list.yaml
+
+# Fleet membership, written by the app at runtime (fleet_path).
+# Puppet seeds it with `replace => false`; contents are never in the repo.
+fleet.yaml
 
 # third-party fetch scratch (bin/fetch-thirdparty.sh)
 bin/*.zip

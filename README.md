@@ -14,6 +14,8 @@ here.
 | **[`docs/STATUS.md`](docs/STATUS.md)** | Build status + **planned UX** backlog |
 | **This README** | How to run and use the software |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
+| [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) | GPU fleet: control-plane contract, box provisioning |
+| [`docs/fleet-state.md`](docs/fleet-state.md) | Fleet membership: ownership, lifecycle, recovery |
 | Infra `p6/modules/llmao` | Production deploy |
 
 ```
@@ -91,17 +93,17 @@ make test          # offline seam + model_list tests (no OAuth session automatio
 
 ## Using the gateway (after sign-in)
 
-1. **My Keys** — create a personal PAT for a project you belong to (purpose optional).  
-   Copy the secret **once**.  
-2. Point your client at the LiteLLM OpenAI-compatible base URL with that `sk-…` key.  
-   Use a **model id** from **Models** as the `model` parameter.  
-3. **Other Keys** (PMC / site admin) — automation keys; who minted them is recorded as `created_by`.  
+1. **My Keys** — create a personal PAT for a project you belong to (purpose optional).
+   Copy the secret **once**.
+2. Point your client at the LiteLLM OpenAI-compatible base URL with that `sk-…` key.
+   Use a **model id** from **Models** as the `model` parameter.
+3. **Other Keys** (PMC / site admin) — automation keys; who minted them is recorded as `created_by`.
 4. **Models** — sanctioned inventory (supply-path details for site admins only).
 
 **Projects** (envelopes, member caps, by-person usage) and **Reports** are product intent — see design §6 and the UX backlog in [`docs/STATUS.md`](docs/STATUS.md).
 
-Full status and phased UI plan: **[`docs/STATUS.md`](docs/STATUS.md)**.  
-Product design: **rai-private** `services/llmao/README.md`.  
+Full status and phased UI plan: **[`docs/STATUS.md`](docs/STATUS.md)**.
+Product design: **rai-private** `services/llmao/README.md`.
 Ops: Infra **`p6/modules/llmao/README.md`**.
 
 ---
@@ -149,11 +151,12 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 Self-host catalog models run as **vLLM** processes on GPU boxes (Vast today).
 LiteLLM stays in front for PATs and project budgets. Placement is
-`config.yaml` → `fleet.hosts` (public IP → `[model, port]` or
-`[model, port, name]`). Boxes fetch `GET /vllm/config` with template
-`FLEET_KEY`; asfquart keys the host from `X-Forwarded-For` or the peer IP.
-See [`hosting/README.md`](hosting/README.md) and
-[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md).
+`fleet_path` → `hosts` (public IP → `[model, port]` or `[model, port, name]`),
+a runtime-owned file separate from `config.yaml`. Boxes fetch `GET /vllm/config`
+with template `FLEET_KEY`; asfquart keys the host from `X-Forwarded-For` or the peer IP.
+See [`hosting/README.md`](hosting/README.md),
+[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md), and
+[`docs/fleet-state.md`](docs/fleet-state.md).
 
 Example inventory today (`model_list.yaml.example`): `gemma4-26b`, `qwen3-8b`.
 LiteLLM `api_base` is still static in `model_list.yaml` (health-gated mix is
@@ -171,7 +174,8 @@ api.py                   JSON /healthz, /vllm/config, /v1/*
 templates/ static/       EZT + Bootstrap (`fleet.ezt` site-admin)
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
 bin/gen-litellm-master-key.sh   print sk-… for admin key
-config.yaml.example      → config.yaml (gitignored; `fleet.hosts`)
+config.yaml.example      → config.yaml (gitignored; secrets, no fleet.hosts)
+fleet.yaml               runtime-owned fleet membership (gitignored)
 litellm.yaml.example     → litellm.yaml (include model_list.yaml)
 model_list.yaml.example  → model_list.yaml (inventory SoT; keys from eyaml)
 certs/                   mkcert PEMs + README
