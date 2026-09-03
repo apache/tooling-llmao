@@ -25,10 +25,6 @@ litellm.yaml
 # use model_list.yaml.example
 model_list.yaml
 
-# Fleet membership, written by the app at runtime (fleet_path).
-# Puppet seeds it with `replace => false`; contents are never in the repo.
-fleet.yaml
-
 # third-party fetch scratch (bin/fetch-thirdparty.sh)
 bin/*.zip
 
