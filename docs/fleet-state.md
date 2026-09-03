@@ -2,286 +2,307 @@
 
 Companion to [`vllm-fleet-design.md`](vllm-fleet-design.md), which defines the
 control-plane contract: what a host is, how a box fetches its assignment, and
-what the JSON looks like. This document covers **where fleet membership lives,
-how it changes, and what happens when it is lost**.
-
-Amends §3.2 of that document, which places membership in `config.yaml` →
-`fleet.hosts`.
+what the JSON looks like. This document covers **where fleet state lives, how
+it changes, and what happens when it is lost**.
 
 ---
 
-## 1. Principle
+## 1. LiteLLM is the source of truth
 
-**Configuration is what a human decides and reviews. Data is what the system
-mutates during normal operation.**
+An earlier draft of this document proposed a runtime-owned YAML file for
+membership, on the grounds that a GPU box rebooting during a database outage
+could still fetch its assignment.
 
-Fleet membership is data. It changes when an instance is rented, migrates, or
-dies — none of which warrants a code review. Placing it in a Puppet-rendered
-`config.yaml` would make adding a GPU box a hiera edit, a pull request, and an
-agent run, on a timescale of hours for instances that churn in minutes.
+**That argument does not hold.** During a Postgres outage LiteLLM cannot
+authenticate any request — virtual keys live there — and with
+`STORE_MODEL_IN_DB` it cannot route either. The gateway is down regardless, so
+a box that fetches its config during that window comes up serving a model
+nothing can reach. The resilience buys nothing.
 
-Puppet owns configuration. The app owns data. Puppet still guarantees the data
-file exists with correct ownership; it stops enforcing the contents.
+State lives in LiteLLM's database. There is no second store.
 
----
+### 1.1 What a route already carries
 
-## 2. File Split
-
-### 2.1 `config.yaml` — Puppet-owned
-
-Rendered from hiera and eyaml on every agent run, overwritten each time.
-Contains secrets, LiteLLM settings, budgets, `site_admins`, health intervals,
-and `fleet.key` — everything a human decides deliberately.
-
-It no longer contains `fleet.hosts`. It gains a pointer:
-
-```yaml
-fleet_path: /etc/llmao/fleet.yaml
-```
-
-### 2.2 `fleet.yaml` — app-owned
-
-Membership only. Seeded once by Puppet, never overwritten:
-
-```puppet
-file { '/etc/llmao/fleet.yaml':
-  ensure  => file,
-  owner   => $user,
-  group   => $group,
-  mode    => '0640',
-  replace => false,     # create if absent; contents never enforced
-  content => "# Managed by llmao at runtime.\nhosts: {}\n",
-}
-```
-
-`replace => false` applies the content only when the file does not exist.
-**Ownership and mode remain enforced on every run**, so a stray `chmod` is
-still corrected while the contents are left alone.
-
-### 2.3 Why a file and not Postgres
-
-§10 of the fleet design already records `YAML SoT; no STORE_MODEL_IN_DB`. The
-same reasoning applies to membership, and adds a resilience argument:
-`fleet.yaml` on disk means a GPU box rebooting during a database outage can
-still fetch its assignment. Membership in Postgres would break that — the box
-comes up, asks what to run, and gets nothing.
-
-The database remains authoritative for keys, teams, budgets and spend.
-
----
-
-## 3. Schema
-
-```yaml
-hosts:
-  80.188.223.202:
-    label: vast-a100-gemma
-    provider: vast
-    instance: "49080461"
-    added: 2026-09-02T17:45:12Z
-    added_by: akm
-    last_config_fetch: 2026-09-02T18:03:44Z
-    servers:
-      - [gemma4-26b, 10100]
-
-  100.105.28.100:
-    label: asf-l40s-qwen
-    provider: asf
-    added: 2026-08-04T00:48:01Z
-    added_by: akm
-    last_config_fetch: 2026-09-02T18:03:51Z
-    servers:
-      - [qwen3-8b, 8003]
-
-retired:
-  - host: 159.48.242.29
-    label: vast-a100-gemma
-    provider: vast
-    instance: "46213937"
-    added: 2026-08-04T02:11:00Z
-    retired: 2026-09-02T16:30:00Z
-    retired_by: akm
-    reason: host maintenance window, migrated to 80.188.223.202
-```
-
-`servers` keeps the existing `[model, port]` / `[model, port, name]` form from
-§3.2, so `validate_fleet` is unchanged. The rest is additive.
-
-| field | purpose |
+| field | fleet meaning |
 |---|---|
-| `label` | IPs are unreadable at a glance; a dozen hosts need names |
-| `provider` | `vast` churns, `asf` does not — sets expectations for staleness |
-| `instance` | the provider's own id, for finding the box in their console |
-| `added` / `added_by` | audit trail |
-| `last_config_fetch` | **liveness.** A rented box that has not fetched in a week is gone |
+| `model_name` | the catalog model, and the routing key |
+| `litellm_params.api_base` | **which host, which port** |
+| `litellm_params.api_key` | the bearer token for that vLLM |
+| `model_info` | arbitrary dict — carries the recipe and provenance |
 
-### 3.1 Host capacity is not declared here
+`GET /vllm/config` becomes: select routes whose `api_base` host matches the
+caller's IP, return their `model_info.vllm` blocks and ports.
 
-VRAM and disk are **discoverable on the box** and must not be hand-entered.
-A typed `vram_gb: 80` is wrong the first time a provider supplies a different
-card than was ordered, and the resulting failure appears as an engine-init
-error rather than a validation message.
+### 1.2 Enabling it
 
-The model's absolute requirement belongs in the catalog
-(`model_info.vllm.vram_gb`, `disk_gb`); the box decides fit at install against
-hardware it can see.
+`STORE_MODEL_IN_DB` is an **environment variable**, not a config key:
 
-`expect_gpu` / `expect_vram_gb` may optionally be carried here as a **hint**,
-so the UI can warn at add-time that a model will not fit. It is never
-authoritative, and a mismatch between expected and observed is itself a useful
-signal — the rental was not what was paid for.
-
-### 3.2 Retirement is a soft delete
-
-Entries move from `hosts` to `retired` with a required reason; they are not
-removed. This answers "did this host ever exist, and what happened to it"
-without a database table.
-
-Retirement also has a security dimension. Providers recycle IP addresses, so a
-stale entry may eventually match an instance rented by someone else.
-`GET /vllm/config` requires the fleet key with a constant-time compare, so the
-blast radius is bounded — but the fleet key is a single shared secret baked
-into the box template (§3.1, §8), which makes "nobody else could hold it" an
-assumption rather than a guarantee. Retire promptly.
-
----
-
-## 4. Mutation
-
-All writes go through a single atomic helper: serialise, write to a temp file
-in the same directory, `fsync`, `rename`. A crash mid-write must never leave a
-half-parsed fleet. Validation runs **before** the write, not after.
-
-`Fleet.reload()` re-reads the file and rebuilds `Server` objects, **preserving
-health state for hosts whose entry did not change**. With a dozen hosts and an
-1800s health grace, resetting every probe because one box was added would put
-nineteen healthy servers back into `starting` for twenty minutes.
-
-### 4.1 UI actions
-
-The `/fleet` page becomes the management surface:
-
-- **Add host** — IP, label, provider, instance id, `[model, port]` rows.
-  Validates the model exists in the catalog and the port is unclaimed on that
-  IP; stamps `added` / `added_by` from the session.
-- **Retire host** — moves the entry to `retired` with a required reason. A box
-  still running then receives 404 from `/vllm/config` on its next fetch, which
-  is the correct signal that it is no longer ours.
-- **Edit servers** — change the model/port rows for a box being repurposed.
-
-Hand-editing the file remains supported when the app is stopped.
-
-### 4.2 Surfacing staleness
-
-`last_config_fetch` is rendered as an age and coloured: green under an hour,
-amber over a day, red over a week.
-
-**Entries are never auto-retired.** A box down for maintenance is
-indistinguishable from one that is dead, and silently removing it during an
-outage is the wrong default. The colour prompts a human; the human decides.
-
----
-
-## 5. Loss and Recovery
-
-### 5.1 What survives what
-
-| event | `fleet.yaml` | LiteLLM DB | in-memory health |
-|---|---|---|---|
-| Puppet run | untouched | untouched | untouched |
-| app restart | untouched | untouched | rebuilt in ~45s from probes |
-| Postgres outage | untouched | unavailable; calls fail at auth | untouched |
-| host rebuild | **lost** | **lost** | lost |
-
-Health state is correctly ephemeral — it is a live measurement, not a record.
-
-### 5.2 Host rebuild is the real exposure
-
-A rebuilt gateway seeds `fleet.yaml` with `hosts: {}`. Every GPU box then
-receives 404 on its next config fetch and stops being served. This is the cost
-of taking membership out of version control and is accepted deliberately.
-
-Partial mitigation exists for free: **the GPU boxes are still running.** They
-hold their assignment locally and continue serving; they simply cannot
-re-fetch. Reconstructing a lost `fleet.yaml` from a dozen live boxes is tedious
-but possible — a better failure mode than a lost database.
-
-### 5.3 Backup
-
-`fleet.yaml` and the LiteLLM database are lost together and should be captured
-together:
-
-```bash
-sudo -u postgres pg_dump litellm | gzip > "$dest/litellm-$stamp.sql.gz"
-tar czf "$dest/etc-llmao-$stamp.tar.gz" -C /etc llmao
+```
+STORE_MODEL_IN_DB=True
 ```
 
-**`$dest` is unresolved and belongs to the p6 work.** Three constraints:
-
-- The destination must be captured **off-host**. `bpc_client_asf` pulls via
-  rsync from a central BackupPC server, so the client has no local daemon and
-  its coverage cannot be confirmed from the box. The share list lives on the
-  server — which paths are pulled is a question for Infra, not an assumption.
-  A default share of `/etc` and `/home` would miss `/var/backups` entirely.
-- Confirm the host is not in `bpc_client_asf::excludelist`.
-- A file-level copy of a live Postgres data directory is **not** a valid
-  backup. The `pg_dump` is what makes it restorable, whatever captures it.
-
-Until that is settled, a local dump protects against a bad edit or an
-accidental delete and nothing else. Worth having; not worth calling a backup.
-
-Restore is a file copy and a reload:
-
-```bash
-tar xzf /var/backups/llmao/etc-llmao-<stamp>.tar.gz -C /
-chown llmao:llmao /etc/llmao/fleet.yaml
-systemctl restart llmao
-```
+Without it, `/model/new` returns HTTP 500 with
+`Set 'STORE_MODEL_IN_DB='True'' in your env to enable this feature`. The YAML
+`model_list` then becomes a bootstrap seed rather than the source of truth.
 
 ---
 
-## 6. Behaviour at Scale
+## 2. Registration is health-gated
 
-Assumptions: roughly a dozen GPU boxes, split across ASF-provisioned and
-rented; vast and runpod instances that vanish, migrate, and are reassigned new
-addresses.
+A provisioned instance can take fifteen minutes to load weights. A route whose
+backend is not yet serving will fail every request routed to it.
 
-- **`retired` becomes the longest section.** That is correct — it is the
-  record. Prune by hand if it becomes unwieldy; never automatically.
-- **`hosts` must stay clean** or the skew check (§`check_config_skew`) fires
-  continuously against machines that no longer exist, and the signal is
-  ignored.
-- **Group by provider in the UI.** With a dozen boxes the useful question is
-  "how many rented instances are still alive", not an alphabetical list of IPs.
+**Rule: a route exists in LiteLLM if and only if its vLLM is serving.**
+
+```
+add host    -> record assignment, generate api_key, no route yet
+box boots   -> GET /vllm/config
+health OK   -> POST /model/new
+health DOWN -> POST /model/delete
+retire      -> delete route, drop assignment
+```
+
+Uniform, with no special cases. An earlier draft proposed registering at
+add-time when the `model_name` already had healthy peers and deferring
+otherwise — that makes the same operation behave differently depending on the
+state of unrelated servers, which is fine when written and baffling later.
+
+### 2.1 Why not register early and let cooldown absorb it
+
+Verified against litellm 1.99.0 source. Two findings:
+
+**There is no per-deployment enable/disable.** No `enabled` or `is_disabled`
+field, and nothing in the model-management endpoints. A route is registered or
+deleted; there is no third state.
+
+**Cooldown does not protect a booting backend.** `DEFAULT_COOLDOWN_TIME_SECONDS`
+is **5**, so a cooled deployment re-enters rotation almost immediately. And
+`router_utils/cooldown_handlers.py` deliberately exempts single-deployment
+model groups — `SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD` is **1000**, with
+the comment *"by default we should avoid cooldowns on single deployment model
+groups."*
+
+So the first server for a new model would fail every request for the full boot
+window, uncooled. Health-gating is the only mechanism available.
+
+`cooldown_time` and `allowed_fails` are settable per-deployment via
+`model_info` if different behaviour is wanted later.
+
+### 2.2 The pending assignment
+
+Health-gating means an assignment must exist before its route does. That state
+is small — IP, port, model name, generated key, per pending host — but it is
+state.
+
+Options, preferred first:
+
+- **A table in the same Postgres.** Not LiteLLM's schema, but the same
+  database, so no new backup story and no new failure mode. "State-free" meant
+  no *second* datastore; this respects that.
+- **In memory, accepting loss on restart.** A box that already fetched keeps
+  running; one that has not gets 404 and retries. Zero persistence, but a
+  restart mid-provisioning strands a box being paid for.
+- **Register immediately and tolerate the failures.** Simplest, and a bad
+  default given §2.1.
+
+---
+
+## 3. Three config lifetimes
+
+Config here has three distinct change costs, and conflating them causes most of
+the confusion:
+
+| lifetime | what | to change it |
+|---|---|---|
+| **baked** | `ASFQUART_URL`, `FLEET_KEY` in the instance template | re-provision |
+| **boot** | the vLLM assignment — model, port, launch args | box must re-fetch and restart vLLM |
+| **live** | routes, keys, budgets in LiteLLM | immediate |
+
+Changing `max_model_len` does nothing until that box restarts vLLM. The catalog
+says one thing and the server does another, silently.
+
+**This is a second kind of skew.** `check_config_skew` compares llmao against
+LiteLLM. Nothing compares llmao's *intended* launch args against what a box is
+actually running.
+
+### 3.1 Config revision
+
+`/vllm/config` responses carry a revision — a hash of the assignment payload.
+The box records what it applied and reports it back, so the UX can show
+`applied rev 3, current rev 5` rather than letting a stale server pretend to be
+current.
+
+If boxes re-fetch periodically rather than only at boot, a changed revision
+also becomes the trigger for a restart, making config changes eventually
+consistent.
+
+Whether that restart should be automatic is open: an unattended restart drops
+in-flight requests. Probably detect automatically, apply on a button.
+
+---
+
+## 4. Modelling variants
+
+### 4.1 Contract versus recipe
+
+**`model_name` is a contract with callers.** Everything behind it must be
+interchangeable from their point of view.
+
+**`model_info.vllm` is a recipe for the box.** Recipes may differ freely as
+long as the contract holds.
+
+Same `model_name`, different recipes — fine:
+
+- FP8 on one box, BF16 on another
+- weights from HF on one, an internal mirror on another
+- different cards, `gpu_memory_utilization`, `--kv-cache-memory`
+
+Different `model_name` required:
+
+- different served context window — a 32k route cannot take a 100k prompt
+- different reasoning parser, or thinking on by default versus off
+- anything that changes the shape of a response
+
+**If two routes share a `model_name`, their caller-visible parameters must
+match.** Otherwise identical requests behave differently depending on which
+backend they land on. Where a pool is uneven, advertise the **minimum** — a
+pool with a 40k and a 128k server advertises 40k, or it is not a pool.
+
+### 4.2 Recipes carry provenance
+
+Weights come from HF, from internal mirrors, from image registries, and in
+several quantizations. The recipe should say so explicitly rather than
+overloading one string:
+
+```yaml
+model_info:
+  vllm:
+    model: Qwen/Qwen3-8B-FP8      # what vLLM is told to load
+    source:
+      kind: hf                    # hf | url | registry | local
+    vram_gb: 8                    # checkable before pulling 50GB
+    disk_gb: 18
+    args: ["--reasoning-parser", "qwen3"]
+```
+
+Three reasons to separate `source` from `model`: the box can check fit before
+downloading; credentials differ by source kind; and a box that already holds
+the weights should not re-download because the catalog names an HF repo.
+
+### 4.3 Host capacity is discovered, not declared
+
+VRAM and disk are discoverable on the box. A hand-typed `vram_gb: 80` is wrong
+the first time a provider supplies a different card than was ordered — which,
+with rented instances, is a matter of when.
+
+The model's requirement goes in the recipe; the box decides fit against
+hardware it can see. `--kv-cache-memory` makes this exact: vLLM prints the byte
+count it wants, so the install step can start conservative, read the figure,
+and relaunch.
+
+---
+
+## 5. Lifecycle
+
+### 5.1 Retirement
+
+Deleting a route deletes the record, so "did this host ever exist" loses its
+answer. Either mark `model_info.retired` and remove the route from routing, or
+accept LiteLLM's own audit trail as the record.
+
+Worth deciding rather than losing by default.
+
+### 5.2 Staleness
+
+`last_config_fetch` is the liveness signal — surface it as a coloured age,
+green under an hour, red over a week.
+
+**Never auto-retire.** A box down for maintenance is indistinguishable from one
+that is dead, and silently dropping it during an outage is the wrong default.
+
+Retiring promptly is also hygiene: providers recycle IPs, so a stale entry may
+eventually match an instance rented by someone else. `GET /vllm/config`
+requires the fleet key with a constant-time compare, so the blast radius is
+bounded — but that key is a single shared secret baked into the box template,
+which makes "nobody else could hold it" an assumption.
+
+### 5.3 At a dozen hosts
+
+- **Group by provider in the UI.** The useful question is "how many rented
+  boxes are still alive", not an alphabetical list of IPs.
+- **`model_name` pools need a minimum-advertising rule** (§4.1), which cannot
+  be a static catalog value once a pool is uneven.
 - **A `notes` field is worth considering.** "Rented for the superset scan, kill
   after" is obvious for a week and unrecoverable after a month.
 
 ---
 
-## 7. Implementation
+## 6. Loss and recovery
 
-1. Read `fleet_path`, falling back to `config.fleet.hosts` for compatibility.
-2. Accept the extended per-host schema (additive; `servers` unchanged).
-3. Atomic write helper.
-4. `Fleet.reload()` preserving unchanged hosts' health state.
-5. `/fleet` add / retire / edit routes.
+| event | LiteLLM DB | in-memory health |
+|---|---|---|
+| Puppet run | untouched | untouched |
+| app restart | untouched | rebuilt in ~45s from probes |
+| Postgres outage | unavailable; auth **and routing** fail | untouched |
+| host rebuild | **lost** | lost |
 
-Items 1–3 are worth doing even if the UI is deferred: they are what make the
-file safely hand-editable, which is the current practice.
+Health state is correctly ephemeral — a live measurement, not a record.
+
+With routes in Postgres, a lost database means the proxy no longer knows what
+to proxy, not merely who may call it. Virtual keys are stored hashed and shown
+once at mint, so recovery also means re-minting every key and reconfiguring
+every consumer.
+
+**Partial mitigation for free:** the GPU boxes keep running. They hold their
+assignment locally and continue serving; they simply cannot re-fetch.
+
+### 6.1 Backup
+
+```bash
+sudo -u postgres pg_dump litellm | gzip > "$dest/litellm-$stamp.sql.gz"
+```
+
+One artifact now, rather than a database dump plus a state file.
+
+**`$dest` is unresolved and belongs to the p6 work.** Three constraints:
+
+- it must be captured **off-host**. `bpc_client_asf` pulls via rsync from a
+  central BackupPC server, so the client has no local daemon and coverage
+  cannot be confirmed from the box. The share list lives on the server — ask
+  Infra which paths are pulled. A default share of `/etc` and `/home` would
+  miss `/var/backups`.
+- confirm the host is not in `bpc_client_asf::excludelist`.
+- a file-level copy of a live Postgres data directory is **not** a valid
+  backup. The `pg_dump` is what makes it restorable.
 
 ---
 
-## 8. Open Points
+## 7. Implementation
 
-- `$dest` for backups, pending the p6 manifest and confirmation of BackupPC
-  coverage.
-- Whether `expect_gpu` / `expect_vram_gb` are worth carrying, or whether
-  observed-only reporting is sufficient.
-- Whether `notes` is a field or belongs in `label`.
+1. `STORE_MODEL_IN_DB=True` in the service environment
+2. Derive `GET /vllm/config` from routes matching the caller's IP
+3. Push `/model/new` on the healthy transition, `/model/delete` on down
+4. Somewhere for pending assignments (§2.2)
+5. Config revision on `/vllm/config`, reported back by `install_sets.py`
+6. UI: add, retire, edit
 
-**Resolved:** membership is a file, not a database; `replace => false` is the
-Puppet mechanism; retirement is a soft delete; entries are never auto-retired;
-host capacity is discovered, not declared.
+---
+
+## 8. Open
+
+- Pending-assignment storage (§2.2).
+- Retirement record after route deletion (§5.1).
+- Automatic restart on revision change, or detect-and-prompt (§3.1).
+- Advertising the minimum across an uneven pool (§4.1).
+- Backup destination (§6.1).
+- **Does `model_info` survive a `/model/new` round-trip intact?** If LiteLLM
+  normalises or drops unknown nested keys, recipes cannot live there. Testable
+  against a local proxy with `STORE_MODEL_IN_DB=True`.
+
+**Resolved:** LiteLLM is the source of truth; no second datastore; registration
+is health-gated; there is no per-deployment enable/disable and cooldown does
+not cover the boot window; host capacity is discovered, not declared;
+`model_name` is a caller contract and `model_info.vllm` a box recipe.
 
 ---
 

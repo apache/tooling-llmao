@@ -31,13 +31,13 @@ flowchart TB
     B["GET /vllm/config<br/>Authorization: Bearer &lt;fleet-key&gt;<br/>host = client IP"]
     C["JSON response<br/>(with secrets)"]
 
-    subgraph BoxA["Vast.ai box A — IP in fleet.hosts"]
+    subgraph BoxA["Vast.ai box A — IP in fleet membership"]
         A1["vllm :8000 (model)"]
         A2["vllm :8001 (model)"]
         A3["vllm :8002 (model)"]
     end
 
-    subgraph BoxB["Vast.ai box B — IP in fleet.hosts"]
+    subgraph BoxB["Vast.ai box B — IP in fleet membership"]
         B1["vllm :8000 (model)"]
         B2["vllm :8001 (model)"]
     end
@@ -60,7 +60,7 @@ flowchart TB
   - Logical **hosts** (models + ports on one GPU box, keyed by public IP)
 - Each GPU box receives the **fleet key** on the template. asfquart maps
   leftmost `X-Forwarded-For` if present, else `request.remote_addr` (Apache/Hypercorn in front)
-  to `fleet.hosts`.
+  to fleet membership.
 - At box-start, the provider installer fetches JSON for that IP
   and installs native process units (Vast: Supervisor). There is no on-disk
   `servers.yaml` and no Python process manager.
@@ -91,11 +91,26 @@ asfquart owns placement. The catalog is how to serve, not where. Changing
 placement is a control-plane change only; GPU templates stay identical (shared
 `FLEET_KEY`).
 
-Membership lives in `fleet_path` (`/etc/llmao/fleet.yaml`), not `config.yaml`,
-so it can be edited at runtime without a Puppet run. See
+Fleet state lives in LiteLLM: a route's `api_base` is the host and port, and
+`model_info` carries the recipe and provenance. See
 [fleet-state.md](fleet-state.md) for ownership, lifecycle, and recovery.
 
-### 3.3 Host config JSON
+### 3.3 Config lifetimes
+
+Config has three change costs, and conflating them causes most of the confusion
+about why an edit "did nothing":
+
+| lifetime | what | to change it |
+|---|---|---|
+| **baked** | `ASFQUART_URL`, `FLEET_KEY` in the template | re-provision |
+| **boot** | the vLLM assignment — model, port, launch args | box re-fetches, restarts vLLM |
+| **live** | routes, keys, budgets in LiteLLM | immediate |
+
+Changing `max_model_len` does nothing until that box restarts vLLM. A revision
+hash on the config response, reported back by the box, is what makes the
+difference between intended and running visible.
+
+### 3.4 Host config JSON
 
 asfquart builds JSON from `hosts.<client-ip>` joined to the catalog. Vast
 `install_set.py` fetches `GET /vllm/config` at box-start and writes Supervisor
@@ -113,7 +128,7 @@ Response: 200 application/json
 ```
 
 - asfquart validates the fleet key (not OAuth).
-- Looks up `fleet.hosts` by client IP (`X-Forwarded-For` or `request.remote_addr`).
+- Looks up `hosts` by client IP (`X-Forwarded-For` or `request.remote_addr`).
 - Emits JSON (host, servers: name, HF weights id, host, port, args, API keys).
 
 ---
@@ -139,7 +154,7 @@ Response: 200 application/json
 ```
 
 Catalog model (`model_info.vllm`): HF weights id, optional util, max len, `args`.
-Host row (`fleet.hosts`): `[model_name, port]` or `[model_name, port, name]`.
+Host row (`fleet_path` → `hosts`): `[model_name, port]` or `[model_name, port, name]`.
 `api_key` comes from `litellm_params` (same secret LiteLLM presents).
 
 Notes:
@@ -190,7 +205,8 @@ Notes:
   - `ASFQUART_URL`
 - On-create: `provision.sh` → `install_set.py` (JSON → Supervisor units).
 
-The template is identical for every box. Placement is `fleet.hosts` by public IP.
+The template is identical for every box. Placement is keyed by public IP in
+`fleet_path` → `hosts`.
 
 ---
 
@@ -200,8 +216,9 @@ The template is identical for every box. Placement is `fleet.hosts` by public IP
 - Real model API keys exist only inside asfquart and in the short-lived YAML that is fetched at boot.
 - Endpoint must be served over HTTPS.
 - Recommended: restrict endpoint reachability (private network, Tailscale, Cloudflare Access, IP allow-list, etc.).
-- vLLM `GET /health` has **no API key**. `fleet.hosts` host:port must be on a
-  private path (Tailscale / WireGuard / allow-list). Tunnels are out of scope for v1.
+- vLLM `GET /health` has **no API key**. The host:port from fleet membership
+  must be on a private path (Tailscale / WireGuard / allow-list). Tunnels are
+  out of scope for v1.
 - Future hardening options (not required for v1):
   - Instance-ID binding
   - Short-lived bootstrap tokens
@@ -225,12 +242,18 @@ The template is identical for every box. Placement is `fleet.hosts` by public IP
 ## 10. Open Points / Decisions Still Soft
 
 - Restart policy details (Supervisor `autorestart` / give up after N, …).
-- Health-gated LiteLLM `api_base` add/remove (YAML SoT; no `STORE_MODEL_IN_DB`).
+- Where pending assignments live between "host added" and "vLLM healthy".
+  A route only exists once the server is serving, so the assignment needs a
+  home before that. Preferred: a small table in the same Postgres.
+- Whether a retired host keeps a record. Deleting a route deletes the row.
 - Remaining Vast operational nits (framework works; boxes fetch config).
 
-**Resolved:** `GET /vllm/config` (no path); host = IP in `fleet_path` → `hosts`
-(a runtime-owned file, not `config.yaml` and not the database); retirement is a
-soft delete; `ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
+**Resolved:** `GET /vllm/config` (no path); LiteLLM is the source of truth --
+routes live in Postgres (`STORE_MODEL_IN_DB=True`, an env var, not a config
+key) and the YAML `model_list` is a bootstrap seed; a host is the `api_base` of
+a route, matched against the caller IP; registration is health-gated, so a
+route exists only while its vLLM is serving; no second datastore;
+`ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
 `servers.yaml`; no Werkzeug ProxyFix on Quart ASGI.
 
 ---
@@ -238,8 +261,12 @@ soft delete; `ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
 ## 11. Leftover implementation
 
 1. Smoke remaining box issues.
-2. Wire LiteLLM `api_base` to healthy `fleet.hosts` ports (reload path TBD).
-3. Optional: health-gated overlay so boot delay does not 502 users.
+2. Push `/model/new` on the healthy transition and `/model/delete` on down.
+   Note `litellm_params` reads back **encrypted**, so `api_base` cannot be
+   used to identify a route's host -- duplicate the host into `model_info`,
+   or decrypt via LiteLLM's own accessor.
+3. Config revision on `/vllm/config`, reported back by the box, so a stale
+   vLLM cannot pretend to be current (see 3.3).
 
 ---
 

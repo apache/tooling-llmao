@@ -150,18 +150,21 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 ### Self-hosted models via vLLM
 
 Self-host catalog models run as **vLLM** processes on GPU boxes (Vast today).
-LiteLLM stays in front for PATs and project budgets. Placement is
-`fleet_path` → `hosts` (public IP → `[model, port]` or `[model, port, name]`),
-a runtime-owned file separate from `config.yaml`. Boxes fetch `GET /vllm/config`
-with template `FLEET_KEY`; asfquart keys the host from `X-Forwarded-For` or the peer IP.
+LiteLLM stays in front for PATs and project budgets, and is also where fleet
+state lives: a route's `api_base` is the host and port, and `model_info` carries
+the recipe. Boxes fetch `GET /vllm/config` with template `FLEET_KEY`; asfquart
+keys the host from `X-Forwarded-For` or the peer IP and returns the routes
+matching it.
 See [`hosting/README.md`](hosting/README.md),
 [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md), and
 [`docs/fleet-state.md`](docs/fleet-state.md).
 
 Example inventory today (`model_list.yaml.example`): `gemma4-26b`, `qwen3-8b`.
-LiteLLM `api_base` is still static in `model_list.yaml` (health-gated mix is
-future). Cache/logs live under `$DATA_DIRECTORY` on the box (typically
-`/workspace`), not in the config JSON.
+`model_list.yaml` is the **catalog** — what each model is, its licence and
+provenance, and the vLLM recipe. Routes are *instances* of a catalog entry and
+live in LiteLLM's database (`STORE_MODEL_IN_DB=True`), created when a server
+goes healthy and removed when it goes down. Cache/logs live under `$DATA_DIRECTORY` on the
+box (typically `/workspace`), not in the config JSON.
 
 ---
 
@@ -175,9 +178,8 @@ templates/ static/       EZT + Bootstrap (`fleet.ezt` site-admin)
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
 bin/gen-litellm-master-key.sh   print sk-… for admin key
 config.yaml.example      → config.yaml (gitignored; secrets, no fleet.hosts)
-fleet.yaml               runtime-owned fleet membership (gitignored)
 litellm.yaml.example     → litellm.yaml (include model_list.yaml)
-model_list.yaml.example  → model_list.yaml (inventory SoT; keys from eyaml)
+model_list.yaml.example  → model_list.yaml (model catalog; no secrets)
 certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, litellm_client, fleet
 hosting/vast/            provision.sh + install_set.py
