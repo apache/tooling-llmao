@@ -1,25 +1,51 @@
-# Model inventory — single source of truth for LiteLLM routes + llmao UX.
+# Model catalog — what ASF offers, and the recipe for serving it.
 #
 #   cp model_list.yaml.example model_list.yaml
 #
-# litellm.yaml includes this file. Puppet/eyaml substitutes API keys only;
-# api_base is not secret (cleartext here; do not show raw bases in the UX).
-# Production: do not use STORE_MODEL_IN_DB for inventory — this YAML is SoT.
-# Ops: restart LiteLLM after VCS/config changes (p6 systemd notify later).
-
+# THIS IS NOT THE ROUTING TABLE. Routes live in LiteLLM's database
+# (STORE_MODEL_IN_DB=True) and are created by llmao when a vLLM server goes
+# healthy, one per running instance. This file defines the MODELS; routes are
+# instances of them. litellm.yaml does NOT include this file -- doing so would
+# create routes with no api_base, which sends every call to api.openai.com.
+#
+# Two consumers:
+#   llmao/models.py     public_models() strips litellm_params and surfaces
+#                       model_info as the catalog UX
+#   llmao route build   copies litellm_params, adds the per-instance api_base
+#                       and api_key, and POSTs /model/new
+#
+# So this carries what is true of the MODEL, never what is true of one machine.
+# No api_base, no api_key -- both are per-instance and generated when a host is
+# added. Nothing here is secret; Puppet substitutes nothing.
 model_list:
   - model_name: gemma4-26b
+    # Protocol and served name only. api_base and api_key are added per
+    # instance at registration.
     litellm_params:
       model: openai/gemma4-26b
-      api_base: http://127.0.0.1:8001
-      api_key: CHANGE_ME_SELFHOST_API_KEY
     model_info:
       vllm:
         model: google/gemma-4-26B-A4B-it
-        gpu_memory_utilization: 0.55
-        args: []
+        source:
+          kind: hf                # hf | url | registry | local
+        # Requirements, so a box can reject before pulling ~50GB. Host
+        # capacity is DISCOVERED on the box (nvidia-smi), never declared
+        # here -- a hand-typed VRAM figure is wrong the first time a
+        # provider supplies a different card than was ordered.
+        vram_gb: 49
+        disk_gb: 55
+        # Explicit, not inherited. A --max-model-len above the measured KV
+        # cache produces hangs rather than errors, so this is a decision.
+        max_model_len: 131072
+        args:
+          - --dtype
+          - bfloat16
+          - --reasoning-parser
+          - gemma4
       display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
       provider: self-host
+      # The CONTRACT with callers. Every instance serving this model_name must
+      # honour it; where a pool is uneven, advertise the minimum across it.
       context_window: 131072
       license: Apache-2.0
       openness: open-weight
@@ -29,25 +55,32 @@ model_list:
       self_hosted: true
       modality: text+vision
       supports_thinking: true
+      # Measured through the proxy, not assumed: with no kwarg sent, Gemma
+      # emits 0 chars of reasoning and Qwen emits ~890. Callers must send
+      # enable_thinking:true to get reasoning from this model.
       thinks_by_default: false
       notes: >-
         MoE, ~4B active. General/multimodal/agentic default. Served off-host
         at BF16 on an 80GB card.
-
   - model_name: qwen3-8b
     litellm_params:
       model: openai/qwen3-8b
-      api_base: http://127.0.0.1:8003
-      api_key: CHANGE_ME_SELFHOST_API_KEY
     model_info:
       vllm:
         model: Qwen/Qwen3-8B-FP8
-        gpu_memory_utilization: 0.40
+        source:
+          kind: hf
+        vram_gb: 8
+        disk_gb: 18
+        max_model_len: 40960
         args:
           - --reasoning-parser
           - qwen3
       display_name: "Qwen3 8B (self-hosted, fast)"
       provider: self-host
+      # 40,960 is this model's max_position_embeddings -- an architectural
+      # ceiling, not a tuning choice. vLLM refuses higher at startup, and
+      # VLLM_ALLOW_LONG_MAX_MODEL_LEN produces NaN on this RoPE model.
       context_window: 40960
       license: Apache-2.0
       openness: open-weight
@@ -57,6 +90,9 @@ model_list:
       self_hosted: true
       modality: text
       supports_thinking: true
+      # Opposite of Gemma: Qwen reasons UNLESS told not to. A fast tier must
+      # actively send enable_thinking:false, and a low max_tokens returns
+      # content:null with the whole budget spent in reasoning_content.
       thinks_by_default: true
       notes: >-
         Fast lightweight tier for routine/cheap calls. Reasoning model
