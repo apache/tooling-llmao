@@ -533,7 +533,17 @@ class LiteLLMBackend:
 
 
 def _norm_base(url: Any) -> str:
-    return str(url or "").rstrip("/")
+    """Strip trailing slashes and a trailing /v1.
+
+    LiteLLM appends /v1/chat/completions to api_base, so a base ending in
+    /v1 resolves to /v1/v1/... That 404s at the origin and surfaces as an
+    OpenAI authentication error naming platform.openai.com, which sends the
+    reader after their own key rather than the route.
+    """
+    s = str(url or "").rstrip("/")
+    if s.endswith("/v1"):
+        s = s[:-3].rstrip("/")
+    return s
 
 
 def _api_bases_from_model_info(body: Any) -> set[str]:

@@ -105,8 +105,8 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
         vllm = model.model_info.vllm
         if "model" not in vllm or not vllm.model:
             raise ValueError(f"{name}: model_info.vllm.model is required")
-        if "litellm_params" not in model or not model.litellm_params.api_key:
-            raise ValueError(f"{name}: litellm_params.api_key is required")
+        if "litellm_params" not in model:
+            raise ValueError(f"{name}: litellm_params is required")
 
     catalog = set(names)
     for host, rows in hosts.items():
@@ -204,7 +204,10 @@ class Server:
             host=host,
             port=port,
             hf_model=str(vllm.model),
-            api_key=str(model.litellm_params.api_key),
+            # Per-instance credential, not a catalog property -- generated when
+            # a host is added, same reasoning as api_base. Empty until the
+            # health-gated registration work lands.
+            api_key=str(model.litellm_params.get("api_key") or ""),
             args=[str(a) for a in args],
             gpu_memory_utilization=float(util) if util is not None else None,
             max_model_len=int(maxlen) if maxlen is not None else None,

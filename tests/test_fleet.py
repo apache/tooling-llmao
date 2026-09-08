@@ -13,6 +13,7 @@ from llmao.fleet import (
     validate_fleet,
 )
 from llmao.models import load_model_list
+from llmao.litellm_client import _norm_base
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
@@ -112,3 +113,37 @@ def test_client_ip_xff_leftmost():
 def test_client_ip_no_xff():
     assert client_ip(remote_addr="203.0.113.10", forwarded_for=None) == "203.0.113.10"
     assert client_ip(remote_addr="::ffff:203.0.113.10", forwarded_for="") == "203.0.113.10"
+
+
+def test_norm_base_strips_trailing_v1():
+    """LiteLLM appends /v1/chat/completions to api_base.
+
+    A base that already ends in /v1 resolves to /v1/v1/..., which 404s at the
+    origin. LiteLLM cannot parse that and reports an OpenAI authentication
+    error naming platform.openai.com -- so the symptom points at the caller's
+    key rather than at the route. This happened in production against the
+    Fastly-fronted Gemma endpoint.
+    """
+    assert _norm_base("https://llm.tooling.apache.org/v1") == "https://llm.tooling.apache.org"
+    assert _norm_base("https://llm.tooling.apache.org/v1/") == "https://llm.tooling.apache.org"
+    assert _norm_base("http://127.0.0.1:8003/v1") == "http://127.0.0.1:8003"
+
+
+def test_norm_base_leaves_other_paths_alone():
+    """Only a trailing /v1 is stripped -- not a path that merely contains it."""
+    assert _norm_base("http://127.0.0.1:8003") == "http://127.0.0.1:8003"
+    assert _norm_base("http://127.0.0.1:8003/") == "http://127.0.0.1:8003"
+    assert _norm_base("https://example.com/v1/proxy") == "https://example.com/v1/proxy"
+    assert _norm_base("") == ""
+    assert _norm_base(None) == ""
+
+
+def test_norm_base_makes_skew_comparison_match():
+    """The comparison this exists for.
+
+    check_config_skew compares Server.api_base against what LiteLLM reports.
+    Server.api_base is host:port with no suffix; a catalog entry may carry
+    /v1. Without normalisation on both sides they never match, and the skew
+    check reports a missing route that is actually present.
+    """
+    assert _norm_base("http://100.105.28.100:8003/v1") == _norm_base("http://100.105.28.100:8003")
