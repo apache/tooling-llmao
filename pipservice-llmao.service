@@ -20,8 +20,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=llmao
-Group=llmao
 WorkingDirectory=/opt/llmao
 
 # Hypercorn on loopback. The Apache vhost fronts this on 443 with TLS and
