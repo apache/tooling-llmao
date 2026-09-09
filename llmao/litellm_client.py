@@ -496,7 +496,7 @@ class LiteLLMBackend:
         resp = await self._request("GET", "model/info")
         self._raise_http(resp)
         bases = _api_bases_from_model_info(resp.json())
-        fleet_bases = {s.api_base for s in self.fleet.servers}
+        fleet_bases = {s.api_base for s in self.fleet.servers if s.api_base}
         for srv in self.fleet.servers:
             note = "missing from LiteLLM"
             if srv.api_base in bases:
@@ -519,7 +519,7 @@ class LiteLLMBackend:
             litellm_down = srv.api_base in unhealthy
             note = "LiteLLM health disagrees"
             disagrees = (
-                (srv.state == Server.HEALTHY and litellm_down)
+                (srv.state == Server.SERVING and litellm_down)
                 or (srv.state == Server.DOWN and litellm_up)
             )
             if disagrees:

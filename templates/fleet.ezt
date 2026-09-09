@@ -18,6 +18,7 @@
           <th>Host</th>
           <th>Server</th>
           <th>Listen</th>
+          <th>Public</th>
           <th>State</th>
           <th>Last ok</th>
           <th>Config request</th>
@@ -29,9 +30,10 @@
         <tr>
           <td class="font-monospace small">[servers.host]</td>
           <td>[servers.name]</td>
-          <td class="font-monospace small">[servers.host_port]</td>
+          <td class="font-monospace small">[servers.listen]</td>
+          <td class="font-monospace small">[servers.public]</td>
           <td>
-            [if-any servers.healthy]
+            [if-any servers.serving]
             <span class="badge text-bg-success">[servers.state]</span>
             [end]
             [if-any servers.starting]
@@ -40,11 +42,9 @@
             [if-any servers.down]
             <span class="badge text-bg-danger">[servers.state]</span>
             [end]
-            [if-any servers.healthy][else]
-            [if-any servers.starting][else]
-            [if-any servers.down][else]
+            [if-any servers.pending]
             <span class="badge text-bg-light text-dark">[servers.state]</span>
-            [end][end][end]
+            [end]
           </td>
           <td class="small">[servers.last_ok]</td>
           <td class="small">[servers.config_ago]</td>

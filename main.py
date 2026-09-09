@@ -65,7 +65,7 @@ def create_app():
 
     backend = LiteLLMBackend(app.cfg, fleet)
     app.fleet = fleet
-    app.add_runner(fleet.run_health, name="fleet-health")
+    app.add_runner(fleet.run_lifecycle, name="fleet-lifecycle")
     app.add_runner(backend.run_skew, name="litellm-skew")
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)

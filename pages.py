@@ -226,14 +226,18 @@ async def fleet_page(result):
         rows.append(edict({
             "host": srv.host,
             "name": srv.name,
-            "host_port": f"{srv.host}:{srv.port}",
+            "listen": f"{srv.host}:{srv.listen_port}",
+            "public": (
+                f"{srv.host}:{srv.public_port}" if srv.public_port is not None else "—"
+            ),
             "state": srv.state,
             "last_ok": _ago(srv.last_ok, now),
             "config_ago": _ago(fetched, now),
             "skew": "; ".join(srv.skew) if srv.skew else "",
-            "healthy": ezt.boolean(srv.state == Server.HEALTHY),
+            "serving": ezt.boolean(srv.state == Server.SERVING),
             "starting": ezt.boolean(srv.state == Server.STARTING),
             "down": ezt.boolean(srv.state == Server.DOWN),
+            "pending": ezt.boolean(srv.state == Server.PENDING),
         }))
     result.servers = rows
     return result

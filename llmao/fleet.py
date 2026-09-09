@@ -156,9 +156,9 @@ def config_for_host(
 class Server:
     """One vLLM process from fleet.hosts (live health + box JSON)."""
 
-    UNKNOWN = "unknown"
+    PENDING = "pending"
     STARTING = "starting"
-    HEALTHY = "healthy"
+    SERVING = "serving"
     DOWN = "down"
 
     def __init__(
@@ -167,23 +167,25 @@ class Server:
         model_name: str,
         name: str,
         host: str,
-        port: int,
+        listen_port: int,
         hf_model: str,
         api_key: str,
         args: list[str],
         gpu_memory_utilization: float | None = None,
         max_model_len: int | None = None,
+        public_port: int | None = None,
     ):
         self.model_name = model_name
         self.name = name
         self.host = host
-        self.port = int(port)
+        self.listen_port = int(listen_port)
+        self.public_port = int(public_port) if public_port is not None else None
         self.hf_model = hf_model
         self.api_key = api_key
         self.args = args
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
-        self.state = self.UNKNOWN
+        self.state = self.PENDING
         self.seen_at = time.time()
         self.last_ok = None
         self.last_error = None
@@ -202,7 +204,7 @@ class Server:
             model_name=model_name,
             name=name,
             host=host,
-            port=port,
+            listen_port=port,
             hf_model=str(vllm.model),
             # Per-instance credential, not a catalog property -- generated when
             # a host is added, same reasoning as api_base. Empty until the
@@ -214,12 +216,16 @@ class Server:
         )
 
     @property
-    def health_url(self) -> str:
-        return f"http://{self.host}:{self.port}/health"
+    def health_url(self) -> str | None:
+        if self.public_port is None:
+            return None
+        return f"http://{self.host}:{self.public_port}/health"
 
     @property
-    def api_base(self) -> str:
-        return f"http://{self.host}:{self.port}"
+    def api_base(self) -> str | None:
+        if self.public_port is None:
+            return None
+        return f"http://{self.host}:{self.public_port}"
 
     def box_json(self) -> dict[str, Any]:
         """Wire payload for GET /vllm/config (servers[].model is the HF weights id)."""
@@ -227,7 +233,7 @@ class Server:
             "name": self.name,
             "model": self.hf_model,
             "host": self.host,
-            "port": self.port,
+            "port": self.listen_port,
             "api_key": self.api_key,
             "args": list(self.args),
         }
@@ -247,16 +253,16 @@ class Server:
         err: str | None = None,
     ) -> None:
         if ok:
-            if self.state != self.HEALTHY:
-                _LOGGER.info(f"fleet server {self.name}@{self.api_base} healthy")
-            self.state = self.HEALTHY
+            if self.state != self.SERVING:
+                _LOGGER.info(f"fleet server {self.name}@{self.api_base} serving")
+            self.state = self.SERVING
             self.last_ok = now
             self.last_error = None
             self.fails = 0
             return
         self.fails += 1
         self.last_error = err or "unhealthy"
-        if self.state == self.HEALTHY:
+        if self.state == self.SERVING:
             if self.fails >= fail_threshold:
                 self.state = self.DOWN
                 _LOGGER.warning(
@@ -274,7 +280,7 @@ class Server:
 
 
 class Fleet:
-    """Live fleet: servers from config, health from probes, config-fetch stamps."""
+    """Live fleet: servers from config, lifecycle probes, config-fetch stamps."""
 
     BADGE_UP = "up"
     BADGE_STARTING = "starting"
@@ -290,12 +296,16 @@ class Fleet:
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
         models = models if models is not None else load_model_list(cfg=cfg)
         by_name = {model.model_name: model for model in models}
+        local = "vast" not in cfg.fleet
         servers = []
         for host, rows in cfg.fleet.hosts.items():
             host = str(host).strip()
             for i, raw in enumerate(rows):
                 model_name, port, name = parse_host_row(raw, host, i)
-                servers.append(Server.from_row(host, model_name, port, name, by_name[model_name]))
+                srv = Server.from_row(host, model_name, port, name, by_name[model_name])
+                if local:
+                    srv.public_port = srv.listen_port
+                servers.append(srv)
         return cls(cfg, servers)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
@@ -307,13 +317,13 @@ class Fleet:
         if not states:
             return ""
         uniq = set(states)
-        if uniq == {Server.HEALTHY}:
+        if uniq == {Server.SERVING}:
             return self.BADGE_UP
-        if uniq <= {Server.STARTING, Server.UNKNOWN}:
+        if uniq <= {Server.STARTING, Server.PENDING}:
             return self.BADGE_STARTING
         if uniq == {Server.DOWN}:
             return self.BADGE_DOWN
-        if Server.HEALTHY in uniq and uniq <= {Server.HEALTHY, Server.STARTING, Server.UNKNOWN}:
+        if Server.SERVING in uniq and uniq <= {Server.SERVING, Server.STARTING, Server.PENDING}:
             return self.BADGE_UP
         return self.BADGE_MIXED
 
@@ -332,7 +342,10 @@ class Fleet:
             client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
         try:
             for srv in self.servers:
-                ok, err = await _get_health(client, srv.health_url)
+                url = srv.health_url
+                if url is None:
+                    continue
+                ok, err = await _get_health(client, url)
                 srv.record_probe(
                     ok, now=stamp, grace_s=grace, fail_threshold=threshold, err=err
                 )
@@ -340,13 +353,13 @@ class Fleet:
             if own:
                 await client.aclose()
 
-    async def run_health(self) -> None:
+    async def run_lifecycle(self) -> None:
         interval = float(self.cfg.fleet.health_interval_s)
         while True:
             try:
                 await self.probe_all()
             except Exception:
-                _LOGGER.exception("fleet health probe failed")
+                _LOGGER.exception("fleet lifecycle probe failed")
             await asyncio.sleep(interval)
 
 

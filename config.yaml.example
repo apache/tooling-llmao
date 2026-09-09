@@ -57,6 +57,8 @@ fleet:
   skew_interval_s: 180
   # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
   litellm_health_interval_s: 14400
+  # Host row port is the container listen port (vLLM --port / box JSON).
+  # Without fleet.vast, the public port equals the listen port (local).
   hosts:
     127.0.0.1:
       - [gemma4-26b, 8001]
