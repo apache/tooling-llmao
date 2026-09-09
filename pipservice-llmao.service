@@ -25,7 +25,7 @@ WorkingDirectory=/opt/llmao
 # Hypercorn on loopback. The Apache vhost fronts this on 443 with TLS and
 # proxies /v1/* to the LiteLLM port, so the portal never terminates TLS
 # itself and its certfile/keyfile config is unused in production.
-ExecStart=/opt/llmao/.venv/bin/python -m hypercorn main:llmao_app --bind 127.0.0.1:8080
+ExecStart=/usr/local/bin/uv run --project /opt/llmao python -m hypercorn main:llmao_app --bind 127.0.0.1:8080
 
 Restart=always
 RestartSec=10
