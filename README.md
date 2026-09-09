@@ -163,7 +163,7 @@ Example inventory today (`model_list.yaml.example`): `gemma4-26b`, `qwen3-8b`.
 `model_list.yaml` is the **catalog** — what each model is, its licence and
 provenance, and the vLLM recipe. Routes are *instances* of a catalog entry and
 live in LiteLLM's database (`STORE_MODEL_IN_DB=True`), created when a server
-goes healthy and removed when it goes down. Cache/logs live under `$DATA_DIRECTORY` on the
+is serving and removed when it goes down (mix not implemented yet). Cache/logs live under `$DATA_DIRECTORY` on the
 box (typically `/workspace`), not in the config JSON.
 
 ---

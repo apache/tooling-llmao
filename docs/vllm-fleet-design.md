@@ -1,8 +1,10 @@
 # Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
 
-**Status:** Operating — boxes fetch `GET /vllm/config` by client IP. Remaining:
-LiteLLM static `api_base`, long vLLM boot, health-gated mix.
-**Date:** 2026-09-02
+**Status:** Operating — boxes fetch `GET /vllm/config` by client IP. Listen vs
+public ports are split in `Server`; Vast HostPort discovery and LiteLLM mix
+are not implemented yet. Remaining: Vast public-port map, health-gated
+`/model/new`, long vLLM boot.
+**Date:** 2026-09-08
 **Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
 
 ---
@@ -84,8 +86,11 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
 ### 3.2 Hosts
 
 A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
-`[model, port, name]` rows. Optional **name** lets two processes share a
-catalog model (e.g. two qwen3 on one box).
+`[model, port, name]` rows. That **port is the container listen port**
+(`vllm serve --port` / box JSON). Vast's proxy publishes a different public
+HostPort; llmao will record that as `Server.public_port` (not yet fetched).
+Without `fleet.vast`, public equals listen. Optional **name** lets two
+processes share a catalog model (e.g. two qwen3 on one box).
 
 asfquart owns placement. The catalog is how to serve, not where. Changing
 placement is a control-plane change only; GPU templates stay identical (shared
@@ -231,8 +236,8 @@ The template is identical for every box. Placement is keyed by public IP in
 - Same endpoint + fleet key used by RunPod (or any other provider) instances.
 - Additional set metadata (preferred GPU type, minimum VRAM, etc.) for scheduling.
 - Automatic re-fetch of configuration on SIGHUP or periodic interval.
-- Health-gated LiteLLM `api_base` add/remove (YAML remains SoT; no
-  `STORE_MODEL_IN_DB`). Spike a reload path before coding.
+- Health-gated LiteLLM `api_base` add/remove (`STORE_MODEL_IN_DB=True`;
+  catalog YAML is the recipe, not the live route table).
 - Do **not** use LiteLLM `GET /health` as the vLLM boot probe (it runs real
   completions). asfquart already probes vLLM `/health` and, rarely, LiteLLM
   `/health` only to detect **skew**.
@@ -261,11 +266,13 @@ route exists only while its vLLM is serving; no second datastore;
 ## 11. Leftover implementation
 
 1. Smoke remaining box issues.
-2. Push `/model/new` on the healthy transition and `/model/delete` on down.
+2. Discover Vast public HostPort (`Server.public_port`); probe that, never
+   send it to the box.
+3. Push `/model/new` on the serving transition and `/model/delete` on down.
    Note `litellm_params` reads back **encrypted**, so `api_base` cannot be
    used to identify a route's host -- duplicate the host into `model_info`,
    or decrypt via LiteLLM's own accessor.
-3. Config revision on `/vllm/config`, reported back by the box, so a stale
+4. Config revision on `/vllm/config`, reported back by the box, so a stale
    vLLM cannot pretend to be current (see 3.3).
 
 ---

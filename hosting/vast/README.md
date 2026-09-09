@@ -9,7 +9,10 @@ There is no Python process manager.
 ## Instance
 
 - Launch mode: SSH (or Jupyter + SSH).
-- Map ports used by the set (example inventory: 8001, 8003).
+- Map **container** ports used by the set (example inventory: 8001, 8003).
+  Those are `fleet.hosts` listen ports and what `GET /vllm/config` returns.
+  Vast remaps them to public HostPorts; llmao does not send the public
+  port to the box. Discovery of HostPort is not implemented yet.
 - Disk: large enough for HF cache under `$DATA_DIRECTORY/hf-cache`
   (`DATA_DIRECTORY` is typically `/workspace`).
 - Environment:

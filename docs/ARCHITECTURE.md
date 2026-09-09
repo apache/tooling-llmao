@@ -58,10 +58,12 @@ metadata in LiteLLM.
 **GPU fleet (vLLM on Vast, later RunPod):** `docs/vllm-fleet-design.md`.
 `APP.fleet` (`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
 `fleet.key`) maps client IP (`X-Forwarded-For` or peer) to `fleet.hosts`.
-JSON `{host, servers[]}` — no `hf_home`/`log_dir`. Vast
-`hosting/vast/install_set.py` writes Supervisor units. Health/skew:
-`app.add_runner`. JSON handlers use `@api` in `api.py`. Do not wrap Quart
-`asgi_app` with Werkzeug ProxyFix.
+JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
+(not Vast's public HostPort). No `hf_home`/`log_dir`. Vast
+`hosting/vast/install_set.py` writes Supervisor units. Lifecycle/skew:
+`app.add_runner` (`fleet-lifecycle`, `litellm-skew`). Server states:
+`pending` / `starting` / `serving` / `down`. JSON handlers use `@api` in
+`api.py`. Do not wrap Quart `asgi_app` with Werkzeug ProxyFix.
 
 Build status and backlog: **`docs/STATUS.md`**.
 

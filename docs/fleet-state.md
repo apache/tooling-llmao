@@ -281,7 +281,8 @@ One artifact now, rather than a database dump plus a state file.
 
 1. `STORE_MODEL_IN_DB=True` in the service environment
 2. Derive `GET /vllm/config` from routes matching the caller's IP
-3. Push `/model/new` on the healthy transition, `/model/delete` on down
+3. Push `/model/new` on the serving transition, `/model/delete` on down
+   (`api_base` uses the **public** port; box JSON stays listen)
 4. Somewhere for pending assignments (§2.2)
 5. Config revision on `/vllm/config`, reported back by `install_sets.py`
 6. UI: add, retire, edit
