@@ -267,7 +267,7 @@ route exists only while its vLLM is serving; no second datastore;
 
 1. Smoke remaining box issues.
 2. Discover Vast public HostPort (`Server.public_port`); probe that, never
-   send it to the box.
+   send it to the box. **Done** when `fleet.vast.api_key` is set (`vast_client`).
 3. Push `/model/new` on the serving transition and `/model/delete` on down.
    Note `litellm_params` reads back **encrypted**, so `api_base` cannot be
    used to identify a route's host -- duplicate the host into `model_info`,

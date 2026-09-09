@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from llmao.models import load_model_list
+from llmao.vast_client import fetch_port_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +91,13 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             raise ValueError(f"config.yaml: fleet.{key} must be a number") from e
         if val <= 0:
             raise ValueError(f"config.yaml: fleet.{key} must be > 0")
+    if "vast" in cfg.fleet:
+        try:
+            key = str(cfg.fleet.vast.api_key or "").strip()
+        except (AttributeError, KeyError) as e:
+            raise ValueError("config.yaml: fleet.vast.api_key is required") from e
+        if not key:
+            raise ValueError("config.yaml: fleet.vast.api_key is required")
 
     models = models if models is not None else load_model_list(cfg=cfg)
     names: list[str] = []
@@ -311,6 +319,26 @@ class Fleet:
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
         self.config_fetch_at[host] = now if now is not None else time.time()
 
+    def apply_port_map(self, mapping: Any) -> None:
+        """Set public_port from Vast IP → listen → HostPort. Leave unset if missing."""
+        for srv in self.servers:
+            by_listen = mapping.get(srv.host) if mapping is not None else None
+            if not by_listen:
+                _LOGGER.info(f"vast: no instance for fleet host {srv.host}")
+                continue
+            public = by_listen.get(str(srv.listen_port))
+            if public is None:
+                _LOGGER.warning(
+                    f"vast: no HostPort for {srv.name}@{srv.host} listen {srv.listen_port}"
+                )
+                continue
+            public = int(public)
+            if srv.public_port != public:
+                _LOGGER.info(
+                    f"vast: {srv.name}@{srv.host} listen {srv.listen_port} public {public}"
+                )
+                srv.public_port = public
+
     def model_health(self, model_name: str) -> str:
         """Aggregate: up / starting / down / mixed, or empty if no servers."""
         states = [s.state for s in self.servers if s.model_name == model_name]
@@ -353,11 +381,23 @@ class Fleet:
             if own:
                 await client.aclose()
 
+    async def refresh_public_ports(self, client: httpx.AsyncClient) -> None:
+        if "vast" not in self.cfg.fleet:
+            return
+        mapping = await fetch_port_map(self.cfg.fleet.vast.api_key, client=client)
+        self.apply_port_map(mapping)
+
     async def run_lifecycle(self) -> None:
         interval = float(self.cfg.fleet.health_interval_s)
+        timeout = float(self.cfg.fleet.health_timeout_s)
         while True:
             try:
-                await self.probe_all()
+                async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+                    try:
+                        await self.refresh_public_ports(client)
+                    except Exception:
+                        _LOGGER.exception("vast port map failed")
+                    await self.probe_all(client=client)
             except Exception:
                 _LOGGER.exception("fleet lifecycle probe failed")
             await asyncio.sleep(interval)

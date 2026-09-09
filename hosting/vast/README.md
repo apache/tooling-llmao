@@ -12,7 +12,8 @@ There is no Python process manager.
 - Map **container** ports used by the set (example inventory: 8001, 8003).
   Those are `fleet.hosts` listen ports and what `GET /vllm/config` returns.
   Vast remaps them to public HostPorts; llmao does not send the public
-  port to the box. Discovery of HostPort is not implemented yet.
+  port to the box. With `fleet.vast.api_key`, `fleet-lifecycle` fills
+  `public_port` from one show-instances GET each tick.
 - Disk: large enough for HF cache under `$DATA_DIRECTORY/hf-cache`
   (`DATA_DIRECTORY` is typically `/workspace`).
 - Environment:

@@ -59,6 +59,10 @@ fleet:
   litellm_health_interval_s: 14400
   # Host row port is the container listen port (vLLM --port / box JSON).
   # Without fleet.vast, the public port equals the listen port (local).
+  # Production: set fleet.vast.api_key (gitignored config.yaml). Lifecycle
+  # fetches Vast HostPorts; never send those to the box.
+  # vast:
+  #   api_key: CHANGE_ME_VAST_API_KEY
   hosts:
     127.0.0.1:
       - [gemma4-26b, 8001]
