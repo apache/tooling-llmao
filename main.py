@@ -1,10 +1,10 @@
 #!/usr/bin/env -S uv run --script
 """Standalone / ASGI entrypoint for llmao (Apache STeVe-style).
 
-Loads llmao.yaml next to this file, serves with optional TLS from certs/,
+Loads config.yaml next to this file, serves with optional TLS from certs/,
 and uses asfquart OAuth so redirect URIs work with localhost.apache.org.
 
-  cp llmao.yaml.example llmao.yaml   # then edit secrets
+  cp config.yaml.example config.yaml   # then edit secrets
   # generate PEMs under certs/ — see certs/README.md
   uv run python main.py
 
@@ -22,12 +22,6 @@ DATE_FORMAT = "%m/%d %H:%M"
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 CERTS_DIR = THIS_DIR / "certs"
-
-# asfquart defaults this to config.yaml; we override to match the p6
-# pipservice convention, which writes ${installpath}/${name}.yaml -- so
-# /opt/llmao/llmao.yaml in production. Keeping one name for both local and
-# deployed runs avoids a divergence that only shows up on the host.
-CONFIG_FNAME = "llmao.yaml"
 
 # Populated by run_asgi() for Hypercorn: ``main:llmao_app``
 llmao_app = None
@@ -50,7 +44,6 @@ def create_app():
     app = asfquart.construct(
         "llmao",
         app_dir=str(THIS_DIR),
-        cfg_file=CONFIG_FNAME,
         static_folder=None,  # /static served from pages.py
         oauth=True,
         force_login=True,
@@ -60,10 +53,10 @@ def create_app():
     from llmao.litellm_client import LiteLLMBackend
     from llmao.seam import Seam
 
-    # Config is app.cfg (EasyDict from llmao.yaml) — dotted access throughout.
+    # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
     from llmao.models import load_model_list
 
-    # Fail-fast: model_list.yaml is required (same presumption as llmao.yaml).
+    # Fail-fast: model_list.yaml is required (same presumption as config.yaml).
     from llmao.fleet import Fleet, validate_fleet
 
     catalog = load_model_list(cfg=app.cfg)
@@ -130,11 +123,10 @@ def run_standalone() -> None:
 
     _LOGGER.info(" ** Run-mode: Standalone")
 
-    if not (THIS_DIR / CONFIG_FNAME).is_file():
+    if not (THIS_DIR / "config.yaml").is_file():
         _LOGGER.error(
-            "Missing %s next to main.py. "
-            "Copy llmao.yaml.example to %s and edit secrets.",
-            CONFIG_FNAME, CONFIG_FNAME,
+            "Missing config.yaml next to main.py. "
+            "Copy config.yaml.example to config.yaml and edit secrets."
         )
         sys.exit(1)
 
@@ -169,7 +161,7 @@ def run_standalone() -> None:
     else:
         _LOGGER.info("TLS disabled (no server.certfile/keyfile); plain HTTP")
 
-    extra_files.add(THIS_DIR / CONFIG_FNAME)
+    extra_files.add(THIS_DIR / "config.yaml")
     app.runx(port=port, extra_files=extra_files, **kwargs)
 
 
