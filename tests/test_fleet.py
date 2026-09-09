@@ -147,3 +147,12 @@ def test_norm_base_makes_skew_comparison_match():
     check reports a missing route that is actually present.
     """
     assert _norm_base("http://100.105.28.100:8003/v1") == _norm_base("http://100.105.28.100:8003")
+
+
+def test_from_row_falls_back_to_fleet_api_key():
+    """Empty means vLLM starts unauthenticated on a public port."""
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003]]})
+    cfg.fleet.selfhost_api_key = "sk-fleet"
+    models = load_model_list(EXAMPLE)          # catalog carries no api_key
+    payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
+    assert payload["servers"][0]["api_key"] == "sk-fleet"

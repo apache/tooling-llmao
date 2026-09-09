@@ -153,7 +153,9 @@ def config_for_host(
     for i, raw in enumerate(cfg.fleet.hosts[host]):
         model_name, port, name = parse_host_row(raw, host, i)
         servers.append(
-            Server.from_row(host, model_name, port, name, by_name[model_name]).box_json()
+            Server.from_row(
+                host, model_name, port, name, by_name[model_name], cfg
+            ).box_json()
         )
     return {
         "host": host,
@@ -201,7 +203,10 @@ class Server:
         self.skew: list[str] = []
 
     @classmethod
-    def from_row(cls, host: str, model_name: str, port: int, name: str, model: Any) -> Server:
+    def from_row(
+        cls, host: str, model_name: str, port: int, name: str, model: Any,
+        cfg: Any = None,
+    ) -> Server:
         vllm = model.model_info.vllm
         args = vllm.get("args") or []
         if isinstance(args, str):
@@ -214,10 +219,22 @@ class Server:
             host=host,
             listen_port=port,
             hf_model=str(vllm.model),
-            # Per-instance credential, not a catalog property -- generated when
-            # a host is added, same reasoning as api_base. Empty until the
-            # health-gated registration work lands.
-            api_key=str(model.litellm_params.get("api_key") or ""),
+            # Bearer token the box passes to `vllm serve --api-key`, and the
+            # same value LiteLLM presents when calling that server.
+            #
+            # A catalog entry may still carry one (older model_list.yaml did),
+            # but it is not a property of the model -- it is a credential for
+            # one machine. The fleet-wide value in config is the current
+            # source; per-instance keys generated at host-add time are the
+            # eventual one.
+            #
+            # An empty result means vLLM starts UNAUTHENTICATED on a public
+            # port, so this must resolve to something.
+            api_key=str(
+                model.litellm_params.get("api_key")
+                or (cfg.fleet.get("selfhost_api_key") if cfg is not None else "")
+                or ""
+            ),
             args=[str(a) for a in args],
             gpu_memory_utilization=float(util) if util is not None else None,
             max_model_len=int(maxlen) if maxlen is not None else None,
@@ -310,7 +327,9 @@ class Fleet:
             host = str(host).strip()
             for i, raw in enumerate(rows):
                 model_name, port, name = parse_host_row(raw, host, i)
-                srv = Server.from_row(host, model_name, port, name, by_name[model_name])
+                srv = Server.from_row(
+                    host, model_name, port, name, by_name[model_name], cfg
+                )
                 if local:
                     srv.public_port = srv.listen_port
                 servers.append(srv)
