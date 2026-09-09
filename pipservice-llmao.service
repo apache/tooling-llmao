@@ -1,0 +1,49 @@
+# Systemd unit for the llmao portal, symlinked into place by the p6
+# `pipservice` define. It lives HERE, in the repo, not in Puppet:
+#
+#   systemd::unit_file { "pipservice-${name}.service":
+#     target => "${installpath}/pipservice-${name}.service",
+#
+# So the application owns how it starts. Puppet owns only the config and the
+# LiteLLM proxy alongside it.
+#
+# update_pipenv.sh greps this file to decide how to install dependencies. It
+# must NOT match, so that it concludes the project uses uv and bootstraps
+# nothing -- uv resolves from uv.lock when the service starts. Do not name
+# that other tool anywhere in this file, including in comments.
+
+[Unit]
+Description=llmao — ASF LLM gateway portal
+Documentation=https://github.com/apache/tooling-llmao
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llmao
+Group=llmao
+WorkingDirectory=/opt/llmao
+
+# Hypercorn on loopback. The Apache vhost fronts this on 443 with TLS and
+# proxies /v1/* to the LiteLLM port, so the portal never terminates TLS
+# itself and its certfile/keyfile config is unused in production.
+ExecStart=/opt/llmao/.venv/bin/python -m hypercorn main:llmao_app --bind 127.0.0.1:8080
+
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+# asfquart stores its session-signing key in apptoken.txt in the app
+# directory -- base.py reads the file if present, otherwise generates one and
+# writes it 0600. Without write access it falls back to an ephemeral key and
+# logs "Session permanence cannot be guaranteed", so every redeploy would sign
+# users out. Under pipservice autodeploy that is every commit.
+ReadWritePaths=/opt/llmao
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
