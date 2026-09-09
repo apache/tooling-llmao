@@ -8,7 +8,15 @@
     password manager or secrets system.
   </p>
 
+  [if-any has_for_model]
+  <p class="text-muted small">For model <code>[for_model]</code>. The key is
+    not limited to this model yet.</p>
+  [end]
+
   <form method="post" action="/do-create-key" class="vstack gap-3">
+    [if-any has_for_model]
+    <input type="hidden" name="model" value="[for_model]">
+    [end]
     <div>
       <label class="form-label" for="project">Project</label>
       <select class="form-select" name="project" id="project" required>

@@ -35,7 +35,7 @@ from dunamai import Version
 from llmao.auth import current_identity
 from llmao.fleet import Fleet, Server
 from llmao.litellm_client import BackendUnavailable, KeyInfo
-from llmao.models import ux_models
+from llmao.models import model_available_for, ux_models
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -188,12 +188,16 @@ async def models_page(result):
     rows = []
     for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
         row = edict(m)
+        avail = model_available_for(None, m)
+        row.available = ezt.boolean(avail)
+        row.unavailable = ezt.boolean(not avail)
         row.health = fleet.model_health(row.model_name)
         row.health_up = ezt.boolean(row.health == Fleet.BADGE_UP)
         row.health_starting = ezt.boolean(row.health == Fleet.BADGE_STARTING)
         row.health_down = ezt.boolean(row.health == Fleet.BADGE_DOWN)
         row.health_mixed = ezt.boolean(row.health == Fleet.BADGE_MIXED)
         rows.append(row)
+    rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
     result.models = rows
     return result
 
@@ -365,6 +369,9 @@ async def keys_other_list(result):
 @APP.use_template(TEMPLATES / "key_create.ezt")
 @page(title="Create personal key")
 async def keys_new_form(result):
+    model = (quart.request.args.get("model") or "").strip()
+    result.for_model = model
+    result.has_for_model = ezt.boolean(bool(model))
     return result
 
 

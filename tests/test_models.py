@@ -10,7 +10,13 @@ import yaml
 from easydict import EasyDict as edict
 from litellm.types.router import Deployment
 
-from llmao.models import load_model_list, public_models, models_path_from_cfg, ux_models
+from llmao.models import (
+    load_model_list,
+    model_available_for,
+    public_models,
+    models_path_from_cfg,
+    ux_models,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "model_list.yaml.example"
@@ -57,6 +63,7 @@ def test_ux_models_redacts_supply_path_for_non_admins():
         assert r["provider"] == ""
         assert r["weights_distribution"] == ""
         assert r["hosting_label"] in ("Self-hosted", "External", "—")
+        assert model_available_for(None, r) is True
         # Free-text flattened for data-* attributes (no raw newlines).
         assert "\n" not in r["notes"]
     for f in full:

@@ -4,10 +4,9 @@
 
   <h1 class="h3 mb-3">Models</h1>
   <p class="text-muted small">
-    Foundation model inventory offered through the llmao / LiteLLM gateway.
-    Use the model <strong>ID</strong> as the <code>model</code> parameter with
-    your PAT. Team or key allow-lists may further limit what a given credential
-    can call when configured.
+    Models you can call with a personal key. Use the <strong>ID</strong> as
+    the <code>model</code> parameter. Context, license, and hosting are in
+    Details.
   </p>
 
   [if-any models]
@@ -18,15 +17,13 @@
           <th>Name</th>
           <th>ID</th>
           <th>Status</th>
-          <th>Hosting</th>
-          <th>Context</th>
-          <th>License</th>
+          <th>Available</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         [for models]
-        <tr>
+        <tr[if-any models.unavailable] class="table-secondary text-muted"[end]>
           <td>
             [models.display_name]
             [if-any models.modality]
@@ -52,15 +49,18 @@
             [end]
           </td>
           <td>
-            [if-any models.self_hosted]
-            <span class="badge text-bg-success">[models.hosting_label]</span>
-            [else]
-            <span class="badge text-bg-warning text-dark">[models.hosting_label]</span>
-            [end]
+            <input class="form-check-input" type="checkbox" disabled
+                   [if-any models.available]checked[end]
+                   aria-label="Available">
           </td>
-          <td class="small font-monospace">[models.context_window]</td>
-          <td class="small">[models.license]</td>
-          <td class="text-end">
+          <td class="text-end text-nowrap">
+            [if-any models.available]
+            <a class="btn btn-outline-primary btn-sm me-1"
+               href="/keys/new?model=[models.model_name]">Request a key</a>
+            [else]
+            <span class="btn btn-outline-secondary btn-sm me-1 disabled"
+                  title="Not available to you">Request a key</span>
+            [end]
             <button type="button" class="btn btn-outline-secondary btn-sm"
                     data-bs-toggle="modal" data-bs-target="#modelDetailModal"
                     data-model-name="[models.model_name]"

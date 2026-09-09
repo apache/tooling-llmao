@@ -81,6 +81,15 @@ def _hosting_label(m: Dict[str, Any]) -> str:
     return "—"
 
 
+def model_available_for(identity: Any, model: Dict[str, Any]) -> bool:
+    """Whether this user may call the catalog model.
+
+    Always True until team allow-lists, envelope, and other gates exist
+    (STATUS P5). Distinct from fleet Status (serving vs down).
+    """
+    return True
+
+
 def ux_models(
     path: Optional[pathlib.Path] = None,
     *,

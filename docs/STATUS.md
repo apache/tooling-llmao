@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-09-08  
+**As of:** 2026-09-09  
 **Repo:** `apache/tooling-llmao`  
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`  
 **How to run/use this software:** repo [`README.md`](../README.md)  
@@ -20,6 +20,8 @@
 ## Done (today — thin)
 
 Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `model_list.yaml` inventory; PAT UX (**My Keys** / **Other Keys**); **Models** catalog (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
+
+**Models page:** catalog-first table (name, id, fleet Status, Available checkbox stub, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details. Available is always true until allow-lists / envelope (P5); sort puts unavailable last.
 
 **GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/models` Up/Starting/Down/Mixed; `/fleet` listen + public columns. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Remaining: health-gated LiteLLM `/model/new`, long vLLM boot.
 
@@ -88,7 +90,7 @@ Home = role-aware launchpad (not keys-only)
 ### P5 — Capacity + models allow-list
 
 - Capacity meters (TPM/RPM/parallel) separate from $
-- Models: filter/badge “available to you” when team allow-lists are real policy
+- Models: wire Available (and key `models` allow-list) when team / envelope policy exists; column already stubbed
 
 ### Cross-cutting UX rules (when building)
 
