@@ -45,6 +45,14 @@ models_path: model_list.yaml
 # Placement is keyed by the box public IP (request.remote_addr / X-Forwarded-For).
 fleet:
   key: CHANGE_ME_FLEET_KEY
+  # Bearer token every self-hosted vLLM is started with (--api-key) and that
+  # LiteLLM presents when calling it. One shared value for the fleet; a
+  # catalog entry may override per model, and per-instance keys generated at
+  # host-add time will eventually replace both.
+  #
+  # If this is unset AND the catalog carries no api_key, vLLM starts
+  # UNAUTHENTICATED on a public port.
+  selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
   # Seconds between vLLM GET /health probes (unauthenticated; private path only).
   health_interval_s: 45
   # Per-probe HTTP timeout for vLLM /health.
