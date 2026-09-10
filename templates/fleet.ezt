@@ -4,10 +4,13 @@
 
   <h1 class="h3 mb-3">Fleet</h1>
   <p class="text-muted small">
-    vLLM <code>/health</code> probes (no API key; private network).
+    vLLM servers and probe state.
+    [if-any is_site_admin]
+    Host and port are site-admin only.
     Proxy-level model checks:
     <a href="[litellm_ui]">LiteLLM Admin UI</a>
     (real completions; not used as the boot probe).
+    [end]
   </p>
 
   [if-any servers]
@@ -15,23 +18,33 @@
     <table class="table table-sm table-hover align-middle">
       <thead>
         <tr>
+          [if-any is_site_admin]
           <th>Host</th>
+          [end]
           <th>Server</th>
+          [if-any is_site_admin]
           <th>Listen</th>
           <th>Public</th>
+          [end]
           <th>State</th>
           <th>Last ok</th>
+          [if-any is_site_admin]
           <th>Config request</th>
           <th>Skew</th>
+          [end]
         </tr>
       </thead>
       <tbody>
         [for servers]
         <tr>
+          [if-any is_site_admin]
           <td class="font-monospace small">[servers.host]</td>
+          [end]
           <td>[servers.name]</td>
+          [if-any is_site_admin]
           <td class="font-monospace small">[servers.listen]</td>
           <td class="font-monospace small">[servers.public]</td>
+          [end]
           <td>
             [if-any servers.serving]
             <span class="badge text-bg-success">[servers.state]</span>
@@ -47,8 +60,10 @@
             [end]
           </td>
           <td class="small">[servers.last_ok]</td>
+          [if-any is_site_admin]
           <td class="small">[servers.config_ago]</td>
           <td class="small">[servers.skew]</td>
+          [end]
         </tr>
         [end]
       </tbody>

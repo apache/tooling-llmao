@@ -35,7 +35,7 @@ from dunamai import Version
 from llmao.auth import current_identity
 from llmao.fleet import Fleet, Server
 from llmao.litellm_client import BackendUnavailable, KeyInfo
-from llmao.models import model_available_for, ux_models
+from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -188,10 +188,13 @@ async def models_page(result):
     rows = []
     for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
         row = edict(m)
-        avail = model_available_for(None, m)
+        row.health = fleet.model_health(row.model_name)
+        self_hosted = m.get("hosting_label") == "Self-hosted"
+        avail = model_available_for(None, m) and model_in_service(
+            row.health, self_hosted=self_hosted
+        )
         row.available = ezt.boolean(avail)
         row.unavailable = ezt.boolean(not avail)
-        row.health = fleet.model_health(row.model_name)
         row.health_up = ezt.boolean(row.health == Fleet.BADGE_UP)
         row.health_starting = ezt.boolean(row.health == Fleet.BADGE_STARTING)
         row.health_down = ezt.boolean(row.health == Fleet.BADGE_DOWN)
@@ -218,26 +221,27 @@ def _ago(ts, now: float) -> str:
 @APP.use_template(TEMPLATES / "fleet.ezt")
 @page(title="Fleet")
 async def fleet_page(result):
-    if not result.is_site_admin:
-        raise AuthzError("site admin only")
     now = time.time()
     fleet = APP.fleet
+    admin = bool(result.is_site_admin)
     litellm = APP.cfg.litellm.base_url.rstrip("/")
-    result.litellm_ui = f"{litellm}/ui"
+    result.litellm_ui = f"{litellm}/ui" if admin else ""
     rows = []
     for srv in fleet.servers:
         fetched = fleet.config_fetch_at.get(srv.host)
         rows.append(edict({
-            "host": srv.host,
+            "host": srv.host if admin else "",
             "name": srv.name,
-            "listen": f"{srv.host}:{srv.listen_port}",
+            "listen": f"{srv.host}:{srv.listen_port}" if admin else "",
             "public": (
-                f"{srv.host}:{srv.public_port}" if srv.public_port is not None else "—"
+                f"{srv.host}:{srv.public_port}"
+                if admin and srv.public_port is not None
+                else ("—" if admin else "")
             ),
             "state": srv.state,
             "last_ok": _ago(srv.last_ok, now),
-            "config_ago": _ago(fetched, now),
-            "skew": "; ".join(srv.skew) if srv.skew else "",
+            "config_ago": _ago(fetched, now) if admin else "",
+            "skew": "; ".join(srv.skew) if admin and srv.skew else "",
             "serving": ezt.boolean(srv.state == Server.SERVING),
             "starting": ezt.boolean(srv.state == Server.STARTING),
             "down": ezt.boolean(srv.state == Server.DOWN),

@@ -82,12 +82,26 @@ def _hosting_label(m: Dict[str, Any]) -> str:
 
 
 def model_available_for(identity: Any, model: Dict[str, Any]) -> bool:
-    """Whether this user may call the catalog model.
+    """Policy: whether this user is allowed the catalog model.
 
     Always True until team allow-lists, envelope, and other gates exist
-    (STATUS P5). Distinct from fleet Status (serving vs down).
+    (STATUS P5). Combine with ``model_in_service`` for the Available column.
     """
     return True
+
+
+def model_in_service(health: str, *, self_hosted: bool) -> bool:
+    """Whether the catalog model can take traffic right now.
+
+    ``health`` is Fleet.model_health: up / starting / down / mixed / empty.
+    Self-hosted with no serving replica is not in service. Vendor models
+    (not self-hosted, empty health) are treated as in service.
+    """
+    if health in ("up", "mixed"):
+        return True
+    if not health:
+        return not self_hosted
+    return False
 
 
 def ux_models(

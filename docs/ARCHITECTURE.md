@@ -62,8 +62,10 @@ JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
 (not Vast's public HostPort). No `hf_home`/`log_dir`. Vast
 `hosting/vast/install_set.py` writes Supervisor units. Lifecycle/skew:
 `app.add_runner` (`fleet-lifecycle`, `litellm-skew`). Server states:
-`pending` / `starting` / `serving` / `down`. JSON handlers use `@api` in
-`api.py`. Do not wrap Quart `asgi_app` with Werkzeug ProxyFix.
+`pending` / `starting` / `serving` / `down`. `/fleet` is signed-in; host:port
+and LiteLLM UI are site-admin (same idea as Models supply-path in Details).
+JSON handlers use `@api` in `api.py`. Do not wrap Quart `asgi_app` with
+Werkzeug ProxyFix.
 
 Build status and backlog: **`docs/STATUS.md`**.
 

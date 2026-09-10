@@ -13,6 +13,7 @@ from litellm.types.router import Deployment
 from llmao.models import (
     load_model_list,
     model_available_for,
+    model_in_service,
     public_models,
     models_path_from_cfg,
     ux_models,
@@ -70,6 +71,15 @@ def test_ux_models_redacts_supply_path_for_non_admins():
         # Example inventory includes weights_distribution for self-host models.
         assert f.get("weights_distribution") or f.get("provider")
         assert "\n" not in f["notes"]
+
+
+def test_model_in_service():
+    assert model_in_service("up", self_hosted=True) is True
+    assert model_in_service("mixed", self_hosted=True) is True
+    assert model_in_service("starting", self_hosted=True) is False
+    assert model_in_service("down", self_hosted=True) is False
+    assert model_in_service("", self_hosted=True) is False
+    assert model_in_service("", self_hosted=False) is True
 
 
 def test_litellm_deployment_preserves_model_info_extras():

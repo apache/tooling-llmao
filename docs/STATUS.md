@@ -21,9 +21,9 @@
 
 Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `model_list.yaml` inventory; PAT UX (**My Keys** / **Other Keys**); **Models** catalog (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
 
-**Models page:** catalog-first table (name, id, fleet Status, Available checkbox stub, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details. Available is always true until allow-lists / envelope (P5); sort puts unavailable last.
+**Models page:** catalog-first table (name, id, fleet Status, Available, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service (Up/Mixed, or vendor with no fleet row). Self-hosted with nothing serving is unchecked. Sort puts unavailable last.
 
-**GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/models` Up/Starting/Down/Mixed; `/fleet` listen + public columns. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Remaining: health-gated LiteLLM `/model/new`, long vLLM boot.
+**GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/models` Up/Starting/Down/Mixed; `/fleet` is signed-in (server name + state); host:port, config fetch, and skew are site-admin. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Remaining: health-gated LiteLLM `/model/new`, long vLLM boot.
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
