@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from easydict import EasyDict as edict
 
-from llmao.fleet import Fleet, Server, validate_fleet
+from llmao.fleet import Fleet, VllmServer, validate_fleet
 from llmao.models import load_model_list
 from llmao.vast_client import port_map_from_body, ports_from_instance
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS
@@ -53,7 +53,7 @@ def test_truncated_page_still_returns_what_we_have(caplog):
 
 
 def test_apply_port_map():
-    s = Server(
+    s = VllmServer(
         model_name="gemma4-26b",
         name="gemma4-26b",
         host="203.0.113.10",
@@ -71,7 +71,7 @@ def test_apply_port_map():
 
 
 def test_apply_port_map_missing_host_stays_pending():
-    s = Server(
+    s = VllmServer(
         model_name="gemma4-26b",
         name="gemma4-26b",
         host="198.51.100.1",
@@ -83,7 +83,7 @@ def test_apply_port_map_missing_host_stays_pending():
     fleet = Fleet(cfg=None, servers=[s])
     fleet.apply_port_map(port_map_from_body({"instances": [INSTANCE], "total_instances": 1}))
     assert s.public_port is None
-    assert s.state == Server.PENDING
+    assert s.state == VllmServer.PENDING
 
 
 def test_validate_fleet_requires_vast_api_key():

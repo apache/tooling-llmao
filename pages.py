@@ -33,7 +33,7 @@ from easydict import EasyDict as edict
 from dunamai import Version
 
 from llmao.auth import current_identity
-from llmao.fleet import Server
+from llmao.fleet import VllmServer
 from llmao.litellm_client import BackendUnavailable, KeyInfo
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
@@ -193,6 +193,8 @@ async def models_page(result):
         avail = model_available_for(None, m) and model_in_service(
             row.health, self_hosted=self_hosted
         )
+        if self_hosted:
+            avail = avail and fleet.model_in_litellm(row.model_name)
         row.available = ezt.boolean(avail)
         row.unavailable = ezt.boolean(not avail)
         rows.append(row)
@@ -238,10 +240,26 @@ async def fleet_page(result):
             "last_ok": _ago(srv.last_ok, now),
             "config_ago": _ago(fetched, now) if admin else "",
             "skew": "; ".join(srv.skew) if admin and srv.skew else "",
-            "serving": ezt.boolean(srv.state == Server.SERVING),
-            "starting": ezt.boolean(srv.state == Server.STARTING),
-            "down": ezt.boolean(srv.state == Server.DOWN),
-            "pending": ezt.boolean(srv.state == Server.PENDING),
+            "in_litellm": ezt.boolean(srv.in_litellm),
+            "litellm_health": (
+                "healthy"
+                if srv.litellm_healthy is True
+                else ("unhealthy" if srv.litellm_healthy is False else "—")
+            ),
+            "litellm_health_ago": (
+                _ago(srv.litellm_health_at, now)
+                if admin and srv.litellm_health_at
+                else ("—" if admin else "")
+            ),
+            "no_deployment": ezt.boolean(
+                srv.state == VllmServer.SERVING and not srv.in_litellm
+            ),
+            "serving": ezt.boolean(
+                srv.state == VllmServer.SERVING and srv.in_litellm
+            ),
+            "starting": ezt.boolean(srv.state == VllmServer.STARTING),
+            "down": ezt.boolean(srv.state == VllmServer.DOWN),
+            "pending": ezt.boolean(srv.state == VllmServer.PENDING),
         }))
     result.servers = rows
     return result

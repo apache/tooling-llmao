@@ -1,7 +1,7 @@
 # Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
 
 **Status:** Operating — boxes fetch `GET /vllm/config` by client IP. Listen vs
-public ports are split in `Server`; Vast HostPort discovery and LiteLLM mix
+public ports are split in `VllmServer`; Vast HostPort discovery and LiteLLM mix
 are not implemented yet. Remaining: Vast public-port map, health-gated
 `/model/new`, long vLLM boot.
 **Date:** 2026-09-08
@@ -72,7 +72,7 @@ flowchart TB
 ## 3. Core Concepts
 
 **Catalog** — `model_list.yaml`: how to serve each recipe. **Model** — one
-catalog recipe (`model_name`, e.g. `gemma4-26b`). **Server** — one vLLM
+catalog recipe (`model_name`, e.g. `gemma4-26b`). **VllmServer** — one vLLM
 process on a host (`port`). Box JSON `servers[].model` is the **HF
 weights id** (`model_info.vllm.model`); that field name is deferred.
 
@@ -88,7 +88,7 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
 A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
 `[model, port, name]` rows. That **port is the container listen port**
 (`vllm serve --port` / box JSON). Vast's proxy publishes a different public
-HostPort; llmao will record that as `Server.public_port` (not yet fetched).
+HostPort; llmao records that as `VllmServer.public_port`.
 Without `fleet.vast`, public equals listen. Optional **name** lets two
 processes share a catalog model (e.g. two qwen3 on one box).
 
@@ -266,7 +266,7 @@ route exists only while its vLLM is serving; no second datastore;
 ## 11. Leftover implementation
 
 1. Smoke remaining box issues.
-2. Discover Vast public HostPort (`Server.public_port`); probe that, never
+2. Discover Vast public HostPort (`VllmServer.public_port`); probe that, never
    send it to the box. **Done** when `fleet.vast.api_key` is set (`vast_client`).
 3. Push `/model/new` on the serving transition and `/model/delete` on down.
    Note `litellm_params` reads back **encrypted**, so `api_base` cannot be

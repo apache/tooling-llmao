@@ -21,7 +21,7 @@ nothing can reach. The resilience buys nothing.
 
 State lives in LiteLLM's database. There is no second store.
 
-### 1.1 What a route already carries
+### 1.1 What a deployment already carries
 
 | field | fleet meaning |
 |---|---|
@@ -30,7 +30,7 @@ State lives in LiteLLM's database. There is no second store.
 | `litellm_params.api_key` | the bearer token for that vLLM |
 | `model_info` | arbitrary dict — carries the recipe and provenance |
 
-`GET /vllm/config` becomes: select routes whose `api_base` host matches the
+`GET /vllm/config` becomes: select deployments whose `api_base` host matches the
 caller's IP, return their `model_info.vllm` blocks and ports.
 
 ### 1.2 Enabling it
@@ -49,17 +49,18 @@ Without it, `/model/new` returns HTTP 500 with
 
 ## 2. Registration is health-gated
 
-A provisioned instance can take fifteen minutes to load weights. A route whose
+A provisioned instance can take fifteen minutes to load weights. A deployment whose
 backend is not yet serving will fail every request routed to it.
 
-**Rule: a route exists in LiteLLM if and only if its vLLM is serving.**
+**Rule: a deployment exists in LiteLLM if and only if its vLLM is serving.**
+The Router is the whole proxy; a deployment is one backend (`/model/new` row).
 
 ```
-add host    -> record assignment, generate api_key, no route yet
+add host    -> record assignment, generate api_key, no deployment yet
 box boots   -> GET /vllm/config
 health OK   -> POST /model/new
 health DOWN -> POST /model/delete
-retire      -> delete route, drop assignment
+retire      -> delete deployment, drop assignment
 ```
 
 Uniform, with no special cases. An earlier draft proposed registering at

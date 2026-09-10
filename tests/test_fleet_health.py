@@ -1,9 +1,9 @@
-"""Fleet Server health state machine (no real vLLM)."""
+"""Fleet VllmServer health state machine (no real vLLM)."""
 import asyncio
 
 from easydict import EasyDict as edict
 
-from llmao.fleet import Fleet, Server
+from llmao.fleet import Fleet, VllmServer
 
 
 def _server(**kwargs):
@@ -18,13 +18,13 @@ def _server(**kwargs):
         public_port=8001,
     )
     defaults.update(kwargs)
-    return Server(**defaults)
+    return VllmServer(**defaults)
 
 
 def test_probe_serving():
     s = _server()
     s.record_probe(True, now=100.0, grace_s=1800, fail_threshold=3)
-    assert s.state == Server.SERVING
+    assert s.state == VllmServer.SERVING
     assert s.last_ok == 100.0
 
 
@@ -32,14 +32,14 @@ def test_starting_inside_grace():
     s = _server()
     s.seen_at = 0.0
     s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
-    assert s.state == Server.STARTING
+    assert s.state == VllmServer.STARTING
 
 
 def test_down_after_grace():
     s = _server()
     s.seen_at = 0.0
     s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="timeout")
-    assert s.state == Server.DOWN
+    assert s.state == VllmServer.DOWN
 
 
 def test_serving_needs_consecutive_fails():
@@ -47,16 +47,16 @@ def test_serving_needs_consecutive_fails():
     s.record_probe(True, now=1.0, grace_s=1800, fail_threshold=3)
     s.record_probe(False, now=2.0, grace_s=1800, fail_threshold=3)
     s.record_probe(False, now=3.0, grace_s=1800, fail_threshold=3)
-    assert s.state == Server.SERVING
+    assert s.state == VllmServer.SERVING
     s.record_probe(False, now=4.0, grace_s=1800, fail_threshold=3)
-    assert s.state == Server.DOWN
+    assert s.state == VllmServer.DOWN
 
 
 def test_model_health_aggregate():
     a = _server(name="a", listen_port=1)
     b = _server(name="b", listen_port=2, model_name="qwen3-8b")
-    a.state = Server.SERVING
-    b.state = Server.STARTING
+    a.state = VllmServer.SERVING
+    b.state = VllmServer.STARTING
     fleet = Fleet(cfg=None, servers=[a, b])
     assert fleet.model_health("gemma4-26b") == Fleet.BADGE_UP
     assert fleet.model_health("qwen3-8b") == Fleet.BADGE_STARTING
@@ -98,7 +98,7 @@ def test_local_from_cfg_public_equals_listen():
     fleet = Fleet.from_cfg(cfg, models=load_model_list(example))
     assert fleet.servers[0].listen_port == 8001
     assert fleet.servers[0].public_port == 8001
-    assert fleet.servers[0].state == Server.PENDING
+    assert fleet.servers[0].state == VllmServer.PENDING
 
 
 def test_probe_skips_without_public_port():
@@ -121,4 +121,14 @@ def test_probe_skips_without_public_port():
 
     fleet = Fleet(cfg=cfg, servers=[s])
     asyncio.run(fleet.probe_all(client=_Boom(), now=1.0))
-    assert s.state == Server.PENDING
+    assert s.state == VllmServer.PENDING
+
+
+def test_model_in_litellm():
+    s = _server()
+    s.in_litellm = False
+    fleet = Fleet(cfg=None, servers=[s])
+    assert fleet.model_in_litellm("gemma4-26b") is False
+    s.in_litellm = True
+    assert fleet.model_in_litellm("gemma4-26b") is True
+    assert fleet.model_in_litellm("other") is False

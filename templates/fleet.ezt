@@ -4,12 +4,14 @@
 
   <h1 class="h3 mb-3">Fleet</h1>
   <p class="text-muted small">
-    vLLM servers and probe state.
+    vLLM processes. State <span class="badge text-bg-success">serving</span>
+    means vLLM is up <em>and</em> LiteLLM has a deployment for that public
+    port. Otherwise the process is not in the router.
     [if-any is_site_admin]
     Host and port are site-admin only.
-    Proxy-level model checks:
-    <a href="[litellm_ui]">LiteLLM Admin UI</a>
-    (real completions; not used as the boot probe).
+    LiteLLM <code>/health</code> is stored from the skew runner (not probed
+    again here).
+    <a href="[litellm_ui]">LiteLLM Admin UI</a>.
     [end]
   </p>
 
@@ -21,7 +23,7 @@
           [if-any is_site_admin]
           <th>Host</th>
           [end]
-          <th>Server</th>
+          <th>vLLM</th>
           [if-any is_site_admin]
           <th>Listen</th>
           <th>Public</th>
@@ -29,6 +31,7 @@
           <th>State</th>
           <th>Last ok</th>
           [if-any is_site_admin]
+          <th>LiteLLM health</th>
           <th>Config request</th>
           <th>Skew</th>
           [end]
@@ -47,7 +50,10 @@
           [end]
           <td>
             [if-any servers.serving]
-            <span class="badge text-bg-success">[servers.state]</span>
+            <span class="badge text-bg-success">serving</span>
+            [end]
+            [if-any servers.no_deployment]
+            <span class="badge text-bg-warning text-dark">no deployment</span>
             [end]
             [if-any servers.starting]
             <span class="badge text-bg-secondary">[servers.state]</span>
@@ -61,6 +67,9 @@
           </td>
           <td class="small">[servers.last_ok]</td>
           [if-any is_site_admin]
+          <td class="small">[servers.litellm_health]
+            <span class="text-muted">[servers.litellm_health_ago]</span>
+          </td>
           <td class="small">[servers.config_ago]</td>
           <td class="small">[servers.skew]</td>
           [end]

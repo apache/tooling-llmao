@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Protocol
 
 import httpx
 
-from llmao.fleet import Server
+from llmao.fleet import VllmServer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -500,10 +500,13 @@ class LiteLLMBackend:
         for srv in self.fleet.servers:
             note = "missing from LiteLLM"
             if srv.api_base in bases:
+                srv.in_litellm = True
                 srv.skew = [n for n in srv.skew if n != note]
-            elif note not in srv.skew:
-                srv.skew.append(note)
-                _LOGGER.warning(f"skew: {srv.name}@{srv.api_base} {note}")
+            else:
+                srv.in_litellm = False
+                if note not in srv.skew:
+                    srv.skew.append(note)
+                    _LOGGER.warning(f"skew: {srv.name}@{srv.api_base} {note}")
         extra = bases - fleet_bases
         if extra:
             _LOGGER.warning(f"skew: LiteLLM api_base not in fleet.hosts: {sorted(extra)}")
@@ -514,13 +517,22 @@ class LiteLLMBackend:
         body = resp.json() if resp.content else {}
         healthy = {_norm_base(x.get("api_base")) for x in (body.get("healthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
         unhealthy = {_norm_base(x.get("api_base")) for x in (body.get("unhealthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
+        stamp = time.time()
         for srv in self.fleet.servers:
             litellm_up = srv.api_base in healthy
             litellm_down = srv.api_base in unhealthy
+            if litellm_up:
+                srv.litellm_healthy = True
+                srv.litellm_health_at = stamp
+            elif litellm_down:
+                srv.litellm_healthy = False
+                srv.litellm_health_at = stamp
+            else:
+                srv.litellm_healthy = None
             note = "LiteLLM health disagrees"
             disagrees = (
-                (srv.state == Server.SERVING and litellm_down)
-                or (srv.state == Server.DOWN and litellm_up)
+                (srv.state == VllmServer.SERVING and litellm_down)
+                or (srv.state == VllmServer.DOWN and litellm_up)
             )
             if disagrees:
                 if note not in srv.skew:

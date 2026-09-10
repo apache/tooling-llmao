@@ -143,7 +143,7 @@ def config_for_host(
     for i, raw in enumerate(cfg.fleet.hosts[host]):
         model_name, port, name = parse_host_row(raw, host, i)
         servers.append(
-            Server.from_row(
+            VllmServer.from_row(
                 host, model_name, port, name, by_name[model_name], cfg
             ).box_json()
         )
@@ -153,7 +153,7 @@ def config_for_host(
     }
 
 
-class Server:
+class VllmServer:
     """One vLLM process from fleet.hosts (live health + box JSON)."""
 
     PENDING = "pending"
@@ -191,12 +191,16 @@ class Server:
         self.last_error = None
         self.fails = 0
         self.skew: list[str] = []
+        # LiteLLM deployment presence / GET /health (filled by skew runner only).
+        self.in_litellm = False
+        self.litellm_healthy: bool | None = None
+        self.litellm_health_at: float | None = None
 
     @classmethod
     def from_row(
         cls, host: str, model_name: str, port: int, name: str, model: Any,
         cfg: Any = None,
-    ) -> Server:
+    ) -> VllmServer:
         vllm = model.model_info.vllm
         args = vllm.get("args") or []
         if isinstance(args, str):
@@ -302,7 +306,7 @@ class Fleet:
     BADGE_DOWN = "down"
     BADGE_MIXED = "mixed"
 
-    def __init__(self, cfg: Any, servers: list[Server]):
+    def __init__(self, cfg: Any, servers: list[VllmServer]):
         self.cfg = cfg
         self.servers = servers
         self.config_fetch_at: dict[str, float] = {}
@@ -317,7 +321,7 @@ class Fleet:
             host = str(host).strip()
             for i, raw in enumerate(rows):
                 model_name, port, name = parse_host_row(raw, host, i)
-                srv = Server.from_row(
+                srv = VllmServer.from_row(
                     host, model_name, port, name, by_name[model_name], cfg
                 )
                 if local:
@@ -354,15 +358,19 @@ class Fleet:
         if not states:
             return ""
         uniq = set(states)
-        if uniq == {Server.SERVING}:
+        if uniq == {VllmServer.SERVING}:
             return self.BADGE_UP
-        if uniq <= {Server.STARTING, Server.PENDING}:
+        if uniq <= {VllmServer.STARTING, VllmServer.PENDING}:
             return self.BADGE_STARTING
-        if uniq == {Server.DOWN}:
+        if uniq == {VllmServer.DOWN}:
             return self.BADGE_DOWN
-        if Server.SERVING in uniq and uniq <= {Server.SERVING, Server.STARTING, Server.PENDING}:
+        if VllmServer.SERVING in uniq and uniq <= {VllmServer.SERVING, VllmServer.STARTING, VllmServer.PENDING}:
             return self.BADGE_UP
         return self.BADGE_MIXED
+
+    def model_in_litellm(self, model_name: str) -> bool:
+        """True if any vLLM for this catalog id has a LiteLLM deployment (skew)."""
+        return any(s.model_name == model_name and s.in_litellm for s in self.servers)
 
     async def probe_all(
         self,

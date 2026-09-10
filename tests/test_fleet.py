@@ -141,8 +141,8 @@ def test_norm_base_leaves_other_paths_alone():
 def test_norm_base_makes_skew_comparison_match():
     """The comparison this exists for.
 
-    check_config_skew compares Server.api_base against what LiteLLM reports.
-    Server.api_base is host:port with no suffix; a catalog entry may carry
+    check_config_skew compares VllmServer.api_base against what LiteLLM reports.
+    VllmServer.api_base is host:port with no suffix; a catalog entry may carry
     /v1. Without normalisation on both sides they never match, and the skew
     check reports a missing route that is actually present.
     """
