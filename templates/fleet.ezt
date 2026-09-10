@@ -4,9 +4,10 @@
 
   <h1 class="h3 mb-3">Fleet</h1>
   <p class="text-muted small">
-    vLLM processes. State <span class="badge text-bg-success">serving</span>
-    means vLLM is up <em>and</em> LiteLLM has a deployment for that public
-    port. Otherwise the process is not in the router.
+    Intended LiteLLM deployments (self-hosted vLLM and commercial).
+    <span class="badge text-bg-success">serving</span> means traffic can
+    route. Self-host also needs vLLM up; commercial uses LiteLLM
+    <code>/health</code> only.
     [if-any is_site_admin]
     Host and port are site-admin only.
     LiteLLM <code>/health</code> is stored from the skew runner (not probed
@@ -23,7 +24,7 @@
           [if-any is_site_admin]
           <th>Host</th>
           [end]
-          <th>vLLM</th>
+          <th>Name</th>
           [if-any is_site_admin]
           <th>Listen</th>
           <th>Public</th>
@@ -43,7 +44,12 @@
           [if-any is_site_admin]
           <td class="font-monospace small">[servers.host]</td>
           [end]
-          <td>[servers.name]</td>
+          <td>
+            [servers.name]
+            [if-any servers.self_hosted][else]
+            <span class="badge text-bg-secondary ms-1">external</span>
+            [end]
+          </td>
           [if-any is_site_admin]
           <td class="font-monospace small">[servers.listen]</td>
           <td class="font-monospace small">[servers.public]</td>
@@ -79,7 +85,7 @@
     </table>
   </div>
   [else]
-  <p class="text-muted">No fleet servers in config.yaml.</p>
+  <p class="text-muted">No intended deployments (empty fleet.hosts and no commercial catalog rows).</p>
   [end]
 </div>
 [include "footer.ezt"]

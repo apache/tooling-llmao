@@ -126,9 +126,8 @@ def test_probe_skips_without_public_port():
 
 def test_model_in_litellm():
     s = _server()
-    s.in_litellm = False
     fleet = Fleet(cfg=None, servers=[s])
     assert fleet.model_in_litellm("gemma4-26b") is False
-    s.in_litellm = True
+    fleet.deployments[0].in_litellm = True
     assert fleet.model_in_litellm("gemma4-26b") is True
     assert fleet.model_in_litellm("other") is False

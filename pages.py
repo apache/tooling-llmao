@@ -225,42 +225,67 @@ async def fleet_page(result):
     litellm = APP.cfg.litellm.base_url.rstrip("/")
     result.litellm_ui = f"{litellm}/ui" if admin else ""
     rows = []
-    for srv in fleet.servers:
-        fetched = fleet.config_fetch_at.get(srv.host)
-        rows.append(edict({
-            "host": srv.host if admin else "",
-            "name": srv.name,
-            "listen": f"{srv.host}:{srv.listen_port}" if admin else "",
-            "public": (
+    for dep in fleet.deployments:
+        srv = dep.vllm
+        fetched = fleet.config_fetch_at.get(srv.host) if srv else None
+        if srv is not None:
+            last_ok = srv.last_ok
+            no_deployment = srv.state == VllmServer.SERVING and not dep.in_litellm
+            serving = srv.state == VllmServer.SERVING and dep.in_litellm
+            starting = srv.state == VllmServer.STARTING
+            down = srv.state == VllmServer.DOWN
+            pending = srv.state == VllmServer.PENDING
+            state = srv.state
+            listen = f"{srv.host}:{srv.listen_port}" if admin else ""
+            public = (
                 f"{srv.host}:{srv.public_port}"
                 if admin and srv.public_port is not None
                 else ("—" if admin else "")
+            )
+            host = srv.host if admin else ""
+            config_ago = _ago(fetched, now) if admin else ""
+        else:
+            last_ok = dep.litellm_health_at
+            no_deployment = not dep.in_litellm
+            serving = dep.in_litellm and dep.litellm_healthy is True
+            starting = False
+            down = dep.in_litellm and dep.litellm_healthy is False
+            pending = dep.in_litellm and dep.litellm_healthy is None
+            state = (
+                "serving" if serving else (
+                    "down" if down else ("pending" if pending else "no deployment")
+                )
+            )
+            listen = "—" if admin else ""
+            public = dep.api_base if admin else ""
+            host = ""
+            config_ago = "—" if admin else ""
+        rows.append(edict(
+            host=host,
+            name=dep.name,
+            self_hosted=ezt.boolean(dep.self_hosted),
+            listen=listen,
+            public=public,
+            state=state,
+            last_ok=_ago(last_ok, now),
+            config_ago=config_ago,
+            skew="; ".join(dep.skew) if admin and dep.skew else "",
+            in_litellm=ezt.boolean(dep.in_litellm),
+            litellm_health=(
+                "healthy" if dep.litellm_healthy is True
+                else ("unhealthy" if dep.litellm_healthy is False else "—")
             ),
-            "state": srv.state,
-            "last_ok": _ago(srv.last_ok, now),
-            "config_ago": _ago(fetched, now) if admin else "",
-            "skew": "; ".join(srv.skew) if admin and srv.skew else "",
-            "in_litellm": ezt.boolean(srv.in_litellm),
-            "litellm_health": (
-                "healthy"
-                if srv.litellm_healthy is True
-                else ("unhealthy" if srv.litellm_healthy is False else "—")
-            ),
-            "litellm_health_ago": (
-                _ago(srv.litellm_health_at, now)
-                if admin and srv.litellm_health_at
+            litellm_health_ago=(
+                _ago(dep.litellm_health_at, now)
+                if admin and dep.litellm_health_at
                 else ("—" if admin else "")
             ),
-            "no_deployment": ezt.boolean(
-                srv.state == VllmServer.SERVING and not srv.in_litellm
-            ),
-            "serving": ezt.boolean(
-                srv.state == VllmServer.SERVING and srv.in_litellm
-            ),
-            "starting": ezt.boolean(srv.state == VllmServer.STARTING),
-            "down": ezt.boolean(srv.state == VllmServer.DOWN),
-            "pending": ezt.boolean(srv.state == VllmServer.PENDING),
-        }))
+            no_deployment=ezt.boolean(no_deployment),
+            serving=ezt.boolean(serving),
+            starting=ezt.boolean(starting),
+            down=ezt.boolean(down),
+            pending=ezt.boolean(pending),
+        ))
     result.servers = rows
     return result
 

@@ -496,20 +496,25 @@ class LiteLLMBackend:
         resp = await self._request("GET", "model/info")
         self._raise_http(resp)
         bases = _api_bases_from_model_info(resp.json())
-        fleet_bases = {s.api_base for s in self.fleet.servers if s.api_base}
-        for srv in self.fleet.servers:
+        intended = {
+            _norm_base(d.api_base) for d in self.fleet.deployments if d.api_base
+        }
+        for dep in self.fleet.deployments:
             note = "missing from LiteLLM"
-            if srv.api_base in bases:
-                srv.in_litellm = True
-                srv.skew = [n for n in srv.skew if n != note]
+            base = _norm_base(dep.api_base) if dep.api_base else None
+            if base and base in bases:
+                dep.in_litellm = True
+                dep.skew = [n for n in dep.skew if n != note]
             else:
-                srv.in_litellm = False
-                if note not in srv.skew:
-                    srv.skew.append(note)
-                    _LOGGER.warning(f"skew: {srv.name}@{srv.api_base} {note}")
-        extra = bases - fleet_bases
+                dep.in_litellm = False
+                if base and note not in dep.skew:
+                    dep.skew.append(note)
+                    _LOGGER.warning(f"skew: {dep.name}@{dep.api_base} {note}")
+        extra = bases - intended
         if extra:
-            _LOGGER.warning(f"skew: LiteLLM api_base not in fleet.hosts: {sorted(extra)}")
+            _LOGGER.warning(
+                f"skew: LiteLLM api_base not an intended deployment: {sorted(extra)}"
+            )
 
     async def check_health_skew(self) -> None:
         resp = await self._request("GET", "health")
@@ -518,30 +523,34 @@ class LiteLLMBackend:
         healthy = {_norm_base(x.get("api_base")) for x in (body.get("healthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
         unhealthy = {_norm_base(x.get("api_base")) for x in (body.get("unhealthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
         stamp = time.time()
-        for srv in self.fleet.servers:
-            litellm_up = srv.api_base in healthy
-            litellm_down = srv.api_base in unhealthy
+        for dep in self.fleet.deployments:
+            base = _norm_base(dep.api_base) if dep.api_base else None
+            litellm_up = bool(base) and base in healthy
+            litellm_down = bool(base) and base in unhealthy
             if litellm_up:
-                srv.litellm_healthy = True
-                srv.litellm_health_at = stamp
+                dep.litellm_healthy = True
+                dep.litellm_health_at = stamp
             elif litellm_down:
-                srv.litellm_healthy = False
-                srv.litellm_health_at = stamp
+                dep.litellm_healthy = False
+                dep.litellm_health_at = stamp
             else:
-                srv.litellm_healthy = None
+                dep.litellm_healthy = None
+            srv = dep.vllm
+            if srv is None:
+                continue
             note = "LiteLLM health disagrees"
             disagrees = (
                 (srv.state == VllmServer.SERVING and litellm_down)
                 or (srv.state == VllmServer.DOWN and litellm_up)
             )
             if disagrees:
-                if note not in srv.skew:
-                    srv.skew.append(note)
+                if note not in dep.skew:
+                    dep.skew.append(note)
                 _LOGGER.warning(
-                    f"health skew: {srv.name}@{srv.api_base} fleet={srv.state} litellm_up={litellm_up}"
+                    f"health skew: {dep.name}@{dep.api_base} fleet={srv.state} litellm_up={litellm_up}"
                 )
             else:
-                srv.skew = [n for n in srv.skew if n != note]
+                dep.skew = [n for n in dep.skew if n != note]
 
 
 def _norm_base(url: Any) -> str:

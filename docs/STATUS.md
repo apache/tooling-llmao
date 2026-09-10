@@ -29,6 +29,11 @@ required boolean (`provider: self-host` removed). Commercial rows need a
 static `api_base` (fail-fast); mix/register-at-startup is not this slice.
 Standalone watches `config.yaml`; Puppet restarts on change.
 
+**Fleet deployments:** `FleetDeployment` is one intended LiteLLM backend
+(self-host `VllmServer` public `api_base`, or commercial catalog `api_base`).
+`/fleet` lists those rows. Skew expected set is those bases (commercial is
+not an “extra”). LiteLLM `/health` is stored on the deployment.
+
 **Fleet UX:** `VllmServer` (not generic Server). `/fleet` green serving only if
 vLLM `/health` **and** a LiteLLM deployment exists for that `api_base`. Else
 **no deployment**. LiteLLM `/health` (per `api_base`) is stored on the server

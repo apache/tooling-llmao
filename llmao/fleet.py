@@ -3,9 +3,11 @@
 GPU boxes fetch GET /vllm/config (no servers.yaml). Placement is fleet.hosts
 keyed by client IP.
 
-Terminology: the **catalog** is model_list.yaml (how to serve). A **model** is
-one catalog recipe (`model_name`). A **server** is one vLLM process on a host
-(port). Box JSON `servers[].model` is still the HF weights id.
+Terminology: the **catalog** is model_list.yaml. A **model** is one catalog
+recipe (`model_name`). A **VllmServer** is one vLLM process. A
+**FleetDeployment** is one intended LiteLLM backend (self-host public
+api_base or commercial static api_base). The LiteLLM **Router** is the whole
+proxy. Box JSON `servers[].model` is still the HF weights id.
 """
 from __future__ import annotations
 
@@ -190,11 +192,6 @@ class VllmServer:
         self.last_ok = None
         self.last_error = None
         self.fails = 0
-        self.skew: list[str] = []
-        # LiteLLM deployment presence / GET /health (filled by skew runner only).
-        self.in_litellm = False
-        self.litellm_healthy: bool | None = None
-        self.litellm_health_at: float | None = None
 
     @classmethod
     def from_row(
@@ -298,17 +295,78 @@ class VllmServer:
         self.state = self.DOWN
 
 
+class FleetDeployment:
+    """One intended LiteLLM deployment (catalog + api_base).
+
+    Self-hosted: wraps a VllmServer (public port may be unset). Commercial:
+    static api_base from the catalog. Skew/health live here, not on VllmServer.
+    """
+
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        name: str,
+        self_hosted: bool,
+        api_base: str | None = None,
+        vllm: VllmServer | None = None,
+    ):
+        self.model_name = model_name
+        self.name = name
+        self.self_hosted = self_hosted
+        self._api_base = api_base
+        self.vllm = vllm
+        self.in_litellm = False
+        self.litellm_healthy: bool | None = None
+        self.litellm_health_at: float | None = None
+        self.skew: list[str] = []
+
+    @classmethod
+    def from_vllm(cls, srv: VllmServer) -> FleetDeployment:
+        return cls(
+            model_name=srv.model_name,
+            name=srv.name,
+            self_hosted=True,
+            vllm=srv,
+        )
+
+    @classmethod
+    def from_commercial(cls, model: Any) -> FleetDeployment:
+        params = model.litellm_params
+        base = str(params.get("api_base") or "").strip()
+        return cls(
+            model_name=str(model.model_name),
+            name=str(model.model_name),
+            self_hosted=False,
+            api_base=base or None,
+        )
+
+    @property
+    def api_base(self) -> str | None:
+        if self.vllm is not None:
+            return self.vllm.api_base
+        return self._api_base
+
+
 class Fleet:
-    """Live fleet: servers from config, lifecycle probes, config-fetch stamps."""
+    """Live fleet: vLLM servers, intended deployments, lifecycle probes."""
 
     BADGE_UP = "up"
     BADGE_STARTING = "starting"
     BADGE_DOWN = "down"
     BADGE_MIXED = "mixed"
 
-    def __init__(self, cfg: Any, servers: list[VllmServer]):
+    def __init__(
+        self,
+        cfg: Any,
+        servers: list[VllmServer],
+        deployments: list[FleetDeployment] | None = None,
+    ):
         self.cfg = cfg
         self.servers = servers
+        self.deployments = deployments if deployments is not None else [
+            FleetDeployment.from_vllm(s) for s in servers
+        ]
         self.config_fetch_at: dict[str, float] = {}
 
     @classmethod
@@ -327,7 +385,11 @@ class Fleet:
                 if local:
                     srv.public_port = srv.listen_port
                 servers.append(srv)
-        return cls(cfg, servers)
+        deployments = [FleetDeployment.from_vllm(s) for s in servers]
+        for model in models:
+            if not model.model_info.self_hosted:
+                deployments.append(FleetDeployment.from_commercial(model))
+        return cls(cfg, servers, deployments)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
         self.config_fetch_at[host] = now if now is not None else time.time()
@@ -370,7 +432,7 @@ class Fleet:
 
     def model_in_litellm(self, model_name: str) -> bool:
         """True if any vLLM for this catalog id has a LiteLLM deployment (skew)."""
-        return any(s.model_name == model_name and s.in_litellm for s in self.servers)
+        return any(d.model_name == model_name and d.in_litellm for d in self.deployments)
 
     async def probe_all(
         self,
