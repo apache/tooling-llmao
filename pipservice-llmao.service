@@ -22,11 +22,11 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/llmao
 
-# uv caches downloads and build artifacts, defaulting to ~/.cache/uv.
-# ProtectHome=true makes /root read-only, so point it inside the app
-# directory, which ReadWritePaths covers. Without this the service exits
-# with "Failed to initialize cache at /root/.cache/uv".
-Environment=UV_CACHE_DIR=/opt/llmao/.uv-cache
+# ProtectHome=true makes /root read-only, and several tools default their
+# caches to ~/.cache -- uv, Prisma, and whatever those pull in. Redirecting
+# HOME catches all of them at once rather than adding an override per tool
+# as each one fails at startup. /opt/llmao is already in ReadWritePaths.
+Environment=HOME=/opt/llmao
 
 # Hypercorn on loopback. The Apache vhost fronts this on 443 with TLS and
 # proxies /v1/* to the LiteLLM port, so the portal never terminates TLS
@@ -41,7 +41,7 @@ Restart=always
 RestartSec=10
 TimeoutStopSec=30
 
-# Two things need to write here: uv's cache above, and asfquart's
+# Two things need to write here: the caches above, and asfquart's
 # session-signing key. base.py reads apptoken.txt if present, otherwise
 # generates one and writes it 0600; without write access it falls back to an
 # ephemeral key and logs "Session permanence cannot be guaranteed", so every
