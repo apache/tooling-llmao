@@ -22,20 +22,31 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/llmao
 
+# uv caches downloads and build artifacts, defaulting to ~/.cache/uv.
+# ProtectHome=true makes /root read-only, so point it inside the app
+# directory, which ReadWritePaths covers. Without this the service exits
+# with "Failed to initialize cache at /root/.cache/uv".
+Environment=UV_CACHE_DIR=/opt/llmao/.uv-cache
+
 # Hypercorn on loopback. The Apache vhost fronts this on 443 with TLS and
 # proxies /v1/* to the LiteLLM port, so the portal never terminates TLS
 # itself and its certfile/keyfile config is unused in production.
+#
+# Through uv rather than .venv/bin/python: pipservice does not build a venv
+# for uv projects, so that path does not exist until uv creates it. The
+# first start is slow while it resolves, and needs network access.
 ExecStart=/usr/local/bin/uv run --project /opt/llmao python -m hypercorn main:llmao_app --bind 127.0.0.1:8080
 
 Restart=always
 RestartSec=10
 TimeoutStopSec=30
 
-# asfquart stores its session-signing key in apptoken.txt in the app
-# directory -- base.py reads the file if present, otherwise generates one and
-# writes it 0600. Without write access it falls back to an ephemeral key and
-# logs "Session permanence cannot be guaranteed", so every redeploy would sign
-# users out. Under pipservice autodeploy that is every commit.
+# Two things need to write here: uv's cache above, and asfquart's
+# session-signing key. base.py reads apptoken.txt if present, otherwise
+# generates one and writes it 0600; without write access it falls back to an
+# ephemeral key and logs "Session permanence cannot be guaranteed", so every
+# redeploy would sign users out. Under pipservice autodeploy that is every
+# commit.
 ReadWritePaths=/opt/llmao
 
 NoNewPrivileges=true
