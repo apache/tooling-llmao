@@ -22,6 +22,7 @@ from __future__ import annotations
 import functools
 import pathlib
 import time
+from urllib.parse import urlsplit
 
 import asfquart
 import asfquart.auth
@@ -65,6 +66,32 @@ def _flash_rows():
     return [edict(category=c, message=m) for c, m in msgs]
 
 
+def _safe_back(default: str = "/") -> str:
+    """Where to send someone after a handler raised.
+
+    Referer is client-supplied, so it is only followed when it is same-origin
+    and is not the path that just failed:
+
+    - off-site is refused, or llmao becomes an open redirect: an attacker
+      sends a victim to a failing llmao URL and we bounce them onward with an
+      apache.org address in their history
+    - the failing path itself is refused, or refreshing it redirects to
+      itself forever
+    - no Referer at all means a bookmark, a pasted link or a typed URL, so
+      there is nowhere to go back to
+    """
+    ref = quart.request.headers.get("Referer") or ""
+    if not ref:
+        return default
+    parsed = urlsplit(ref)
+    if parsed.netloc and parsed.netloc != quart.request.host:
+        return default
+    target = parsed.path or default
+    if target == quart.request.path:
+        return default
+    return target
+
+
 def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     """GET pages: basic_info(title), inject result=, catch, attach flashes.
 
@@ -80,8 +107,25 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
             try:
                 data = await fn(*args, result=result, **kwargs)
             except types as e:
+                # Redirect rather than falling through to the render.
+                #
+                # `data = result` handed the page template the same object
+                # the aborted handler was midway through filling, so anything
+                # assigned after the raise was simply absent. ezt then failed
+                # on the missing name and Quart returned a 500 with the full
+                # traceback -- session dict included. That is more disclosure
+                # for a rejected request than a successful one gets.
+                #
+                # Worse when it does not crash: if the template happens to
+                # read only names set before the raise, it renders a page
+                # that looks right and is quietly missing data.
+                #
+                # Authz was how this surfaced, but BackendUnavailable is the
+                # one that will recur -- a handler that makes two LiteLLM
+                # calls, where the second fails, hits it during any proxy
+                # restart.
                 await quart.flash(str(e), category)
-                data = result
+                return quart.redirect(_safe_back())
             if data is None:
                 data = result
             data.flashes = _flash_rows()
