@@ -295,6 +295,7 @@ class LiteLLMBackend:
     async def warm(self) -> None:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
         await self._team_list_rows()
+        await self.ensure_commercial()
 
     async def ensure_team_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
@@ -473,6 +474,99 @@ class LiteLLMBackend:
     async def usage(self, project: Optional[str]) -> List[Dict]:
         # Spend APIs not wired yet.
         return []
+
+    def deployment_body(self, dep) -> dict:
+        """POST /model/new payload from the catalog + this deployment's api_base."""
+        entry = self.fleet.catalog.get(dep.model_name)
+        if entry is None:
+            raise BackendUnavailable(
+                f"catalog missing {dep.model_name}; cannot POST /model/new"
+            )
+        params = dict(entry.litellm_params)
+        if not dep.api_base:
+            raise BackendUnavailable(f"{dep.name}: no api_base for /model/new")
+        params["api_base"] = dep.api_base
+        if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
+            params["api_key"] = dep.vllm.api_key
+        return {
+            "model_name": dep.model_name,
+            "litellm_params": params,
+            "model_info": {
+                "self_hosted": dep.self_hosted,
+                "asf_api_base": _norm_base(dep.api_base),
+            },
+        }
+
+    async def _model_info_rows(self) -> list:
+        resp = await self._request("GET", "model/info")
+        self._raise_http(resp)
+        body = resp.json()
+        if isinstance(body, list):
+            return body
+        if isinstance(body, dict):
+            return body.get("data") or body.get("models") or []
+        return []
+
+    def _litellm_id(self, row: dict, dep) -> str | None:
+        if str(row.get("model_name") or "") != dep.model_name:
+            return None
+        want = _norm_base(dep.api_base)
+        info = row.get("model_info") or {}
+        if not isinstance(info, dict):
+            info = {}
+        if _norm_base(info.get("asf_api_base")) == want or _norm_base(
+            (row.get("litellm_params") or {}).get("api_base") if isinstance(row.get("litellm_params"), dict) else ""
+        ) == want:
+            return str(info.get("id") or row.get("model_id") or "") or None
+        return None
+
+    async def add_deployment(self, dep) -> None:
+        body = self.deployment_body(dep)
+        resp = await self._request("POST", "model/new", json=body)
+        if resp.status_code in (400, 409):
+            dep.in_litellm = True
+            _LOGGER.info(f"model/new already present {dep.name}@{dep.api_base}")
+            return
+        self._raise_http(resp)
+        dep.in_litellm = True
+        _LOGGER.info(f"model/new {dep.name}@{dep.api_base}")
+
+    async def delete_deployment(self, dep) -> None:
+        rows = await self._model_info_rows()
+        found = None
+        for row in rows:
+            if isinstance(row, dict):
+                found = self._litellm_id(row, dep)
+                if found:
+                    break
+        if not found:
+            dep.in_litellm = False
+            _LOGGER.warning(f"model/delete: no LiteLLM id for {dep.name}@{dep.api_base}")
+            return
+        resp = await self._request("POST", "model/delete", json={"id": found})
+        self._raise_http(resp)
+        dep.in_litellm = False
+        _LOGGER.info(f"model/delete {dep.name}@{dep.api_base} id={found}")
+
+    async def ensure_commercial(self) -> None:
+        """At startup: POST /model/new for each commercial catalog deployment."""
+        for dep in self.fleet.deployments:
+            if dep.self_hosted or not dep.api_base:
+                continue
+            if dep.in_litellm:
+                continue
+            await self.add_deployment(dep)
+
+    async def sync_selfhost(self) -> None:
+        """After vLLM probes: register serving backends, drop down ones."""
+        for dep in self.fleet.deployments:
+            if not dep.self_hosted or dep.vllm is None:
+                continue
+            srv = dep.vllm
+            if srv.state == VllmServer.SERVING and dep.api_base and not dep.in_litellm:
+                await self.add_deployment(dep)
+            elif srv.state == VllmServer.DOWN and dep.in_litellm:
+                await self.delete_deployment(dep)
 
     async def run_skew(self) -> None:
         """Config skew often; LiteLLM GET /health (tokens) on a long interval."""

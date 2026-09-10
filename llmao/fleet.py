@@ -361,12 +361,20 @@ class Fleet:
         cfg: Any,
         servers: list[VllmServer],
         deployments: list[FleetDeployment] | None = None,
+        catalog: dict[str, Any] | None = None,
+        after_probe=None,
     ):
         self.cfg = cfg
         self.servers = servers
         self.deployments = deployments if deployments is not None else [
             FleetDeployment.from_vllm(s) for s in servers
         ]
+        # model_name → catalog row. POST /model/new copies litellm_params from
+        # here; LiteLLM /model/info encrypts them on the way back.
+        self.catalog = catalog if catalog is not None else {}
+        # Awaitable after each vLLM probe tick (LiteLLMBackend.sync_selfhost).
+        # Wired from create_app so this module does not import the LiteLLM client.
+        self.after_probe = after_probe
         self.config_fetch_at: dict[str, float] = {}
 
     @classmethod
@@ -389,7 +397,7 @@ class Fleet:
         for model in models:
             if not model.model_info.self_hosted:
                 deployments.append(FleetDeployment.from_commercial(model))
-        return cls(cfg, servers, deployments)
+        return cls(cfg, servers, deployments, catalog=by_name)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
         self.config_fetch_at[host] = now if now is not None else time.time()
@@ -477,6 +485,8 @@ class Fleet:
                     except Exception:
                         _LOGGER.exception("vast port map failed")
                     await self.probe_all(client=client)
+                    if self.after_probe is not None:
+                        await self.after_probe()
             except Exception:
                 _LOGGER.exception("fleet lifecycle probe failed")
             await asyncio.sleep(interval)

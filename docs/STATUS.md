@@ -39,7 +39,7 @@ vLLM `/health` **and** a LiteLLM deployment exists for that `api_base`. Else
 **no deployment**. LiteLLM `/health` (per `api_base`) is stored on the server
 with a timestamp by the skew runner; the page does not probe again.
 
-**GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/fleet` is signed-in (server name + state); host:port, config fetch, and skew are site-admin. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Remaining: health-gated LiteLLM `/model/new`, long vLLM boot.
+**GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/fleet` is signed-in (server name + state); host:port, config fetch, and skew are site-admin. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Self-host: `/model/new` after vLLM serving, `/model/delete` on down (catalog YAML params). Commercial: `/model/new` at llmao startup. Remaining: long vLLM boot.
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
