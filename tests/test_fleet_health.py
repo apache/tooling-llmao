@@ -131,3 +131,103 @@ def test_model_in_litellm():
     fleet.deployments[0].in_litellm = True
     assert fleet.model_in_litellm("gemma4-26b") is True
     assert fleet.model_in_litellm("other") is False
+
+
+def test_grace_boundary_is_exclusive():
+    """A slow start must not be marked down one second early.
+
+    health_grace_s is 1800, sized for a cold Gemma pull -- ~50GB of weights
+    before vLLM listens. The comparison is `(now - seen_at) < grace_s`, so
+    1799 is still STARTING and 1800 is DOWN. Pinned because moving to <= would
+    shave a second off a window that was chosen deliberately, and the failure
+    would look like a flaky box rather than an off-by-one.
+    """
+    s = _server()
+    s.seen_at = 0.0
+    s.record_probe(False, now=1799.0, grace_s=1800, fail_threshold=3, err="refused")
+    assert s.state == VllmServer.STARTING
+
+    s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
+    assert s.state == VllmServer.DOWN
+
+
+def test_recovers_from_down_on_a_single_probe():
+    """DOWN -> SERVING takes one success, and clears the fail counter.
+
+    Asymmetric on purpose: three failures to go down, one success to come
+    back. That is the right bias for health-gated registration -- withholding
+    a working server is worse than briefly trusting a flaky one -- but it is
+    worth stating rather than leaving as an accident of the code.
+    """
+    s = _server()
+    s.seen_at = 0.0
+    for _ in range(3):
+        s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
+    assert s.state == VllmServer.DOWN
+    assert s.fails == 3
+
+    s.record_probe(True, now=2100.0, grace_s=1800, fail_threshold=3)
+    assert s.state == VllmServer.SERVING
+    assert s.fails == 0
+    assert s.last_error is None
+
+
+def test_flapping_settles_rather_than_oscillating_per_probe():
+    """A box that alternates ok/fail stays SERVING.
+
+    Each success resets fails to 0, so an alternating box never accumulates
+    the three consecutive failures needed to go down. It reports SERVING
+    throughout.
+
+    That is the intended behaviour of a consecutive-fail threshold, but it
+    means a box failing half its probes looks entirely healthy -- worth
+    knowing before trusting this signal to gate route registration.
+    """
+    s = _server()
+    s.seen_at = 0.0
+    now = 100.0
+    for _ in range(10):
+        s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")
+        now += 45.0
+        s.record_probe(True, now=now, grace_s=1800, fail_threshold=3)
+        now += 45.0
+
+    assert s.state == VllmServer.SERVING
+    assert s.fails == 0
+
+
+def test_down_stays_down_while_failing():
+    """Once DOWN, further failures do not reset the grace window.
+
+    The grace branch is only reached when state is not SERVING, and by then
+    now - seen_at is far past grace_s -- so a long-dead box cannot slip back
+    into STARTING and look like it is merely booting.
+    """
+    s = _server()
+    s.seen_at = 0.0
+    for _ in range(3):
+        s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
+    assert s.state == VllmServer.DOWN
+
+    s.record_probe(False, now=9999.0, grace_s=1800, fail_threshold=3, err="refused")
+    assert s.state == VllmServer.DOWN
+    assert s.fails == 4
+
+
+def test_never_healthy_box_goes_starting_then_down():
+    """The provisioning failure case: wrong port, or vLLM crash-looping.
+
+    Stays STARTING for the whole grace window so a genuinely slow start is
+    not misreported, then goes DOWN once. Registration should therefore never
+    have fired for it.
+    """
+    s = _server()
+    s.seen_at = 0.0
+    now = 45.0
+    while now < 1800.0:
+        s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")
+        assert s.state == VllmServer.STARTING, f"flipped early at {now}s"
+        now += 45.0
+
+    s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
+    assert s.state == VllmServer.DOWN
