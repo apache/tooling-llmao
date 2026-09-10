@@ -16,7 +16,6 @@
         <tr>
           <th>Name</th>
           <th>ID</th>
-          <th>Status</th>
           <th>Available</th>
           <th></th>
         </tr>
@@ -35,23 +34,11 @@
           </td>
           <td class="font-monospace small">[models.model_name]</td>
           <td>
-            [if-any models.health_up]
-            <span class="badge text-bg-success">Up</span>
+            [if-any models.available]
+            <span class="badge text-bg-success">Yes</span>
+            [else]
+            <span class="badge text-bg-secondary">No</span>
             [end]
-            [if-any models.health_starting]
-            <span class="badge text-bg-secondary">Starting</span>
-            [end]
-            [if-any models.health_down]
-            <span class="badge text-bg-danger">Down</span>
-            [end]
-            [if-any models.health_mixed]
-            <span class="badge text-bg-warning text-dark">Mixed</span>
-            [end]
-          </td>
-          <td>
-            <input class="form-check-input" type="checkbox" disabled
-                   [if-any models.available]checked[end]
-                   aria-label="Available">
           </td>
           <td class="text-end text-nowrap">
             [if-any models.available]

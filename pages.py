@@ -33,7 +33,7 @@ from easydict import EasyDict as edict
 from dunamai import Version
 
 from llmao.auth import current_identity
-from llmao.fleet import Fleet, Server
+from llmao.fleet import Server
 from llmao.litellm_client import BackendUnavailable, KeyInfo
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
@@ -195,10 +195,6 @@ async def models_page(result):
         )
         row.available = ezt.boolean(avail)
         row.unavailable = ezt.boolean(not avail)
-        row.health_up = ezt.boolean(row.health == Fleet.BADGE_UP)
-        row.health_starting = ezt.boolean(row.health == Fleet.BADGE_STARTING)
-        row.health_down = ezt.boolean(row.health == Fleet.BADGE_DOWN)
-        row.health_mixed = ezt.boolean(row.health == Fleet.BADGE_MIXED)
         rows.append(row)
     rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
     result.models = rows
