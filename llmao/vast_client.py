@@ -12,7 +12,7 @@ from easydict import EasyDict as edict
 
 _LOGGER = logging.getLogger(__name__)
 
-VAST_INSTANCES_URL = "https://console.vast.ai/api/v1/instances"
+VAST_INSTANCES_URL = "https://console.vast.ai/api/v1/instances/"
 VAST_PAGE_LIMIT = 25
 
 
