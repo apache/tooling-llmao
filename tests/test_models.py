@@ -17,6 +17,7 @@ from llmao.models import (
     public_models,
     models_path_from_cfg,
     ux_models,
+    validate_catalog,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -61,16 +62,35 @@ def test_ux_models_redacts_supply_path_for_non_admins():
     for r in redacted:
         assert r["model_name"]
         assert r["display_name"]
-        assert r["provider"] == ""
         assert r["weights_distribution"] == ""
-        assert r["hosting_label"] in ("Self-hosted", "External", "—")
+        assert r["hosting_label"] in ("Self-hosted", "External")
         assert model_available_for(None, r) is True
         # Free-text flattened for data-* attributes (no raw newlines).
         assert "\n" not in r["notes"]
     for f in full:
         # Example inventory includes weights_distribution for self-host models.
-        assert f.get("weights_distribution") or f.get("provider")
+        assert f.get("weights_distribution")
         assert "\n" not in f["notes"]
+
+
+def test_catalog_requires_self_hosted():
+    models = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["model_list"]
+    row = edict(models[0])
+    del row.model_info["self_hosted"]
+    with pytest.raises(ValueError, match="self_hosted"):
+        validate_catalog([row])
+
+
+def test_commercial_requires_api_base():
+    row = edict({
+        "model_name": "paid-model",
+        "litellm_params": {"model": "openai/gpt-4"},
+        "model_info": {"self_hosted": False, "license": "proprietary"},
+    })
+    with pytest.raises(ValueError, match="api_base"):
+        validate_catalog([row])
+    row.litellm_params.api_base = "https://api.openai.com/v1"
+    validate_catalog([row])
 
 
 def test_model_in_service():

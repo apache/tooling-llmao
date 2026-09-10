@@ -189,7 +189,7 @@ async def models_page(result):
     for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
         row = edict(m)
         row.health = fleet.model_health(row.model_name)
-        self_hosted = m.get("hosting_label") == "Self-hosted"
+        self_hosted = bool(m.get("self_hosted"))
         avail = model_available_for(None, m) and model_in_service(
             row.health, self_hosted=self_hosted
         )

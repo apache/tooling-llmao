@@ -15,8 +15,9 @@
 #                       and api_key, and POSTs /model/new
 #
 # So this carries what is true of the MODEL, never what is true of one machine.
-# No api_base, no api_key -- both are per-instance and generated when a host is
-# added. Nothing here is secret; Puppet substitutes nothing.
+# self_hosted (boolean, required): true = vLLM recipe + fleet.hosts placement;
+# api_base/api_key are per instance at registration. false = commercial; require
+# a static litellm_params.api_base (fail-fast). Nothing here is secret.
 model_list:
   - model_name: gemma4-26b
     # Protocol and served name only. api_base and api_key are added per
@@ -43,7 +44,6 @@ model_list:
           - --reasoning-parser
           - gemma4
       display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
-      provider: self-host
       # The CONTRACT with callers. Every instance serving this model_name must
       # honour it; where a pool is uneven, advertise the minimum across it.
       context_window: 131072
@@ -77,7 +77,6 @@ model_list:
           - --reasoning-parser
           - qwen3
       display_name: "Qwen3 8B (self-hosted, fast)"
-      provider: self-host
       # 40,960 is this model's max_position_embeddings -- an architectural
       # ceiling, not a tuning choice. vLLM refuses higher at startup, and
       # VLLM_ALLOW_LONG_MAX_MODEL_LEN produces NaN on this RoPE model.

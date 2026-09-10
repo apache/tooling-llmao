@@ -24,10 +24,10 @@ run: install
 test: install
 	uv run pytest tests/ -q
 
-# Run the LiteLLM proxy. Requires litellm.yaml + model_list.yaml (from *.example).
+# Run the LiteLLM proxy. Requires litellm.yaml (from *.example).
+# model_list.yaml is the llmao catalog (not included by the proxy).
 proxy: install
 	@test -f litellm.yaml || (echo "Missing litellm.yaml — copy litellm.yaml.example" >&2; exit 1)
-	@test -f model_list.yaml || (echo "Missing model_list.yaml — copy model_list.yaml.example" >&2; exit 1)
 	uv run litellm --config litellm.yaml
 
 # Build the production Docker image (optional; systemd is the preferred deploy).

@@ -23,6 +23,12 @@ Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBacke
 
 **Models page:** catalog-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service (Up/Mixed, or vendor with no fleet row). Self-hosted with nothing serving is No. Sort puts No last. Per-server state is on `/fleet`, not this table.
 
+**Catalog vs LiteLLM:** `model_list.yaml` is not included by the proxy.
+`litellm.yaml` `general_settings.store_model_in_db: true`. `self_hosted` is a
+required boolean (`provider: self-host` removed). Commercial rows need a
+static `api_base` (fail-fast); mix/register-at-startup is not this slice.
+Standalone watches `config.yaml`; Puppet restarts on change.
+
 **GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/fleet` is signed-in (server name + state); host:port, config fetch, and skew are site-admin. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Remaining: health-gated LiteLLM `/model/new`, long vLLM boot.
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.

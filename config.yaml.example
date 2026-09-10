@@ -37,7 +37,8 @@ budgets:
 site_admins: []
 
 
-# Shared model inventory (LiteLLM include + llmao UX). Relative to app root.
+# Catalog (llmao UX + vLLM recipe). Not included by litellm.yaml.
+# Relative to app root.
 models_path: model_list.yaml
 
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
@@ -67,6 +68,8 @@ fleet:
   litellm_health_interval_s: 14400
   # Host row port is the container listen port (vLLM --port / box JSON).
   # Without fleet.vast, the public port equals the listen port (local).
+  # fleet.hosts is loaded once at process start. Standalone (runx) watches
+  # config.yaml and reloads. Production: Puppet restart after a change.
   # Production: set fleet.vast.api_key (gitignored config.yaml). Lifecycle
   # fetches Vast HostPorts; never send those to the box.
   # vast:

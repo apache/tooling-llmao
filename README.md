@@ -72,9 +72,10 @@ make run
 Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
 with ASF.
 
-PAT metadata lives in LiteLLM’s Postgres. Model inventory is **only**
-`model_list.yaml` (not DB `STORE_MODEL_IN_DB`). Provider **API keys** in that
-file come from eyaml in production; **`api_base` is cleartext** (not shown in UX).
+PAT metadata lives in LiteLLM’s Postgres. The **catalog** is `model_list.yaml`
+(llmao only; not included by LiteLLM). Routes live in the DB
+(`store_model_in_db`). Commercial entries need a static `api_base`;
+self-host `api_base` is per instance.
 
 After Puppet/VCS updates model list or litellm config, **restart LiteLLM**
 (systemd notify in p6 later). Production secrets are on-disk YAML, not env vars.
@@ -138,8 +139,8 @@ the handler still runs.
    No production env-var secret channel.
 
 3. **LiteLLM** with Postgres (`database_url` in `litellm.yaml`) and
-   `litellm --config litellm.yaml`. Model routes live in **`model_list.yaml`**
-   (included); provider API keys via eyaml in production.
+   `store_model_in_db: true`. Do not include `model_list.yaml`. Routes are
+   pushed by llmao when mix lands.
 
 4. **Serve** llmao (`main.py` or Hypercorn). Point client tools at the
    **LiteLLM** base URL with PATs, not at llmao for chat.
@@ -174,12 +175,12 @@ box (typically `/workspace`), not in the config JSON.
 main.py                  entry: create_app, run_standalone / run_asgi
 pages.py                 HTML + /static
 api.py                   JSON /healthz, /vllm/config, /v1/*
-templates/ static/       EZT + Bootstrap (`fleet.ezt` site-admin)
+templates/ static/       EZT + Bootstrap
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
 bin/gen-litellm-master-key.sh   print sk-… for admin key
-config.yaml.example      → config.yaml (gitignored; secrets, no fleet.hosts)
-litellm.yaml.example     → litellm.yaml (include model_list.yaml)
-model_list.yaml.example  → model_list.yaml (model catalog; no secrets)
+config.yaml.example      → config.yaml (gitignored; secrets)
+litellm.yaml.example     → litellm.yaml (no catalog include; store_model_in_db)
+model_list.yaml.example  → model_list.yaml (catalog for llmao; no secrets)
 certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, litellm_client, fleet
 hosting/vast/            provision.sh + install_set.py

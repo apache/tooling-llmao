@@ -40,11 +40,12 @@ process talks to LiteLLM over the **admin** surface (master key, **async
 httpx**) to provision teams and (soon) mint or revoke virtual keys—see design
 §5–6. Project names are LDAP/session names (asfquart); no rename map.
 
-**Model inventory** is `model_list.yaml` only (LiteLLM `include`; no
-`STORE_MODEL_IN_DB`). llmao loads the same file for UX (`llmao/models.py`).
-Governance fields live flat under each entry’s `model_info`. API keys in that
-file are secrets (eyaml); `api_base` is cleartext. Restart LiteLLM after
-inventory changes (Puppet/systemd later).
+**Model catalog** is `model_list.yaml` (llmao UX + vLLM recipe). LiteLLM does
+**not** include it. `store_model_in_db: true` in `litellm.yaml`
+`general_settings` (Puppet may also set the env). Routes are pushed by llmao.
+`self_hosted` is a required boolean. Governance fields live under
+`model_info`. Standalone asfquart watches `config.yaml` (`runx` extra_files);
+production Puppet restarts the service after a change.
 
 **LiteLLM virtual keys / teams** need Postgres + Prisma (`litellm[proxy,extra-proxy]`).
 Developers: system PostgreSQL + `make db`. Production: Puppet + on-disk

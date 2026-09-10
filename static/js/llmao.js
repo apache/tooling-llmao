@@ -49,7 +49,6 @@ document.addEventListener("DOMContentLoaded", function () {
       if (supply) {
         if (reveal) {
           supply.classList.remove("d-none");
-          set("mdProvider", btn.getAttribute("data-provider"));
           set("mdWeights", btn.getAttribute("data-weights"));
           set("mdTraining", btn.getAttribute("data-training"));
           set("mdProvenance", btn.getAttribute("data-provenance"));

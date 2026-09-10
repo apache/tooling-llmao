@@ -1,7 +1,8 @@
 """Load the shared model inventory (model_list.yaml).
 
-Same file LiteLLM includes via litellm.yaml. Fail-fast if missing — same
-presumption as config.yaml and litellm.yaml (copy from *.example).
+Catalog for llmao UX and vLLM recipes. LiteLLM does not include this file.
+Fail-fast if missing — same presumption as config.yaml and litellm.yaml
+(copy from *.example).
 """
 from __future__ import annotations
 
@@ -37,7 +38,41 @@ def load_model_list(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> 
     data = edict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     if "model_list" not in data or not isinstance(data.model_list, list):
         raise ValueError(f"{path}: expected top-level model_list: [ ... ]")
+    validate_catalog(data.model_list, path=path)
     return data.model_list
+
+
+def validate_catalog(models: list, *, path: pathlib.Path | str = "model_list.yaml") -> None:
+    """Fail-fast: self_hosted boolean; vLLM recipe vs commercial api_base."""
+    seen: set[str] = set()
+    for model in models:
+        if "model_name" not in model or not model.model_name:
+            raise ValueError(f"{path}: catalog model missing model_name")
+        name = str(model.model_name)
+        if name in seen:
+            raise ValueError(f"{path}: duplicate model_name {name}")
+        seen.add(name)
+        if "litellm_params" not in model:
+            raise ValueError(f"{name}: litellm_params is required")
+        if "model_info" not in model:
+            raise ValueError(f"{name}: model_info is required")
+        info = model.model_info
+        flag = info.get("self_hosted") if hasattr(info, "get") else None
+        if not isinstance(flag, bool):
+            raise ValueError(f"{name}: model_info.self_hosted must be true or false")
+        if flag:
+            if "vllm" not in info:
+                raise ValueError(f"{name}: model_info.vllm is required when self_hosted")
+            vllm = info.vllm
+            if "model" not in vllm or not vllm.model:
+                raise ValueError(f"{name}: model_info.vllm.model is required")
+        else:
+            params = model.litellm_params
+            base = params.get("api_base") if hasattr(params, "get") else None
+            if not str(base or "").strip():
+                raise ValueError(
+                    f"{name}: self_hosted false requires litellm_params.api_base"
+                )
 
 
 def public_models(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> List[Dict[str, Any]]:
@@ -56,7 +91,6 @@ _SUPPLY_PATH_KEYS = frozenset({
     "weights_distribution",
     "training_data_provenance",
     "provenance_record",
-    "provider",  # may name commercial partners; generic hosting badge is separate
 })
 
 
@@ -68,15 +102,10 @@ def _oneline(s: Any) -> str:
 
 
 def _hosting_label(m: Dict[str, Any]) -> str:
-    """Public hosting class (not partnership detail). Prefer self_hosted flag."""
+    """Public hosting class from the required self_hosted boolean."""
     if m.get("self_hosted") is True:
         return "Self-hosted"
     if m.get("self_hosted") is False:
-        return "External"
-    prov = (m.get("provider") or "").lower()
-    if prov in ("self-host", "selfhost", "self-hosted"):
-        return "Self-hosted"
-    if prov:
         return "External"
     return "—"
 
@@ -117,6 +146,8 @@ def ux_models(
 
     Free-text is collapsed to one line for HTML data-* attributes (EZT
     HTML-escapes quotes; embedded newlines still break attributes).
+
+    TODO: return edict rows (dotted access) instead of plain dicts.
     """
     rows = []
     for m in public_models(path, cfg=cfg):
@@ -139,7 +170,6 @@ def ux_models(
             "notes": _oneline(m.get("notes")),
             "reveal_supply": reveal_supply,
             # Admin-only supply fields (empty strings when redacted)
-            "provider": _oneline(m.get("provider")) if reveal_supply else "",
             "weights_distribution": (
                 _oneline(m.get("weights_distribution")) if reveal_supply else ""
             ),

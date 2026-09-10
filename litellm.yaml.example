@@ -2,19 +2,17 @@
 # Copy to litellm.yaml (gitignored) and replace CHANGE_ME_* values.
 #
 #   cp litellm.yaml.example litellm.yaml
-#   cp model_list.yaml.example model_list.yaml
+#   cp model_list.yaml.example model_list.yaml   # catalog for llmao, not included here
 #   ./bin/gen-litellm-master-key.sh   # print sk-…; paste into config.yaml + litellm.yaml
 #   make proxy                       # litellm --config litellm.yaml
 #
-# Requires model_list.yaml next to this file (same as config.yaml / litellm.yaml:
-# copy from *.example; fail if missing). API keys in model_list.yaml come from
-# eyaml in production; api_base is cleartext.
+# Do not include model_list.yaml. That file is the catalog (UX + vLLM recipe).
+# Routes live in Postgres (store_model_in_db) and are pushed by llmao
+# (/model/new). Including the catalog would create routes with no api_base
+# (LiteLLM then sends traffic to api.openai.com).
 #
-# Do not use STORE_MODEL_IN_DB for the ASF model inventory — model_list.yaml is SoT.
-# Production secrets are on-disk YAML (Puppet/eyaml), not environment variables.
-
-include:
-  - model_list.yaml
+# Production secrets: Puppet/eyaml. Puppet may also set STORE_MODEL_IN_DB in
+# the process env; the YAML flag below is what local `make proxy` uses.
 
 litellm_settings:
   drop_params: true
@@ -26,3 +24,4 @@ general_settings:
   # Developer: run `make db` (bin/setup_litellm_db.py) against system Postgres
   # and paste the printed database_url here. Production: Puppet/eyaml.
   database_url: postgresql://llmao:CHANGE_ME@127.0.0.1:5432/litellm
+  store_model_in_db: true

@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from llmao.models import load_model_list
+from llmao.models import load_model_list, validate_catalog
 from llmao.vast_client import fetch_port_map
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,23 +100,9 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             raise ValueError("config.yaml: fleet.vast.api_key is required")
 
     models = models if models is not None else load_model_list(cfg=cfg)
-    names: list[str] = []
-    for model in models:
-        if "model_name" not in model or not model.model_name:
-            raise ValueError("catalog model missing model_name")
-        name = str(model.model_name)
-        if name in names:
-            raise ValueError(f"duplicate model_name in catalog: {name}")
-        names.append(name)
-        if "model_info" not in model or "vllm" not in model.model_info:
-            raise ValueError(f"{name}: model_info.vllm is required")
-        vllm = model.model_info.vllm
-        if "model" not in vllm or not vllm.model:
-            raise ValueError(f"{name}: model_info.vllm.model is required")
-        if "litellm_params" not in model:
-            raise ValueError(f"{name}: litellm_params is required")
-
-    catalog = set(names)
+    validate_catalog(models)
+    catalog = {str(model.model_name) for model in models}
+    by_name = {str(model.model_name): model for model in models}
     for host, rows in hosts.items():
         host = str(host).strip()
         if not host:
@@ -129,6 +115,10 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             model_name, port, label = parse_host_row(raw, host, i)
             if model_name not in catalog:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
+            if not by_name[model_name].model_info.self_hosted:
+                raise ValueError(
+                    f"fleet.hosts.{host}[{i}]: {model_name} is not self_hosted"
+                )
             if label in seen_names:
                 raise ValueError(f"fleet.hosts.{host}: duplicate name {label!r}")
             if port in seen_ports:
