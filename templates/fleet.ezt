@@ -30,6 +30,8 @@
           <th>Public</th>
           [end]
           <th>State</th>
+          <th>Context</th>
+          <th>KV cache</th>
           <th>Last ok</th>
           [if-any is_site_admin]
           <th>LiteLLM health</th>
@@ -69,6 +71,14 @@
             [end]
             [if-any servers.pending]
             <span class="badge text-bg-light text-dark">[servers.state]</span>
+            [end]
+          </td>
+          <td class="small font-monospace">[servers.context]</td>
+          <td class="small font-monospace">
+            [if-any servers.oversized]
+            <span class="badge text-bg-danger" title="Context window exceeds the measured KV cache. vLLM will hang on a request that needs the space rather than refuse it.">[servers.kv_cache]</span>
+            [else]
+            [servers.kv_cache]
             [end]
           </td>
           <td class="small">[servers.last_ok]</td>

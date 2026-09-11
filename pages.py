@@ -288,6 +288,16 @@ async def fleet_page(result):
             )
             host = srv.host if admin else ""
             config_ago = _ago(fetched, now) if admin else ""
+            # Measured KV cache against the served context window. A
+            # max_model_len above the cache makes vLLM hang on a request that
+            # needs the space rather than refuse at startup, so it reads as a
+            # slow model rather than a misconfiguration.
+            kv_cache = (
+                f"{srv.kv_cache_tokens:,}" if srv.kv_cache_tokens is not None else "—"
+            )
+            served_len = srv.observed_max_model_len or srv.max_model_len
+            context = f"{served_len:,}" if served_len else "—"
+            oversized = srv.oversized
         else:
             last_ok = dep.litellm_health_at
             no_deployment = not dep.in_litellm
@@ -304,6 +314,10 @@ async def fleet_page(result):
             public = dep.api_base if admin else ""
             host = ""
             config_ago = "—" if admin else ""
+            # Commercial endpoints have no KV cache to measure.
+            kv_cache = "—"
+            context = "—"
+            oversized = False
         rows.append(edict(
             host=host,
             name=dep.name,
@@ -314,6 +328,9 @@ async def fleet_page(result):
             last_ok=_ago(last_ok, now),
             config_ago=config_ago,
             skew="; ".join(dep.skew) if admin and dep.skew else "",
+            kv_cache=kv_cache,
+            context=context,
+            oversized=ezt.boolean(oversized),
             in_litellm=ezt.boolean(dep.in_litellm),
             litellm_health=(
                 "healthy" if dep.litellm_healthy is True

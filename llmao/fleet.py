@@ -196,6 +196,16 @@ class VllmServer:
         # was ordered.
         self.vram_gb = vram_gb
         self.disk_gb = disk_gb
+        # Observed from the box, not configured. None until the server has
+        # been SERVING and a scrape has succeeded.
+        #
+        # kv_cache_tokens is the figure that decides whether max_model_len is
+        # safe: a serving length above the measured cache produces HANGS, not
+        # errors, which is the sharpest failure mode in the stack. It has only
+        # ever been visible by reading a vLLM startup log by hand.
+        self.kv_cache_tokens: int | None = None
+        self.observed_max_model_len: int | None = None
+        self.observed_at: float | None = None
         self.state = self.PENDING
         self.seen_at = time.time()
         self.last_ok = None
@@ -255,6 +265,25 @@ class VllmServer:
         if self.public_port is None:
             return None
         return f"http://{self.host}:{self.public_port}/v1"
+
+    @property
+    def oversized(self) -> bool:
+        """Serving length exceeds the measured KV cache.
+
+        This is the hang condition. vLLM accepts a --max-model-len above what
+        the cache can hold and then stalls on a request that needs the space,
+        rather than refusing at startup -- so it looks like a slow model, not
+        a misconfiguration.
+
+        False when either figure is unknown: an unscraped server is not a
+        broken one.
+        """
+        if self.kv_cache_tokens is None:
+            return False
+        served = self.observed_max_model_len or self.max_model_len
+        if served is None:
+            return False
+        return served > self.kv_cache_tokens
 
     def box_json(self) -> dict[str, Any]:
         """Wire payload for GET /vllm/config (servers[].model is the HF weights id)."""
@@ -477,10 +506,26 @@ class Fleet:
                 url = srv.health_url
                 if url is None:
                     continue
+                was = srv.state
                 ok, err = await _get_health(client, url)
                 srv.record_probe(
                     ok, now=stamp, grace_s=grace, fail_threshold=threshold, err=err
                 )
+                # Scrape on the edge into SERVING, and once more if an earlier
+                # attempt came back empty. Both values are fixed at engine
+                # init, so re-reading them every probe would be waste.
+                if srv.state == srv.SERVING and (
+                    was != srv.SERVING or srv.kv_cache_tokens is None
+                ):
+                    base = srv.api_base
+                    if base:
+                        kv, mml = await fetch_observed(client, base, srv.api_key)
+                        if kv is not None:
+                            srv.kv_cache_tokens = kv
+                        if mml is not None:
+                            srv.observed_max_model_len = mml
+                        if kv is not None or mml is not None:
+                            srv.observed_at = stamp
         finally:
             if own:
                 await client.aclose()
@@ -507,6 +552,108 @@ class Fleet:
             except Exception:
                 _LOGGER.exception("fleet lifecycle probe failed")
             await asyncio.sleep(interval)
+
+
+def parse_kv_cache_tokens(metrics_text: str) -> int | None:
+    """KV cache size in tokens from vLLM's Prometheus output, or None.
+
+    vLLM reports cache geometry as labels on an Info-style metric:
+
+        vllm:cache_config_info{block_size="16",num_gpu_blocks="33960",
+                               kv_cache_size_tokens="855836",...} 1.0
+
+    Prefer kv_cache_size_tokens, which is the same number vLLM prints at
+    startup as "GPU KV cache size: N tokens".
+
+    Do NOT compute it as num_gpu_blocks * block_size. On the A100 serving
+    Gemma those give 543,360 against a reported 855,836 -- blocks do not map
+    uniformly to tokens for a model with heterogeneous head dimensions, and
+    the product understates by a third. Understating the cache would falsely
+    flag a correctly-sized server as oversized.
+
+    The product is kept only as a fallback for builds that do not emit the
+    token count, where an approximate figure beats none.
+
+    Returns None rather than raising when the metric is absent or shaped
+    differently -- vLLM's metric names are not a stable API, and a missing
+    figure should degrade the display rather than break the probe loop.
+    """
+    for line in metrics_text.splitlines():
+        if not line.startswith("vllm:cache_config_info"):
+            continue
+        start, end = line.find("{"), line.rfind("}")
+        if start < 0 or end < start:
+            continue
+        labels: dict[str, str] = {}
+        for part in line[start + 1:end].split(","):
+            k, _, v = part.partition("=")
+            labels[k.strip()] = v.strip().strip('"')
+
+        direct = labels.get("kv_cache_size_tokens")
+        if direct and direct != "None":
+            try:
+                tokens = int(direct)
+            except ValueError:
+                tokens = 0
+            if tokens > 0:
+                return tokens
+
+        try:
+            blocks = int(labels["num_gpu_blocks"])
+            size = int(labels["block_size"])
+        except (KeyError, ValueError):
+            continue
+        if blocks > 0 and size > 0:
+            return blocks * size
+    return None
+
+
+def parse_max_model_len(models_json: Any) -> int | None:
+    """Served context window from /v1/models, or None."""
+    try:
+        rows = models_json["data"]
+    except (TypeError, KeyError):
+        return None
+    for row in rows or []:
+        value = row.get("max_model_len") if isinstance(row, dict) else None
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+async def fetch_observed(
+    client: httpx.AsyncClient, base: str, api_key: str
+) -> tuple[int | None, int | None]:
+    """Scrape (kv_cache_tokens, max_model_len) from a serving vLLM.
+
+    Both are fixed at engine init, so this is called on the transition into
+    SERVING rather than on every probe -- polling an unchanging value every
+    45s would be waste.
+
+    /metrics is unauthenticated on vLLM; /v1/models is not, so the key goes on
+    both rather than reasoning about which needs it.
+
+    Never raises: an unreachable or differently-shaped endpoint leaves the
+    fields None and the UX shows them as unknown.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    kv = mml = None
+    try:
+        resp = await client.get(f"{base}/metrics", headers=headers)
+        if resp.status_code == 200:
+            kv = parse_kv_cache_tokens(resp.text)
+    except httpx.HTTPError:
+        pass
+    try:
+        resp = await client.get(f"{base}/v1/models", headers=headers)
+        if resp.status_code == 200:
+            mml = parse_max_model_len(resp.json())
+    except (httpx.HTTPError, ValueError):
+        pass
+    return kv, mml
 
 
 async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, str | None]:

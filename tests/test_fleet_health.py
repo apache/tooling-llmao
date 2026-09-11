@@ -3,7 +3,7 @@ import asyncio
 
 from easydict import EasyDict as edict
 
-from llmao.fleet import Fleet, VllmServer
+from llmao.fleet import parse_kv_cache_tokens, parse_max_model_len, Fleet, VllmServer
 
 
 def _server(**kwargs):
@@ -231,3 +231,101 @@ def test_never_healthy_box_goes_starting_then_down():
 
     s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == VllmServer.DOWN
+
+
+_METRICS = """\
+# HELP vllm:num_requests_running Number of requests in model execution batches.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{model_name="google/gemma-4-26B-A4B-it"} 0.0
+# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
+# TYPE vllm:cache_config_info gauge
+vllm:cache_config_info{block_size="16",cache_dtype="auto",enable_prefix_caching="True",gpu_memory_utilization="0.9",kv_cache_max_concurrency="6.52951355508556",kv_cache_memory_bytes="None",kv_cache_size_tokens="855836",num_cpu_blocks="None",num_gpu_blocks="33960"} 1.0
+"""
+
+
+def test_parse_kv_cache_tokens_prefers_the_reported_count():
+    """kv_cache_size_tokens is authoritative; the block product is not.
+
+    Real output from the A100 serving Gemma reports 855,836 tokens while
+    num_gpu_blocks * block_size gives 543,360 -- blocks do not map uniformly
+    to tokens for a model with heterogeneous head dimensions. Taking the
+    product would understate the cache by a third and falsely flag a
+    correctly-sized server as oversized.
+    """
+    assert parse_kv_cache_tokens(_METRICS) == 855836
+    assert 33960 * 16 == 543360  # what the wrong answer would have been
+
+
+def test_parse_kv_cache_tokens_falls_back_to_block_product():
+    """Builds that do not emit the token count still get an approximation."""
+    text = 'vllm:cache_config_info{block_size="16",num_gpu_blocks="1000"} 1.0'
+    assert parse_kv_cache_tokens(text) == 16000
+
+    text = 'vllm:cache_config_info{block_size="16",num_gpu_blocks="1000",kv_cache_size_tokens="None"} 1.0'
+    assert parse_kv_cache_tokens(text) == 16000
+
+
+def test_parse_kv_cache_tokens_absent():
+    """vLLM's metric names are not a stable API.
+
+    A missing or renamed metric degrades the display rather than breaking the
+    probe loop, so this returns None instead of raising.
+    """
+    assert parse_kv_cache_tokens("vllm:num_requests_running{} 0.0\n") is None
+    assert parse_kv_cache_tokens("") is None
+
+
+def test_parse_kv_cache_tokens_malformed():
+    for text in (
+        'vllm:cache_config_info{block_size="16"} 1.0',          # no block count
+        'vllm:cache_config_info{block_size="x",num_gpu_blocks="1"} 1.0',
+        'vllm:cache_config_info block_size=16 1.0',              # no braces
+        'vllm:cache_config_info{block_size="0",num_gpu_blocks="0"} 1.0',
+    ):
+        assert parse_kv_cache_tokens(text) is None, text
+
+
+def test_parse_max_model_len():
+    body = {"data": [{"id": "gemma4-26b", "max_model_len": 131072}]}
+    assert parse_max_model_len(body) == 131072
+    assert parse_max_model_len({"data": []}) is None
+    assert parse_max_model_len({}) is None
+    assert parse_max_model_len(None) is None
+
+
+def test_oversized_flags_the_hang_condition():
+    """A served window above the measured cache makes vLLM hang, not error.
+
+    The A100 measures ~856k tokens of KV cache, so 131072 is safe. A box whose
+    cache came out smaller -- a co-resident model, a different card than
+    ordered -- would serve the same config and stall on a long request.
+    """
+    s = _server()
+    s.kv_cache_tokens = 855952
+    s.observed_max_model_len = 131072
+    assert s.oversized is False
+
+    s.kv_cache_tokens = 98304
+    assert s.oversized is True
+
+
+def test_oversized_false_when_unmeasured():
+    """An unscraped server is not a broken one."""
+    s = _server()
+    s.observed_max_model_len = 131072
+    assert s.kv_cache_tokens is None
+    assert s.oversized is False
+
+    s.kv_cache_tokens = 1000
+    s.observed_max_model_len = None
+    s.max_model_len = None
+    assert s.oversized is False
+
+
+def test_oversized_falls_back_to_configured_length():
+    """Before a scrape lands, the configured value is what we have."""
+    s = _server()
+    s.kv_cache_tokens = 40960
+    s.observed_max_model_len = None
+    s.max_model_len = 131072
+    assert s.oversized is True
