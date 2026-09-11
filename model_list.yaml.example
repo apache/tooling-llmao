@@ -52,6 +52,9 @@ model_list:
           - bfloat16
           - --reasoning-parser
           - gemma4
+          - --enable-auto-tool-choice
+          - --tool-call-parser
+          - gemma4
       display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
       # The CONTRACT with callers. Every instance serving this model_name must
       # honour it; where a pool is uneven, advertise the minimum across it.
