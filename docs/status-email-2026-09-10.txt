@@ -1,0 +1,75 @@
+Subject: llmao progress — Models, fleet, and LiteLLM mix (Aug–Sep)
+
+Hi all,
+
+A follow-up to the 9 August note. This covers tooling-llmao from then through
+10 September.
+
+Why this exists
+---------------
+Unchanged: a Foundation-wide way to reach sanctioned inference with
+attribution and budgets. llm.apache.org is the live service. This note is
+about the apache/tooling-llmao software.
+
+Where we are
+------------
+Callers still use LiteLLM with PATs. What is new is a live GPU fleet
+(Vast vLLM boxes) and a Models catalog that tells committers what they
+can actually call. llmao no longer includes model_list.yaml in LiteLLM.
+Deployments live in LiteLLM’s database and are created when a vLLM is
+serving (and at startup for commercial APIs).
+
+Detail: tooling-llmao docs/STATUS.md.
+Design: rai-private services/llmao/README.md.
+
+What landed (tooling-llmao)
+---------------------------
+• Models page: catalog-first (name, id, Available Yes/No, request a key).
+  Context, license, and hosting are in Details; supply-path is site-admin.
+  Available is Yes only if the model is in service and in LiteLLM.
+
+• GPU fleet on Vast: boxes GET /vllm/config by public IP + template
+  FLEET_KEY. Supervisor runs vLLM. Container listen port vs Vast public
+  HostPort are split; llmao discovers HostPort via the Vast API. /fleet is
+  visible to signed-in users; host:port is site-admin.
+
+• Terminology: VllmServer is a GPU process; a LiteLLM deployment is one
+  /model/new row (the Router is the whole proxy). FleetDeployment covers
+  self-host and commercial backends.
+
+• Mix: POST /model/new when vLLM is serving, POST /model/delete when it
+  goes down. Recipe from model_list.yaml. Commercial static api_base at
+  llmao startup. store_model_in_db in litellm.yaml (Puppet may also set
+  the env).
+
+• Projects list + read-only overview stub (P0 path). PAT UX hardening
+  (STeVe POST/303, flashes, copy-once). GitHub Issues on. pipservice unit
+  for uv. Docker image/compose removed — we do not develop or deploy that
+  way.
+
+Related
+-------
+• p6 modules/llmao is in production (Puppet/systemd, Postgres, eyaml,
+  LiteLLM restart on config change).
+• Design notes: rai-private services/llmao/README.md.
+
+Open & next
+-----------
+• RAI: who may create team-scoped automation PATs (provisional: any PMC).
+• Fleet leftovers: long vLLM boot, config revision on the box, pending-
+  assignment table, box smoke.
+• UX: project envelopes (P0+), Reports, Available policy (P5), PAT
+  tied to a model id.
+
+Pointers
+--------
+  https://github.com/apache/tooling-llmao
+  Design: rai-private → services/llmao/README.md
+  Status: tooling-llmao → docs/STATUS.md
+
+Questions welcome.
+
+Cheers,
+-g
+
+ps. email assist from Grok, if it wasn't obvious :)
