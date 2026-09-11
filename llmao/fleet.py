@@ -241,7 +241,7 @@ class VllmServer:
     def api_base(self) -> str | None:
         if self.public_port is None:
             return None
-        return f"http://{self.host}:{self.public_port}"
+        return f"http://{self.host}:{self.public_port}/v1"
 
     def box_json(self) -> dict[str, Any]:
         """Wire payload for GET /vllm/config (servers[].model is the HF weights id)."""
