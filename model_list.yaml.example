@@ -38,6 +38,15 @@ model_list:
         # Explicit, not inherited. A --max-model-len above the measured KV
         # cache produces hangs rather than errors, so this is a decision.
         max_model_len: 131072
+        # Declared requirements. Served to the box, which checks them against
+        # nvidia-smi and df before pulling weights -- the alternative is a
+        # fifteen-minute download followed by an engine-init failure whose
+        # message does not mention memory.
+        #
+        # Weights only. KV cache comes out of whatever is left, which is why
+        # a box with exactly vram_gb free still will not serve usefully.
+        vram_gb: 49      # BF16, measured at load
+        disk_gb: 55
         args:
           - --dtype
           - bfloat16
@@ -73,6 +82,8 @@ model_list:
         vram_gb: 8
         disk_gb: 18
         max_model_len: 40960
+        vram_gb: 8       # FP8
+        disk_gb: 18
         args:
           - --reasoning-parser
           - qwen3

@@ -92,6 +92,8 @@ def parse_server(raw: dict[str, Any]) -> dict[str, Any]:
         raise SystemExit(f"server entry missing required fields: {', '.join(missing)}")
     gmu = raw.get("gpu_memory_utilization")
     mml = raw.get("max_model_len")
+    vram = raw.get("vram_gb")
+    disk = raw.get("disk_gb")
     return {
         "name": str(raw["name"]),
         "model": str(raw["model"]),
@@ -99,6 +101,8 @@ def parse_server(raw: dict[str, Any]) -> dict[str, Any]:
         "api_key": str(raw["api_key"]),
         "gpu_memory_utilization": float(gmu) if gmu is not None else None,
         "max_model_len": int(mml) if mml is not None else None,
+        "vram_gb": float(vram) if vram is not None else None,
+        "disk_gb": float(disk) if disk is not None else None,
         "args": normalize_args(raw.get("args")),
     }
 
@@ -108,6 +112,69 @@ def servers_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
     if not rows:
         raise SystemExit("config JSON has no servers")
     return [parse_server(s) for s in rows]
+
+
+def free_vram_gb() -> float | None:
+    """Free VRAM on GPU 0, or None if nvidia-smi is unavailable.
+
+    Capacity is read from the card rather than declared in the catalog: a
+    hand-typed figure is wrong the first time a provider supplies a different
+    GPU than was ordered, and with rented instances that is a matter of when.
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15, check=True,
+        ).stdout.strip().splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not out:
+        return None
+    try:
+        return int(out[0].strip()) / 1024.0
+    except ValueError:
+        return None
+
+
+def free_disk_gb(path: str) -> float | None:
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    return (st.f_bavail * st.f_frsize) / (1024.0 ** 3)
+
+
+def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
+    """Reasons these servers will not fit, or an empty list.
+
+    Checked before writing units because the alternative is a fifteen-minute
+    weights pull followed by an engine-init failure whose message does not
+    mention memory. Requirements come from the catalog; capacity is read from
+    the box.
+
+    Silent when nvidia-smi is unavailable or a model declares no vram_gb --
+    an unknown is not a failure, and refusing to start on a missing optional
+    field would be worse than the problem.
+    """
+    problems: list[str] = []
+
+    want_vram = sum(s["vram_gb"] for s in specs if s.get("vram_gb"))
+    have_vram = free_vram_gb()
+    if want_vram and have_vram is not None and want_vram > have_vram:
+        names = ", ".join(s["name"] for s in specs if s.get("vram_gb"))
+        problems.append(
+            f"VRAM: {names} need {want_vram:.1f}GB, {have_vram:.1f}GB free. "
+            f"Weights alone -- KV cache comes out of what is left."
+        )
+
+    want_disk = sum(s["disk_gb"] for s in specs if s.get("disk_gb"))
+    have_disk = free_disk_gb(data_dir)
+    if want_disk and have_disk is not None and want_disk > have_disk:
+        problems.append(
+            f"disk: need {want_disk:.1f}GB under {data_dir}, {have_disk:.1f}GB free"
+        )
+
+    return problems
 
 
 def build_argv(spec: dict[str, Any]) -> list[str]:
@@ -193,6 +260,17 @@ def main(argv: list[str] | None = None) -> int:
     asfquart_url = require_env("ASFQUART_URL")
     url = config_url(asfquart_url)
     data = fetch_config(url, fleet_key)
+
+    # Refuse before writing units rather than after a long weights pull. The
+    # provisioning log is where this is read, so the message has to stand on
+    # its own -- there is no reporting channel back to llmao yet.
+    data_dir = os.environ.get("DATA_DIRECTORY", "/workspace")
+    problems = check_fit(servers_from_config(data), data_dir=data_dir)
+    if problems:
+        for line in problems:
+            print(f"install_set: will not fit -- {line}", file=sys.stderr)
+        return 1
+
     write_units(data, CONF_DIR)
     if os.environ.get("INSTALL_SET_DRY_RUN", "").strip() in ("1", "true"):
         return 0

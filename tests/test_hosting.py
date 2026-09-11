@@ -127,3 +127,84 @@ def test_ssl_verify_off(monkeypatch):
     ctx = inst.ssl_context()
     assert ctx.check_hostname is False
     assert ctx.verify_mode == ssl.CERT_NONE
+
+
+def _spec(name="gemma4-26b", vram=None, disk=None):
+    raw = {"name": name, "model": "org/model", "port": 8001, "api_key": "sk-x"}
+    if vram is not None:
+        raw["vram_gb"] = vram
+    if disk is not None:
+        raw["disk_gb"] = disk
+    return inst.parse_server(raw)
+
+
+def test_parse_server_reads_requirements():
+    spec = _spec(vram=49, disk=55)
+    assert spec["vram_gb"] == 49.0
+    assert spec["disk_gb"] == 55.0
+
+
+def test_parse_server_requirements_optional():
+    spec = _spec()
+    assert spec["vram_gb"] is None
+    assert spec["disk_gb"] is None
+
+
+def test_check_fit_passes_when_it_fits(monkeypatch):
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: 80.0)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 100.0)
+    assert inst.check_fit([_spec(vram=49, disk=55)], data_dir="/workspace") == []
+
+
+def test_check_fit_reports_vram_shortfall(monkeypatch):
+    """The case this exists for: a 49GB model on a 24GB card.
+
+    Without the check, the box pulls ~50GB of weights and then fails at engine
+    init with a message that does not mention memory.
+    """
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: 24.0)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 500.0)
+    problems = inst.check_fit([_spec(vram=49)], data_dir="/workspace")
+    assert len(problems) == 1
+    assert "VRAM" in problems[0]
+    assert "49.0" in problems[0] and "24.0" in problems[0]
+
+
+def test_check_fit_sums_across_co_resident_servers(monkeypatch):
+    """Two models on one card compete for the same VRAM.
+
+    Gemma and Qwen were briefly co-resident on an L40S; together they left too
+    little for KV cache, forcing Qwen to 8k context and costing Gemma its CUDA
+    graphs. Neither fails on its own.
+    """
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: 48.0)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 500.0)
+    specs = [_spec("gemma4-26b", vram=49), _spec("qwen3-8b", vram=8)]
+    problems = inst.check_fit(specs, data_dir="/workspace")
+    assert len(problems) == 1
+    assert "57.0" in problems[0]
+
+
+def test_check_fit_silent_without_nvidia_smi(monkeypatch):
+    """An unknown is not a failure.
+
+    Refusing to start because nvidia-smi is missing would be worse than the
+    problem the check exists to catch.
+    """
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: None)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: None)
+    assert inst.check_fit([_spec(vram=49, disk=55)], data_dir="/workspace") == []
+
+
+def test_check_fit_silent_when_model_declares_nothing(monkeypatch):
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: 4.0)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 4.0)
+    assert inst.check_fit([_spec()], data_dir="/workspace") == []
+
+
+def test_check_fit_reports_disk_shortfall(monkeypatch):
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: 80.0)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 20.0)
+    problems = inst.check_fit([_spec(disk=55)], data_dir="/workspace")
+    assert len(problems) == 1
+    assert "disk" in problems[0]

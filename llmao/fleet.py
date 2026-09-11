@@ -175,6 +175,8 @@ class VllmServer:
         args: list[str],
         gpu_memory_utilization: float | None = None,
         max_model_len: int | None = None,
+        vram_gb: float | None = None,
+        disk_gb: float | None = None,
         public_port: int | None = None,
     ):
         self.model_name = model_name
@@ -187,6 +189,13 @@ class VllmServer:
         self.args = args
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
+        # Declared requirements, served to the box so it can refuse before
+        # pulling tens of GB of weights. NOT host capacity -- that is
+        # discovered on the box from nvidia-smi, because a hand-typed figure
+        # is wrong the first time a provider supplies a different card than
+        # was ordered.
+        self.vram_gb = vram_gb
+        self.disk_gb = disk_gb
         self.state = self.PENDING
         self.seen_at = time.time()
         self.last_ok = None
@@ -204,6 +213,8 @@ class VllmServer:
             args = args.split()
         util = vllm.get("gpu_memory_utilization")
         maxlen = vllm.get("max_model_len")
+        vram = vllm.get("vram_gb")
+        disk = vllm.get("disk_gb")
         return cls(
             model_name=model_name,
             name=name,
@@ -229,6 +240,8 @@ class VllmServer:
             args=[str(a) for a in args],
             gpu_memory_utilization=float(util) if util is not None else None,
             max_model_len=int(maxlen) if maxlen is not None else None,
+            vram_gb=float(vram) if vram is not None else None,
+            disk_gb=float(disk) if disk is not None else None,
         )
 
     @property
@@ -257,6 +270,10 @@ class VllmServer:
             out["gpu_memory_utilization"] = self.gpu_memory_utilization
         if self.max_model_len is not None:
             out["max_model_len"] = self.max_model_len
+        if self.vram_gb is not None:
+            out["vram_gb"] = self.vram_gb
+        if self.disk_gb is not None:
+            out["disk_gb"] = self.disk_gb
         return out
 
     def record_probe(
