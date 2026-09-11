@@ -41,8 +41,8 @@ if missing — same presumption as STeVe-style config):
 | File | From | Role |
 |------|------|------|
 | `config.yaml` | `config.yaml.example` | llmao / asfquart |
-| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`include: model_list.yaml`) |
-| `model_list.yaml` | `model_list.yaml.example` | **Model inventory SoT** (routes + UX metadata) |
+| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`store_model_in_db`; do **not** include the catalog) |
+| `model_list.yaml` | `model_list.yaml.example` | Catalog (UX + vLLM recipe; not the live route table) |
 
 ```bash
 make install
@@ -64,7 +64,6 @@ make db                                # bin/setup_litellm_db.py
 ./bin/gen-litellm-master-key.sh        # print sk-…; paste into BOTH:
 #   litellm.yaml  → general_settings.master_key
 #   config.yaml   → litellm.master_key
-# set api keys in model_list.yaml (eyaml in production)
 make proxy                             # litellm --config litellm.yaml
 make run
 ```
@@ -139,8 +138,8 @@ the handler still runs.
    No production env-var secret channel.
 
 3. **LiteLLM** with Postgres (`database_url` in `litellm.yaml`) and
-   `store_model_in_db: true`. Do not include `model_list.yaml`. Routes are
-   pushed by llmao when mix lands.
+   `store_model_in_db: true`. Do not include `model_list.yaml`. llmao POSTs
+   `/model/new` when a self-host vLLM is serving (and at startup for commercial).
 
 4. **Serve** llmao (`main.py` or Hypercorn). Point client tools at the
    **LiteLLM** base URL with PATs, not at llmao for chat.
@@ -152,10 +151,9 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 Self-host catalog models run as **vLLM** processes on GPU boxes (Vast today).
 LiteLLM stays in front for PATs and project budgets, and is also where fleet
-state lives: a route's `api_base` is the host and port, and `model_info` carries
-the recipe. Boxes fetch `GET /vllm/config` with template `FLEET_KEY`; asfquart
-keys the host from `X-Forwarded-For` or the peer IP and returns the routes
-matching it.
+state lives: a **deployment** `api_base` is the public host and port.
+`GET /vllm/config` still comes from `fleet.hosts` (listen ports) plus the
+catalog. Boxes fetch it with template `FLEET_KEY`.
 See [`hosting/README.md`](hosting/README.md),
 [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md), and
 [`docs/fleet-state.md`](docs/fleet-state.md).
@@ -163,8 +161,8 @@ See [`hosting/README.md`](hosting/README.md),
 Example inventory today (`model_list.yaml.example`): `gemma4-26b`, `qwen3-8b`.
 `model_list.yaml` is the **catalog** — what each model is, its licence and
 provenance, and the vLLM recipe. Routes are *instances* of a catalog entry and
-live in LiteLLM's database (`STORE_MODEL_IN_DB=True`), created when a server
-is serving and removed when it goes down (mix not implemented yet). Cache/logs live under `$DATA_DIRECTORY` on the
+live in LiteLLM's database (`store_model_in_db`), created when a server
+is serving and removed when it goes down. Cache/logs live under `$DATA_DIRECTORY` on the
 box (typically `/workspace`), not in the config JSON.
 
 ---

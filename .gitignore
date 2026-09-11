@@ -21,8 +21,7 @@ apptoken.txt
 # LiteLLM proxy config with secrets — use litellm.yaml.example
 litellm.yaml
 
-# Model inventory with provider keys (api_base is cleartext; keys from eyaml)
-# use model_list.yaml.example
+# Catalog (no secrets; copy from model_list.yaml.example)
 model_list.yaml
 
 # third-party fetch scratch (bin/fetch-thirdparty.sh)

@@ -35,15 +35,10 @@ caller's IP, return their `model_info.vllm` blocks and ports.
 
 ### 1.2 Enabling it
 
-`STORE_MODEL_IN_DB` is an **environment variable**, not a config key:
-
-```
-STORE_MODEL_IN_DB=True
-```
-
-Without it, `/model/new` returns HTTP 500 with
-`Set 'STORE_MODEL_IN_DB='True'' in your env to enable this feature`. The YAML
-`model_list` then becomes a bootstrap seed rather than the source of truth.
+Set `general_settings.store_model_in_db: true` in `litellm.yaml`. Puppet may
+also set `STORE_MODEL_IN_DB=True` in the process env. Without the flag,
+`/model/new` returns HTTP 500. The YAML catalog is the recipe, not the live
+route table.
 
 ---
 
@@ -280,12 +275,14 @@ One artifact now, rather than a database dump plus a state file.
 
 ## 7. Implementation
 
-1. `STORE_MODEL_IN_DB=True` in the service environment
-2. Derive `GET /vllm/config` from routes matching the caller's IP
-3. Push `/model/new` on the serving transition, `/model/delete` on down
-   (`api_base` uses the **public** port; box JSON stays listen)
-4. Somewhere for pending assignments (§2.2)
-5. Config revision on `/vllm/config`, reported back by `install_sets.py`
+1. `store_model_in_db` in YAML (and/or env) — **done** in examples; Puppet env too
+2. Derive `GET /vllm/config` from LiteLLM deployments matching the caller IP —
+   **not done**; still `fleet.hosts`
+3. `/model/new` on serving, `/model/delete` on down — **done** (`asf_api_base`
+   on `model_info` for delete). Public port in `api_base`; box JSON listen.
+   Commercial `/model/new` at llmao startup.
+4. Somewhere for pending assignments (§2.2) — still `fleet.hosts` YAML
+5. Config revision on `/vllm/config`, reported back by `install_set.py`
 6. UI: add, retire, edit
 
 ---

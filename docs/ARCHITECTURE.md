@@ -37,7 +37,7 @@ Foundation level. LDAP-backed `ClientSession` carries `uid`, committer
 **LiteLLM proxy** holds *teams, users, virtual keys (PATs), budgets, capacity
 limits, and spend*. Clients call its OpenAI-compatible API with a PAT. This
 process talks to LiteLLM over the **admin** surface (master key, **async
-httpx**) to provision teams and (soon) mint or revoke virtual keys—see design
+httpx**) to provision teams and mint or revoke virtual keys—see design
 §5–6. Project names are LDAP/session names (asfquart); no rename map.
 
 **Model catalog** is `model_list.yaml` (llmao UX + vLLM recipe). LiteLLM does
@@ -62,10 +62,12 @@ metadata in LiteLLM.
 JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
 (not Vast's public HostPort). No `hf_home`/`log_dir`. Vast
 `hosting/vast/install_set.py` writes Supervisor units. Lifecycle/skew:
-`app.add_runner` (`fleet-lifecycle`, `litellm-skew`). `VllmServer` states:
-`pending` / `starting` / `serving` / `down`. `/fleet` shows serving only when
-vLLM is up **and** LiteLLM has a deployment. Host:port
-and LiteLLM UI are site-admin (same idea as Models supply-path in Details).
+`app.add_runner` (`fleet-lifecycle`, `litellm-skew`). After probes,
+`Fleet.after_probe` POSTs `/model/new` / `/model/delete`. `Fleet.catalog` is
+the YAML recipe. `FleetDeployment` is one intended LiteLLM backend (self-host
+or commercial). `VllmServer` states: `pending` / `starting` / `serving` /
+`down`. `/fleet` shows serving only when vLLM is up **and** LiteLLM has a
+deployment. Host:port and LiteLLM UI are site-admin.
 JSON handlers use `@api` in `api.py`. Do not wrap Quart `asgi_app` with
 Werkzeug ProxyFix.
 
@@ -94,7 +96,7 @@ known; after a cache-miss `team/list`, use list-row fields (no redundant
 browser → HTTPS (local mkcert or prod proxy)
        → asfquart OAuth / session
        → @require + seam.authorize
-       → LiteLLM admin API (team/budget; soon PATs)
+       → LiteLLM admin API (team/budget/PATs; deployments)
 ```
 
 HTML mutations are `POST /do-*` only, then **303** to a GET display (flash for status; created-key secret is a `raw` HTML flash). JSON API is separate.

@@ -3,8 +3,8 @@
 #   cp model_list.yaml.example model_list.yaml
 #
 # THIS IS NOT THE ROUTING TABLE. Routes live in LiteLLM's database
-# (STORE_MODEL_IN_DB=True) and are created by llmao when a vLLM server goes
-# healthy, one per running instance. This file defines the MODELS; routes are
+# (store_model_in_db) and are created by llmao when a vLLM server is serving,
+# one per running instance. This file defines the MODELS; deployments are
 # instances of them. litellm.yaml does NOT include this file -- doing so would
 # create routes with no api_base, which sends every call to api.openai.com.
 #

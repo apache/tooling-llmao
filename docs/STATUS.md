@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-09-09  
+**As of:** 2026-09-10  
 **Repo:** `apache/tooling-llmao`  
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`  
 **How to run/use this software:** repo [`README.md`](../README.md)  
@@ -21,25 +21,12 @@
 
 Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `model_list.yaml` inventory; PAT UX (**My Keys** / **Other Keys**); **Models** catalog (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
 
-**Models page:** catalog-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service (Up/Mixed, or vendor with no fleet row). Self-hosted with nothing serving is No. Sort puts No last. Per-server state is on `/fleet`, not this table.
+**Models page:** catalog-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing serving or no deployment is No. Sort puts No last. Per-process state is on `/fleet`.
 
 **Catalog vs LiteLLM:** `model_list.yaml` is not included by the proxy.
-`litellm.yaml` `general_settings.store_model_in_db: true`. `self_hosted` is a
-required boolean (`provider: self-host` removed). Commercial rows need a
-static `api_base` (fail-fast); mix/register-at-startup is not this slice.
-Standalone watches `config.yaml`; Puppet restarts on change.
+`litellm.yaml` `general_settings.store_model_in_db: true` (Puppet may also set the env). `self_hosted` is a required boolean. Commercial rows need a static `api_base` (fail-fast). Standalone watches `config.yaml`; Puppet restarts on change.
 
-**Fleet deployments:** `FleetDeployment` is one intended LiteLLM backend
-(self-host `VllmServer` public `api_base`, or commercial catalog `api_base`).
-`/fleet` lists those rows. Skew expected set is those bases (commercial is
-not an “extra”). LiteLLM `/health` is stored on the deployment.
-
-**Fleet UX:** `VllmServer` (not generic Server). `/fleet` green serving only if
-vLLM `/health` **and** a LiteLLM deployment exists for that `api_base`. Else
-**no deployment**. LiteLLM `/health` (per `api_base`) is stored on the server
-with a timestamp by the skew runner; the page does not probe again.
-
-**GPU fleet (framework operating):** `fleet.hosts` (IP → `[model, listen_port]` / optional name); `GET /vllm/config` by client IP + template `FLEET_KEY` (box JSON uses the **listen** port); Vast `install_set.py` → Supervisor; `APP.fleet` lifecycle + skew runners (`pending` / `starting` / `serving` / `down`); `/fleet` is signed-in (server name + state); host:port, config fetch, and skew are site-admin. Without `fleet.vast`, public port = listen (local). With `fleet.vast.api_key`, lifecycle fills public HostPort from show-instances. Self-host: `/model/new` after vLLM serving, `/model/delete` on down (catalog YAML params). Commercial: `/model/new` at llmao startup. Remaining: long vLLM boot.
+**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; Vast HostPort → `public_port`; `VllmServer` + `FleetDeployment`. `/fleet` is signed-in (host:port admin). Green serving = vLLM up **and** LiteLLM has that `api_base`. Self-host: `/model/new` after serving, `/model/delete` on down (catalog YAML). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner. Remaining: long vLLM boot, config revision, pending-assignment table, box smoke.
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
@@ -132,8 +119,7 @@ Home = role-aware launchpad (not keys-only)
 3. Site admin via `rai` PMC (optional keep cfg list)  
 4. PMC notification email on key/budget lifecycle  
 5. p6 Puppet: Postgres, eyaml→YAML, systemd, restart LiteLLM on config change  
-6. Cleanup container-oriented paths  
-7. Advisor / richer routing  
+6. Advisor / richer routing  
 
 ---
 
