@@ -5,7 +5,7 @@
 # Local run needs config.yaml (from config.yaml.example) and, for OAuth,
 # TLS certs under certs/ — see certs/README.md.
 
-.PHONY: install run test proxy db build clean thirdparty
+.PHONY: install run test proxy db clean thirdparty
 
 install:
 	uv sync
@@ -29,10 +29,6 @@ test: install
 proxy: install
 	@test -f litellm.yaml || (echo "Missing litellm.yaml — copy litellm.yaml.example" >&2; exit 1)
 	uv run litellm --config litellm.yaml
-
-# Build the production Docker image (optional; systemd is the preferred deploy).
-build:
-	docker build -t llmao:latest .
 
 clean:
 	rm -f llmao-state.json demo-state.json *.tmp
