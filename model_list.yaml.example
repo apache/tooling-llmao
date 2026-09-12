@@ -95,12 +95,11 @@ model_list:
         # 29G measured in /workspace/.hf_home; 35 leaves room for the torch
         # compile cache.
         disk_gb: 35
-        # 32768 rather than the model's native 262144. Measured on a
-        # 96GB RTX PRO 6000: 32k gives 1,310,720 tokens of KV cache and
-        # 40x concurrency. Reserving cache for 262k would cut that to ~5x,
-        # for a window nothing in LiteLLM_SpendLogs comes near -- p95 of
-        # observed prompts is 11,325 tokens.
-        max_model_len: 32768
+        # 131072, matching Gemma so callers need not track which model has
+        # which window. Measured KV cache on a 96GB card is 1,310,720 tokens,
+        # giving ~10x concurrency here against 40x at 32k. Raised after 32k
+        # truncated a code-generation task.
+        max_model_len: 131072
         args:
           - --kv-cache-dtype
           - fp8
@@ -115,15 +114,16 @@ model_list:
       display_name: "Qwen3.8 27B (self-hosted, multimodal)"
       provider: self-host
       # The contract with callers. Every instance serving this model_name
-      # must honour it; advertise the minimum across an uneven pool.
-      # What this deployment serves, not what the model supports. Native is
-      # 262144; served at 32k because that is what gives 40x concurrency on
-      # a 96GB card, and observed p95 prompt length is 11,325 tokens.
+      # must honour it; advertise the minimum across an uneven pool, or
+      # identical requests behave differently depending on where they land.
       #
-      # If a second instance ever serves a different window, the pool must
-      # advertise the minimum across it or identical requests behave
-      # differently depending on where they land.
-      context_window: 32768
+      # What this deployment serves, not what the model supports. Native is
+      # 262144. Served at 131072 to match Gemma, so callers need not track
+      # which model has which window. Measured KV cache on a 96GB card is
+      # 1,310,720 tokens, giving ~10x concurrency here against 40x at 32k.
+      #
+      # Raised from 32768 after that truncated a code-generation task.
+      context_window: 131072
       license: Apache-2.0
       openness: open-weight
       weights_distribution: "Qwen/Qwen3.8-27B-FP8 (HF, FP8) · vLLM"
