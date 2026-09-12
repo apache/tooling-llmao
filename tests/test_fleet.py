@@ -6,10 +6,12 @@ import yaml
 from easydict import EasyDict as edict
 
 from llmao.fleet import (
+    Fleet,
     UnknownHost,
     client_ip,
     config_for_host,
     normalize_peer_ip,
+    parse_host_row,
     validate_fleet,
 )
 from llmao.models import load_model_list
@@ -156,3 +158,61 @@ def test_from_row_falls_back_to_fleet_api_key():
     models = load_model_list(EXAMPLE)          # catalog carries no api_key
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
     assert payload["servers"][0]["api_key"] == "sk-fleet"
+
+def test_host_row_pins_public_port():
+    """[model, port, name, public_port] survives a provider lookup.
+
+    Vast exposes its container->public mapping through an API; RunPod does
+    not. Without a way to state the public port in config, a RunPod box gets
+    no api_base, never goes healthy, and shows unavailable with nothing in
+    the UI to say why.
+    """
+    assert parse_host_row(["qwen3-8b", 8003], "h", 0) == ("qwen3-8b", 8003, "qwen3-8b", None)
+    assert parse_host_row(["qwen3-8b", 8003, "b"], "h", 0) == ("qwen3-8b", 8003, "b", None)
+    assert parse_host_row(["qwen3-8b", 8003, "b", 15601], "h", 0) == (
+        "qwen3-8b", 8003, "b", 15601,
+    )
+
+
+def test_host_row_null_name_reaches_the_fourth_slot():
+    """null for name is how you pin a port without renaming the server."""
+    model, port, name, public = parse_host_row(["qwen3-8b", 8003, None, 15601], "h", 0)
+    assert name == "qwen3-8b"      # falls back to the model name
+    assert public == 15601
+
+
+def test_host_row_rejects_bad_public_port():
+    with pytest.raises(ValueError, match="public_port must be an int"):
+        parse_host_row(["qwen3-8b", 8003, None, "nope"], "h", 0)
+    with pytest.raises(ValueError, match="must be"):
+        parse_host_row(["qwen3-8b", 8003, "b", 1, 2], "h", 0)
+
+
+def test_pinned_port_survives_apply_port_map():
+    """A provider map must not overwrite what config stated.
+
+    apply_port_map runs on every refresh. Without the guard it would log
+    "no instance for fleet host" against a RunPod box on every cycle, and a
+    future resolver could replace a correct pinned value with a guess.
+    """
+    cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003, None, 15601]]})
+    fleet = Fleet.from_cfg(cfg, models=load_model_list(EXAMPLE))
+    srv = fleet.servers[0]
+    assert srv.public_port == 15601
+    assert srv.public_port_pinned is True
+    assert srv.api_base == "http://1.2.3.4:15601"
+
+    # A map that knows nothing about this host, then one that disagrees.
+    fleet.apply_port_map({})
+    assert srv.public_port == 15601
+    fleet.apply_port_map({"1.2.3.4": {"8003": 99999}})
+    assert srv.public_port == 15601
+
+
+def test_unpinned_port_still_follows_the_provider_map():
+    cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003]]})
+    fleet = Fleet.from_cfg(cfg, models=load_model_list(EXAMPLE))
+    srv = fleet.servers[0]
+    assert srv.public_port_pinned is False
+    fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})
+    assert srv.public_port == 12711

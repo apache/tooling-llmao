@@ -58,20 +58,42 @@ def client_ip(*, remote_addr: str | None, forwarded_for: str | None) -> str:
     return normalize_peer_ip(remote_addr)
 
 
-def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str]:
-    if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3):
+def parse_host_row(
+    raw: Any, host: str, index: int
+) -> tuple[str, int, str, int | None]:
+    """[model, port] | [model, port, name] | [model, port, name, public_port]
+
+    The fourth element pins the public port for providers whose mapping we
+    cannot look up. Vast exposes one through its API; RunPod does not, so a
+    RunPod box would otherwise never get an api_base and could never go
+    healthy -- the model simply shows unavailable with nothing to say why.
+
+    Use null for `name` to reach the fourth slot without renaming a server:
+
+        - [qwen3.8-27b, 8004, null, 16643]
+    """
+    if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3, 4):
         raise ValueError(
-            f"fleet.hosts.{host}[{index}] must be [model, port] or [model, port, name]"
+            f"fleet.hosts.{host}[{index}] must be [model, port], "
+            f"[model, port, name] or [model, port, name, public_port]"
         )
     model_name = str(raw[0]).strip()
     try:
         port = int(raw[1])
     except (TypeError, ValueError) as e:
         raise ValueError(f"fleet.hosts.{host}[{index}] port must be an int") from e
-    name = str(raw[2]).strip() if len(raw) == 3 else model_name
+    name = str(raw[2]).strip() if len(raw) >= 3 and raw[2] is not None else model_name
+    public_port = None
+    if len(raw) == 4 and raw[3] is not None:
+        try:
+            public_port = int(raw[3])
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"fleet.hosts.{host}[{index}] public_port must be an int"
+            ) from e
     if not model_name or not name:
         raise ValueError(f"fleet.hosts.{host}[{index}] needs model and name")
-    return model_name, port, name
+    return model_name, port, name, public_port
 
 
 def validate_fleet(cfg: Any, models: list | None = None) -> None:
@@ -114,7 +136,7 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
         seen_names: set[str] = set()
         seen_ports: set[int] = set()
         for i, raw in enumerate(rows):
-            model_name, port, label = parse_host_row(raw, host, i)
+            model_name, port, label, _ = parse_host_row(raw, host, i)
             if model_name not in catalog:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
             if not by_name[model_name].model_info.self_hosted:
@@ -143,7 +165,9 @@ def config_for_host(
     by_name = {model.model_name: model for model in models}
     servers = []
     for i, raw in enumerate(cfg.fleet.hosts[host]):
-        model_name, port, name = parse_host_row(raw, host, i)
+        # The box is told its listen port; the public port is ours, not its
+        # business -- it binds inside the container.
+        model_name, port, name, _ = parse_host_row(raw, host, i)
         servers.append(
             VllmServer.from_row(
                 host, model_name, port, name, by_name[model_name], cfg
@@ -184,6 +208,11 @@ class VllmServer:
         self.host = host
         self.listen_port = int(listen_port)
         self.public_port = int(public_port) if public_port is not None else None
+        # Set when the port came from the host row rather than a provider
+        # API. apply_port_map leaves these alone -- otherwise a Vast lookup
+        # that does not know this host would log a warning and, worse, a
+        # future resolver could overwrite a correct value with a guess.
+        self.public_port_pinned = False
         self.hf_model = hf_model
         self.api_key = api_key
         self.args = args
@@ -432,11 +461,15 @@ class Fleet:
         for host, rows in cfg.fleet.hosts.items():
             host = str(host).strip()
             for i, raw in enumerate(rows):
-                model_name, port, name = parse_host_row(raw, host, i)
+                model_name, port, name, public = parse_host_row(raw, host, i)
                 srv = VllmServer.from_row(
                     host, model_name, port, name, by_name[model_name], cfg
                 )
-                if local:
+                if public is not None:
+                    # Pinned in config: no provider lookup can override it.
+                    srv.public_port = public
+                    srv.public_port_pinned = True
+                elif local:
                     srv.public_port = srv.listen_port
                 servers.append(srv)
         deployments = [FleetDeployment.from_vllm(s) for s in servers]
@@ -449,8 +482,15 @@ class Fleet:
         self.config_fetch_at[host] = now if now is not None else time.time()
 
     def apply_port_map(self, mapping: Any) -> None:
-        """Set public_port from Vast IP → listen → HostPort. Leave unset if missing."""
+        """Set public_port from Vast IP → listen → HostPort. Leave unset if missing.
+
+        Servers with a pinned public_port are skipped: the host row is more
+        authoritative than a provider lookup that may not cover the host at
+        all.
+        """
         for srv in self.servers:
+            if srv.public_port_pinned:
+                continue
             by_listen = mapping.get(srv.host) if mapping is not None else None
             if not by_listen:
                 _LOGGER.info(f"vast: no instance for fleet host {srv.host}")
