@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Check every model the gateway advertises, end to end.
+
+    export LLMAO_KEY=sk-...          # a PAT from My Keys
+    llmao-smoke                      # all models
+    llmao-smoke --model qwen3-8b
+    llmao-smoke --direct             # bypass LiteLLM; needs VLLM_API_KEY
+
+Run this after any change to a model, a box, or the gateway. It is the
+"is it still working" test, not a benchmark -- one request at a time, small
+budgets, under a minute for the whole fleet.
+
+Six checks per model:
+
+  completion      does it answer at all
+  thinking off    does enable_thinking:false actually suppress reasoning
+  tool calling    does a tools payload come back as tool_calls
+  vision          only for models the catalog claims support it
+  long output     does a multi-thousand-token generation survive the proxy
+  large prompt    does a prompt at half the model's window get accepted
+                  (sized per model -- a fixed 25k exceeds the 8B's whole
+                  40,960-token window)
+
+WHAT THE OUTPUT MEANS
+
+  finish=length with content empty
+      A reasoning model spent its whole budget thinking. Tokens billed,
+      nothing returned, HTTP 200, no error. Send enable_thinking:false or
+      raise max_tokens.
+
+  tool calling: none
+      Either the tool-call parser is wrong for the model, or the model chose
+      not to call. Check which on the box:
+        curl -sS http://HOST:PORT/metrics | grep tool_call_parser_invocations
+      outcome="no_tool_call" climbing means the parser ran and declined.
+
+  a 502 at almost exactly 60s
+      Apache's default ProxyTimeout. Should be 1800 now; if this reappears
+      the vhost config has regressed.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import struct
+import sys
+import time
+import urllib.error
+import urllib.request
+import zlib
+
+GATEWAY = "https://llm.apache.org/v1/chat/completions"
+
+# No endpoints are committed here. --direct discovers them from LiteLLM's
+# routing table on the gateway host, or from LLMAO_DIRECT_<MODEL> env vars
+# elsewhere. See _discover.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _discover import direct_endpoints          # noqa: E402
+
+# Models whose catalog entry claims image support. Checked rather than
+# assumed -- the claim is only worth having if it works.
+VISION = {"gemma4-26b", "qwen3.8-27b"}
+
+OK, BAD, WARN = "\033[32m✓\033[0m", "\033[31m✗\033[0m", "\033[33m!\033[0m"
+
+
+def red_square_png() -> str:
+    """An 8x8 red PNG as base64.
+
+    Generated rather than fetched: vLLM pulls image URLs server-side and some
+    hosts (Wikimedia among them) return 403 to it, which surfaces as a
+    confusing 422 that looks like the model rejecting images.
+    """
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+    raw = b"".join(b"\x00" + bytes([255, 0, 0] * 8) for _ in range(8))
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode()
+
+
+def call(url: str, key: str, body: dict, timeout: int = 900) -> dict:
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}",
+                 "Content-Type": "application/json"})
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode()
+    except urllib.error.HTTPError as e:
+        return {"err": f"HTTP {e.code}", "detail": e.read().decode()[:100],
+                "wall": time.monotonic() - t0}
+    except Exception as e:
+        return {"err": type(e).__name__, "detail": str(e)[:100],
+                "wall": time.monotonic() - t0}
+    wall = time.monotonic() - t0
+
+    # A backend error can arrive as HTTP 200 with a body of literal null --
+    # seen when vLLM returned 422 for an unfetchable image URL.
+    if not raw.strip() or raw.strip() == "null":
+        return {"err": "null body", "detail": "", "wall": wall}
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return {"err": "bad JSON", "detail": raw[:100], "wall": wall}
+    if not isinstance(d, dict) or d.get("error"):
+        e = d.get("error") if isinstance(d, dict) else d
+        msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
+        return {"err": "api error", "detail": msg[:100], "wall": wall}
+
+    c = d["choices"][0]
+    m = c["message"]
+    return {
+        "wall": wall,
+        "content": m.get("content") or "",
+        "reasoning": m.get("reasoning") or "",
+        "tool_calls": m.get("tool_calls") or [],
+        "finish": c["finish_reason"],
+        "tokens": d["usage"]["completion_tokens"],
+        "prompt_tokens": d["usage"]["prompt_tokens"],
+    }
+
+
+def context_window(chat_url: str, key: str) -> int:
+    """The model's window, from whichever endpoint we are pointed at.
+
+    Through the gateway LiteLLM does not report max_model_len, so this
+    returns 0 there and the caller falls back to a safe default. Direct to a
+    box it gives the real figure.
+    """
+    url = chat_url.replace("/chat/completions", "/models")
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            for m in json.load(r).get("data", []):
+                if m.get("max_model_len"):
+                    return int(m["max_model_len"])
+    except Exception:
+        pass
+    return 0
+
+
+def line(label: str, mark: str, detail: str) -> None:
+    print(f"    {mark} {label:16} {detail}")
+
+
+def check(model: str, url: str, key: str) -> int:
+    print(f"\n  {model}")
+    fails = 0
+
+    r = call(url, key, {"model": model,
+                        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                        "max_tokens": 200})
+    if "err" in r:
+        line("completion", BAD, f"{r['err']}: {r['detail']}")
+        return 1                       # nothing else will work either
+    line("completion", OK, f"{r['tokens']} tok, {r['wall']:.1f}s, "
+                           f"finish={r['finish']}")
+
+    # The override is the only control callers have over reasoning, and it
+    # matters: a low max_tokens with reasoning on returns nothing at all.
+    r = call(url, key, {"model": model,
+                        "messages": [{"role": "user", "content": "Name the three branches of the US federal government."}],
+                        "chat_template_kwargs": {"enable_thinking": False},
+                        "max_tokens": 200})
+    if "err" in r:
+        line("thinking off", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+    elif r["reasoning"]:
+        line("thinking off", WARN, f"{len(r['reasoning'])} reasoning chars "
+                                   f"-- the kwarg is not taking effect")
+        fails += 1
+    elif not r["content"]:
+        line("thinking off", BAD, f"empty content, finish={r['finish']}"); fails += 1
+    else:
+        line("thinking off", OK, "no reasoning emitted")
+
+    tools = [{"type": "function", "function": {
+        "name": "get_weather", "description": "Get current weather",
+        "parameters": {"type": "object",
+                       "properties": {"city": {"type": "string"}},
+                       "required": ["city"]}}}]
+    r = call(url, key, {"model": model,
+                        "messages": [{"role": "user", "content": "What is the weather in Portland? Use the get_weather tool."}],
+                        "tools": tools, "tool_choice": "auto", "max_tokens": 400})
+    if "err" in r:
+        line("tool calling", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+    elif r["tool_calls"]:
+        fn = r["tool_calls"][0]["function"]
+        line("tool calling", OK, f"{fn['name']} {fn['arguments']}")
+    else:
+        # If the raw syntax is sitting in content, the parser is wrong for
+        # this model rather than the model declining.
+        hint = " (raw call is in content -- wrong parser)" if "<tool_call>" in r["content"] or "<function" in r["content"] else ""
+        line("tool calling", BAD, f"no tool_calls{hint}"); fails += 1
+
+    if model in VISION:
+        img = f"data:image/png;base64,{red_square_png()}"
+        r = call(url, key, {"model": model, "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "What colour is this image? One word."},
+            {"type": "image_url", "image_url": {"url": img}}]}],
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 50})
+        if "err" in r:
+            line("vision", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+        elif "red" in r["content"].lower():
+            line("vision", OK, r["content"].strip()[:40])
+        else:
+            line("vision", WARN, f"unexpected: {r['content'].strip()[:40]}")
+
+    # Anything over a minute used to die at Apache's default ProxyTimeout.
+    r = call(url, key, {"model": model, "messages": [{"role": "user", "content":
+        "Write a detailed technical guide to PostgreSQL index types. Cover "
+        "B-tree, Hash, GiST, SP-GiST, GIN and BRIN with examples."}],
+        "chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 4000})
+    if "err" in r:
+        extra = "  <-- looks like a proxy timeout" if 55 < r["wall"] < 70 else ""
+        line("long output", BAD, f"{r['err']} after {r['wall']:.0f}s{extra}"); fails += 1
+    else:
+        line("long output", OK, f"{r['tokens']} tok in {r['wall']:.0f}s "
+                                f"({r['tokens']/r['wall']:.0f} tok/s)")
+
+    # Sized to the model, not a fixed 25k: vLLM rejects a request whose
+    # prompt plus max_tokens exceeds the window, and the 8B's whole window is
+    # 40,960. Aim at half of it, which exercises a large prompt on every
+    # model without ever being the wrong test.
+    window = context_window(url, key) or 40960
+    target = max(4000, window // 2)
+    filler = "The quick brown fox jumps over the lazy dog. " * (target // 11)
+    r = call(url, key, {"model": model, "messages": [{"role": "user",
+        "content": filler + "\n\nHow many words is that, to the nearest thousand?"}],
+        "chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 100})
+    label = f"{target // 1000}k prompt"
+    if "err" in r:
+        line(label, BAD, f"{r['err']}: {r['detail']}"); fails += 1
+    else:
+        line(label, OK, f"{r['prompt_tokens']} tok accepted, {r['wall']:.1f}s")
+    return fails
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", action="append")
+    ap.add_argument("--direct", action="store_true",
+                    help="hit the boxes directly; isolates gateway problems")
+    args = ap.parse_args()
+
+    var = "VLLM_API_KEY" if args.direct else "LLMAO_KEY"
+    key = os.environ.get(var)
+    if not key:
+        sys.exit(f"export {var} first")
+
+    endpoints = direct_endpoints() if args.direct else {}
+    if args.direct and not endpoints:
+        sys.exit("no direct endpoints found.\n"
+                 "  on the gateway host: run as root, or export MK=<master key>\n"
+                 "  elsewhere: export LLMAO_DIRECT_QWEN3_8B=host:port\n"
+                 "  or drop --direct to test through the gateway")
+
+    if args.model:
+        models = args.model
+    elif args.direct:
+        models = sorted(endpoints)
+    else:
+        req = urllib.request.Request(
+            "https://llm.apache.org/v1/models",
+            headers={"Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            models = sorted(m["id"] for m in json.load(r)["data"])
+        print(f"gateway advertises: {models}")
+
+    total = 0
+    for m in models:
+        if args.direct:
+            hp = endpoints.get(m)
+            if not hp:
+                print(f"\n  {m}\n    {WARN} no direct endpoint discovered")
+                continue
+            url = f"http://{hp}/v1/chat/completions"
+        else:
+            url = GATEWAY
+        total += check(m, url, key)
+
+    print(f"\n{'all checks passed' if not total else str(total) + ' check(s) failed'}")
+    sys.exit(1 if total else 0)
+
+
+if __name__ == "__main__":
+    main()
