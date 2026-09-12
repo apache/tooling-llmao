@@ -74,6 +74,76 @@ model_list:
       notes: >-
         MoE, ~4B active. General/multimodal/agentic default. Served off-host
         at BF16 on an 80GB card.
+
+  - model_name: qwen3.8-27b
+    litellm_params:
+      model: openai/qwen3.8-27b
+    model_info:
+      vllm:
+        model: Qwen/Qwen3.8-27B-FP8
+        source:
+          kind: hf
+        # Weights only -- KV cache comes out of what is left, so a box with
+        # exactly this free will pass the fit check and still not serve
+        # usefully.
+        #
+        # 29 GiB derived from the 8B below, which measured 8.8 GiB for 8.2B
+        # params (1.07 GiB/B at FP8). Rounded up so the check fails closed.
+        # Cannot be read from nvidia-smi: vLLM allocates 0.90 of the card
+        # regardless of model size, because KV expands to fill it.
+        vram_gb: 30
+        # 29G measured in /workspace/.hf_home; 35 leaves room for the torch
+        # compile cache.
+        disk_gb: 35
+        # 32768 rather than the model's native 262144. Measured on a
+        # 96GB RTX PRO 6000: 32k gives 1,310,720 tokens of KV cache and
+        # 40x concurrency. Reserving cache for 262k would cut that to ~5x,
+        # for a window nothing in LiteLLM_SpendLogs comes near -- p95 of
+        # observed prompts is 11,325 tokens.
+        max_model_len: 32768
+        args:
+          - --kv-cache-dtype
+          - fp8
+          - --enable-prefix-caching
+          - --reasoning-parser
+          - qwen3
+          - --enable-auto-tool-choice
+          # Per model family. Gemma uses gemma4, the 8B below uses
+          # qwen3_xml. An invalid name fails at vLLM startup.
+          - --tool-call-parser
+          - qwen3_coder
+      display_name: "Qwen3.8 27B (self-hosted, multimodal)"
+      provider: self-host
+      # The contract with callers. Every instance serving this model_name
+      # must honour it; advertise the minimum across an uneven pool.
+      # What this deployment serves, not what the model supports. Native is
+      # 262144; served at 32k because that is what gives 40x concurrency on
+      # a 96GB card, and observed p95 prompt length is 11,325 tokens.
+      #
+      # If a second instance ever serves a different window, the pool must
+      # advertise the minimum across it or identical requests behave
+      # differently depending on where they land.
+      context_window: 32768
+      license: Apache-2.0
+      openness: open-weight
+      weights_distribution: "Qwen/Qwen3.8-27B-FP8 (HF, FP8) · vLLM"
+      training_data_provenance: "undisclosed (Alibaba)"
+      provenance_record: absent
+      self_hosted: true
+      # NOT VERIFIED. The model card says multimodal and the config has a
+      # vision tower, but no image has been sent through this deployment.
+      # Confirm before advertising it.
+      modality: text+vision
+      supports_thinking: true
+      # Measured, not assumed: a one-sentence prompt with no kwarg returned
+      # 3,206 completion tokens, most of it in `reasoning`. Opposite of
+      # Gemma. A fast path must send enable_thinking:false.
+      thinks_by_default: true
+      notes: >-
+        Dense 27B, hybrid GatedDeltaNet + periodic full attention. Capable
+        tier. Native window is 262k; served at 32k for concurrency.
+        Measured ~46 tok/s single-stream on an RTX PRO 6000.
+
   - model_name: qwen3-8b
     litellm_params:
       model: openai/qwen3-8b
@@ -82,31 +152,38 @@ model_list:
         model: Qwen/Qwen3-8B-FP8
         source:
           kind: hf
-        vram_gb: 8
-        disk_gb: 18
+        # Measured: "Model loading took 8.8 GiB" in the vLLM startup log.
+        # Rounded up so the fit check fails closed.
+        vram_gb: 9
+        # 8.9G measured in /workspace/.hf_home.
+        disk_gb: 12
+        # 40,960 is this model's max_position_embeddings -- an
+        # architectural ceiling, not a choice. vLLM refuses higher, and
+        # VLLM_ALLOW_LONG_MAX_MODEL_LEN produces NaN on this RoPE model.
         max_model_len: 40960
-        vram_gb: 8       # FP8
-        disk_gb: 18
         args:
+          - --kv-cache-dtype
+          - fp8
+          - --enable-prefix-caching
           - --reasoning-parser
           - qwen3
+          - --enable-auto-tool-choice
+          - --tool-call-parser
+          - qwen3_xml
       display_name: "Qwen3 8B (self-hosted, fast)"
-      # 40,960 is this model's max_position_embeddings -- an architectural
-      # ceiling, not a tuning choice. vLLM refuses higher at startup, and
-      # VLLM_ALLOW_LONG_MAX_MODEL_LEN produces NaN on this RoPE model.
+      provider: self-host
       context_window: 40960
       license: Apache-2.0
       openness: open-weight
-      weights_distribution: "Qwen/Qwen3-8B-FP8 (HF) · vLLM"
+      weights_distribution: "Qwen/Qwen3-8B-FP8 (HF, FP8) · vLLM"
       training_data_provenance: "undisclosed (Alibaba)"
       provenance_record: absent
       self_hosted: true
       modality: text
       supports_thinking: true
-      # Opposite of Gemma: Qwen reasons UNLESS told not to. A fast tier must
-      # actively send enable_thinking:false, and a low max_tokens returns
-      # content:null with the whole budget spent in reasoning_content.
       thinks_by_default: true
       notes: >-
-        Fast lightweight tier for routine/cheap calls. Reasoning model
-        (vLLM --reasoning-parser qwen3).
+        Fast tier for routine calls. Reasoning on by default -- send
+        enable_thinking:false to keep it cheap. Measured ~50 tok/s
+        single-stream on an RTX 4090, GPU at 99% and full boost clocks --
+        the advantage over the 27B is concurrency, not per-request speed.
