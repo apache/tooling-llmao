@@ -1,6 +1,6 @@
 # llmao
 
-Tooling’s **implementation** of the ASF LLM gateway seam at `llm.apache.org`.
+Tooling’s **implementation** of the ASF LLM gateway at `llm.apache.org`.
 
 **What this app is for:** Apache-facing control plane for **shared, attributed,
 limited** access to Foundation-sanctioned inference. You sign in with ASF,
@@ -102,9 +102,89 @@ make test          # offline seam + model_list tests (no OAuth session automatio
 
 **Projects** (envelopes, member caps, by-person usage) and **Reports** are product intent — see design §6 and the UX backlog in [`docs/STATUS.md`](docs/STATUS.md).
 
-Full status and phased UI plan: **[`docs/STATUS.md`](docs/STATUS.md)**.
-Product design: **rai-private** `services/llmao/README.md`.
-Ops: Infra **`p6/modules/llmao/README.md`**.
+### Things worth knowing before you call a model
+
+**Reasoning defaults differ by model, and the failure is silent.** Some models
+reason unless told not to; others do the reverse. A request with a small
+`max_tokens` to a reasoning model can spend the whole budget thinking and
+return **nothing** — HTTP 200, empty `content`, `finish_reason: length`, no
+error. To turn it off:
+
+```json
+"chat_template_kwargs": {"enable_thinking": false}
+```
+
+**Prompt and output share the context window.** vLLM rejects a request where
+prompt tokens + `max_tokens` exceeds the model's window, so the two are not
+independent. A client configured with a max-tokens larger than the window gets
+a 400 before any prompt is counted — and raising the client's context setting
+makes it worse, not better.
+
+**Truncation at a round number is a budget, not the model.** Raise
+`max_tokens`. Truncation at a round wall-clock time is a proxy timeout.
+
+The **Models** page carries context window, licence and provenance per model.
+
+---
+
+## Connecting your agent
+
+The gateway speaks both the OpenAI and Anthropic APIs, so most agents work
+with environment variables alone.
+
+### Claude Code
+
+```bash
+export ANTHROPIC_BASE_URL=https://llm.apache.org
+export ANTHROPIC_AUTH_TOKEN=<your PAT from My Keys>
+export ANTHROPIC_MODEL=gemma4-26b
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000
+claude
+```
+
+LiteLLM exposes `/v1/messages`, so Claude Code talks to it without a shim.
+
+**`CLAUDE_CODE_MAX_CONTEXT_TOKENS` matters.** Claude Code assumes a 200k
+window for a model it does not recognise and auto-compacts too late; requests
+then fail once prompt + output exceeds the real window. Set it below the
+model's window — 120000 against 131072 leaves room for the response.
+
+**Pick a model whose reasoning is off by default.** A model that reasons
+before answering emits nothing for a minute or more, and Claude Code abandons
+the stream and retries. The retries stack: we watched a box run the same
+expensive generation twice for a response nobody was reading. `gemma4-26b`
+starts emitting immediately and works well.
+
+**`--effort` may be needed.** Claude Code sends `reasoning_effort: high` by
+default, and not every model accepts that value — Qwen3.8-27B takes only
+`xhigh`, `medium` and `low`, and 400s on `high`. `claude --effort medium`
+sets it. Gemma accepts all five levels, so no flag is needed there.
+
+**Tool use is currently broken through the Anthropic path.** LiteLLM routes
+it to vLLM's `/v1/responses` endpoint with a `tool_choice` shape vLLM does
+not accept, so web search and other tools fail with a validation error.
+Tracked — the likely fix is the `hosted_vllm/` provider prefix on routes.
+Plain conversation is unaffected.
+
+### Pi
+
+_Placeholder._
+
+Pi connects over the OpenAI-compatible API. Known so far: its `contextWindow`
+and `maxTokens` settings must sum to less than the model's window, or vLLM
+rejects the request — `maxTokens` larger than the window on its own is an
+immediate 400.
+
+To be filled in with a working configuration.
+
+### Anything OpenAI-compatible
+
+```bash
+export OPENAI_BASE_URL=https://llm.apache.org/v1
+export OPENAI_API_KEY=<your PAT>
+```
+
+`GET /v1/models` lists what your key can reach.
 
 ---
 
@@ -149,21 +229,58 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
-Self-host catalog models run as **vLLM** processes on GPU boxes (Vast today).
-LiteLLM stays in front for PATs and project budgets, and is also where fleet
-state lives: a **deployment** `api_base` is the public host and port.
-`GET /vllm/config` still comes from `fleet.hosts` (listen ports) plus the
-catalog. Boxes fetch it with template `FLEET_KEY`.
-See [`hosting/README.md`](hosting/README.md),
-[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md), and
-[`docs/fleet-state.md`](docs/fleet-state.md).
+Self-host catalog models run as **vLLM** processes on GPU boxes (Vast and
+RunPod today). LiteLLM stays in front for PATs and project budgets, and is
+also where fleet state lives: a **deployment** `api_base` is the public host
+and port. `GET /vllm/config` still comes from `fleet.hosts` (listen ports)
+plus the catalog. Boxes fetch it with template `FLEET_KEY`.
 
-Example inventory today (`model_list.yaml.example`): `gemma4-26b`, `qwen3-8b`.
+See [`hosting/README.md`](hosting/README.md),
+[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) and
+[`docs/fleet-state.md`](docs/fleet-state.md). Operational detail — what is
+running where, and the exact launch commands — is kept out of this repo.
+
 `model_list.yaml` is the **catalog** — what each model is, its licence and
 provenance, and the vLLM recipe. Routes are *instances* of a catalog entry and
-live in LiteLLM's database (`store_model_in_db`), created when a server
-is serving and removed when it goes down. Cache/logs live under `$DATA_DIRECTORY` on the
-box (typically `/workspace`), not in the config JSON.
+live in LiteLLM's database (`store_model_in_db`), created when a server is
+serving and removed when it goes down. Cache and logs live under
+`$DATA_DIRECTORY` on the box (typically `/workspace`), not in the config JSON.
+
+**Port resolution differs by provider.** Vast exposes its container-to-public
+mapping through an API, so those hosts resolve automatically. RunPod does not,
+so a RunPod host must state its public port in the `fleet.hosts` row — an
+optional fourth element. RunPod also reassigns the port on every pod recreate,
+even when the pod lands on the same machine.
+
+---
+
+## Testing and load
+
+Both scripts discover endpoints at runtime rather than carrying them in the
+repo. See [`bin/README.md`](bin/README.md).
+
+```bash
+export LLMAO_KEY=<a PAT>
+./bin/llmao-smoke                    # every model: completion, reasoning
+                                     # control, tool calling, vision, long
+                                     # output, large prompt
+./bin/llmao-smoke --direct           # bypass LiteLLM; the difference between
+                                     # the two runs is the gateway's overhead
+```
+
+```bash
+export VLLM_API_KEY=<llmao::selfhost_api_key>
+./bin/llmao-saturate --model <model> # ramp concurrency until something queues,
+                                     # and say whether the limit is the
+                                     # scheduler or memory
+```
+
+`llmao-smoke` exits non-zero on failure, so it works in CI. Run it after any
+change to a model, a box, or the gateway.
+
+`llmao-saturate` needs to reach the boxes directly, so it runs on the gateway
+host. **Do not run the two together** — smoke queueing behind a saturation
+ramp produces numbers that look like a regression and are not.
 
 ---
 
@@ -176,6 +293,9 @@ api.py                   JSON /healthz, /vllm/config, /v1/*
 templates/ static/       EZT + Bootstrap
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
 bin/gen-litellm-master-key.sh   print sk-… for admin key
+bin/llmao-smoke          end-to-end checks across every model
+bin/llmao-saturate       concurrency ramp; finds the queueing point
+bin/_discover.py         endpoint discovery shared by both (no committed IPs)
 config.yaml.example      → config.yaml (gitignored; secrets)
 litellm.yaml.example     → litellm.yaml (no catalog include; store_model_in_db)
 model_list.yaml.example  → model_list.yaml (catalog for llmao; no secrets)
