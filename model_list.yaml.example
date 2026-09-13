@@ -18,6 +18,13 @@
 # self_hosted (boolean, required): true = vLLM recipe + fleet.hosts placement;
 # api_base/api_key are per instance at registration. false = commercial; require
 # a static litellm_params.api_base (fail-fast). Nothing here is secret.
+#
+# On --max-num-batched-tokens, which every self-hosted entry sets:
+# vLLM defaults it to 2048, and that default admitted only 2-3 concurrent
+# requests on every box here while 90% of the KV cache sat idle -- requests
+# spent 4.3x longer queued than being processed. It is NOT a property of the
+# model: it scales with the card's headroom, and a value that is right on a
+# 96GB card will OOM a 24GB one and kill the engine outright.
 model_list:
   - model_name: gemma4-26b
     # Protocol and served name only. api_base and api_key are added per
@@ -29,33 +36,36 @@ model_list:
         model: google/gemma-4-26B-A4B-it
         source:
           kind: hf                # hf | url | registry | local
-        # Requirements, so a box can reject before pulling ~50GB. Host
-        # capacity is DISCOVERED on the box (nvidia-smi), never declared
-        # here -- a hand-typed VRAM figure is wrong the first time a
-        # provider supplies a different card than was ordered.
-        vram_gb: 49
-        disk_gb: 55
-        # Explicit, not inherited. A --max-model-len above the measured KV
-        # cache produces hangs rather than errors, so this is a decision.
-        max_model_len: 131072
-        # Declared requirements. Served to the box, which checks them against
-        # nvidia-smi and df before pulling weights -- the alternative is a
-        # fifteen-minute download followed by an engine-init failure whose
-        # message does not mention memory.
+        # Declared requirements, so a box can reject before pulling ~50GB.
+        # Host capacity is DISCOVERED on the box (nvidia-smi), never declared
+        # here -- a hand-typed VRAM figure is wrong the first time a provider
+        # supplies a different card than was ordered.
         #
         # Weights only. KV cache comes out of whatever is left, which is why
         # a box with exactly vram_gb free still will not serve usefully.
         vram_gb: 49      # BF16, measured at load
         disk_gb: 55
+        # Explicit, not inherited. A --max-model-len above the measured KV
+        # cache produces hangs rather than errors, so this is a decision.
+        max_model_len: 131072
         args:
           - --dtype
           - bfloat16
+          - --enable-chunked-prefill
+          # 16384 against the 2048 default. Suits an 80GB card; see the note
+          # at the top of this file before copying it elsewhere.
+          - --max-num-batched-tokens
+          - "16384"
           - --reasoning-parser
           - gemma4
           - --enable-auto-tool-choice
+          # Per model family, and the names mislead. Verify a new one by
+          # running each candidate parser against the model's real output
+          # rather than guessing from its name.
           - --tool-call-parser
           - gemma4
       display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
+      provider: self-host
       # The CONTRACT with callers. Every instance serving this model_name must
       # honour it; where a pool is uneven, advertise the minimum across it.
       context_window: 131072
@@ -65,15 +75,22 @@ model_list:
       training_data_provenance: "undisclosed (Google DeepMind)"
       provenance_record: absent
       self_hosted: true
+      # Verified: correctly identified a base64 data-URL test image.
       modality: text+vision
       supports_thinking: true
       # Measured through the proxy, not assumed: with no kwarg sent, Gemma
       # emits 0 chars of reasoning and Qwen emits ~890. Callers must send
       # enable_thinking:true to get reasoning from this model.
+      #
+      # Reasoning being off by default is why this is the model that works
+      # with interactive agents: tokens start immediately, where a reasoning
+      # model emits nothing for a minute and impatient clients give up.
       thinks_by_default: false
       notes: >-
         MoE, ~4B active. General/multimodal/agentic default. Served off-host
-        at BF16 on an 80GB card.
+        at BF16 on an 80GB card. Sustains ~124 tok/s on long generations
+        against ~60 on short ones -- short-prompt figures are mostly
+        round-trip overhead.
 
   - model_name: qwen3.8-27b
     litellm_params:
@@ -89,26 +106,35 @@ model_list:
         #
         # 29 GiB derived from the 8B below, which measured 8.8 GiB for 8.2B
         # params (1.07 GiB/B at FP8). Rounded up so the check fails closed.
-        # Cannot be read from nvidia-smi: vLLM allocates 0.90 of the card
-        # regardless of model size, because KV expands to fill it.
+        # Cannot be read from nvidia-smi: vLLM allocates its utilisation
+        # fraction of the card regardless of model size, because KV expands
+        # to fill it.
         vram_gb: 30
         # 29G measured in /workspace/.hf_home; 35 leaves room for the torch
         # compile cache.
         disk_gb: 35
         # 131072, matching Gemma so callers need not track which model has
-        # which window. Measured KV cache on a 96GB card is 1,310,720 tokens,
-        # giving ~10x concurrency here against 40x at 32k. Raised after 32k
-        # truncated a code-generation task.
+        # which window. Native maximum is 262144; serving that would cost
+        # concurrency, since the cache is spent on fewer, longer requests.
+        #
+        # Raised from 32768 after that truncated a code-generation task.
         max_model_len: 131072
         args:
           - --kv-cache-dtype
           - fp8
           - --enable-prefix-caching
+          - --enable-chunked-prefill
+          # 16384 against the 2048 default. On a 96GB card this took the box
+          # from 2 concurrent requests to 38. See the note at the top of this
+          # file: the value scales with headroom, not with the model.
+          - --max-num-batched-tokens
+          - "16384"
           - --reasoning-parser
           - qwen3
           - --enable-auto-tool-choice
-          # Per model family. Gemma uses gemma4, the 8B below uses
-          # qwen3_xml. An invalid name fails at vLLM startup.
+          # qwen3_coder here; the 8B below needs hermes despite both being
+          # Qwen models. The parser has to match the syntax the model's chat
+          # template emits, not its name.
           - --tool-call-parser
           - qwen3_coder
       display_name: "Qwen3.8 27B (self-hosted, multimodal)"
@@ -116,13 +142,6 @@ model_list:
       # The contract with callers. Every instance serving this model_name
       # must honour it; advertise the minimum across an uneven pool, or
       # identical requests behave differently depending on where they land.
-      #
-      # What this deployment serves, not what the model supports. Native is
-      # 262144. Served at 131072 to match Gemma, so callers need not track
-      # which model has which window. Measured KV cache on a 96GB card is
-      # 1,310,720 tokens, giving ~10x concurrency here against 40x at 32k.
-      #
-      # Raised from 32768 after that truncated a code-generation task.
       context_window: 131072
       license: Apache-2.0
       openness: open-weight
@@ -130,19 +149,26 @@ model_list:
       training_data_provenance: "undisclosed (Alibaba)"
       provenance_record: absent
       self_hosted: true
-      # NOT VERIFIED. The model card says multimodal and the config has a
-      # vision tower, but no image has been sent through this deployment.
-      # Confirm before advertising it.
+      # Verified: correctly identified a base64 data-URL test image.
       modality: text+vision
       supports_thinking: true
       # Measured, not assumed: a one-sentence prompt with no kwarg returned
       # 3,206 completion tokens, most of it in `reasoning`. Opposite of
-      # Gemma. A fast path must send enable_thinking:false.
+      # Gemma. A fast path must send enable_thinking:false, and a small
+      # max_tokens without it returns content:null with the whole budget
+      # spent thinking.
       thinks_by_default: true
+      # Accepts only these, and 400s on anything else -- notably on "high",
+      # which is what several clients send by default.
+      reasoning_effort_levels: [xhigh, medium, low]
       notes: >-
         Dense 27B, hybrid GatedDeltaNet + periodic full attention. Capable
-        tier. Native window is 262k; served at 32k for concurrency.
-        Measured ~46 tok/s single-stream on an RTX PRO 6000.
+        tier, and the best of the three under concurrent load. Measured ~46
+        tok/s single-stream on an RTX PRO 6000 -- the advantage over the 8B
+        is concurrency, not per-request speed. Verbose: produced 15,561
+        tokens on a task Gemma completed in 5,277, so budget accordingly.
+        Its reasoning phase makes it a poor fit for interactive agents that
+        expect a prompt first token.
 
   - model_name: qwen3-8b
     litellm_params:
@@ -157,8 +183,8 @@ model_list:
         vram_gb: 9
         # 8.9G measured in /workspace/.hf_home.
         disk_gb: 12
-        # 40,960 is this model's max_position_embeddings -- an
-        # architectural ceiling, not a choice. vLLM refuses higher, and
+        # 40,960 is this model's max_position_embeddings -- an architectural
+        # ceiling, not a choice. vLLM refuses higher, and
         # VLLM_ALLOW_LONG_MAX_MODEL_LEN produces NaN on this RoPE model.
         max_model_len: 40960
         args:
@@ -166,11 +192,20 @@ model_list:
           - fp8
           - --enable-prefix-caching
           - --enable-chunked-prefill
+          # 4096, NOT the 16384 the larger boxes use. On a 24GB card, 16384
+          # OOM'd during an FP8 matmul at 4 concurrent 16k prompts and took
+          # EngineCore down with it -- vLLM does not degrade, it dies, and
+          # nothing brings it back.
           - --max-num-batched-tokens
           - "4096"
           - --reasoning-parser
           - qwen3
           - --enable-auto-tool-choice
+          # hermes, not qwen3_xml, despite this being a Qwen model. It emits
+          # <tool_call> blocks wrapping JSON -- the Hermes convention -- and
+          # qwen3_xml does not parse them: the call arrives as text in
+          # `content` with no tool_calls field and no error. Found by running
+          # each candidate parser against the model's real output offline.
           - --tool-call-parser
           - hermes
       display_name: "Qwen3 8B (self-hosted, fast)"
@@ -188,5 +223,7 @@ model_list:
       notes: >-
         Fast tier for routine calls. Reasoning on by default -- send
         enable_thinking:false to keep it cheap. Measured ~50 tok/s
-        single-stream on an RTX 4090, GPU at 99% and full boost clocks --
-        the advantage over the 27B is concurrency, not per-request speed.
+        single-stream on an RTX 4090 with the GPU at 99% and full boost
+        clocks, so that is the card's real rate rather than a limit worth
+        chasing. The advantage over the 27B is concurrency, not per-request
+        speed.
