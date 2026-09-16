@@ -25,12 +25,18 @@
 # spent 4.3x longer queued than being processed. It is NOT a property of the
 # model: it scales with the card's headroom, and a value that is right on a
 # 96GB card will OOM a 24GB one and kill the engine outright.
+#
+# For self-hosted models, provider is hosted_vllm/, not openai/. LiteLLM's docs
+# specify this prefix for an OpenAI-compatible vLLM server. Under openai/,
+# /v1/messages is translated to vLLM's /v1/responses and the Anthropic tool_choice
+# object is passed through unconverted, which vLLM rejects -- that is what breaks
+# tool use for Claude Code.
 model_list:
   - model_name: gemma4-26b
     # Protocol and served name only. api_base and api_key are added per
     # instance at registration.
     litellm_params:
-      model: openai/gemma4-26b
+      model: hosted_vllm/gemma4-26b
     model_info:
       vllm:
         model: google/gemma-4-26B-A4B-it
@@ -94,7 +100,7 @@ model_list:
 
   - model_name: qwen3.8-27b
     litellm_params:
-      model: openai/qwen3.8-27b
+      model: hosted_vllm/qwen3.8-27b
     model_info:
       vllm:
         model: Qwen/Qwen3.8-27B-FP8
@@ -172,7 +178,7 @@ model_list:
 
   - model_name: qwen3-8b
     litellm_params:
-      model: openai/qwen3-8b
+      model: hosted_vllm/qwen3-8b
     model_info:
       vllm:
         model: Qwen/Qwen3-8B-FP8
