@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Check every model the gateway advertises, end to end.
+"""Check every model the gateway advertises against what the catalog claims.
+
+This is a regression test, not a capability probe. It sends only values the
+catalog says a model accepts, and fails when the model does not behave as the
+catalog says it will. Use probe.py to discover what a model can do; use this
+to notice when that stops being true.
 
     export LLMAO_KEY=sk-...          # a PAT from My Keys
     llmao-smoke                      # all models
@@ -114,12 +119,33 @@ def call(url: str, key: str, body: dict, timeout: int = 900) -> dict:
         msg = e.get("message", str(e)) if isinstance(e, dict) else str(e)
         return {"err": "api error", "detail": msg[:100], "wall": wall}
 
+    # The Anthropic surface returns content blocks and no `choices`.
+    if "choices" not in d:
+        blocks = d.get("content") or []
+        return {
+            "wall": wall,
+            "content": "".join(b.get("text", "") for b in blocks
+                               if b.get("type") == "text"),
+            "reasoning": "".join(b.get("thinking", "") for b in blocks
+                                 if b.get("type") == "thinking"),
+            "tool_calls": [b for b in blocks if b.get("type") == "tool_use"],
+            "finish": d.get("stop_reason", "?"),
+            "tokens": (d.get("usage") or {}).get("output_tokens", 0),
+            "prompt_tokens": (d.get("usage") or {}).get("input_tokens", 0),
+        }
+
     c = d["choices"][0]
     m = c["message"]
     return {
         "wall": wall,
         "content": m.get("content") or "",
-        "reasoning": m.get("reasoning") or "",
+        # LiteLLM returns reasoning as `reasoning_content` and duplicates it
+        # under provider_specific_fields. Reading only `reasoning` reports
+        # zero every time -- that is how #31 was filed against a working
+        # proxy.
+        "reasoning": (m.get("reasoning_content") or m.get("reasoning")
+                      or (m.get("provider_specific_fields") or {}).get("reasoning")
+                      or ""),
         "tool_calls": m.get("tool_calls") or [],
         "finish": c["finish_reason"],
         "tokens": d["usage"]["completion_tokens"],
@@ -163,22 +189,54 @@ def check(model: str, url: str, key: str) -> int:
     line("completion", OK, f"{r['tokens']} tok, {r['wall']:.1f}s, "
                            f"finish={r['finish']}")
 
-    # The override is the only control callers have over reasoning, and it
-    # matters: a low max_tokens with reasoning on returns nothing at all.
+    # enable_thinking is the only control a caller has over reasoning. Both
+    # directions are checked: off must suppress it, and on must produce it,
+    # or the catalog's thinks_by_default is a claim nobody can act on.
     r = call(url, key, {"model": model,
-                        "messages": [{"role": "user", "content": "Name the three branches of the US federal government."}],
+                        "messages": [{"role": "user", "content": "What is 17 x 23?"}],
                         "chat_template_kwargs": {"enable_thinking": False},
-                        "max_tokens": 200})
+                        "max_tokens": 400})
     if "err" in r:
         line("thinking off", BAD, f"{r['err']}: {r['detail']}"); fails += 1
     elif r["reasoning"]:
-        line("thinking off", WARN, f"{len(r['reasoning'])} reasoning chars "
-                                   f"-- the kwarg is not taking effect")
+        line("thinking off", BAD, f"{len(r['reasoning'])}c of reasoning "
+                                   f"-- the kwarg did not take effect")
         fails += 1
     elif not r["content"]:
-        line("thinking off", BAD, f"empty content, finish={r['finish']}"); fails += 1
+        line("thinking off", BAD, f"no content, finish={r['finish']}"); fails += 1
     else:
-        line("thinking off", OK, "no reasoning emitted")
+        line("thinking off", OK, f"suppressed, {r['tokens']} tok")
+
+    r = call(url, key, {"model": model,
+                        "messages": [{"role": "user", "content": "What is 17 x 23?"}],
+                        "chat_template_kwargs": {"enable_thinking": True},
+                        "max_tokens": 1500})
+    if "err" in r:
+        line("thinking on", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+    elif not r["reasoning"]:
+        line("thinking on", BAD, "no reasoning -- the kwarg did not take effect")
+        fails += 1
+    else:
+        line("thinking on", OK, f"{len(r['reasoning'])}c of reasoning")
+
+    # The shape that broke Claude Code: tool_choice as an object on the
+    # Anthropic surface. Worth its own check because plain `tools` passed
+    # while this failed.
+    if not url.startswith("http://"):
+        ms = url.replace("/chat/completions", "/messages")
+        r = call(ms, key, {
+            "model": model, "max_tokens": 300,
+            "tools": [{"name": "get_weather", "input_schema": {
+                "type": "object", "properties": {"city": {"type": "string"}},
+                "required": ["city"]}}],
+            "tool_choice": {"type": "auto"},
+            "messages": [{"role": "user", "content": "Weather in Portland? Use the tool."}],
+        })
+        if "err" in r:
+            line("anthropic tool_choice", BAD, f"{r['err']}: {r['detail'][:70]}")
+            fails += 1
+        else:
+            line("anthropic tool_choice", OK, "accepted")
 
     tools = [{"type": "function", "function": {
         "name": "get_weather", "description": "Get current weather",
@@ -271,8 +329,16 @@ def main() -> None:
             "https://llm.apache.org/v1/models",
             headers={"Authorization": f"Bearer {key}"})
         with urllib.request.urlopen(req, timeout=30) as r:
-            models = sorted(m["id"] for m in json.load(r)["data"])
-        print(f"gateway advertises: {models}")
+            advertised = sorted(m["id"] for m in json.load(r)["data"])
+        # Temporary routes from testing appear here too; asserting against
+        # them is noise, and leaving one registered should be visible.
+        models = [m for m in advertised
+                  if not m.startswith(("hv-", "ovr-", "test-"))]
+        print(f"gateway advertises: {advertised}")
+        if len(models) != len(advertised):
+            skipped = sorted(set(advertised) - set(models))
+            print(f"  {WARN} skipping test route(s): {', '.join(skipped)} "
+                  f"-- delete when finished")
 
     total = 0
     for m in models:

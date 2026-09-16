@@ -101,6 +101,11 @@ model_list:
   - model_name: qwen3.8-27b
     litellm_params:
       model: hosted_vllm/qwen3.8-27b
+      # This model 400s on reasoning_effort "high", which is what several
+      # clients send by default. A route-level value DEFAULTS rather than
+      # overrides -- verified: a caller sending xhigh still gets xhigh, and
+      # a caller sending high is shielded instead of broken.
+      reasoning_effort: medium
     model_info:
       vllm:
         model: Qwen/Qwen3.8-27B-FP8
@@ -179,6 +184,14 @@ model_list:
   - model_name: qwen3-8b
     litellm_params:
       model: hosted_vllm/qwen3-8b
+      # Off by default because this model is unusable with it on: "what is
+      # 17 x 23" produced 3,481 characters of reasoning, hit the token cap
+      # and returned NO content. Streaming showed 400 chunks, zero output.
+      #
+      # A default, not an override -- a caller sending enable_thinking: true
+      # still gets reasoning. Verified.
+      chat_template_kwargs:
+        enable_thinking: false
     model_info:
       vllm:
         model: Qwen/Qwen3-8B-FP8
