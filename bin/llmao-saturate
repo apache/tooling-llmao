@@ -71,6 +71,7 @@ values. An earlier version parsed the container log and got stale numbers --
 a level that finished in 2s reported the PREVIOUS level's peak, which is how
 a 4k run and a 32k run both came back at exactly 7.0%.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -87,7 +88,8 @@ from concurrent.futures import ThreadPoolExecutor
 # No endpoints committed here -- discovered from LiteLLM's routing table on
 # the gateway host, or LLMAO_DIRECT_<MODEL> elsewhere. See _discover.py.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _discover import direct_endpoints          # noqa: E402
+from _discover import direct_endpoints
+
 
 # The window comes from the box itself at runtime, not from a table here:
 # it changes whenever a box is relaunched with a different --max-model-len,
@@ -99,9 +101,7 @@ def served_config(hostport: str, key: str) -> dict:
     someone to raise a value that is already raised sends them chasing a
     setting that is not the problem.
     """
-    req = urllib.request.Request(
-        f"http://{hostport}/metrics",
-        headers={"Authorization": f"Bearer {key}"})
+    req = urllib.request.Request(f"http://{hostport}/metrics", headers={"Authorization": f"Bearer {key}"})
     out: dict = {}
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -114,7 +114,7 @@ def served_config(hostport: str, key: str) -> dict:
         start, end = line.find("{"), line.rfind("}")
         if start < 0:
             continue
-        for part in line[start + 1:end].split(","):
+        for part in line[start + 1 : end].split(","):
             k, _, v = part.partition("=")
             out[k.strip()] = v.strip().strip('"')
         break
@@ -122,32 +122,32 @@ def served_config(hostport: str, key: str) -> dict:
 
 
 def context_window(hostport: str, key: str) -> int:
-    req = urllib.request.Request(
-        f"http://{hostport}/v1/models",
-        headers={"Authorization": f"Bearer {key}"})
+    req = urllib.request.Request(f"http://{hostport}/v1/models", headers={"Authorization": f"Bearer {key}"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return int(json.load(r)["data"][0].get("max_model_len") or 0)
     except Exception:
         return 0
 
-WORDS = ("alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo "
-         "lima mike november oscar papa quebec romeo sierra tango uniform "
-         "victor whiskey xray yankee zulu").split()
+
+WORDS = (
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo "
+    "lima mike november oscar papa quebec romeo sierra tango uniform "
+    "victor whiskey xray yankee zulu"
+).split()
 
 
 def make_prompt(tokens: int, seed: int) -> str:
     rng = random.Random(seed)
     body = " ".join(rng.choice(WORDS) for _ in range(int(tokens / 1.3)))
-    return (f"Here is a word list.\n\n{body}\n\nHow many words is that, to "
-            f"the nearest thousand? Answer with a number only.")
+    return (
+        f"Here is a word list.\n\n{body}\n\nHow many words is that, to the nearest thousand? Answer with a number only."
+    )
 
 
 def scheduler_state(hostport: str, key: str) -> tuple[int, int, float]:
     """(running, waiting, kv %) live from /metrics, or (-1,-1,-1)."""
-    req = urllib.request.Request(
-        f"http://{hostport}/metrics",
-        headers={"Authorization": f"Bearer {key}"})
+    req = urllib.request.Request(f"http://{hostport}/metrics", headers={"Authorization": f"Bearer {key}"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             text = r.read().decode()
@@ -170,32 +170,34 @@ def scheduler_state(hostport: str, key: str) -> tuple[int, int, float]:
     return run, wait, kv
 
 
-def call(hostport: str, key: str, model: str, prompt: str,
-         max_tokens: int, timeout: int) -> dict:
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "chat_template_kwargs": {"enable_thinking": False},
-        "max_tokens": max_tokens}).encode()
+def call(hostport: str, key: str, model: str, prompt: str, max_tokens: int, timeout: int) -> dict:
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": max_tokens,
+        }
+    ).encode()
     req = urllib.request.Request(
-        f"http://{hostport}/v1/chat/completions", data=body,
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json"})
+        f"http://{hostport}/v1/chat/completions",
+        data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             json.loads(r.read().decode())
         return {"ok": True, "wall": time.monotonic() - t0}
     except urllib.error.HTTPError as e:
-        return {"ok": False, "wall": time.monotonic() - t0,
-                "why": f"HTTP {e.code}", "detail": e.read().decode()[:90]}
+        return {"ok": False, "wall": time.monotonic() - t0, "why": f"HTTP {e.code}", "detail": e.read().decode()[:90]}
     except Exception as e:
-        return {"ok": False, "wall": time.monotonic() - t0,
-                "why": type(e).__name__, "detail": str(e)[:90]}
+        return {"ok": False, "wall": time.monotonic() - t0, "why": type(e).__name__, "detail": str(e)[:90]}
 
 
-def ramp(model: str, hostport: str, key: str, prompt_tokens: int,
-         levels: list[int], max_tokens: int, timeout: int) -> None:
+def ramp(
+    model: str, hostport: str, key: str, prompt_tokens: int, levels: list[int], max_tokens: int, timeout: int
+) -> None:
     ctx = context_window(hostport, key)
     cfg = served_config(hostport, key)
 
@@ -209,17 +211,17 @@ def ramp(model: str, hostport: str, key: str, prompt_tokens: int,
         head += f"   window {ctx:,}"
     print(head)
     if cfg:
-        print(f"  util {cfg.get('gpu_memory_utilization', '?')}  "
-              f"kv dtype {cfg.get('cache_dtype', '?')}  "
-              f"cache {int(cfg.get('kv_cache_size_tokens', 0)):,} tokens  "
-              f"vllm concurrency estimate "
-              f"{cfg.get('kv_cache_max_concurrency', '?')}x")
+        print(
+            f"  util {cfg.get('gpu_memory_utilization', '?')}  "
+            f"kv dtype {cfg.get('cache_dtype', '?')}  "
+            f"cache {int(cfg.get('kv_cache_size_tokens', 0)):,} tokens  "
+            f"vllm concurrency estimate "
+            f"{cfg.get('kv_cache_max_concurrency', '?')}x"
+        )
     # vLLM rejects a request whose prompt plus max_tokens exceeds the window.
     if ctx and prompt_tokens + max_tokens > ctx:
-        print(f"  ! prompt + max_tokens ({prompt_tokens + max_tokens:,}) "
-              f"exceeds the window; vLLM will 400")
-    print(f"{'conc':>5}{'ok':>5}{'fail':>6}{'p50':>9}{'p95':>9}"
-          f"{'run':>6}{'wait':>6}{'KV%':>7}")
+        print(f"  ! prompt + max_tokens ({prompt_tokens + max_tokens:,}) exceeds the window; vLLM will 400")
+    print(f"{'conc':>5}{'ok':>5}{'fail':>6}{'p50':>9}{'p95':>9}{'run':>6}{'wait':>6}{'KV%':>7}")
     print("-" * 70)
 
     for conc in levels:
@@ -236,8 +238,7 @@ def ramp(model: str, hostport: str, key: str, prompt_tokens: int,
             peak_kv = max(peak_kv, k)
 
         with ThreadPoolExecutor(max_workers=conc + 1) as pool:
-            futs = [pool.submit(call, hostport, key, model, p, max_tokens, timeout)
-                    for p in prompts]
+            futs = [pool.submit(call, hostport, key, model, p, max_tokens, timeout) for p in prompts]
             while not all(f.done() for f in futs):
                 sample()
                 time.sleep(1.0)
@@ -248,9 +249,11 @@ def ramp(model: str, hostport: str, key: str, prompt_tokens: int,
         walls = sorted(r["wall"] for r in ok)
         p50 = statistics.median(walls) if walls else 0.0
         p95 = walls[min(len(walls) - 1, int(len(walls) * 0.95))] if walls else 0.0
-        print(f"{conc:>5}{len(ok):>5}{len(rs) - len(ok):>6}"
-              f"{p50:>8.1f}s{p95:>8.1f}s{peak_run:>6}{peak_wait:>6}"
-              f"{peak_kv:>6.1f}%")
+        print(
+            f"{conc:>5}{len(ok):>5}{len(rs) - len(ok):>6}"
+            f"{p50:>8.1f}s{p95:>8.1f}s{peak_run:>6}{peak_wait:>6}"
+            f"{peak_kv:>6.1f}%"
+        )
 
         if not ok:
             print("  all failed -- stopping")
@@ -268,10 +271,12 @@ def ramp(model: str, hostport: str, key: str, prompt_tokens: int,
         # running against 10.
         if peak_wait >= max(4, peak_run) and peak_wait > 2:
             if peak_kv >= 70:
-                verdict = ("MEMORY -- the KV cache is full. Raise "
-                           "gpu-memory-utilization, enable --kv-cache-dtype "
-                           "fp8, or lower --max-model-len. A bigger card "
-                           "would help here.")
+                verdict = (
+                    "MEMORY -- the KV cache is full. Raise "
+                    "gpu-memory-utilization, enable --kv-cache-dtype "
+                    "fp8, or lower --max-model-len. A bigger card "
+                    "would help here."
+                )
             else:
                 # Only recommend raising the batch budget if it has not been
                 # raised. vLLM does not publish max_num_batched_tokens, so
@@ -279,27 +284,35 @@ def ramp(model: str, hostport: str, key: str, prompt_tokens: int,
                 # default: that caps concurrency at 2-3 regardless of load.
                 looks_default = peak_run <= 3
                 if looks_default:
-                    verdict = ("SCHEDULER -- queued while memory sits idle, "
-                               "and only a few requests ever run at once. "
-                               "That is the signature of the 2048 default: "
-                               "raise --max-num-batched-tokens. A bigger "
-                               "card would NOT help.")
+                    verdict = (
+                        "SCHEDULER -- queued while memory sits idle, "
+                        "and only a few requests ever run at once. "
+                        "That is the signature of the 2048 default: "
+                        "raise --max-num-batched-tokens. A bigger "
+                        "card would NOT help."
+                    )
                 else:
-                    verdict = (f"SCHEDULER -- queued while memory sits idle, "
-                               f"but {peak_run} ran concurrently, so the "
-                               f"batch budget is already raised. This is the "
-                               f"card: prefill throughput, not memory and "
-                               f"not configuration. A faster card would "
-                               f"help; a larger one would not.")
-            print(f"\n  >> sustained queue at {conc} concurrent: "
-                  f"{peak_run} running, {peak_wait} waiting, KV {peak_kv:.1f}%")
+                    verdict = (
+                        f"SCHEDULER -- queued while memory sits idle, "
+                        f"but {peak_run} ran concurrently, so the "
+                        f"batch budget is already raised. This is the "
+                        f"card: prefill throughput, not memory and "
+                        f"not configuration. A faster card would "
+                        f"help; a larger one would not."
+                    )
+            print(
+                f"\n  >> sustained queue at {conc} concurrent: "
+                f"{peak_run} running, {peak_wait} waiting, KV {peak_kv:.1f}%"
+            )
             print(f"     {verdict}")
             return
 
     print(f"\n  no sustained queue through {levels[-1]} concurrent.")
-    print("  Either there is headroom, or the test is too weak -- try "
-          "--prompt-tokens 64000\n  or higher levels. A transient "
-          "'wait' of 1-2 is normal prefill serialisation.")
+    print(
+        "  Either there is headroom, or the test is too weak -- try "
+        "--prompt-tokens 64000\n  or higher levels. A transient "
+        "'wait' of 1-2 is normal prefill serialisation."
+    )
 
 
 def main() -> None:
@@ -309,8 +322,7 @@ def main() -> None:
     # 0 = derive from each model's window. A fixed size is wrong across a
     # fleet: 32k exceeds the 8B's entire 40,960 window, so --all used to fail
     # on it every time with a 400 rather than measuring anything.
-    ap.add_argument("--prompt-tokens", type=int, default=0,
-                    help="0 (default) = one third of each model's window")
+    ap.add_argument("--prompt-tokens", type=int, default=0, help="0 (default) = one third of each model's window")
     ap.add_argument("--max-tokens", type=int, default=100)
     ap.add_argument("--levels", default="2,4,8,16,24,32,48")
     ap.add_argument("--timeout", type=int, default=900)
@@ -322,9 +334,11 @@ def main() -> None:
 
     endpoints = direct_endpoints()
     if not endpoints:
-        sys.exit("no endpoints discovered.\n"
-                 "  on the gateway host: run as root, or export MK=<master key>\n"
-                 "  elsewhere: export LLMAO_DIRECT_QWEN3_8B=host:port")
+        sys.exit(
+            "no endpoints discovered.\n"
+            "  on the gateway host: run as root, or export MK=<master key>\n"
+            "  elsewhere: export LLMAO_DIRECT_QWEN3_8B=host:port"
+        )
 
     if args.all:
         models = sorted(endpoints)
@@ -334,16 +348,13 @@ def main() -> None:
         models = [sorted(endpoints)[0]]
 
     levels = [int(x) for x in args.levels.split(",")]
-    print(f"{args.prompt_tokens:,}-token prompts, {args.max_tokens} output, "
-          f"ramping until Waiting > 0")
+    print(f"{args.prompt_tokens:,}-token prompts, {args.max_tokens} output, ramping until Waiting > 0")
     for m in models:
         hp = endpoints.get(m)
         if not hp:
-            print(f"\n{m}: no endpoint discovered "
-                  f"(known: {', '.join(sorted(endpoints))})")
+            print(f"\n{m}: no endpoint discovered (known: {', '.join(sorted(endpoints))})")
             continue
-        ramp(m, hp, key, args.prompt_tokens, levels, args.max_tokens,
-             args.timeout)
+        ramp(m, hp, key, args.prompt_tokens, levels, args.max_tokens, args.timeout)
 
 
 if __name__ == "__main__":

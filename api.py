@@ -25,11 +25,11 @@ import logging
 
 import asfquart
 import asfquart.auth
-from asfquart.auth import Requirements as R
+from asfquart.auth import Requirements
 from quart import jsonify, request
 
 from llmao.auth import current_identity
-from llmao.fleet import UnknownHost, client_ip, config_for_host
+from llmao.fleet import UnknownHostError, client_ip, config_for_host
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -47,24 +47,21 @@ class HttpError(Exception):
 def _ok_extras(result) -> str:
     """Short success extras from a JSON-ish dict; never includes secrets."""
     if not isinstance(result, dict):
-        return ''
+        return ""
     parts = []
-    if result.get('host') is not None:
-        parts.append(f'host={result["host"]}')
-    servers = result.get('servers')
+    if result.get("host") is not None:
+        parts.append(f"host={result['host']}")
+    servers = result.get("servers")
     if isinstance(servers, list):
-        models = ','.join(
-            f'{s.get("name")}:{s.get("port")}' if isinstance(s, dict) else str(s)
-            for s in servers
-        )
-        parts.append(f'models={models}')
-    if result.get('project') is not None:
-        parts.append(f'project={result["project"]}')
-    if 'count' in result:
-        parts.append(f'count={result["count"]}')
-    if 'provisioned' in result:
-        parts.append(f'provisioned={result["provisioned"]}')
-    return (' ' + ' '.join(parts)) if parts else ''
+        models = ",".join(f"{s.get('name')}:{s.get('port')}" if isinstance(s, dict) else str(s) for s in servers)
+        parts.append(f"models={models}")
+    if result.get("project") is not None:
+        parts.append(f"project={result['project']}")
+    if "count" in result:
+        parts.append(f"count={result['count']}")
+    if "provisioned" in result:
+        parts.append(f"provisioned={result['provisioned']}")
+    return (" " + " ".join(parts)) if parts else ""
 
 
 def api(fn):
@@ -79,22 +76,22 @@ def api(fn):
         try:
             result = await fn(*args, **kwargs)
         except AuthzError as e:
-            _LOGGER.warning(f'{fn.__name__}: {e}')
+            _LOGGER.warning("%s: %s", fn.__name__, e)
             return err(403, str(e))
         except HttpError as e:
-            msg = f'{fn.__name__}: {e.status} {e}'
+            msg = f"{fn.__name__}: {e.status} {e}"
             if e.status >= 500:
                 _LOGGER.error(msg)
             else:
                 _LOGGER.warning(msg)
             return err(e.status, str(e))
         except Exception:
-            _LOGGER.exception(f'unhandled error in {fn.__name__}')
-            return err(500, 'internal error in gateway; check the server log')
-        if fn.__name__ == 'healthz':
-            _LOGGER.debug(f'{fn.__name__} ok')
+            _LOGGER.exception("unhandled error in %s", fn.__name__)
+            return err(500, "internal error in gateway; check the server log")
+        if fn.__name__ == "healthz":
+            _LOGGER.debug("%s ok", fn.__name__)
         else:
-            _LOGGER.info(f'{fn.__name__} ok{_ok_extras(result)}')
+            _LOGGER.info("%s ok%s", fn.__name__, _ok_extras(result))
         return jsonify(result)
 
     return wrapper
@@ -125,7 +122,7 @@ async def vllm_config():
     prefix = "Bearer "
     if not auth.startswith(prefix):
         raise HttpError(403, "missing fleet key")
-    presented = auth[len(prefix):].strip()
+    presented = auth[len(prefix) :].strip()
     if not hmac.compare_digest(presented, expected):
         raise HttpError(403, "invalid fleet key")
     host = client_ip(
@@ -134,8 +131,8 @@ async def vllm_config():
     )
     try:
         payload = config_for_host(host, cfg=APP.cfg)
-    except UnknownHost:
-        raise HttpError(404, f"unknown fleet host: {host}")
+    except UnknownHostError:
+        raise HttpError(404, f"unknown fleet host: {host}") from None
     APP.fleet.note_config_fetch(host)
     return payload
 
@@ -157,7 +154,7 @@ async def project_usage(project: str):
 
 
 @APP.get("/v1/projects/<project>/budget")
-@asfquart.auth.require({R.committer})
+@asfquart.auth.require({Requirements.committer})
 @api
 async def project_budget(project: str):
     seam = APP.config["LLMAO_SEAM"]

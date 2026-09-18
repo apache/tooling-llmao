@@ -1,17 +1,35 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Load the shared model inventory (model_list.yaml).
 
 Catalog for llmao UX and vLLM recipes. LiteLLM does not include this file.
 Fail-fast if missing — same presumption as config.yaml and litellm.yaml
 (copy from *.example).
 """
+
 from __future__ import annotations
 
 import pathlib
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import ezt
 import yaml
-from easydict import EasyDict as edict
+from easydict import EasyDict
 
 # Default path: repo / install root (next to main.py).
 DEFAULT_MODELS_PATH = pathlib.Path(__file__).resolve().parent.parent / "model_list.yaml"
@@ -27,7 +45,7 @@ def models_path_from_cfg(cfg: Any = None) -> pathlib.Path:
     return DEFAULT_MODELS_PATH
 
 
-def load_model_list(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> List[Dict[str, Any]]:
+def load_model_list(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
     """Load model_list from YAML. Raises FileNotFoundError if absent."""
     path = path or models_path_from_cfg(cfg)
     if not path.is_file():
@@ -35,7 +53,7 @@ def load_model_list(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> 
             f"Missing {path}. Copy model_list.yaml.example to model_list.yaml "
             f"(same pattern as config.yaml and litellm.yaml)."
         )
-    data = edict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    data = EasyDict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     if "model_list" not in data or not isinstance(data.model_list, list):
         raise ValueError(f"{path}: expected top-level model_list: [ ... ]")
     validate_catalog(data.model_list, path=path)
@@ -70,12 +88,10 @@ def validate_catalog(models: list, *, path: pathlib.Path | str = "model_list.yam
             params = model.litellm_params
             base = params.get("api_base") if hasattr(params, "get") else None
             if not str(base or "").strip():
-                raise ValueError(
-                    f"{name}: self_hosted false requires litellm_params.api_base"
-                )
+                raise ValueError(f"{name}: self_hosted false requires litellm_params.api_base")
 
 
-def public_models(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> List[Dict[str, Any]]:
+def public_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
     """Models for UX: model_name + model_info (no litellm_params / secrets)."""
     out = []
     for entry in load_model_list(path, cfg=cfg):
@@ -87,11 +103,13 @@ def public_models(path: Optional[pathlib.Path] = None, *, cfg: Any = None) -> Li
 
 
 # Fields that describe how/where we obtain or serve a model (partnerships, HF paths).
-_SUPPLY_PATH_KEYS = frozenset({
-    "weights_distribution",
-    "training_data_provenance",
-    "provenance_record",
-})
+_SUPPLY_PATH_KEYS = frozenset(
+    {
+        "weights_distribution",
+        "training_data_provenance",
+        "provenance_record",
+    }
+)
 
 
 def _oneline(s: Any) -> str:
@@ -101,7 +119,7 @@ def _oneline(s: Any) -> str:
     return " ".join(str(s).split())
 
 
-def _hosting_label(m: Dict[str, Any]) -> str:
+def _hosting_label(m: dict[str, Any]) -> str:
     """Public hosting class from the required self_hosted boolean."""
     if m.get("self_hosted") is True:
         return "Self-hosted"
@@ -110,7 +128,7 @@ def _hosting_label(m: Dict[str, Any]) -> str:
     return "—"
 
 
-def model_available_for(identity: Any, model: Dict[str, Any]) -> bool:
+def model_available_for(identity: Any, model: dict[str, Any]) -> bool:
     """Policy: whether this user is allowed the catalog model.
 
     Always True until team allow-lists, envelope, and other gates exist
@@ -134,11 +152,11 @@ def model_in_service(health: str, *, self_hosted: bool) -> bool:
 
 
 def ux_models(
-    path: Optional[pathlib.Path] = None,
+    path: pathlib.Path | None = None,
     *,
     cfg: Any = None,
     reveal_supply: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Shape inventory for the Models page (table + detail modal).
 
     When ``reveal_supply`` is False (normal committers), omit fields that
@@ -147,7 +165,7 @@ def ux_models(
     Free-text is collapsed to one line for HTML data-* attributes (EZT
     HTML-escapes quotes; embedded newlines still break attributes).
 
-    TODO: return edict rows (dotted access) instead of plain dicts.
+    TODO: return EasyDict rows (dotted access) instead of plain dicts.
     """
     rows = []
     for m in public_models(path, cfg=cfg):
@@ -156,28 +174,24 @@ def ux_models(
         name = _oneline(m.get("model_name"))
         display = _oneline(m.get("display_name")) or name
         ctx = m.get("context_window")
-        rows.append({
-            "model_name": name,
-            "display_name": display,
-            "hosting_label": _hosting_label(m),
-            "self_hosted": ezt.boolean(m.get("self_hosted")),
-            "context_window": ctx if ctx is not None else "—",
-            "license": _oneline(m.get("license")) or "—",
-            "modality": _oneline(m.get("modality")),
-            "supports_thinking": ezt.boolean(m.get("supports_thinking")),
-            "thinks_by_default": ezt.boolean(m.get("thinks_by_default")),
-            "openness": _oneline(m.get("openness")),
-            "notes": _oneline(m.get("notes")),
-            "reveal_supply": reveal_supply,
-            # Admin-only supply fields (empty strings when redacted)
-            "weights_distribution": (
-                _oneline(m.get("weights_distribution")) if reveal_supply else ""
-            ),
-            "training_data_provenance": (
-                _oneline(m.get("training_data_provenance")) if reveal_supply else ""
-            ),
-            "provenance_record": (
-                _oneline(m.get("provenance_record")) if reveal_supply else ""
-            ),
-        })
+        rows.append(
+            {
+                "model_name": name,
+                "display_name": display,
+                "hosting_label": _hosting_label(m),
+                "self_hosted": ezt.boolean(m.get("self_hosted")),
+                "context_window": ctx if ctx is not None else "—",
+                "license": _oneline(m.get("license")) or "—",
+                "modality": _oneline(m.get("modality")),
+                "supports_thinking": ezt.boolean(m.get("supports_thinking")),
+                "thinks_by_default": ezt.boolean(m.get("thinks_by_default")),
+                "openness": _oneline(m.get("openness")),
+                "notes": _oneline(m.get("notes")),
+                "reveal_supply": reveal_supply,
+                # Admin-only supply fields (empty strings when redacted)
+                "weights_distribution": (_oneline(m.get("weights_distribution")) if reveal_supply else ""),
+                "training_data_provenance": (_oneline(m.get("training_data_provenance")) if reveal_supply else ""),
+                "provenance_record": (_oneline(m.get("provenance_record")) if reveal_supply else ""),
+            }
+        )
     return rows

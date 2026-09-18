@@ -30,12 +30,12 @@ import asfquart.session
 import asfquart.utils
 import ezt
 import quart
-from easydict import EasyDict as edict
 from dunamai import Version
+from easydict import EasyDict
 
 from llmao.auth import current_identity
 from llmao.fleet import VllmServer
-from llmao.litellm_client import BackendUnavailable, KeyInfo
+from llmao.litellm_client import BackendUnavailableError, KeyInfo
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
@@ -63,7 +63,7 @@ def _flash_rows():
         msgs = quart.get_flashed_messages(with_categories=True)
     except Exception:
         return []
-    return [edict(category=c, message=m) for c, m in msgs]
+    return [EasyDict(category=c, message=m) for c, m in msgs]
 
 
 def _safe_back(default: str = "/") -> str:
@@ -98,7 +98,7 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     Innermost under ``@APP.use_template``. Views take ``result`` as a keyword
     (Quart path params stay named kwargs).
     """
-    types = (AuthzError, BackendUnavailable) + extra_exc
+    types = (AuthzError, BackendUnavailableError, *extra_exc)
 
     def deco(fn):
         @functools.wraps(fn)
@@ -120,7 +120,7 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
                 # read only names set before the raise, it renders a page
                 # that looks right and is quietly missing data.
                 #
-                # Authz was how this surfaced, but BackendUnavailable is the
+                # Authz was how this surfaced, but BackendUnavailableError is the
                 # one that will recur -- a handler that makes two LiteLLM
                 # calls, where the second fails, hits it during any proxy
                 # restart.
@@ -136,9 +136,9 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     return deco
 
 
-async def basic_info(title: str = "llmao") -> edict:
+async def basic_info(title: str = "llmao") -> EasyDict:
     """Base-level EZT template data shared by HTML pages."""
-    basic = edict()
+    basic = EasyDict()
     basic.title = title
     basic.flashes = []
 
@@ -158,15 +158,12 @@ async def basic_info(title: str = "llmao") -> edict:
                 + list(getattr(client_session, "projects", None) or [])
             )
         )
-        basic.projects = [edict({"name": p}) for p in projects]
+        basic.projects = [EasyDict({"name": p}) for p in projects]
         basic.projects_label = ", ".join(projects) if projects else None
         committees = list(getattr(client_session, "committees", None) or [])
         basic.committees = committees
         site_admins = list(APP.cfg.site_admins or [])
-        is_site_admin = (
-            client_session.uid in site_admins
-            or bool(getattr(client_session, "isRoot", False))
-        )
+        is_site_admin = client_session.uid in site_admins or bool(getattr(client_session, "isRoot", False))
         basic.is_site_admin = ezt.boolean(is_site_admin)
         # Other Keys nav + automation mint (provisional: PMC or site admin).
         basic.can_create_automation = ezt.boolean(is_site_admin or bool(committees))
@@ -174,7 +171,7 @@ async def basic_info(title: str = "llmao") -> edict:
             admin_names = projects
         else:
             admin_names = committees
-        basic.admin_projects = [edict({"name": p}) for p in admin_names]
+        basic.admin_projects = [EasyDict({"name": p}) for p in admin_names]
     else:
         basic.uid = None
         basic.name = None
@@ -197,20 +194,24 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
     for k in keys:
         budget = k.max_budget
         budget_s = f"${budget:.4f}" if budget is not None else "—"
-        rows.append(edict({
-            "token_id": k.token_id,
-            "purpose": k.purpose or "—",
-            "project": k.project,
-            "kind_label": "Automation" if k.is_automation else "Personal",
-            "is_automation": ezt.boolean(k.is_automation),
-            "created_by": k.created_by or "—",
-            "spend": f"${k.spend:.6f}",
-            "max_budget": budget_s,
-            "last_used": k.last_used or "—",
-            "created_at": k.created_at or "—",
-            "blocked": k.blocked,
-            "after_path": after_path,
-        }))
+        rows.append(
+            EasyDict(
+                {
+                    "token_id": k.token_id,
+                    "purpose": k.purpose or "—",
+                    "project": k.project,
+                    "kind_label": "Automation" if k.is_automation else "Personal",
+                    "is_automation": ezt.boolean(k.is_automation),
+                    "created_by": k.created_by or "—",
+                    "spend": f"${k.spend:.6f}",
+                    "max_budget": budget_s,
+                    "last_used": k.last_used or "—",
+                    "created_at": k.created_at or "—",
+                    "blocked": k.blocked,
+                    "after_path": after_path,
+                }
+            )
+        )
     return rows
 
 
@@ -231,12 +232,10 @@ async def models_page(result):
     fleet = APP.fleet
     rows = []
     for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
-        row = edict(m)
+        row = EasyDict(m)
         row.health = fleet.model_health(row.model_name)
         self_hosted = bool(m.get("self_hosted"))
-        avail = model_available_for(None, m) and model_in_service(
-            row.health, self_hosted=self_hosted
-        )
+        avail = model_available_for(None, m) and model_in_service(row.health, self_hosted=self_hosted)
         if self_hosted:
             avail = avail and fleet.model_in_litellm(row.model_name)
         row.available = ezt.boolean(avail)
@@ -282,9 +281,7 @@ async def fleet_page(result):
             state = srv.state
             listen = f"{srv.host}:{srv.listen_port}" if admin else ""
             public = (
-                f"{srv.host}:{srv.public_port}"
-                if admin and srv.public_port is not None
-                else ("—" if admin else "")
+                f"{srv.host}:{srv.public_port}" if admin and srv.public_port is not None else ("—" if admin else "")
             )
             host = srv.host if admin else ""
             config_ago = _ago(fetched, now) if admin else ""
@@ -292,9 +289,7 @@ async def fleet_page(result):
             # max_model_len above the cache makes vLLM hang on a request that
             # needs the space rather than refuse at startup, so it reads as a
             # slow model rather than a misconfiguration.
-            kv_cache = (
-                f"{srv.kv_cache_tokens:,}" if srv.kv_cache_tokens is not None else "—"
-            )
+            kv_cache = f"{srv.kv_cache_tokens:,}" if srv.kv_cache_tokens is not None else "—"
             served_len = srv.observed_max_model_len or srv.max_model_len
             context = f"{served_len:,}" if served_len else "—"
             oversized = srv.oversized
@@ -305,11 +300,7 @@ async def fleet_page(result):
             starting = False
             down = dep.in_litellm and dep.litellm_healthy is False
             pending = dep.in_litellm and dep.litellm_healthy is None
-            state = (
-                "serving" if serving else (
-                    "down" if down else ("pending" if pending else "no deployment")
-                )
-            )
+            state = "serving" if serving else ("down" if down else ("pending" if pending else "no deployment"))
             listen = "—" if admin else ""
             public = dep.api_base if admin else ""
             host = ""
@@ -318,35 +309,34 @@ async def fleet_page(result):
             kv_cache = "—"
             context = "—"
             oversized = False
-        rows.append(edict(
-            host=host,
-            name=dep.name,
-            self_hosted=ezt.boolean(dep.self_hosted),
-            listen=listen,
-            public=public,
-            state=state,
-            last_ok=_ago(last_ok, now),
-            config_ago=config_ago,
-            skew="; ".join(dep.skew) if admin and dep.skew else "",
-            kv_cache=kv_cache,
-            context=context,
-            oversized=ezt.boolean(oversized),
-            in_litellm=ezt.boolean(dep.in_litellm),
-            litellm_health=(
-                "healthy" if dep.litellm_healthy is True
-                else ("unhealthy" if dep.litellm_healthy is False else "—")
-            ),
-            litellm_health_ago=(
-                _ago(dep.litellm_health_at, now)
-                if admin and dep.litellm_health_at
-                else ("—" if admin else "")
-            ),
-            no_deployment=ezt.boolean(no_deployment),
-            serving=ezt.boolean(serving),
-            starting=ezt.boolean(starting),
-            down=ezt.boolean(down),
-            pending=ezt.boolean(pending),
-        ))
+        rows.append(
+            EasyDict(
+                host=host,
+                name=dep.name,
+                self_hosted=ezt.boolean(dep.self_hosted),
+                listen=listen,
+                public=public,
+                state=state,
+                last_ok=_ago(last_ok, now),
+                config_ago=config_ago,
+                skew="; ".join(dep.skew) if admin and dep.skew else "",
+                kv_cache=kv_cache,
+                context=context,
+                oversized=ezt.boolean(oversized),
+                in_litellm=ezt.boolean(dep.in_litellm),
+                litellm_health=(
+                    "healthy" if dep.litellm_healthy is True else ("unhealthy" if dep.litellm_healthy is False else "—")
+                ),
+                litellm_health_ago=(
+                    _ago(dep.litellm_health_at, now) if admin and dep.litellm_health_at else ("—" if admin else "")
+                ),
+                no_deployment=ezt.boolean(no_deployment),
+                serving=ezt.boolean(serving),
+                starting=ezt.boolean(starting),
+                down=ezt.boolean(down),
+                pending=ezt.boolean(pending),
+            )
+        )
     result.servers = rows
     return result
 
@@ -362,17 +352,21 @@ def _project_list_rows(rows) -> list:
             pct_label = "—"
         else:
             pct_label = f"{r.pct_used:.0f}%"
-        out.append(edict({
-            "name": r.project,
-            "href": f"/projects/{r.project}",
-            "is_steward": ezt.boolean(r.is_steward),
-            "spend": _money(r.spend),
-            "max_budget": _money(r.max_budget),
-            "remaining": _money(r.remaining),
-            "pct_label": pct_label,
-            "budget_duration": r.budget_duration,
-            "grantor": r.grantor,
-        }))
+        out.append(
+            EasyDict(
+                {
+                    "name": r.project,
+                    "href": f"/projects/{r.project}",
+                    "is_steward": ezt.boolean(r.is_steward),
+                    "spend": _money(r.spend),
+                    "max_budget": _money(r.max_budget),
+                    "remaining": _money(r.remaining),
+                    "pct_label": pct_label,
+                    "budget_duration": r.budget_duration,
+                    "grantor": r.grantor,
+                }
+            )
+        )
     return out
 
 
@@ -383,9 +377,7 @@ def _project_list_rows(rows) -> list:
 async def projects_list(result):
     """Projects you belong to, with project-budget summary."""
     ident = await current_identity(APP.cfg)
-    result.project_rows = _project_list_rows(
-        await APP.config["LLMAO_SEAM"].list_projects_for(ident)
-    )
+    result.project_rows = _project_list_rows(await APP.config["LLMAO_SEAM"].list_projects_for(ident))
     return result
 
 
@@ -397,9 +389,7 @@ async def project_stub(result, project: str):
     """Member-gated stub until P0.3 overview."""
     result.title = project
     result.project = project
-    await APP.config["LLMAO_SEAM"].team_status(
-        await current_identity(APP.cfg), project
-    )
+    await APP.config["LLMAO_SEAM"].team_status(await current_identity(APP.cfg), project)
     return result
 
 
@@ -417,16 +407,18 @@ def _see_other(path: str):
 
 async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_create_another: str) -> None:
     """Render the created-key fragment and stash it as a raw HTML flash."""
-    data = edict({
-        "secret": created.secret,
-        "purpose": created.info.purpose or "—",
-        "project": created.info.project,
-        "kind_label": kind_label,
-        "is_automation": ezt.boolean(created.info.is_automation),
-        "created_by": created.info.created_by or "",
-        "keys_back": keys_back,
-        "keys_create_another": keys_create_another,
-    })
+    data = EasyDict(
+        {
+            "secret": created.secret,
+            "purpose": created.info.purpose or "—",
+            "project": created.info.project,
+            "kind_label": kind_label,
+            "is_automation": ezt.boolean(created.info.is_automation),
+            "created_by": created.info.created_by or "",
+            "keys_back": keys_back,
+            "keys_create_another": keys_create_another,
+        }
+    )
     html = _render("flash_key_created.ezt", data)
     await quart.flash(html, "raw")
 
@@ -438,9 +430,7 @@ async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_c
 async def keys_list(result):
     """My Keys — personal PATs only (one list_keys call)."""
     ident = await current_identity(APP.cfg)
-    result.keys = _key_rows(
-        await APP.config["LLMAO_SEAM"].list_my_keys(ident), after_path="/keys"
-    )
+    result.keys = _key_rows(await APP.config["LLMAO_SEAM"].list_my_keys(ident), after_path="/keys")
     return result
 
 
@@ -454,15 +444,13 @@ async def keys_other_list(result):
         raise AuthzError("Other Keys is limited to PMC members and site admins.")
     ident = await current_identity(APP.cfg)
     seam = APP.config["LLMAO_SEAM"]
-    admin_projects = (
-        ident.all_projects() if ident.is_site_admin else list(ident.committees)
-    )
+    admin_projects = ident.all_projects() if ident.is_site_admin else list(ident.committees)
     by_id: dict[str, KeyInfo] = {}
     for p in admin_projects:
         try:
             for k in await seam.list_automation_keys(ident, p):
                 by_id.setdefault(k.token_id, k)
-        except (AuthzError, BackendUnavailable):
+        except (AuthzError, BackendUnavailableError):
             continue
     result.keys = _key_rows(list(by_id.values()), after_path="/keys/other")
     return result
@@ -489,7 +477,7 @@ async def do_create_key():
         ident = await current_identity(APP.cfg)
         seam = APP.config["LLMAO_SEAM"]
         created = await seam.create_personal_key(ident, project, purpose)
-    except (AuthzError, BackendUnavailable) as e:
+    except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
         return _see_other("/keys/new")
     await _flash_key_created(
@@ -519,14 +507,12 @@ async def do_create_other_key():
     purpose = (form.get("purpose") or "").strip()
     ident = await current_identity(APP.cfg)
     if not (ident.is_site_admin or ident.committees):
-        await flash_danger(
-            "Only PMC members and site admins may create automation keys."
-        )
+        await flash_danger("Only PMC members and site admins may create automation keys.")
         return _see_other("/keys/other/new")
     try:
         seam = APP.config["LLMAO_SEAM"]
         created = await seam.create_automation_key(ident, project, purpose)
-    except (AuthzError, BackendUnavailable) as e:
+    except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
         return _see_other("/keys/other/new")
     await _flash_key_created(
@@ -549,7 +535,7 @@ async def do_revoke_key():
         seam = APP.config["LLMAO_SEAM"]
         await seam.revoke_key(ident, token_id)
         await flash_success("Key revoked.")
-    except (AuthzError, BackendUnavailable) as e:
+    except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
     return _see_other(after_path)
 

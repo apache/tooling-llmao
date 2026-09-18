@@ -1,0 +1,58 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+    - id: check-toml
+    - id: check-yaml
+    # PEM and SSH key material, wherever it is pasted (certs/ is gitignored, but a
+    # key can still end up in a script or a config).
+    - id: detect-private-key
+    - id: end-of-file-fixer
+    - id: mixed-line-ending
+    - id: trailing-whitespace
+- repo: https://github.com/Lucas-C/pre-commit-hooks
+  rev: v1.5.6
+  hooks:
+    - id: insert-license
+      name: Add license for all Python files
+      files: ^((llmao|tests|bin|hosting)/.*\.py$|api\.py$|main\.py$|pages\.py$)
+      args:
+        - --comment-style
+        - "|#|"
+        - --license-filepath
+        - LICENSE-template.txt
+        - --fuzzy-match-generates-todo
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: v0.11.0.1
+  hooks:
+    - id: shellcheck
+- repo: https://github.com/woodruffw/zizmor-pre-commit
+  rev: v1.22.0
+  hooks:
+    - id: zizmor
+      args: [ --min-severity, low ]
+- repo: https://github.com/astral-sh/uv-pre-commit
+  rev: 0.9.26
+  hooks:
+    - id: uv-lock
+- repo: local
+  hooks:
+    - id: ruff
+      name: Ruff Linter
+      entry: uv run ruff check --fix
+      language: system
+      types: [python]
+    - id: ruff-format
+      name: Ruff Formatter
+      entry: uv run ruff format --force-exclude
+      language: system
+      types: [python]
+    # The suite is fast, but not as fast as the hooks above, so it runs on push
+    # rather than every commit. Enable it with `prek install --hook-type pre-push`.
+    - id: pytest
+      name: Run the test suite
+      entry: uv run pytest tests/ -q
+      language: system
+      stages: [pre-push]
+      pass_filenames: false
+      always_run: true

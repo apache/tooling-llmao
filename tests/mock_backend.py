@@ -1,13 +1,31 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """In-process LiteLLM stand-in for the test suite only.
 
 Speaks **project** (LDAP name) like the product Backend. Uses the project
 string as the opaque team identity — no separate team_id map.
 """
+
 from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from llmao.litellm_client import (
     GRANTOR_FREE_TIER,
@@ -23,13 +41,13 @@ from llmao.litellm_client import (
 class MockBackend:
     def __init__(self, cfg: Any):
         self._cfg = cfg
-        self._data: Dict[str, Any] = {
+        self._data: dict[str, Any] = {
             "teams": {},
             "keys": [],
             "usage": [],
         }
 
-    async def team_info(self, project: str) -> Optional[TeamInfo]:
+    async def team_info(self, project: str) -> TeamInfo | None:
         t = self._data.get("teams", {}).get(project)
         if not t:
             return None
@@ -70,10 +88,10 @@ class MockBackend:
     async def list_keys(
         self,
         *,
-        user: Optional[str] = None,
-        project: Optional[str] = None,
+        user: str | None = None,
+        project: str | None = None,
         size: int = 100,
-    ) -> List[KeyInfo]:
+    ) -> list[KeyInfo]:
         out = []
         for k in self._data.get("keys", []):
             if user is not None and k.get("user_id") != user:
@@ -90,8 +108,8 @@ class MockBackend:
         *,
         project: str,
         purpose: str,
-        user: Optional[str] = None,
-        metadata: Optional[Dict] = None,
+        user: str | None = None,
+        metadata: dict | None = None,
     ) -> CreatedKey:
         project = (project or "").strip()
         purpose = (purpose or "").strip()
@@ -127,11 +145,9 @@ class MockBackend:
         self._data["teams"][project]["spend"] = float(spend)
 
     async def delete_key(self, token_id: str) -> None:
-        self._data["keys"] = [
-            k for k in self._data.get("keys", []) if k.get("token") != token_id
-        ]
+        self._data["keys"] = [k for k in self._data.get("keys", []) if k.get("token") != token_id]
 
-    async def usage(self, project: Optional[str]) -> List[Dict]:
+    async def usage(self, project: str | None) -> list[dict]:
         rows = self._data.get("usage", [])
         if project is None:
             return list(rows)

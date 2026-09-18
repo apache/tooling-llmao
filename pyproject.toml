@@ -17,6 +17,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "prek>=0.4.0,<0.5",
+    "ruff>=0.15.20",
 ]
 
 [build-system]
@@ -28,3 +30,61 @@ packages = ["llmao"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+  # Every subprocess call in this repository names a deliberate tool - psql, prisma,
+  # supervisorctl or litellm - and every one of them takes an argument list, never a
+  # string through a shell. S603 cannot see that distinction, and S607 objects to naming
+  # a tool rather than its path, which is what lets the same call work locally and on the
+  # vast hosts.
+  "S603",
+  "S607",
+]
+select = [
+  "I",     # isort
+  "E",
+  "W",
+  "F",
+  "ASYNC", # flake8-async: what does not belong in a coroutine
+  "B",     # flake8-bugbear: the mistakes that still run
+  "G",     # flake8-logging-format: a log message is a format string, its values are arguments
+  "LOG",   # flake8-logging: how a logger is obtained and called
+  "N",     # pep8-naming
+  "RUF",   # ruff-checks
+  "S",     # flake8-bandit: the security-shaped mistakes
+  "TID",   # flake8-tidy-imports
+  "TC",    # flake8-type-checking
+  "UP"     # pyupgrade
+]
+
+[tool.ruff.lint.per-file-ignores]
+"llmao/**/__init__.py" = ["F401", "E402"]  # re-exports and import-time config in the package initializer
+# A test asserts, builds its fixtures out of literals, and reaches for /tmp; flake8-bandit
+# reads each of those as the shape of a security mistake. S104 goes too: the "0.0.0.0" strings
+# are Vast fixture data and expected vllm argv, not a bind this repository performs.
+# ASYNC240 goes: reading a fixture file with pathlib inside an async test blocks a loop that
+# serves one test and nothing else, where in `llmao/` the same call is worth an argument.
+"tests/**" = ["S101", "S104", "S105", "S108", "S701", "ASYNC109", "ASYNC240", "E501", "F841"]
+# One-shot command line tools: they own their event loop and nothing waits on it (ASYNC240).
+# The urlopen URLs (S310) are literals or built with a pinned http(s) scheme against
+# endpoints discovered at runtime - a file: scheme is not reachable.
+"bin/**" = ["ASYNC240", "S310"]
+# The saturation prompt is a seeded word generator, not a secret (S311).
+"bin/llmao-saturate" = ["S311"]
+# The model-length probe swallows errors on purpose: no data means the caller
+# falls back to a safe default (S110).
+"bin/llmao-smoke" = ["S110"]
+# Developer-laptop bootstrap: the only interpolated values are module constants (DB_USER,
+# DB_NAME) and a locally generated secret in dollar-quoted SQL - nothing user-controlled
+# ever reaches the string.
+"bin/setup_litellm_db.py" = ["S608"]
+# fetch_config validates the URL scheme is http(s) before the urlopen; the check sits in
+# code ruff's syntactic S310 cannot see through. The vllm server must listen on all
+# interfaces of the Vast box: it is reached through the host's public IP and the port
+# Vast publishes, so a loopback bind serves no one (S104).
+"hosting/vast/install_set.py" = ["S104", "S310"]

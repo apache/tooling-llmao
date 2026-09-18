@@ -43,6 +43,7 @@ WHAT THE OUTPUT MEANS
       Apache's default ProxyTimeout. Should be 1800 now; if this reappears
       the vhost config has regressed.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,7 +63,7 @@ GATEWAY = "https://llm.apache.org/v1/chat/completions"
 # routing table on the gateway host, or from LLMAO_DIRECT_<MODEL> env vars
 # elsewhere. See _discover.py.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _discover import direct_endpoints          # noqa: E402
+from _discover import direct_endpoints  # noqa: E402
 
 # Models whose catalog entry claims image support. Checked rather than
 # assumed -- the claim is only worth having if it works.
@@ -78,32 +79,35 @@ def red_square_png() -> str:
     hosts (Wikimedia among them) return 403 to it, which surfaces as a
     confusing 422 that looks like the model rejecting images.
     """
+
     def chunk(tag, data):
         body = tag + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
     raw = b"".join(b"\x00" + bytes([255, 0, 0] * 8) for _ in range(8))
-    png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
-           + chunk(b"IDAT", zlib.compress(raw))
-           + chunk(b"IEND", b""))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
     return base64.b64encode(png).decode()
 
 
 def call(url: str, key: str, body: dict, timeout: int = 900) -> dict:
     req = urllib.request.Request(
-        url, data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json"})
+        url,
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode()
     except urllib.error.HTTPError as e:
-        return {"err": f"HTTP {e.code}", "detail": e.read().decode()[:100],
-                "wall": time.monotonic() - t0}
+        return {"err": f"HTTP {e.code}", "detail": e.read().decode()[:100], "wall": time.monotonic() - t0}
     except Exception as e:
-        return {"err": type(e).__name__, "detail": str(e)[:100],
-                "wall": time.monotonic() - t0}
+        return {"err": type(e).__name__, "detail": str(e)[:100], "wall": time.monotonic() - t0}
     wall = time.monotonic() - t0
 
     # A backend error can arrive as HTTP 200 with a body of literal null --
@@ -124,10 +128,8 @@ def call(url: str, key: str, body: dict, timeout: int = 900) -> dict:
         blocks = d.get("content") or []
         return {
             "wall": wall,
-            "content": "".join(b.get("text", "") for b in blocks
-                               if b.get("type") == "text"),
-            "reasoning": "".join(b.get("thinking", "") for b in blocks
-                                 if b.get("type") == "thinking"),
+            "content": "".join(b.get("text", "") for b in blocks if b.get("type") == "text"),
+            "reasoning": "".join(b.get("thinking", "") for b in blocks if b.get("type") == "thinking"),
             "tool_calls": [b for b in blocks if b.get("type") == "tool_use"],
             "finish": d.get("stop_reason", "?"),
             "tokens": (d.get("usage") or {}).get("output_tokens", 0),
@@ -143,9 +145,12 @@ def call(url: str, key: str, body: dict, timeout: int = 900) -> dict:
         # under provider_specific_fields. Reading only `reasoning` reports
         # zero every time -- that is how #31 was filed against a working
         # proxy.
-        "reasoning": (m.get("reasoning_content") or m.get("reasoning")
-                      or (m.get("provider_specific_fields") or {}).get("reasoning")
-                      or ""),
+        "reasoning": (
+            m.get("reasoning_content")
+            or m.get("reasoning")
+            or (m.get("provider_specific_fields") or {}).get("reasoning")
+            or ""
+        ),
         "tool_calls": m.get("tool_calls") or [],
         "finish": c["finish_reason"],
         "tokens": d["usage"]["completion_tokens"],
@@ -180,39 +185,54 @@ def check(model: str, url: str, key: str) -> int:
     print(f"\n  {model}")
     fails = 0
 
-    r = call(url, key, {"model": model,
-                        "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                        "max_tokens": 200})
+    r = call(
+        url,
+        key,
+        {"model": model, "messages": [{"role": "user", "content": "Reply with exactly: OK"}], "max_tokens": 200},
+    )
     if "err" in r:
         line("completion", BAD, f"{r['err']}: {r['detail']}")
-        return 1                       # nothing else will work either
-    line("completion", OK, f"{r['tokens']} tok, {r['wall']:.1f}s, "
-                           f"finish={r['finish']}")
+        return 1  # nothing else will work either
+    line("completion", OK, f"{r['tokens']} tok, {r['wall']:.1f}s, finish={r['finish']}")
 
     # enable_thinking is the only control a caller has over reasoning. Both
     # directions are checked: off must suppress it, and on must produce it,
     # or the catalog's thinks_by_default is a claim nobody can act on.
-    r = call(url, key, {"model": model,
-                        "messages": [{"role": "user", "content": "What is 17 x 23?"}],
-                        "chat_template_kwargs": {"enable_thinking": False},
-                        "max_tokens": 400})
+    r = call(
+        url,
+        key,
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "What is 17 x 23?"}],
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 400,
+        },
+    )
     if "err" in r:
-        line("thinking off", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+        line("thinking off", BAD, f"{r['err']}: {r['detail']}")
+        fails += 1
     elif r["reasoning"]:
-        line("thinking off", BAD, f"{len(r['reasoning'])}c of reasoning "
-                                   f"-- the kwarg did not take effect")
+        line("thinking off", BAD, f"{len(r['reasoning'])}c of reasoning -- the kwarg did not take effect")
         fails += 1
     elif not r["content"]:
-        line("thinking off", BAD, f"no content, finish={r['finish']}"); fails += 1
+        line("thinking off", BAD, f"no content, finish={r['finish']}")
+        fails += 1
     else:
         line("thinking off", OK, f"suppressed, {r['tokens']} tok")
 
-    r = call(url, key, {"model": model,
-                        "messages": [{"role": "user", "content": "What is 17 x 23?"}],
-                        "chat_template_kwargs": {"enable_thinking": True},
-                        "max_tokens": 1500})
+    r = call(
+        url,
+        key,
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "What is 17 x 23?"}],
+            "chat_template_kwargs": {"enable_thinking": True},
+            "max_tokens": 1500,
+        },
+    )
     if "err" in r:
-        line("thinking on", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+        line("thinking on", BAD, f"{r['err']}: {r['detail']}")
+        fails += 1
     elif not r["reasoning"]:
         line("thinking on", BAD, "no reasoning -- the kwarg did not take effect")
         fails += 1
@@ -224,64 +244,121 @@ def check(model: str, url: str, key: str) -> int:
     # while this failed.
     if not url.startswith("http://"):
         ms = url.replace("/chat/completions", "/messages")
-        r = call(ms, key, {
-            "model": model, "max_tokens": 300,
-            "tools": [{"name": "get_weather", "input_schema": {
-                "type": "object", "properties": {"city": {"type": "string"}},
-                "required": ["city"]}}],
-            "tool_choice": {"type": "auto"},
-            "messages": [{"role": "user", "content": "Weather in Portland? Use the tool."}],
-        })
+        r = call(
+            ms,
+            key,
+            {
+                "model": model,
+                "max_tokens": 300,
+                "tools": [
+                    {
+                        "name": "get_weather",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                            "required": ["city"],
+                        },
+                    }
+                ],
+                "tool_choice": {"type": "auto"},
+                "messages": [{"role": "user", "content": "Weather in Portland? Use the tool."}],
+            },
+        )
         if "err" in r:
             line("anthropic tool_choice", BAD, f"{r['err']}: {r['detail'][:70]}")
             fails += 1
         else:
             line("anthropic tool_choice", OK, "accepted")
 
-    tools = [{"type": "function", "function": {
-        "name": "get_weather", "description": "Get current weather",
-        "parameters": {"type": "object",
-                       "properties": {"city": {"type": "string"}},
-                       "required": ["city"]}}}]
-    r = call(url, key, {"model": model,
-                        "messages": [{"role": "user", "content": "What is the weather in Portland? Use the get_weather tool."}],
-                        "tools": tools, "tool_choice": "auto", "max_tokens": 400})
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get current weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            },
+        }
+    ]
+    r = call(
+        url,
+        key,
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "What is the weather in Portland? Use the get_weather tool."}],
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": 400,
+        },
+    )
     if "err" in r:
-        line("tool calling", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+        line("tool calling", BAD, f"{r['err']}: {r['detail']}")
+        fails += 1
     elif r["tool_calls"]:
         fn = r["tool_calls"][0]["function"]
         line("tool calling", OK, f"{fn['name']} {fn['arguments']}")
     else:
         # If the raw syntax is sitting in content, the parser is wrong for
         # this model rather than the model declining.
-        hint = " (raw call is in content -- wrong parser)" if "<tool_call>" in r["content"] or "<function" in r["content"] else ""
-        line("tool calling", BAD, f"no tool_calls{hint}"); fails += 1
+        hint = (
+            " (raw call is in content -- wrong parser)"
+            if "<tool_call>" in r["content"] or "<function" in r["content"]
+            else ""
+        )
+        line("tool calling", BAD, f"no tool_calls{hint}")
+        fails += 1
 
     if model in VISION:
         img = f"data:image/png;base64,{red_square_png()}"
-        r = call(url, key, {"model": model, "messages": [{"role": "user", "content": [
-            {"type": "text", "text": "What colour is this image? One word."},
-            {"type": "image_url", "image_url": {"url": img}}]}],
-            "chat_template_kwargs": {"enable_thinking": False},
-            "max_tokens": 50})
+        r = call(
+            url,
+            key,
+            {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What colour is this image? One word."},
+                            {"type": "image_url", "image_url": {"url": img}},
+                        ],
+                    }
+                ],
+                "chat_template_kwargs": {"enable_thinking": False},
+                "max_tokens": 50,
+            },
+        )
         if "err" in r:
-            line("vision", BAD, f"{r['err']}: {r['detail']}"); fails += 1
+            line("vision", BAD, f"{r['err']}: {r['detail']}")
+            fails += 1
         elif "red" in r["content"].lower():
             line("vision", OK, r["content"].strip()[:40])
         else:
             line("vision", WARN, f"unexpected: {r['content'].strip()[:40]}")
 
     # Anything over a minute used to die at Apache's default ProxyTimeout.
-    r = call(url, key, {"model": model, "messages": [{"role": "user", "content":
-        "Write a detailed technical guide to PostgreSQL index types. Cover "
-        "B-tree, Hash, GiST, SP-GiST, GIN and BRIN with examples."}],
-        "chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 4000})
+    r = call(
+        url,
+        key,
+        {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Write a detailed technical guide to PostgreSQL index types. Cover "
+                    "B-tree, Hash, GiST, SP-GiST, GIN and BRIN with examples.",
+                }
+            ],
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 4000,
+        },
+    )
     if "err" in r:
         extra = "  <-- looks like a proxy timeout" if 55 < r["wall"] < 70 else ""
-        line("long output", BAD, f"{r['err']} after {r['wall']:.0f}s{extra}"); fails += 1
+        line("long output", BAD, f"{r['err']} after {r['wall']:.0f}s{extra}")
+        fails += 1
     else:
-        line("long output", OK, f"{r['tokens']} tok in {r['wall']:.0f}s "
-                                f"({r['tokens']/r['wall']:.0f} tok/s)")
+        line("long output", OK, f"{r['tokens']} tok in {r['wall']:.0f}s ({r['tokens'] / r['wall']:.0f} tok/s)")
 
     # Sized to the model, not a fixed 25k: vLLM rejects a request whose
     # prompt plus max_tokens exceeds the window, and the 8B's whole window is
@@ -290,12 +367,20 @@ def check(model: str, url: str, key: str) -> int:
     window = context_window(url, key) or 40960
     target = max(4000, window // 2)
     filler = "The quick brown fox jumps over the lazy dog. " * (target // 11)
-    r = call(url, key, {"model": model, "messages": [{"role": "user",
-        "content": filler + "\n\nHow many words is that, to the nearest thousand?"}],
-        "chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 100})
+    r = call(
+        url,
+        key,
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": filler + "\n\nHow many words is that, to the nearest thousand?"}],
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 100,
+        },
+    )
     label = f"{target // 1000}k prompt"
     if "err" in r:
-        line(label, BAD, f"{r['err']}: {r['detail']}"); fails += 1
+        line(label, BAD, f"{r['err']}: {r['detail']}")
+        fails += 1
     else:
         line(label, OK, f"{r['prompt_tokens']} tok accepted, {r['wall']:.1f}s")
     return fails
@@ -304,8 +389,7 @@ def check(model: str, url: str, key: str) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="append")
-    ap.add_argument("--direct", action="store_true",
-                    help="hit the boxes directly; isolates gateway problems")
+    ap.add_argument("--direct", action="store_true", help="hit the boxes directly; isolates gateway problems")
     args = ap.parse_args()
 
     var = "VLLM_API_KEY" if args.direct else "LLMAO_KEY"
@@ -315,30 +399,28 @@ def main() -> None:
 
     endpoints = direct_endpoints() if args.direct else {}
     if args.direct and not endpoints:
-        sys.exit("no direct endpoints found.\n"
-                 "  on the gateway host: run as root, or export MK=<master key>\n"
-                 "  elsewhere: export LLMAO_DIRECT_QWEN3_8B=host:port\n"
-                 "  or drop --direct to test through the gateway")
+        sys.exit(
+            "no direct endpoints found.\n"
+            "  on the gateway host: run as root, or export MK=<master key>\n"
+            "  elsewhere: export LLMAO_DIRECT_QWEN3_8B=host:port\n"
+            "  or drop --direct to test through the gateway"
+        )
 
     if args.model:
         models = args.model
     elif args.direct:
         models = sorted(endpoints)
     else:
-        req = urllib.request.Request(
-            "https://llm.apache.org/v1/models",
-            headers={"Authorization": f"Bearer {key}"})
+        req = urllib.request.Request("https://llm.apache.org/v1/models", headers={"Authorization": f"Bearer {key}"})
         with urllib.request.urlopen(req, timeout=30) as r:
             advertised = sorted(m["id"] for m in json.load(r)["data"])
         # Temporary routes from testing appear here too; asserting against
         # them is noise, and leaving one registered should be visible.
-        models = [m for m in advertised
-                  if not m.startswith(("hv-", "ovr-", "test-"))]
+        models = [m for m in advertised if not m.startswith(("hv-", "ovr-", "test-"))]
         print(f"gateway advertises: {advertised}")
         if len(models) != len(advertised):
             skipped = sorted(set(advertised) - set(models))
-            print(f"  {WARN} skipping test route(s): {', '.join(skipped)} "
-                  f"-- delete when finished")
+            print(f"  {WARN} skipping test route(s): {', '.join(skipped)} -- delete when finished")
 
     total = 0
     for m in models:

@@ -1,9 +1,27 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Fleet VllmServer health state machine (no real vLLM)."""
+
 import asyncio
 
-from easydict import EasyDict as edict
+from easydict import EasyDict
 
-from llmao.fleet import parse_kv_cache_tokens, parse_max_model_len, Fleet, VllmServer
+from llmao.fleet import Fleet, VllmServer, parse_kv_cache_tokens, parse_max_model_len
 
 
 def _server(**kwargs):
@@ -75,26 +93,29 @@ def test_box_json_listen_not_public():
     assert body["model"] == "google/gemma"
     assert body["port"] == 8001
     assert body["gpu_memory_utilization"] == 0.5
-    assert s.api_base == "http://10.0.0.1:41234"
+    assert s.api_base == "http://10.0.0.1:41234/v1"
 
 
 def test_local_from_cfg_public_equals_listen():
     from pathlib import Path
+
     from llmao.models import load_model_list
 
     example = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
-    cfg = edict({
-        "fleet": {
-            "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
-            "health_interval_s": 45,
-            "health_timeout_s": 3,
-            "health_grace_s": 1800,
-            "health_fail_threshold": 3,
-            "skew_interval_s": 180,
-            "litellm_health_interval_s": 14400,
-        },
-        "models_path": str(example),
-    })
+    cfg = EasyDict(
+        {
+            "fleet": {
+                "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "health_interval_s": 45,
+                "health_timeout_s": 3,
+                "health_grace_s": 1800,
+                "health_fail_threshold": 3,
+                "skew_interval_s": 180,
+                "litellm_health_interval_s": 14400,
+            },
+            "models_path": str(example),
+        }
+    )
     fleet = Fleet.from_cfg(cfg, models=load_model_list(example))
     assert fleet.servers[0].listen_port == 8001
     assert fleet.servers[0].public_port == 8001
@@ -104,13 +125,17 @@ def test_local_from_cfg_public_equals_listen():
 def test_probe_skips_without_public_port():
     s = _server(public_port=None)
     assert s.health_url is None
-    cfg = edict({
-        "fleet": edict({
-            "health_timeout_s": 1,
-            "health_grace_s": 1800,
-            "health_fail_threshold": 3,
-        })
-    })
+    cfg = EasyDict(
+        {
+            "fleet": EasyDict(
+                {
+                    "health_timeout_s": 1,
+                    "health_grace_s": 1800,
+                    "health_fail_threshold": 3,
+                }
+            )
+        }
+    )
 
     class _Boom:
         async def get(self, url):
@@ -277,9 +302,9 @@ def test_parse_kv_cache_tokens_absent():
 
 def test_parse_kv_cache_tokens_malformed():
     for text in (
-        'vllm:cache_config_info{block_size="16"} 1.0',          # no block count
+        'vllm:cache_config_info{block_size="16"} 1.0',  # no block count
         'vllm:cache_config_info{block_size="x",num_gpu_blocks="1"} 1.0',
-        'vllm:cache_config_info block_size=16 1.0',              # no braces
+        "vllm:cache_config_info block_size=16 1.0",  # no braces
         'vllm:cache_config_info{block_size="0",num_gpu_blocks="0"} 1.0',
     ):
         assert parse_kv_cache_tokens(text) is None, text
