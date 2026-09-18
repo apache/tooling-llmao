@@ -21,7 +21,17 @@ import asyncio
 
 from easydict import EasyDict
 
-from llmao.fleet import Fleet, VllmServer, parse_kv_cache_tokens, parse_max_model_len
+from llmao.fleet import Fleet, VllmServer, fetch_observed, parse_kv_cache_tokens, parse_max_model_len
+
+
+class _Resp:
+    def __init__(self, status_code=200, text="", body=None):
+        self.status_code = status_code
+        self.text = text
+        self._body = body
+
+    def json(self):
+        return self._body
 
 
 def _server(**kwargs):
@@ -354,3 +364,62 @@ def test_oversized_falls_back_to_configured_length():
     s.observed_max_model_len = None
     s.max_model_len = 131072
     assert s.oversized is True
+
+
+def test_fetch_observed_scrapes_from_the_root():
+    """fetch_observed takes the server root, not a /v1-suffixed api_base.
+
+    /metrics sits at the root and the model list at /v1/models. A /v1-
+    suffixed base would request root/v1/metrics and root/v1/v1/models,
+    404 both, and leave the fields None -- oversized detection quietly dead
+    while the rest of the suite stays green.
+    """
+    calls = []
+    root = "http://10.0.0.1:8001"
+
+    class _Client:
+        async def get(self, url, headers=None):
+            calls.append(url)
+            if url == f"{root}/metrics":
+                return _Resp(200, text=_METRICS)
+            if url == f"{root}/v1/models":
+                return _Resp(200, body={"data": [{"max_model_len": 131072}]})
+            return _Resp(404)
+
+    kv, mml = asyncio.run(fetch_observed(_Client(), root, "sk-x"))
+    assert kv == 855836
+    assert mml == 131072
+    assert calls == [f"{root}/metrics", f"{root}/v1/models"]
+
+
+def test_probe_all_scrapes_from_root_not_api_base():
+    """The SERVING-transition scrape must be handed root_url, not api_base.
+
+    Catches the regression one layer up from fetch_observed: if probe_all
+    ever passes the /v1-suffixed base, both scrape requests 404 on every
+    transition, the KV column on /fleet goes empty, and oversized stays
+    unknown without any other test failing.
+    """
+    s = _server()
+    calls = []
+    root = f"http://{s.host}:{s.public_port}"
+
+    class _Client:
+        async def get(self, url, headers=None):
+            calls.append(url)
+            if url.endswith("/health"):
+                return _Resp(200, text="OK")
+            if url.endswith("/metrics"):
+                return _Resp(200, text=_METRICS)
+            if url.endswith("/v1/models"):
+                return _Resp(200, body={"data": [{"max_model_len": 131072}]})
+            return _Resp(404)
+
+    cfg = EasyDict({"fleet": EasyDict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    fleet = Fleet(cfg=cfg, servers=[s])
+    asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
+
+    assert s.state == VllmServer.SERVING
+    assert s.kv_cache_tokens == 855836
+    assert s.observed_max_model_len == 131072
+    assert calls == [f"{root}/health", f"{root}/metrics", f"{root}/v1/models"]
