@@ -1,21 +1,39 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """config_for_host: JSON for a client IP from fleet.hosts + catalog."""
+
 from pathlib import Path
 
 import pytest
 import yaml
-from easydict import EasyDict as edict
+from easydict import EasyDict
 
 from llmao.fleet import (
     Fleet,
-    UnknownHost,
+    UnknownHostError,
     client_ip,
     config_for_host,
     normalize_peer_ip,
     parse_host_row,
     validate_fleet,
 )
-from llmao.models import load_model_list
 from llmao.litellm_client import _norm_base
+from llmao.models import load_model_list
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
@@ -31,14 +49,16 @@ FLEET_KNOBS = {
 
 
 def _cfg(hosts, models_path=EXAMPLE):
-    return edict({
-        "fleet": {"hosts": hosts, **FLEET_KNOBS},
-        "models_path": str(models_path),
-    })
+    return EasyDict(
+        {
+            "fleet": {"hosts": hosts, **FLEET_KNOBS},
+            "models_path": str(models_path),
+        }
+    )
 
 
 def test_example_primary_host():
-    cfg = edict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
+    cfg = EasyDict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
     models = load_model_list(EXAMPLE)
     validate_fleet(cfg, models=models)
     payload = config_for_host("127.0.0.1", models=models, cfg=cfg)
@@ -57,17 +77,19 @@ def test_unknown_host():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_model_list(EXAMPLE)
     validate_fleet(cfg, models=models)
-    with pytest.raises(UnknownHost):
+    with pytest.raises(UnknownHostError):
         config_for_host("10.0.0.9", models=models, cfg=cfg)
 
 
 def test_optional_name_two_copies():
-    cfg = _cfg({
-        "10.0.0.1": [
-            ["qwen3-8b", 8003],
-            ["qwen3-8b", 8004, "qwen3-8b-b"],
-        ]
-    })
+    cfg = _cfg(
+        {
+            "10.0.0.1": [
+                ["qwen3-8b", 8003],
+                ["qwen3-8b", 8004, "qwen3-8b-b"],
+            ]
+        }
+    )
     models = load_model_list(EXAMPLE)
     validate_fleet(cfg, models=models)
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
@@ -76,23 +98,27 @@ def test_optional_name_two_copies():
 
 
 def test_duplicate_name():
-    cfg = _cfg({
-        "10.0.0.1": [
-            ["qwen3-8b", 8003],
-            ["qwen3-8b", 8004],
-        ]
-    })
+    cfg = _cfg(
+        {
+            "10.0.0.1": [
+                ["qwen3-8b", 8003],
+                ["qwen3-8b", 8004],
+            ]
+        }
+    )
     with pytest.raises(ValueError, match="duplicate name"):
         validate_fleet(cfg, models=load_model_list(EXAMPLE))
 
 
 def test_duplicate_port():
-    cfg = _cfg({
-        "10.0.0.1": [
-            ["gemma4-26b", 8001],
-            ["qwen3-8b", 8001],
-        ]
-    })
+    cfg = _cfg(
+        {
+            "10.0.0.1": [
+                ["gemma4-26b", 8001],
+                ["qwen3-8b", 8001],
+            ]
+        }
+    )
     with pytest.raises(ValueError, match="duplicate port"):
         validate_fleet(cfg, models=load_model_list(EXAMPLE))
 
@@ -118,13 +144,16 @@ def test_client_ip_no_xff():
 
 
 def test_norm_base_strips_trailing_v1():
-    """LiteLLM appends /v1/chat/completions to api_base.
+    """Why the normalisation exists.
 
-    A base that already ends in /v1 resolves to /v1/v1/..., which 404s at the
-    origin. LiteLLM cannot parse that and reports an OpenAI authentication
-    error naming platform.openai.com -- so the symptom points at the caller's
-    key rather than at the route. This happened in production against the
-    Fastly-fronted Gemma endpoint.
+    An older LiteLLM appended /v1/chat/completions to api_base, so a base
+    that already ended in /v1 resolved to /v1/v1/... and 404'd at the origin.
+    LiteLLM then reported an OpenAI authentication error naming
+    platform.openai.com -- so the symptom pointed at the caller's key rather
+    than at the route. This happened in production against the Fastly-fronted
+    Gemma endpoint. The current LiteLLM appends only /chat/completions, so a
+    /v1-suffixed base is what vLLM needs now; routes pushed under the old
+    behaviour may lack it, and the comparison must match across both forms.
     """
     assert _norm_base("https://llm.tooling.apache.org/v1") == "https://llm.tooling.apache.org"
     assert _norm_base("https://llm.tooling.apache.org/v1/") == "https://llm.tooling.apache.org"
@@ -144,9 +173,10 @@ def test_norm_base_makes_skew_comparison_match():
     """The comparison this exists for.
 
     check_config_skew compares VllmServer.api_base against what LiteLLM reports.
-    VllmServer.api_base is host:port with no suffix; a catalog entry may carry
-    /v1. Without normalisation on both sides they never match, and the skew
-    check reports a missing route that is actually present.
+    VllmServer.api_base ends in /v1; a route pushed before that, or a catalog
+    entry, may lack it. Without normalisation on both sides the same route
+    never matches, and the skew check reports a missing route that is actually
+    present.
     """
     assert _norm_base("http://100.105.28.100:8003/v1") == _norm_base("http://100.105.28.100:8003")
 
@@ -155,9 +185,10 @@ def test_from_row_falls_back_to_fleet_api_key():
     """Empty means vLLM starts unauthenticated on a public port."""
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003]]})
     cfg.fleet.selfhost_api_key = "sk-fleet"
-    models = load_model_list(EXAMPLE)          # catalog carries no api_key
+    models = load_model_list(EXAMPLE)  # catalog carries no api_key
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
     assert payload["servers"][0]["api_key"] == "sk-fleet"
+
 
 def test_host_row_pins_public_port():
     """[model, port, name, public_port] survives a provider lookup.
@@ -170,14 +201,17 @@ def test_host_row_pins_public_port():
     assert parse_host_row(["qwen3-8b", 8003], "h", 0) == ("qwen3-8b", 8003, "qwen3-8b", None)
     assert parse_host_row(["qwen3-8b", 8003, "b"], "h", 0) == ("qwen3-8b", 8003, "b", None)
     assert parse_host_row(["qwen3-8b", 8003, "b", 15601], "h", 0) == (
-        "qwen3-8b", 8003, "b", 15601,
+        "qwen3-8b",
+        8003,
+        "b",
+        15601,
     )
 
 
 def test_host_row_null_name_reaches_the_fourth_slot():
     """null for name is how you pin a port without renaming the server."""
-    model, port, name, public = parse_host_row(["qwen3-8b", 8003, None, 15601], "h", 0)
-    assert name == "qwen3-8b"      # falls back to the model name
+    _, _, name, public = parse_host_row(["qwen3-8b", 8003, None, 15601], "h", 0)
+    assert name == "qwen3-8b"  # falls back to the model name
     assert public == 15601
 
 
@@ -200,7 +234,7 @@ def test_pinned_port_survives_apply_port_map():
     srv = fleet.servers[0]
     assert srv.public_port == 15601
     assert srv.public_port_pinned is True
-    assert srv.api_base == "http://1.2.3.4:15601"
+    assert srv.api_base == "http://1.2.3.4:15601/v1"
 
     # A map that knows nothing about this host, then one that disagrees.
     fleet.apply_port_map({})

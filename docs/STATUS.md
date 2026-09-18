@@ -1,9 +1,9 @@
 # Build status and backlog
 
-**As of:** 2026-09-13  
-**Repo:** `apache/tooling-llmao`  
-**Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`  
-**How to run/use this software:** repo [`README.md`](../README.md)  
+**As of:** 2026-09-13<br>
+**Repo:** `apache/tooling-llmao`<br>
+**Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`<br>
+**How to run/use this software:** repo [`README.md`](../README.md)<br>
 **Ops:** Infra `p6/modules/llmao/README.md`
 
 **Doc split**
@@ -207,10 +207,10 @@ Home = role-aware launchpad (not keys-only)
 
 ### Open RAI (block precise numbers, not UX scaffolding)
 
-1. Trial/free default amounts and duration  
-2. Hard dual budgets vs display-only people/automation split  
-3. Narrow stewards later (Chair vs any PMC)?  
-4. Capacity fair-share defaults from Infra  
+1. Trial/free default amounts and duration
+2. Hard dual budgets vs display-only people/automation split
+3. Narrow stewards later (Chair vs any PMC)?
+4. Capacity fair-share defaults from Infra
 
 ---
 
@@ -230,16 +230,13 @@ Home = role-aware launchpad (not keys-only)
    `bases - fleet_bases` branch of the skew check is exactly this case and
    should delete rather than only report. Pair with reconciliation at
    startup.
-3. **KV scrape requests the wrong path**, appending `/metrics` to an
-   `api_base` that already ends in `/v1`. That is the empty column on
-   `/fleet`, and it fires on every health cycle.
-4. **Catalog does not record `reasoning_effort` levels** per model.
-5. Harden PAT against LiteLLM pagination / delete ids  
-6. Automation creator policy after RAI decides §5.1.1  
-7. Site admin via `rai` PMC (optional keep cfg list)  
-8. PMC notification email on key/budget lifecycle  
-9. Advisor / richer routing  
-10. **Nothing restarts a GPU box.** All three were launched by hand; a
+3. **Catalog does not record `reasoning_effort` levels** per model.
+4. Harden PAT against LiteLLM pagination / delete ids
+5. Automation creator policy after RAI decides §5.1.1
+6. Site admin via `rai` PMC (optional keep cfg list)
+7. PMC notification email on key/budget lifecycle
+8. Advisor / richer routing
+9. **Nothing restarts a GPU box.** All three were launched by hand; a
     host restart leaves the box up and the model down. RunPod pods carry
     their launch command in `--docker-args` and recover; the hand-launched
     box does not.

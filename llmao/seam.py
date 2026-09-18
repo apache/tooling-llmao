@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """The seam — ASF identity joined to LiteLLM teams and PATs.
 
 Project names are LDAP/session names. PATs are project + user + purpose
@@ -5,11 +22,12 @@ Project names are LDAP/session names. PATs are project + user + purpose
 
 The seam speaks **project** only; mapping to LiteLLM team_id is the backend's job.
 """
+
 from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .litellm_client import (
     GRANTOR_FREE_TIER,
@@ -26,6 +44,7 @@ class AuthzError(Exception):
 
 def require_member(fn):
     """Expects (self, identity, project, ...)."""
+
     @functools.wraps(fn)
     async def wrapper(self, identity: Identity, project: str, *args, **kwargs):
         if not (identity.is_site_admin or identity.member_of(project)):
@@ -37,6 +56,7 @@ def require_member(fn):
 
 def require_admin(fn):
     """Expects (self, identity, project, ...)."""
+
     @functools.wraps(fn)
     async def wrapper(self, identity: Identity, project: str, *args, **kwargs):
         if not identity.admin_of(project):
@@ -49,9 +69,10 @@ def require_admin(fn):
 @dataclass
 class Identity:
     """The subset of an asfquart ClientSession the seam needs."""
+
     uid: str
-    projects: List[str]      # committer projects (LDAP names)
-    committees: List[str]    # PMC memberships (admin within those projects)
+    projects: list[str]  # committer projects (LDAP names)
+    committees: list[str]  # PMC memberships (admin within those projects)
     is_site_admin: bool = False
 
     def member_of(self, project: str) -> bool:
@@ -60,19 +81,20 @@ class Identity:
     def admin_of(self, project: str) -> bool:
         return self.is_site_admin or project in self.committees
 
-    def all_projects(self) -> List[str]:
+    def all_projects(self) -> list[str]:
         return list(dict.fromkeys([*self.committees, *self.projects]))
 
 
 @dataclass
 class ProjectListRow:
     """One project on the Projects list (budget summary)."""
+
     project: str
     is_steward: bool
     max_budget: float
     spend: float
     remaining: float
-    pct_used: Optional[float]
+    pct_used: float | None
     budget_duration: str
     grantor: str = GRANTOR_FREE_TIER
 
@@ -87,32 +109,34 @@ class PersonSpendRow:
 @dataclass
 class AutomationKeyRow:
     """Secret-free automation key summary for project overview."""
+
     token_id: str
     purpose: str
     spend: float
-    created_by: Optional[str]
+    created_by: str | None
     blocked: bool
 
 
 @dataclass
 class ProjectOverview:
     """Read-only project budget + people/automation usage (key spend aggregates)."""
+
     project: str
     is_steward: bool
     max_budget: float
     spend: float
     remaining: float
-    pct_used: Optional[float]
+    pct_used: float | None
     budget_duration: str
     grantor: str
     people_spend: float
     automation_spend: float
-    by_person: List[PersonSpendRow] = field(default_factory=list)
-    automation_keys: List[AutomationKeyRow] = field(default_factory=list)
+    by_person: list[PersonSpendRow] = field(default_factory=list)
+    automation_keys: list[AutomationKeyRow] = field(default_factory=list)
     automation_key_count: int = 0
 
 
-def _pct_used(spend: float, max_budget: float) -> Optional[float]:
+def _pct_used(spend: float, max_budget: float) -> float | None:
     if max_budget <= 0:
         return None
     return round(100.0 * spend / max_budget, 2)
@@ -123,12 +147,12 @@ def _remaining(spend: float, max_budget: float) -> float:
 
 
 def _aggregate_keys(
-    keys: List[KeyInfo],
-) -> Tuple[float, float, List[PersonSpendRow], List[AutomationKeyRow]]:
+    keys: list[KeyInfo],
+) -> tuple[float, float, list[PersonSpendRow], list[AutomationKeyRow]]:
     people = 0.0
     automation = 0.0
-    by_uid: Dict[str, list] = {}
-    auto_rows: List[AutomationKeyRow] = []
+    by_uid: dict[str, list] = {}
+    auto_rows: list[AutomationKeyRow] = []
     for k in keys:
         if k.is_automation:
             automation += k.spend
@@ -148,10 +172,7 @@ def _aggregate_keys(
                 by_uid[uid] = [0.0, 0]
             by_uid[uid][0] += k.spend
             by_uid[uid][1] += 1
-    by_person = [
-        PersonSpendRow(uid=uid, spend=round(vals[0], 6), key_count=vals[1])
-        for uid, vals in by_uid.items()
-    ]
+    by_person = [PersonSpendRow(uid=uid, spend=round(vals[0], 6), key_count=vals[1]) for uid, vals in by_uid.items()]
     by_person.sort(key=lambda r: (-r.spend, r.uid))
     auto_rows.sort(key=lambda r: (-r.spend, r.token_id))
     return round(people, 6), round(automation, 6), by_person, auto_rows
@@ -162,9 +183,7 @@ class Seam:
         self._cfg = cfg
         self._backend = backend
 
-    def _row_from_team(
-        self, project: str, identity: Identity, info: TeamInfo
-    ) -> ProjectListRow:
+    def _row_from_team(self, project: str, identity: Identity, info: TeamInfo) -> ProjectListRow:
         return ProjectListRow(
             project=project,
             is_steward=identity.admin_of(project),
@@ -176,19 +195,17 @@ class Seam:
             grantor=info.grantor,
         )
 
-    async def list_projects_for(self, identity: Identity) -> List[ProjectListRow]:
+    async def list_projects_for(self, identity: Identity) -> list[ProjectListRow]:
         """Projects from identity membership; ensures LiteLLM team (project budget)."""
         names = sorted(identity.all_projects())
-        rows: List[ProjectListRow] = []
+        rows: list[ProjectListRow] = []
         for project in names:
             info = await self._backend.ensure_team(project)
             rows.append(self._row_from_team(project, identity, info))
         return rows
 
     @require_member
-    async def project_overview(
-        self, identity: Identity, project: str
-    ) -> ProjectOverview:
+    async def project_overview(self, identity: Identity, project: str) -> ProjectOverview:
         """Read-only project budget + key-based people/automation breakdown."""
         project = (project or "").strip()
         info = await self._backend.ensure_team(project)
@@ -211,14 +228,14 @@ class Seam:
         )
 
     @require_member
-    async def team_status(self, identity: Identity, project: str) -> Optional[TeamInfo]:
+    async def team_status(self, identity: Identity, project: str) -> TeamInfo | None:
         return await self._backend.team_info(project)
 
-    async def list_my_keys(self, identity: Identity) -> List[KeyInfo]:
+    async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
         return await self._backend.list_keys(user=identity.uid, size=100)
 
     @require_admin
-    async def list_automation_keys(self, identity: Identity, project: str) -> List[KeyInfo]:
+    async def list_automation_keys(self, identity: Identity, project: str) -> list[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
         keys = await self._backend.list_keys(project=project, size=100)
         return [k for k in keys if k.is_automation]
@@ -280,5 +297,5 @@ class Seam:
         raise AuthzError("not allowed to revoke this key")
 
     @require_admin
-    async def project_activity(self, identity: Identity, project: str) -> List[Dict]:
+    async def project_activity(self, identity: Identity, project: str) -> list[dict]:
         return await self._backend.usage(project)

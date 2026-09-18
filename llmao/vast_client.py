@@ -1,14 +1,34 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Vast.ai show-instances: map public IP + listen port to HostPort.
 
 httpx only (no vastai SDK). One GET, no pagination. Returns EasyDict.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
-from easydict import EasyDict as edict
+from easydict import EasyDict
+
+if TYPE_CHECKING:
+    import httpx
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,10 +43,10 @@ def _ip(addr: Any) -> str:
     return ip
 
 
-def ports_from_instance(inst: dict[str, Any]) -> edict:
+def ports_from_instance(inst: dict[str, Any]) -> EasyDict:
     """Container listen port → Vast public HostPort from one instance row."""
     raw = inst.get("ports")
-    out = edict()
+    out = EasyDict()
     if not isinstance(raw, dict):
         return out
     for key, mappings in raw.items():
@@ -44,7 +64,7 @@ def ports_from_instance(inst: dict[str, Any]) -> edict:
     return out
 
 
-def port_map_from_body(body: Any) -> edict:
+def port_map_from_body(body: Any) -> EasyDict:
     """public_ipaddr → {listen: HostPort}. Warn if the page is truncated."""
     if not isinstance(body, dict):
         raise ValueError("vast instances response must be an object")
@@ -58,10 +78,8 @@ def port_map_from_body(body: Any) -> edict:
         except (TypeError, ValueError):
             ntotal = None
         if ntotal is not None and ntotal > len(instances):
-            _LOGGER.warning(
-                f"vast: total_instances={ntotal} but page has {len(instances)}; not paginating"
-            )
-    mapping = edict()
+            _LOGGER.warning("vast: total_instances=%s but page has %s; not paginating", ntotal, len(instances))
+    mapping = EasyDict()
     for inst in instances:
         if not isinstance(inst, dict):
             continue
@@ -75,7 +93,7 @@ def port_map_from_body(body: Any) -> edict:
     return mapping
 
 
-async def fetch_port_map(api_key: str, *, client: httpx.AsyncClient) -> edict:
+async def fetch_port_map(api_key: str, *, client: httpx.AsyncClient) -> EasyDict:
     resp = await client.get(
         VAST_INSTANCES_URL,
         params={"limit": VAST_PAGE_LIMIT},

@@ -1,21 +1,37 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Model inventory: shared YAML + LiteLLM model_info extras."""
+
 from __future__ import annotations
 
 import pathlib
-import tempfile
-import textwrap
 
 import pytest
 import yaml
-from easydict import EasyDict as edict
+from easydict import EasyDict
 from litellm.types.router import Deployment
 
 from llmao.models import (
     load_model_list,
     model_available_for,
     model_in_service,
-    public_models,
     models_path_from_cfg,
+    public_models,
     ux_models,
     validate_catalog,
 )
@@ -43,12 +59,12 @@ def test_example_model_list_loads_for_ux():
 
 def test_missing_model_list_fails_fast():
     missing = ROOT / "model_list.yaml.does-not-exist"
-    with pytest.raises(FileNotFoundError, match="model_list.yaml.example"):
+    with pytest.raises(FileNotFoundError, match=r"model_list\.yaml\.example"):
         load_model_list(missing)
 
 
 def test_models_path_from_cfg():
-    cfg = edict({"models_path": "model_list.yaml.example"})
+    cfg = EasyDict({"models_path": "model_list.yaml.example"})
     p = models_path_from_cfg(cfg)
     assert p.name == "model_list.yaml.example"
     assert p.is_file()
@@ -75,18 +91,20 @@ def test_ux_models_redacts_supply_path_for_non_admins():
 
 def test_catalog_requires_self_hosted():
     models = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["model_list"]
-    row = edict(models[0])
+    row = EasyDict(models[0])
     del row.model_info["self_hosted"]
     with pytest.raises(ValueError, match="self_hosted"):
         validate_catalog([row])
 
 
 def test_commercial_requires_api_base():
-    row = edict({
-        "model_name": "paid-model",
-        "litellm_params": {"model": "openai/gpt-4"},
-        "model_info": {"self_hosted": False, "license": "proprietary"},
-    })
+    row = EasyDict(
+        {
+            "model_name": "paid-model",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"self_hosted": False, "license": "proprietary"},
+        }
+    )
     with pytest.raises(ValueError, match="api_base"):
         validate_catalog([row])
     row.litellm_params.api_base = "https://api.openai.com/v1"

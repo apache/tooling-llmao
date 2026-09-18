@@ -1,11 +1,28 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """P0.1: project list + overview seam (mock backend)."""
+
 import asyncio
 
 import pytest
-from easydict import EasyDict as edict
+from easydict import EasyDict
 
-from llmao.litellm_client import BackendUnavailable, resolve_budget_duration
-from llmao.litellm_client import GRANTOR_FREE_TIER
+from llmao.litellm_client import GRANTOR_FREE_TIER, BackendUnavailableError, resolve_budget_duration
 from llmao.seam import (
     AuthzError,
     Identity,
@@ -15,19 +32,21 @@ from tests.mock_backend import MockBackend
 
 
 def _cfg():
-    return edict({
-        "litellm": {
-            "base_url": "http://127.0.0.1:4000",
-            "master_key": "sk-test",
-            "request_timeout_s": 30,
-        },
-        "budgets": {
-            "default_team_budget_usd": 100.0,
-            "duration": "30d",
-        },
-        "site_admins": ["root"],
-        "models_path": "model_list.yaml.example",
-    })
+    return EasyDict(
+        {
+            "litellm": {
+                "base_url": "http://127.0.0.1:4000",
+                "master_key": "sk-test",
+                "request_timeout_s": 30,
+            },
+            "budgets": {
+                "default_team_budget_usd": 100.0,
+                "duration": "30d",
+            },
+            "site_admins": ["root"],
+            "models_path": "model_list.yaml.example",
+        }
+    )
 
 
 def _seam():
@@ -41,8 +60,8 @@ def test_resolve_budget_duration_prefers_raw_then_cfg():
     assert resolve_budget_duration("7d", cfg) == "7d"
     assert resolve_budget_duration(None, cfg) == "30d"
     assert resolve_budget_duration("  ", cfg) == "30d"
-    bad = edict({"budgets": {}})
-    with pytest.raises(BackendUnavailable):
+    bad = EasyDict({"budgets": {}})
+    with pytest.raises(BackendUnavailableError):
         resolve_budget_duration(None, bad)
 
 
@@ -51,6 +70,7 @@ def test_list_projects_empty_membership():
         seam, _, _ = _seam()
         ident = Identity(uid="jdoe", projects=[], committees=[])
         assert await seam.list_projects_for(ident) == []
+
     asyncio.run(run())
 
 
@@ -73,6 +93,7 @@ def test_list_projects_ensures_team_and_budget():
         info = await backend.team_info("airflow")
         assert info is not None
         assert info.budget_duration == "30d"
+
     asyncio.run(run())
 
 
@@ -89,6 +110,7 @@ def test_list_projects_steward_flag():
         assert by_name["airflow"].is_steward is True
         assert by_name["kafka"].is_steward is False
         assert sorted(by_name) == ["airflow", "kafka"]
+
     asyncio.run(run())
 
 
@@ -98,6 +120,7 @@ def test_overview_authz_outsider():
         ident = Identity(uid="jdoe", projects=["airflow"], committees=[])
         with pytest.raises(AuthzError):
             await seam.project_overview(ident, "kafka")
+
     asyncio.run(run())
 
 
@@ -115,6 +138,7 @@ def test_overview_ensures_team():
         assert ov.by_person == []
         assert ov.automation_key_count == 0
         assert await backend.team_info("airflow") is not None
+
     asyncio.run(run())
 
 
@@ -151,6 +175,7 @@ def test_overview_people_automation_and_by_person():
         assert ov.automation_keys[0].created_by == "chair"
         assert ov.automation_keys[0].spend == 2.5
         assert ov.grantor == GRANTOR_FREE_TIER
+
     asyncio.run(run())
 
 
@@ -164,4 +189,5 @@ def test_site_admin_overview_without_membership():
         assert ov.project == "airflow"
         assert ov.is_steward is True  # site admin
         assert ov.grantor == GRANTOR_FREE_TIER
+
     asyncio.run(run())

@@ -5,7 +5,7 @@
 # Local run needs config.yaml (from config.yaml.example) and, for OAuth,
 # TLS certs under certs/ — see certs/README.md.
 
-.PHONY: install run test proxy db clean thirdparty
+.PHONY: install run test proxy db clean thirdparty check hooks
 
 install:
 	uv sync
@@ -23,6 +23,15 @@ run: install
 
 test: install
 	uv run pytest tests/ -q
+
+# Install the git hooks for this checkout (ruff, formatting, hygiene checks).
+# Add `prek install --hook-type pre-push` for the pre-push test suite.
+hooks: install
+	uv run prek install
+
+# Run every pre-commit hook against the whole tree, as CI does.
+check: install
+	uv run prek run --all-files
 
 # Run the LiteLLM proxy. Requires litellm.yaml (from *.example).
 # model_list.yaml is the llmao catalog (not included by the proxy).

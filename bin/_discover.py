@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Find each model's direct endpoint without hardcoding it.
 
 Shared by llmao-smoke and llmao-saturate.
@@ -21,6 +38,7 @@ Three sources, in order:
   3. Nothing, in which case --direct is unavailable and the gateway checks
      still run. That is most of the value anyway.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,8 +68,7 @@ def _from_litellm() -> dict[str, str]:
     key = _master_key()
     if not key:
         return {}
-    req = urllib.request.Request(
-        LITELLM, headers={"Authorization": f"Bearer {key}"})
+    req = urllib.request.Request(LITELLM, headers={"Authorization": f"Bearer {key}"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.load(r)["data"]
@@ -73,7 +90,7 @@ def _from_env() -> dict[str, str]:
     out = {}
     for k, v in os.environ.items():
         if k.startswith("LLMAO_DIRECT_") and v:
-            out[k[len("LLMAO_DIRECT_"):]] = v.replace("http://", "").rstrip("/")
+            out[k[len("LLMAO_DIRECT_") :]] = v.replace("http://", "").rstrip("/")
     return out
 
 
@@ -85,9 +102,9 @@ def direct_endpoints(models: list[str] | None = None) -> dict[str, str]:
     """{model_name: 'host:port'} from whichever source is available."""
     found = _from_litellm()
     env = _from_env()
-    for model in (models or list(found)):
-        if (v := env.get(_envkey(model))):
-            found[model] = v          # an explicit override wins
+    for model in models or list(found):
+        if v := env.get(_envkey(model)):
+            found[model] = v  # an explicit override wins
     return found
 
 
@@ -98,8 +115,10 @@ def endpoint_for(model: str) -> str | None:
 if __name__ == "__main__":
     eps = direct_endpoints()
     if not eps:
-        print("no endpoints discovered\n"
-              "  on the gateway host: run as root, or export MK=<master key>\n"
-              "  elsewhere: export LLMAO_DIRECT_<MODEL>=host:port")
+        print(
+            "no endpoints discovered\n"
+            "  on the gateway host: run as root, or export MK=<master key>\n"
+            "  elsewhere: export LLMAO_DIRECT_<MODEL>=host:port"
+        )
     for m, hp in sorted(eps.items()):
         print(f"{m:16} {hp}")

@@ -1,9 +1,37 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Fleet VllmServer health state machine (no real vLLM)."""
+
 import asyncio
 
-from easydict import EasyDict as edict
+from easydict import EasyDict
 
-from llmao.fleet import parse_kv_cache_tokens, parse_max_model_len, Fleet, VllmServer
+from llmao.fleet import Fleet, VllmServer, fetch_observed, parse_kv_cache_tokens, parse_max_model_len
+
+
+class _Resp:
+    def __init__(self, status_code=200, text="", body=None):
+        self.status_code = status_code
+        self.text = text
+        self._body = body
+
+    def json(self):
+        return self._body
 
 
 def _server(**kwargs):
@@ -75,26 +103,29 @@ def test_box_json_listen_not_public():
     assert body["model"] == "google/gemma"
     assert body["port"] == 8001
     assert body["gpu_memory_utilization"] == 0.5
-    assert s.api_base == "http://10.0.0.1:41234"
+    assert s.api_base == "http://10.0.0.1:41234/v1"
 
 
 def test_local_from_cfg_public_equals_listen():
     from pathlib import Path
+
     from llmao.models import load_model_list
 
     example = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
-    cfg = edict({
-        "fleet": {
-            "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
-            "health_interval_s": 45,
-            "health_timeout_s": 3,
-            "health_grace_s": 1800,
-            "health_fail_threshold": 3,
-            "skew_interval_s": 180,
-            "litellm_health_interval_s": 14400,
-        },
-        "models_path": str(example),
-    })
+    cfg = EasyDict(
+        {
+            "fleet": {
+                "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "health_interval_s": 45,
+                "health_timeout_s": 3,
+                "health_grace_s": 1800,
+                "health_fail_threshold": 3,
+                "skew_interval_s": 180,
+                "litellm_health_interval_s": 14400,
+            },
+            "models_path": str(example),
+        }
+    )
     fleet = Fleet.from_cfg(cfg, models=load_model_list(example))
     assert fleet.servers[0].listen_port == 8001
     assert fleet.servers[0].public_port == 8001
@@ -104,13 +135,17 @@ def test_local_from_cfg_public_equals_listen():
 def test_probe_skips_without_public_port():
     s = _server(public_port=None)
     assert s.health_url is None
-    cfg = edict({
-        "fleet": edict({
-            "health_timeout_s": 1,
-            "health_grace_s": 1800,
-            "health_fail_threshold": 3,
-        })
-    })
+    cfg = EasyDict(
+        {
+            "fleet": EasyDict(
+                {
+                    "health_timeout_s": 1,
+                    "health_grace_s": 1800,
+                    "health_fail_threshold": 3,
+                }
+            )
+        }
+    )
 
     class _Boom:
         async def get(self, url):
@@ -277,9 +312,9 @@ def test_parse_kv_cache_tokens_absent():
 
 def test_parse_kv_cache_tokens_malformed():
     for text in (
-        'vllm:cache_config_info{block_size="16"} 1.0',          # no block count
+        'vllm:cache_config_info{block_size="16"} 1.0',  # no block count
         'vllm:cache_config_info{block_size="x",num_gpu_blocks="1"} 1.0',
-        'vllm:cache_config_info block_size=16 1.0',              # no braces
+        "vllm:cache_config_info block_size=16 1.0",  # no braces
         'vllm:cache_config_info{block_size="0",num_gpu_blocks="0"} 1.0',
     ):
         assert parse_kv_cache_tokens(text) is None, text
@@ -329,3 +364,62 @@ def test_oversized_falls_back_to_configured_length():
     s.observed_max_model_len = None
     s.max_model_len = 131072
     assert s.oversized is True
+
+
+def test_fetch_observed_scrapes_from_the_root():
+    """fetch_observed takes the server root, not a /v1-suffixed api_base.
+
+    /metrics sits at the root and the model list at /v1/models. A /v1-
+    suffixed base would request root/v1/metrics and root/v1/v1/models,
+    404 both, and leave the fields None -- oversized detection quietly dead
+    while the rest of the suite stays green.
+    """
+    calls = []
+    root = "http://10.0.0.1:8001"
+
+    class _Client:
+        async def get(self, url, headers=None):
+            calls.append(url)
+            if url == f"{root}/metrics":
+                return _Resp(200, text=_METRICS)
+            if url == f"{root}/v1/models":
+                return _Resp(200, body={"data": [{"max_model_len": 131072}]})
+            return _Resp(404)
+
+    kv, mml = asyncio.run(fetch_observed(_Client(), root, "sk-x"))
+    assert kv == 855836
+    assert mml == 131072
+    assert calls == [f"{root}/metrics", f"{root}/v1/models"]
+
+
+def test_probe_all_scrapes_from_root_not_api_base():
+    """The SERVING-transition scrape must be handed root_url, not api_base.
+
+    Catches the regression one layer up from fetch_observed: if probe_all
+    ever passes the /v1-suffixed base, both scrape requests 404 on every
+    transition, the KV column on /fleet goes empty, and oversized stays
+    unknown without any other test failing.
+    """
+    s = _server()
+    calls = []
+    root = f"http://{s.host}:{s.public_port}"
+
+    class _Client:
+        async def get(self, url, headers=None):
+            calls.append(url)
+            if url.endswith("/health"):
+                return _Resp(200, text="OK")
+            if url.endswith("/metrics"):
+                return _Resp(200, text=_METRICS)
+            if url.endswith("/v1/models"):
+                return _Resp(200, body={"data": [{"max_model_len": 131072}]})
+            return _Resp(404)
+
+    cfg = EasyDict({"fleet": EasyDict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    fleet = Fleet(cfg=cfg, servers=[s])
+    asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
+
+    assert s.state == VllmServer.SERVING
+    assert s.kv_cache_tokens == 855836
+    assert s.observed_max_model_len == 131072
+    assert calls == [f"{root}/health", f"{root}/metrics", f"{root}/v1/models"]

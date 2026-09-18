@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """LiteLLM admin backend (async httpx).
 
 LiteLLMBackend talks to a real LiteLLM proxy. The running app always uses this
@@ -6,13 +23,14 @@ client. Tests inject a mock from tests/mock_backend.py — never selected by con
 Product API speaks LDAP **project** names. Mapping project (team_alias) →
 LiteLLM opaque team_id is internal to LiteLLMBackend only.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -21,11 +39,11 @@ from llmao.fleet import VllmServer
 _LOGGER = logging.getLogger(__name__)
 
 
-class BudgetExceeded(Exception):
+class BudgetExceededError(Exception):
     """Raised when a team is over budget (mirrors litellm proxy's 4xx)."""
 
 
-class BackendUnavailable(Exception):
+class BackendUnavailableError(Exception):
     """Raised when the litellm admin API times out or can't be reached."""
 
 
@@ -46,6 +64,7 @@ class TeamInfo:
     TODO(investigate): confirm LiteLLM team/info always returns budget_duration
     (or equivalent); keep cfg fallback required so product never sees Optional.
     """
+
     team_id: str
     max_budget: float = 0.0
     spend: float = 0.0
@@ -78,9 +97,7 @@ def resolve_budget_duration(raw: Any, cfg: Any) -> str:
         s = str(fallback).strip()
         if s:
             return s
-    raise BackendUnavailable(
-        "budget_duration missing from LiteLLM team and cfg.budgets.duration is unset"
-    )
+    raise BackendUnavailableError("budget_duration missing from LiteLLM team and cfg.budgets.duration is unset")
 
 
 @dataclass
@@ -91,17 +108,18 @@ class KeyInfo:
     LiteLLM ``token`` value used for list/delete — not the one-time ``sk-…``
     secret (that lives on CreatedKey.secret only).
     """
+
     token_id: str
-    project: str                 # metadata.project (LDAP name)
-    user: Optional[str]          # LiteLLM user_id; None = automation
-    purpose: str                 # metadata.purpose (optional label; may be "")
-    team_id: str                 # LiteLLM opaque team id (API only)
+    project: str  # metadata.project (LDAP name)
+    user: str | None  # LiteLLM user_id; None = automation
+    purpose: str  # metadata.purpose (optional label; may be "")
+    team_id: str  # LiteLLM opaque team id (API only)
     spend: float
-    max_budget: Optional[float]
-    created_at: Optional[str]
-    last_used: Optional[str]
+    max_budget: float | None
+    created_at: str | None
+    last_used: str | None
     # metadata.created_by — who minted and saw the secret (required if automation)
-    created_by: Optional[str] = None
+    created_by: str | None = None
     blocked: bool = False
 
     @property
@@ -112,39 +130,38 @@ class KeyInfo:
 @dataclass
 class CreatedKey:
     """Result of minting a key — includes secret once."""
+
     secret: str
     info: KeyInfo
 
 
 class Backend(Protocol):
-    async def team_info(self, project: str) -> Optional[TeamInfo]: ...
+    async def team_info(self, project: str) -> TeamInfo | None: ...
     async def ensure_team(self, project: str) -> TeamInfo: ...
     async def list_keys(
         self,
         *,
-        user: Optional[str] = None,
-        project: Optional[str] = None,
+        user: str | None = None,
+        project: str | None = None,
         size: int = 100,
-    ) -> List[KeyInfo]: ...
+    ) -> list[KeyInfo]: ...
     async def create_key(
         self,
         *,
         project: str,
         purpose: str,
-        user: Optional[str] = None,
-        metadata: Optional[Dict] = None,
+        user: str | None = None,
+        metadata: dict | None = None,
     ) -> CreatedKey: ...
     async def delete_key(self, token_id: str) -> None: ...
-    async def usage(self, project: Optional[str]) -> List[Dict]: ...
+    async def usage(self, project: str | None) -> list[dict]: ...
     async def aclose(self) -> None: ...
 
 
 def _normalize_key_obj(raw: Any) -> KeyInfo:
     """Build KeyInfo from a LiteLLM key object (wire → design names)."""
     if isinstance(raw, str):
-        raise ValueError(
-            "key object is a bare token string; need full object with metadata.project"
-        )
+        raise ValueError("key object is a bare token string; need full object with metadata.project")
     if not isinstance(raw, dict):
         raw = dict(raw) if hasattr(raw, "items") else {}
     meta = raw.get("metadata") or {}
@@ -152,9 +169,7 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
         meta = {}
     project = meta.get("project")
     if not project:
-        raise ValueError(
-            "key missing metadata.project (ASF LDAP project name required on every key)"
-        )
+        raise ValueError("key missing metadata.project (ASF LDAP project name required on every key)")
     project = str(project)
 
     user_raw = raw.get("user_id")
@@ -165,16 +180,9 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
     created_by = str(created_by_raw) if created_by_raw else None
     # Automation keys have no user_id; only the minter saw the secret.
     if user is None and not created_by:
-        raise ValueError(
-            "automation key missing metadata.created_by (uid who minted the secret)"
-        )
+        raise ValueError("automation key missing metadata.created_by (uid who minted the secret)")
 
-    last = (
-        raw.get("last_used")
-        or raw.get("last_active")
-        or raw.get("updated_at")
-        or raw.get("last_refreshed_at")
-    )
+    last = raw.get("last_used") or raw.get("last_active") or raw.get("updated_at") or raw.get("last_refreshed_at")
     if last is not None and not isinstance(last, str):
         last = str(last)
     created = raw.get("created_at")
@@ -190,11 +198,7 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
         purpose=purpose,
         team_id=str(raw.get("team_id") or ""),
         spend=float(raw.get("spend") or 0.0),
-        max_budget=(
-            float(raw["max_budget"])
-            if raw.get("max_budget") is not None
-            else None
-        ),
+        max_budget=(float(raw["max_budget"]) if raw.get("max_budget") is not None else None),
         created_at=created,
         last_used=last,
         created_by=created_by,
@@ -212,7 +216,7 @@ class LiteLLMBackend:
     def __init__(self, cfg: Any, fleet: Any):
         self._cfg = cfg
         self.fleet = fleet
-        self._team_ids: Dict[str, str] = {}  # project → team_id
+        self._team_ids: dict[str, str] = {}  # project → team_id
         base = cfg.litellm.base_url.rstrip("/") + "/"
         timeout_s = int(cfg.litellm.request_timeout_s)
         self._client = httpx.AsyncClient(
@@ -232,25 +236,21 @@ class LiteLLMBackend:
             resp = await self._client.request(method, path, **kwargs)
             return resp
         except httpx.TimeoutException as e:
-            raise BackendUnavailable(
+            raise BackendUnavailableError(
                 f"LiteLLM admin API timed out after {self._cfg.litellm.request_timeout_s}s"
             ) from e
         except httpx.ConnectError as e:
-            raise BackendUnavailable(
-                f"could not reach LiteLLM at {self._cfg.litellm.base_url}"
-            ) from e
+            raise BackendUnavailableError(f"could not reach LiteLLM at {self._cfg.litellm.base_url}") from e
 
     def _raise_http(self, resp: httpx.Response) -> None:
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise BackendUnavailable(
-                f"LiteLLM admin error {e.response.status_code}: {e.response.text}"
-            ) from e
+            raise BackendUnavailableError(f"LiteLLM admin error {e.response.status_code}: {e.response.text}") from e
 
-    def _ingest_team_list(self, teams: List[Any]) -> List[Dict[str, Any]]:
+    def _ingest_team_list(self, teams: list[Any]) -> list[dict[str, Any]]:
         """Update project→team_id cache from team/list rows; return dict rows."""
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for t in teams:
             if hasattr(t, "model_dump"):
                 d = t.model_dump()
@@ -267,7 +267,7 @@ class LiteLLMBackend:
                 self._team_ids[str(alias)] = str(tid)
         return rows
 
-    async def _team_list_rows(self) -> List[Dict[str, Any]]:
+    async def _team_list_rows(self) -> list[dict[str, Any]]:
         resp = await self._request("GET", "team/list")
         self._raise_http(resp)
         body = resp.json()
@@ -276,7 +276,7 @@ class LiteLLMBackend:
             teams = []
         return self._ingest_team_list(teams)
 
-    def _team_info_from_dict(self, d: Dict[str, Any], *, team_id: Optional[str] = None) -> TeamInfo:
+    def _team_info_from_dict(self, d: dict[str, Any], *, team_id: str | None = None) -> TeamInfo:
         tid = team_id if team_id is not None else str(d.get("team_id") or "")
         raw_dur = d.get("budget_duration")
         if raw_dur is None or raw_dur == "":
@@ -306,7 +306,7 @@ class LiteLLMBackend:
         """Ensure a LiteLLM team exists for the project; return live budget facts."""
         project = (project or "").strip()
         if not project:
-            raise BackendUnavailable("project is required")
+            raise BackendUnavailableError("project is required")
 
         existing = await self.team_info(project)
         if existing is not None:
@@ -335,7 +335,7 @@ class LiteLLMBackend:
             body = {}
         team_id = body.get("team_id")
         if not team_id:
-            raise BackendUnavailable("LiteLLM team/new returned no team_id")
+            raise BackendUnavailableError("LiteLLM team/new returned no team_id")
         self._team_ids[project] = str(team_id)
         live = await self.team_info(project)
         if live is not None:
@@ -349,7 +349,7 @@ class LiteLLMBackend:
             team_id=str(team_id),
         )
 
-    async def team_info(self, project: str) -> Optional[TeamInfo]:
+    async def team_info(self, project: str) -> TeamInfo | None:
         """Live team spend/budget. Cache holds ids only; spend is never cached.
 
         Cache hit → team/info. Cache miss → team/list (fills cache + returns
@@ -382,11 +382,11 @@ class LiteLLMBackend:
     async def list_keys(
         self,
         *,
-        user: Optional[str] = None,
-        project: Optional[str] = None,
+        user: str | None = None,
+        project: str | None = None,
         size: int = 100,
-    ) -> List[KeyInfo]:
-        params: Dict[str, Any] = {
+    ) -> list[KeyInfo]:
+        params: dict[str, Any] = {
             "page": 1,
             "size": size,
             "return_full_object": "true",
@@ -409,19 +409,19 @@ class LiteLLMBackend:
         try:
             return [_normalize_key_obj(k) for k in keys]
         except ValueError as e:
-            raise BackendUnavailable(str(e)) from e
+            raise BackendUnavailableError(str(e)) from e
 
     async def create_key(
         self,
         *,
         project: str,
         purpose: str,
-        user: Optional[str] = None,
-        metadata: Optional[Dict] = None,
+        user: str | None = None,
+        metadata: dict | None = None,
     ) -> CreatedKey:
         project = (project or "").strip()
         if not project:
-            raise BackendUnavailable("create_key requires project")
+            raise BackendUnavailableError("create_key requires project")
         team = await self.ensure_team(project)
         team_id = team.team_id
         purpose = (purpose or "").strip()
@@ -429,7 +429,7 @@ class LiteLLMBackend:
         meta["project"] = project
         if purpose:
             meta["purpose"] = purpose
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "team_id": team_id,
             "metadata": meta,
             # key_alias is globally unique in LiteLLM — do not put purpose there.
@@ -441,7 +441,7 @@ class LiteLLMBackend:
         body = resp.json()
         secret = body.get("key") or body.get("token")
         if not secret:
-            raise BackendUnavailable("LiteLLM key/generate returned no key secret")
+            raise BackendUnavailableError("LiteLLM key/generate returned no key secret")
         info_src = body.get("info") or body
         if isinstance(info_src, dict) and not info_src.get("token") and not info_src.get("token_id"):
             info_src = {
@@ -464,14 +464,14 @@ class LiteLLMBackend:
         try:
             info = _normalize_key_obj(info_src)
         except ValueError as e:
-            raise BackendUnavailable(str(e)) from e
+            raise BackendUnavailableError(str(e)) from e
         return CreatedKey(secret=str(secret), info=info)
 
     async def delete_key(self, token_id: str) -> None:
         resp = await self._request("POST", "key/delete", json={"keys": [token_id]})
         self._raise_http(resp)
 
-    async def usage(self, project: Optional[str]) -> List[Dict]:
+    async def usage(self, project: str | None) -> list[dict]:
         # Spend APIs not wired yet.
         return []
 
@@ -479,12 +479,10 @@ class LiteLLMBackend:
         """POST /model/new payload from the catalog + this deployment's api_base."""
         entry = self.fleet.catalog.get(dep.model_name)
         if entry is None:
-            raise BackendUnavailable(
-                f"catalog missing {dep.model_name}; cannot POST /model/new"
-            )
+            raise BackendUnavailableError(f"catalog missing {dep.model_name}; cannot POST /model/new")
         params = dict(entry.litellm_params)
         if not dep.api_base:
-            raise BackendUnavailable(f"{dep.name}: no api_base for /model/new")
+            raise BackendUnavailableError(f"{dep.name}: no api_base for /model/new")
         params["api_base"] = dep.api_base
         if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
             params["api_key"] = dep.vllm.api_key
@@ -514,9 +512,13 @@ class LiteLLMBackend:
         info = row.get("model_info") or {}
         if not isinstance(info, dict):
             info = {}
-        if _norm_base(info.get("asf_api_base")) == want or _norm_base(
-            (row.get("litellm_params") or {}).get("api_base") if isinstance(row.get("litellm_params"), dict) else ""
-        ) == want:
+        if (
+            _norm_base(info.get("asf_api_base")) == want
+            or _norm_base(
+                (row.get("litellm_params") or {}).get("api_base") if isinstance(row.get("litellm_params"), dict) else ""
+            )
+            == want
+        ):
             return str(info.get("id") or row.get("model_id") or "") or None
         return None
 
@@ -525,11 +527,11 @@ class LiteLLMBackend:
         resp = await self._request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
             dep.in_litellm = True
-            _LOGGER.info(f"model/new already present {dep.name}@{dep.api_base}")
+            _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
             return
         self._raise_http(resp)
         dep.in_litellm = True
-        _LOGGER.info(f"model/new {dep.name}@{dep.api_base}")
+        _LOGGER.info("model/new %s@%s", dep.name, dep.api_base)
 
     async def delete_deployment(self, dep) -> None:
         rows = await self._model_info_rows()
@@ -541,12 +543,12 @@ class LiteLLMBackend:
                     break
         if not found:
             dep.in_litellm = False
-            _LOGGER.warning(f"model/delete: no LiteLLM id for {dep.name}@{dep.api_base}")
+            _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, dep.api_base)
             return
         resp = await self._request("POST", "model/delete", json={"id": found})
         self._raise_http(resp)
         dep.in_litellm = False
-        _LOGGER.info(f"model/delete {dep.name}@{dep.api_base} id={found}")
+        _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.api_base, found)
 
     async def ensure_commercial(self) -> None:
         """At startup: POST /model/new for each commercial catalog deployment."""
@@ -590,9 +592,7 @@ class LiteLLMBackend:
         resp = await self._request("GET", "model/info")
         self._raise_http(resp)
         bases = _api_bases_from_model_info(resp.json())
-        intended = {
-            _norm_base(d.api_base) for d in self.fleet.deployments if d.api_base
-        }
+        intended = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base}
         for dep in self.fleet.deployments:
             note = "missing from LiteLLM"
             base = _norm_base(dep.api_base) if dep.api_base else None
@@ -603,19 +603,25 @@ class LiteLLMBackend:
                 dep.in_litellm = False
                 if base and note not in dep.skew:
                     dep.skew.append(note)
-                    _LOGGER.warning(f"skew: {dep.name}@{dep.api_base} {note}")
+                    _LOGGER.warning("skew: %s@%s %s", dep.name, dep.api_base, note)
         extra = bases - intended
         if extra:
-            _LOGGER.warning(
-                f"skew: LiteLLM api_base not an intended deployment: {sorted(extra)}"
-            )
+            _LOGGER.warning("skew: LiteLLM api_base not an intended deployment: %s", sorted(extra))
 
     async def check_health_skew(self) -> None:
         resp = await self._request("GET", "health")
         self._raise_http(resp)
         body = resp.json() if resp.content else {}
-        healthy = {_norm_base(x.get("api_base")) for x in (body.get("healthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
-        unhealthy = {_norm_base(x.get("api_base")) for x in (body.get("unhealthy_endpoints") or []) if isinstance(x, dict) and x.get("api_base")}
+        healthy = {
+            _norm_base(x.get("api_base"))
+            for x in (body.get("healthy_endpoints") or [])
+            if isinstance(x, dict) and x.get("api_base")
+        }
+        unhealthy = {
+            _norm_base(x.get("api_base"))
+            for x in (body.get("unhealthy_endpoints") or [])
+            if isinstance(x, dict) and x.get("api_base")
+        }
         stamp = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
@@ -633,15 +639,18 @@ class LiteLLMBackend:
             if srv is None:
                 continue
             note = "LiteLLM health disagrees"
-            disagrees = (
-                (srv.state == VllmServer.SERVING and litellm_down)
-                or (srv.state == VllmServer.DOWN and litellm_up)
+            disagrees = (srv.state == VllmServer.SERVING and litellm_down) or (
+                srv.state == VllmServer.DOWN and litellm_up
             )
             if disagrees:
                 if note not in dep.skew:
                     dep.skew.append(note)
                 _LOGGER.warning(
-                    f"health skew: {dep.name}@{dep.api_base} fleet={srv.state} litellm_up={litellm_up}"
+                    "health skew: %s@%s fleet=%s litellm_up=%s",
+                    dep.name,
+                    dep.api_base,
+                    srv.state,
+                    litellm_up,
                 )
             else:
                 dep.skew = [n for n in dep.skew if n != note]
@@ -650,10 +659,17 @@ class LiteLLMBackend:
 def _norm_base(url: Any) -> str:
     """Strip trailing slashes and a trailing /v1.
 
-    LiteLLM appends /v1/chat/completions to api_base, so a base ending in
-    /v1 resolves to /v1/v1/... That 404s at the origin and surfaces as an
-    OpenAI authentication error naming platform.openai.com, which sends the
-    reader after their own key rather than the route.
+    The identity the skew check compares on: the same route appears with the
+    suffix (VllmServer.api_base, and the litellm_params.api_base copied from
+    it) and without (asf_api_base, routes pushed before the suffix). The
+    comparison must match across both forms.
+
+    (The suffix was once actively wrong: an older LiteLLM appended
+    /v1/chat/completions to api_base, so a /v1-suffixed base resolved to
+    /v1/v1/..., 404'd at the origin, and surfaced as an OpenAI
+    authentication error naming platform.openai.com -- which sends the reader
+    after their own key rather than the route. The current LiteLLM appends
+    only /chat/completions, so the suffix is what vLLM needs now.)
     """
     s = str(url or "").rstrip("/")
     if s.endswith("/v1"):

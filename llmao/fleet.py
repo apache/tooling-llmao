@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """vLLM host JSON: validate at process start, join catalog at request time.
 
 GPU boxes fetch GET /vllm/config (no servers.yaml). Placement is fleet.hosts
@@ -9,6 +26,7 @@ recipe (`model_name`). A **VllmServer** is one vLLM process. A
 api_base or commercial static api_base). The LiteLLM **Router** is the whole
 proxy. Box JSON `servers[].model` is still the HF weights id.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +51,7 @@ _FLEET_NUMBERS = (
 )
 
 
-class UnknownHost(KeyError):
+class UnknownHostError(KeyError):
     """No fleet.hosts entry for this client IP."""
 
 
@@ -51,16 +69,12 @@ def client_ip(*, remote_addr: str | None, forwarded_for: str | None) -> str:
     """
     if forwarded_for and forwarded_for.strip():
         chosen = normalize_peer_ip(forwarded_for.split(",")[0])
-        _LOGGER.info(
-            f"X-Forwarded-For={forwarded_for!r} remote_addr={remote_addr!r} client_ip={chosen}"
-        )
+        _LOGGER.info("X-Forwarded-For=%r remote_addr=%r client_ip=%s", forwarded_for, remote_addr, chosen)
         return chosen
     return normalize_peer_ip(remote_addr)
 
 
-def parse_host_row(
-    raw: Any, host: str, index: int
-) -> tuple[str, int, str, int | None]:
+def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int | None]:
     """[model, port] | [model, port, name] | [model, port, name, public_port]
 
     The fourth element pins the public port for providers whose mapping we
@@ -88,9 +102,7 @@ def parse_host_row(
         try:
             public_port = int(raw[3])
         except (TypeError, ValueError) as e:
-            raise ValueError(
-                f"fleet.hosts.{host}[{index}] public_port must be an int"
-            ) from e
+            raise ValueError(f"fleet.hosts.{host}[{index}] public_port must be an int") from e
     if not model_name or not name:
         raise ValueError(f"fleet.hosts.{host}[{index}] needs model and name")
     return model_name, port, name, public_port
@@ -140,9 +152,7 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             if model_name not in catalog:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
             if not by_name[model_name].model_info.self_hosted:
-                raise ValueError(
-                    f"fleet.hosts.{host}[{i}]: {model_name} is not self_hosted"
-                )
+                raise ValueError(f"fleet.hosts.{host}[{i}]: {model_name} is not self_hosted")
             if label in seen_names:
                 raise ValueError(f"fleet.hosts.{host}: duplicate name {label!r}")
             if port in seen_ports:
@@ -160,7 +170,7 @@ def config_for_host(
     """JSON for one host IP. Requires validate_fleet() already ran on cfg."""
     host = normalize_peer_ip(host)
     if not host or host not in cfg.fleet.hosts:
-        raise UnknownHost(host)
+        raise UnknownHostError(host)
     models = models if models is not None else load_model_list(cfg=cfg)
     by_name = {model.model_name: model for model in models}
     servers = []
@@ -168,11 +178,7 @@ def config_for_host(
         # The box is told its listen port; the public port is ours, not its
         # business -- it binds inside the container.
         model_name, port, name, _ = parse_host_row(raw, host, i)
-        servers.append(
-            VllmServer.from_row(
-                host, model_name, port, name, by_name[model_name], cfg
-            ).box_json()
-        )
+        servers.append(VllmServer.from_row(host, model_name, port, name, by_name[model_name], cfg).box_json())
     return {
         "host": host,
         "servers": servers,
@@ -243,7 +249,12 @@ class VllmServer:
 
     @classmethod
     def from_row(
-        cls, host: str, model_name: str, port: int, name: str, model: Any,
+        cls,
+        host: str,
+        model_name: str,
+        port: int,
+        name: str,
+        model: Any,
         cfg: Any = None,
     ) -> VllmServer:
         vllm = model.model_info.vllm
@@ -284,16 +295,22 @@ class VllmServer:
         )
 
     @property
-    def health_url(self) -> str | None:
+    def root_url(self) -> str | None:
         if self.public_port is None:
             return None
-        return f"http://{self.host}:{self.public_port}/health"
+        return f"http://{self.host}:{self.public_port}"
+
+    @property
+    def health_url(self) -> str | None:
+        if self.root_url is None:
+            return None
+        return f"{self.root_url}/health"
 
     @property
     def api_base(self) -> str | None:
-        if self.public_port is None:
+        if self.root_url is None:
             return None
-        return f"http://{self.host}:{self.public_port}/v1"
+        return f"{self.root_url}/v1"
 
     @property
     def oversized(self) -> bool:
@@ -345,7 +362,7 @@ class VllmServer:
     ) -> None:
         if ok:
             if self.state != self.SERVING:
-                _LOGGER.info(f"fleet server {self.name}@{self.api_base} serving")
+                _LOGGER.info("fleet server %s@%s serving", self.name, self.api_base)
             self.state = self.SERVING
             self.last_ok = now
             self.last_error = None
@@ -356,16 +373,17 @@ class VllmServer:
         if self.state == self.SERVING:
             if self.fails >= fail_threshold:
                 self.state = self.DOWN
-                _LOGGER.warning(
-                    f"fleet server {self.name}@{self.api_base} down ({self.last_error})"
-                )
+                _LOGGER.warning("fleet server %s@%s down (%s)", self.name, self.api_base, self.last_error)
             return
         if (now - self.seen_at) < grace_s:
             self.state = self.STARTING
             return
         if self.state != self.DOWN:
             _LOGGER.warning(
-                f"fleet server {self.name}@{self.api_base} still not healthy after grace ({self.last_error})"
+                "fleet server %s@%s still not healthy after grace (%s)",
+                self.name,
+                self.api_base,
+                self.last_error,
             )
         self.state = self.DOWN
 
@@ -441,9 +459,7 @@ class Fleet:
     ):
         self.cfg = cfg
         self.servers = servers
-        self.deployments = deployments if deployments is not None else [
-            FleetDeployment.from_vllm(s) for s in servers
-        ]
+        self.deployments = deployments if deployments is not None else [FleetDeployment.from_vllm(s) for s in servers]
         # model_name → catalog row. POST /model/new copies litellm_params from
         # here; LiteLLM /model/info encrypts them on the way back.
         self.catalog = catalog if catalog is not None else {}
@@ -462,9 +478,7 @@ class Fleet:
             host = str(host).strip()
             for i, raw in enumerate(rows):
                 model_name, port, name, public = parse_host_row(raw, host, i)
-                srv = VllmServer.from_row(
-                    host, model_name, port, name, by_name[model_name], cfg
-                )
+                srv = VllmServer.from_row(host, model_name, port, name, by_name[model_name], cfg)
                 if public is not None:
                     # Pinned in config: no provider lookup can override it.
                     srv.public_port = public
@@ -493,19 +507,15 @@ class Fleet:
                 continue
             by_listen = mapping.get(srv.host) if mapping is not None else None
             if not by_listen:
-                _LOGGER.info(f"vast: no instance for fleet host {srv.host}")
+                _LOGGER.info("vast: no instance for fleet host %s", srv.host)
                 continue
             public = by_listen.get(str(srv.listen_port))
             if public is None:
-                _LOGGER.warning(
-                    f"vast: no HostPort for {srv.name}@{srv.host} listen {srv.listen_port}"
-                )
+                _LOGGER.warning("vast: no HostPort for %s@%s listen %s", srv.name, srv.host, srv.listen_port)
                 continue
             public = int(public)
             if srv.public_port != public:
-                _LOGGER.info(
-                    f"vast: {srv.name}@{srv.host} listen {srv.listen_port} public {public}"
-                )
+                _LOGGER.info("vast: %s@%s listen %s public %s", srv.name, srv.host, srv.listen_port, public)
                 srv.public_port = public
 
     def model_health(self, model_name: str) -> str:
@@ -548,18 +558,14 @@ class Fleet:
                     continue
                 was = srv.state
                 ok, err = await _get_health(client, url)
-                srv.record_probe(
-                    ok, now=stamp, grace_s=grace, fail_threshold=threshold, err=err
-                )
+                srv.record_probe(ok, now=stamp, grace_s=grace, fail_threshold=threshold, err=err)
                 # Scrape on the edge into SERVING, and once more if an earlier
                 # attempt came back empty. Both values are fixed at engine
                 # init, so re-reading them every probe would be waste.
-                if srv.state == srv.SERVING and (
-                    was != srv.SERVING or srv.kv_cache_tokens is None
-                ):
-                    base = srv.api_base
-                    if base:
-                        kv, mml = await fetch_observed(client, base, srv.api_key)
+                if srv.state == srv.SERVING and (was != srv.SERVING or srv.kv_cache_tokens is None):
+                    root = srv.root_url
+                    if root:
+                        kv, mml = await fetch_observed(client, root, srv.api_key)
                         if kv is not None:
                             srv.kv_cache_tokens = kv
                         if mml is not None:
@@ -625,7 +631,7 @@ def parse_kv_cache_tokens(metrics_text: str) -> int | None:
         if start < 0 or end < start:
             continue
         labels: dict[str, str] = {}
-        for part in line[start + 1:end].split(","):
+        for part in line[start + 1 : end].split(","):
             k, _, v = part.partition("=")
             labels[k.strip()] = v.strip().strip('"')
 
@@ -664,10 +670,12 @@ def parse_max_model_len(models_json: Any) -> int | None:
     return None
 
 
-async def fetch_observed(
-    client: httpx.AsyncClient, base: str, api_key: str
-) -> tuple[int | None, int | None]:
+async def fetch_observed(client: httpx.AsyncClient, base: str, api_key: str) -> tuple[int | None, int | None]:
     """Scrape (kv_cache_tokens, max_model_len) from a serving vLLM.
+
+    base is the server root, not api_base: /metrics sits at the root and the
+    model list at /v1/models, so a /v1-suffixed base would 404 the model list
+    and leave both fields unknown.
 
     Both are fixed at engine init, so this is called on the transition into
     SERVING rather than on every probe -- polling an unchanging value every

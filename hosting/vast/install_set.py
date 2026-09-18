@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Vast box-start: fetch set JSON, write Supervisor units, exit.
 
 Not a process manager. supervisord owns vllm serve. Other providers GET
@@ -14,6 +31,7 @@ import ssl
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -43,11 +61,17 @@ def ssl_context() -> ssl.SSLContext:
             "SSL_VERIFY=0: skipping TLS verify (remove when llm.apache.org is on :443)",
             file=sys.stderr,
         )
-        return ssl._create_unverified_context()
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
     return ssl.create_default_context()
 
 
 def fetch_config(url: str, fleet_key: str, timeout_s: float = 30.0) -> dict[str, Any]:
+    scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        raise SystemExit(f"config url must be http(s), got {scheme!r}")
     req = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {fleet_key}", "Accept": "application/json"},
@@ -122,10 +146,17 @@ def free_vram_gb() -> float | None:
     GPU than was ordered, and with rented instances that is a matter of when.
     """
     try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=15, check=True,
-        ).stdout.strip().splitlines()
+        out = (
+            subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     if not out:
@@ -141,7 +172,7 @@ def free_disk_gb(path: str) -> float | None:
         st = os.statvfs(path)
     except OSError:
         return None
-    return (st.f_bavail * st.f_frsize) / (1024.0 ** 3)
+    return (st.f_bavail * st.f_frsize) / (1024.0**3)
 
 
 def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
@@ -170,9 +201,7 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
     want_disk = sum(s["disk_gb"] for s in specs if s.get("disk_gb"))
     have_disk = free_disk_gb(data_dir)
     if want_disk and have_disk is not None and want_disk > have_disk:
-        problems.append(
-            f"disk: need {want_disk:.1f}GB under {data_dir}, {have_disk:.1f}GB free"
-        )
+        problems.append(f"disk: need {want_disk:.1f}GB under {data_dir}, {have_disk:.1f}GB free")
 
     return problems
 
@@ -208,10 +237,7 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str, data_dir: s
     name = program_name(spec["name"])
     command = shlex.join(build_argv(spec))
     log = str(Path(log_dir) / f"{spec['name']}.log")
-    env = (
-        f'HF_HOME="{_ini_escape(hf_home)}",'
-        f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"'
-    )
+    env = f'HF_HOME="{_ini_escape(hf_home)}",VLLM_API_KEY="{_ini_escape(spec["api_key"])}"'
     return (
         f"[program:{name}]\n"
         f"command={_ini_escape(command)}\n"
