@@ -205,7 +205,7 @@ def window_of(base: str, key: str, model: str) -> int:
 
 def stream(base: str, key: str, model: str, prompt: str, max_tokens: int,
            thinking: bool | None, timeout: int, temperature: float | None = None,
-           progress: bool = False) -> dict:
+           progress: bool = False, effort: str | None = None) -> dict:
     """One streamed call, timing prefill / thinking / generation separately.
 
     Streaming is what makes the decomposition possible: a non-streaming call
@@ -216,8 +216,18 @@ def stream(base: str, key: str, model: str, prompt: str, max_tokens: int,
                   "messages": [{"role": "user", "content": prompt}],
                   "max_tokens": max_tokens, "stream": True,
                   "stream_options": {"include_usage": True}}
+    ctk: dict = {}
     if thinking is not None:
-        body["chat_template_kwargs"] = {"enable_thinking": thinking}
+        ctk["enable_thinking"] = thinking
+    if effort:
+        # Graded reasoning lives in chat_template_kwargs alongside
+        # enable_thinking, NOT as a top-level reasoning_effort -- vLLM accepts
+        # the top-level form too but maps OpenAI's vocabulary onto it, which
+        # is why "high" returns 400 on a model whose levels are
+        # low/medium/xhigh.
+        ctk["reasoning_effort"] = effort
+    if ctk:
+        body["chat_template_kwargs"] = ctk
     if temperature is not None:
         body["temperature"] = temperature
 
@@ -249,7 +259,15 @@ def stream(base: str, key: str, model: str, prompt: str, max_tokens: int,
                     usage = ev["usage"]
                 for ch in ev.get("choices") or []:
                     d = ch.get("delta") or {}
-                    th, bo = d.get("reasoning_content"), d.get("content")
+                    # reasoning_content is what LiteLLM emits; vLLM's own
+                    # streaming path has used `reasoning` in some builds, and
+                    # provider_specific_fields in others. Checking one of
+                    # them reports zero on the others and looks exactly like
+                    # a model that did not reason.
+                    th = (d.get("reasoning_content") or d.get("reasoning")
+                          or ((d.get("provider_specific_fields") or {})
+                              .get("reasoning")))
+                    bo = d.get("content")
                     if first_any is None and (th or bo):
                         first_any = time.monotonic()
                         if progress:
@@ -276,6 +294,12 @@ def stream(base: str, key: str, model: str, prompt: str, max_tokens: int,
     wall = last - t0
     prefill = (first_any - t0) if first_any else wall
 
+    # Tokens were generated but none of them arrived as content OR reasoning.
+    # That means this endpoint puts them somewhere this parser does not look,
+    # and every number below is wrong rather than merely small. Say so.
+    unaccounted = (usage.get("completion_tokens", 0) > 0
+                   and not think_chars and not content_chars)
+
     # Thinking is the span from the first token of ANY kind to the first
     # CONTENT token. When content never arrives -- which is the failure this
     # tool exists to catch -- first_content is None, and attributing the
@@ -294,6 +318,7 @@ def stream(base: str, key: str, model: str, prompt: str, max_tokens: int,
 
     return {"wall": wall, "prefill": prefill, "think": think,
             "gen": max(0.0, wall - prefill - think),
+            "unaccounted": unaccounted,
             "think_chars": think_chars, "content_chars": content_chars,
             "chunks": chunks,
             "prompt_tokens": usage.get("prompt_tokens", 0),
@@ -346,12 +371,15 @@ def row(label: str, r: dict) -> None:
     pin = pt / r["prefill"] if r["prefill"] else 0
     gsec = r["think"] + r["gen"]
     gout = ct / gsec if gsec else 0
-    flag = ("  TRUNCATED THINKING" if (r["think_chars"] and
-                                        not r["content_chars"])
+    flag = ("  UNPARSED -- tokens generated but in no known field"
+            if r.get("unaccounted")
+            else "  TRUNCATED THINKING" if (r["think_chars"] and
+                                            not r["content_chars"])
             else "  EMPTY" if not r["content_chars"] else "")
     print(f"    {label:26}in={pt:>6} ttft={r['prefill']:>6.1f}s "
           f"({pin:>6.0f} tok/s in)  think={r['think']:>6.1f}s  "
-          f"gen={r['gen']:>6.1f}s  out={ct:>6} ({gout:>5.1f} tok/s){flag}")
+          f"gen={r['gen']:>6.1f}s  out={ct:>6} ({gout:>5.1f} tok/s){flag}",
+          flush=True)
 
 
 # ----------------------------------------------------------------- commands
@@ -373,7 +401,8 @@ def cmd_phases(args) -> None:
                 continue
             for i in range(args.repeat):
                 r = stream(base, key, model, filler(size, i, args.warm),
-                           args.max_tokens, False, args.timeout)
+                           args.max_tokens, False, args.timeout,
+                           effort=args.effort)
                 row(f"{size} in, think off", r)
                 if "err" not in r and r["prefill"]:
                     rates.append((r["prompt_tokens"] or size) / r["prefill"])
@@ -418,7 +447,8 @@ def cmd_repro(args) -> None:
 
     r = stream(base, key, model, prompt, args.max_tokens,
                False if args.no_think else None, args.timeout,
-               temperature=args.temperature, progress=True)
+               temperature=args.temperature, progress=True,
+               effort=args.effort)
 
     if "err" in r:
         print(f"\n  FAILED after {r['wall']:.0f}s: {r['err']}: "
@@ -467,7 +497,8 @@ def cmd_budget(args) -> None:
 
     print(f"{BOLD}{model}{RESET}  {DIM}{base}  window {win:,}{RESET}")
     print(f"  {args.input_tokens:,}-token input, reasoning ON, "
-          f"temp={args.temperature}\n")
+          f"temp={args.temperature}, "
+          f"effort={args.effort or 'model default (xhigh on Qwen3.8)'}\n")
     print(f"    {'budget':>8}  {'wall':>7}  {'think':>8}  {'content':>8}  "
           f"{'used':>7}  outcome")
     print(f"    {'-'*8}  {'-'*7}  {'-'*8}  {'-'*8}  {'-'*7}  -------")
@@ -481,28 +512,65 @@ def cmd_budget(args) -> None:
 
     first_ok = None
     results = []
+    by_budget: dict[int, list] = {}
     for b in budgets:
         if args.input_tokens + b > win:
             print(f"    {b:>8}  skipped: {args.input_tokens + b:,} exceeds "
                   f"the {win:,} window")
             continue
-        r = stream(base, key, model, prompt, b, True, args.timeout,
-                   temperature=args.temperature)
-        if "err" in r:
-            print(f"    {b:>8}  {r['err']}: {r['detail'][:40]}")
-            continue
-        used = r["completion_tokens"]
-        if r["content_chars"]:
-            outcome = "completed"
-            if first_ok is None:
-                first_ok = b
-        elif r["think_chars"]:
-            outcome = f"{BOLD}TRUNCATED{RESET} -- no answer"
-        else:
-            outcome = "empty, no reasoning either"
-        print(f"    {b:>8}  {r['wall']:>6.1f}s  {r['think_chars']:>7,}c  "
-              f"{r['content_chars']:>7,}c  {used:>7,}  {outcome}")
-        results.append((b, r))
+        for attempt in range(args.repeat):
+            r = stream(base, key, model, prompt, b, True, args.timeout,
+                       temperature=args.temperature, effort=args.effort)
+            if "err" in r:
+                print(f"    {b:>8}  {r['err']}: {r['detail'][:40]}")
+                continue
+            used = r["completion_tokens"]
+            if r["content_chars"]:
+                outcome = "completed"
+                if first_ok is None:
+                    first_ok = b
+            elif r.get("unaccounted"):
+                outcome = (f"{BOLD}UNPARSED{RESET} -- {used:,} tokens in no "
+                           f"known field")
+            elif r["think_chars"]:
+                outcome = f"{BOLD}TRUNCATED{RESET} -- no answer"
+            else:
+                outcome = "empty, no reasoning either"
+            label = f"{b:>8}" if attempt == 0 else " " * 8
+            print(f"    {label}  {r['wall']:>6.1f}s  {r['think_chars']:>7,}c  "
+                  f"{r['content_chars']:>7,}c  {used:>7,}  {outcome}",
+                  flush=True)
+            results.append((b, r))
+            by_budget.setdefault(b, []).append(r)
+
+    # Thinking length on this model varies enormously between identical
+    # calls: 13,121 / 24,260 / 36,606 chars measured at the same budget and
+    # prompt, a 2.8x spread. A single sample per budget cannot tell a real
+    # effect from that, which is why --repeat matters here more than
+    # anywhere else in this tool.
+    if args.repeat > 1:
+        print()
+        print("  spread across repeats (thinking chars):")
+        for b, rs in sorted(by_budget.items()):
+            th = [r["think_chars"] for r in rs]
+            done = sum(1 for r in rs if r["content_chars"])
+            if len(th) > 1 and min(th):
+                print(f"    {b:>8,}: {min(th):>7,} .. {max(th):>7,}  "
+                      f"({max(th)/min(th):.1f}x)   completed {done}/{len(rs)}")
+            else:
+                print(f"    {b:>8,}: {th[0]:>7,}c   completed {done}/{len(rs)}")
+
+    if any(r.get("unaccounted") for _, r in results):
+        print()
+        print(f"  {BOLD}Some rows generated tokens that arrived as neither "
+              f"content nor reasoning.{RESET}")
+        print("  This endpoint names those fields differently -- the numbers "
+              "above are not")
+        print("  comparable with a run against a different endpoint. Going "
+              "through the")
+        print("  gateway rather than --base usually resolves it, since "
+              "LiteLLM normalises")
+        print("  the field names.")
 
     print()
     ok = [(b, r) for b, r in results if r["content_chars"]]
@@ -516,7 +584,25 @@ def cmd_budget(args) -> None:
 
     needed = max(r["completion_tokens"] for _, r in ok)
     cheapest = min(b for b, _ in ok)
-    print(f"  {BOLD}Smallest budget that completed: {cheapest:,}{RESET}")
+    if args.repeat > 1:
+        # With repeats, "completed once" is not the same as "reliable".
+        reliable = [b for b, rs in sorted(by_budget.items())
+                    if all(r["content_chars"] for r in rs)]
+        if reliable:
+            print(f"  {BOLD}Smallest budget that completed EVERY time: "
+                  f"{min(reliable):,}{RESET}")
+        else:
+            print(f"  {BOLD}No budget completed every time.{RESET} On this "
+                  f"model the thinking length is a")
+            print(f"  distribution, and any ceiling has a tail that "
+                  f"truncates silently.")
+        print(f"  Smallest that completed at least once: {cheapest:,}")
+    else:
+        print(f"  {BOLD}Smallest budget that completed: {cheapest:,}{RESET}")
+        print(f"  {DIM}n=1 per budget. This model's thinking length varies "
+              f"up to 2.8x between{RESET}")
+        print(f"  {DIM}identical calls -- use --repeat 3 before trusting a "
+              f"single row.{RESET}")
     print(f"  Most tokens any completed call used: {needed:,}")
     if cheapest > needed * 1.5:
         print(f"  Headroom suggests something between {needed:,} and "
@@ -578,7 +664,7 @@ def cmd_cache(args) -> None:
                 continue
             times.append(r["prefill"])
             print(f"     call {i+1}: prefill {r['prefill']:>6.2f}s "
-                  f"({r['prompt_tokens']:,} tok)")
+                  f"({r['prompt_tokens']:,} tok)", flush=True)
         return times
 
     print("  A. shared context FIRST, then per-call content")
@@ -631,6 +717,13 @@ def main() -> None:
                          "LiteLLM's routing table")
     ap.add_argument("--base", help="endpoint override, http://HOST:PORT/v1")
     ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--effort", default=None,
+                    help="reasoning level for models that grade it. "
+                         "Qwen3.8-27B takes low|medium|xhigh and DEFAULTS TO "
+                         "XHIGH -- the maximum -- so every call that omits "
+                         "this has been asking for maximum deliberation. "
+                         "Sent inside chat_template_kwargs, not as a "
+                         "top-level parameter")
     ap.add_argument("--warm", action="store_true",
                     help="reuse the SAME prompts across runs, so the prefix "
                          "cache is hit. Default is cold: every run sends "
@@ -688,3 +781,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
