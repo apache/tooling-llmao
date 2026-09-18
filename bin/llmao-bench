@@ -1,0 +1,690 @@
+#!/usr/bin/env python3
+"""Where does the time go on an ASVS-shaped call?
+
+One script, four subcommands. Stdlib only -- no pip, no uv, nothing to
+install on a managed host.
+
+    export LLMAO_KEY=sk-...           # a PAT, for the gateway
+    export MK=...                     # master key, for --direct discovery
+    export VLLM_API_KEY=...           # for --direct calls
+
+    ./llmao-bench phases              # sweep input sizes, all models
+    ./llmao-bench repro               # the exact failing HEAVY shape
+    ./llmao-bench budget              # what budget does REASONING need
+    ./llmao-bench cache               # is the workload cache-shaped
+    ./llmao-bench all                 # all four, one model
+
+WHY THIS EXISTS, AND WHAT IT ALREADY OVERTURNED
+
+The working theory was that the 27B is slow to PREFILL -- that a 38k-token
+prompt takes ~90s just to read. Measuring it separated prefill from
+generation and showed the opposite:
+
+    gemma4-26b    38k in  ->  3.4s prefill   ( 8,546 tok/s)
+    qwen3.8-27b   38k in  ->  2.6s prefill   (11,167 tok/s)
+
+The 27B is the FASTEST of the three at reading input. The earlier "18x
+prefill gap" came from timing a whole call, where Gemma answered briefly and
+the 27B generated its full budget -- that was verbosity, not prefill.
+
+What is actually slow is GENERATION, at ~46 tok/s:
+
+    32,000 max_tokens / 46 tok/s = 696s = 11.6 minutes, single-stream,
+    before any thinking, at concurrency 1.
+
+Under 8-way contention that plausibly triples. The timeout is 1800s. Which
+is the whole failure, and it means max_tokens IS the lever -- the opposite of
+what "prefill-bound" would have implied.
+
+Keep measuring rather than reasoning. That is what this is for.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import random
+import statistics
+import sys
+import time
+import urllib.error
+import urllib.request
+
+GATEWAY = "https://llm.apache.org/v1"
+MODELS = ["gemma4-26b", "qwen3.8-27b", "qwen3-8b"]
+
+# Model -> served window, for sizing prompts that fit. Read from the box when
+# possible; this is only a fallback.
+WINDOW_FALLBACK = {"gemma4-26b": 131072, "qwen3.8-27b": 131072,
+                   "qwen3-8b": 40960}
+
+BOLD, DIM, RESET = "\033[1m", "\033[90m", "\033[0m"
+
+# Prose-shaped filler at ~1.3 tokens/word. Deliberately NOT a repeated
+# phrase: these boxes run --enable-prefix-caching and vLLM matches a prefix
+# from the first token onward, so repeated filler measures the cache rather
+# than the model.
+_WORDS = ("authentication session token validation request handler endpoint "
+          "middleware credential storage encryption boundary input sanitize "
+          "output encode header cookie origin policy access control audit "
+          "record identifier principal scope grant revoke rotate expire "
+          "signature verify digest salt derive rotate envelope transport").split()
+
+
+# Every prompt this script builds is salted with a per-process value, so two
+# runs never send the same text. Without it, `filler(size, i)` with i=0 on
+# every run produces identical prompts, and the SECOND run reads them
+# straight out of the prefix cache.
+#
+# That is not hypothetical. Measured on one box, same command, minutes apart:
+#
+#     first run       11,052 tok/s prefill at 38k
+#     second run      30,354 tok/s     -- same prompt, now cached
+#
+# A 3x difference that looks like variance and is not. --warm disables the
+# salt when you specifically want to measure the cached path.
+_SALT = os.getpid()
+
+
+def filler(tokens: int, seed: int, warm: bool = False) -> str:
+    rng = random.Random(seed if warm else seed * 1_000_003 + _SALT)
+    return " ".join(rng.choice(_WORDS) for _ in range(int(tokens / 1.3)))
+
+
+def code_filler(tokens: int, unique: bool, warm: bool = False) -> str:
+    """Audit-shaped input: code, which tokenises differently from prose.
+
+    `unique` varies identifiers per block. With it off, every block is
+    identical and the prefix cache carries almost the whole prompt -- useful
+    only as a deliberate contrast.
+    """
+    names = ["artifact", "release", "bundle", "package", "payload",
+             "manifest", "record", "entry", "document", "revision"]
+    checks = ["authorizer.check", "acl.permits", "policy.allows",
+              "guard.verify", "rbac.can"]
+    # Salted like filler(), for the same reason: a repeated run would
+    # otherwise measure the cache rather than the model.
+    tag = "" if warm else f"_r{_SALT}"
+    out, total, i = [], 0, 0
+    target = tokens * 4
+    while total < target:
+        n = names[i % len(names)] if unique else names[0]
+        c = checks[i % len(checks)] if unique else checks[0]
+        sfx = f"{tag}_{i}" if unique else tag
+        unit = (
+            f"def process_{n}{sfx}(artifact, committee, uid):\n"
+            f"    if not {c}(uid, committee):\n"
+            f"        raise PermissionError('not a member of ' + committee)\n"
+            f"    token = session.get('csrf_{n}{sfx}')\n"
+            f"    if token != request.headers.get('X-CSRF'):\n"
+            f"        raise SecurityError('csrf mismatch')\n"
+            f"    return storage.write(artifact, owner=uid)\n\n"
+        )
+        out.append(unit)
+        total += len(unit)
+        i += 1
+    return "".join(out)[:target]
+
+
+# ---------------------------------------------------------------- endpoints
+
+def master_key() -> str | None:
+    key = os.environ.get("LITELLM_MASTER_KEY") or os.environ.get("MK")
+    if key:
+        return key
+    try:
+        with open("/opt/llmao/litellm.env") as fh:
+            for line in fh:
+                if line.startswith("LITELLM_MASTER_KEY="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+def discover(model: str) -> str | None:
+    """The model's api_base from LiteLLM's routing table.
+
+    Nothing is committed here: RunPod reassigns the public port on every pod
+    recreate -- one host went 17140 -> 14296 -> 10755 -> 15602 across four
+    rebuilds -- so a hardcoded table is stale within days.
+    """
+    key = master_key()
+    if not key:
+        return None
+    req = urllib.request.Request(
+        "http://127.0.0.1:4000/model/info",
+        headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            for m in json.load(r)["data"]:
+                if m["model_name"] == model:
+                    b = (m.get("model_info") or {}).get("asf_api_base")
+                    if b:
+                        return b.rstrip("/") + "/v1"
+    except Exception:
+        return None
+    return None
+
+
+def resolve(model: str, direct: bool, override: str | None) -> tuple[str, str]:
+    """(base, key) for this model."""
+    if override:
+        k = os.environ.get("VLLM_API_KEY") or os.environ.get("LLMAO_KEY")
+        return override, (k or "EMPTY")
+    if direct:
+        base = os.environ.get("LLMAO_DIRECT_BASE") or discover(model)
+        key = os.environ.get("VLLM_API_KEY")
+        if not base:
+            sys.exit(f"no direct endpoint for {model}. On the gateway host, "
+                     f"export MK=<master key>; elsewhere export "
+                     f"LLMAO_DIRECT_BASE=http://HOST:PORT/v1")
+        if not key:
+            sys.exit("export VLLM_API_KEY for --direct")
+        return base, key
+    key = os.environ.get("LLMAO_KEY")
+    if not key:
+        sys.exit("export LLMAO_KEY")
+    return GATEWAY, key
+
+
+def window_of(base: str, key: str, model: str) -> int:
+    try:
+        req = urllib.request.Request(
+            f"{base}/models", headers={"Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            for m in json.load(r).get("data", []):
+                if m.get("max_model_len"):
+                    return int(m["max_model_len"])
+    except Exception:
+        pass
+    return WINDOW_FALLBACK.get(model, 40960)
+
+
+# ------------------------------------------------------------------- timing
+
+def stream(base: str, key: str, model: str, prompt: str, max_tokens: int,
+           thinking: bool | None, timeout: int, temperature: float | None = None,
+           progress: bool = False) -> dict:
+    """One streamed call, timing prefill / thinking / generation separately.
+
+    Streaming is what makes the decomposition possible: a non-streaming call
+    returns one wall time with no way to tell 80s of prefill from 80s of
+    generation, and they have opposite fixes.
+    """
+    body: dict = {"model": model,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": max_tokens, "stream": True,
+                  "stream_options": {"include_usage": True}}
+    if thinking is not None:
+        body["chat_template_kwargs"] = {"enable_thinking": thinking}
+    if temperature is not None:
+        body["temperature"] = temperature
+
+    req = urllib.request.Request(
+        f"{base}/chat/completions", data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}",
+                 "Content-Type": "application/json"})
+
+    t0 = time.monotonic()
+    first_any = first_content = None
+    think_chars = content_chars = chunks = 0
+    usage: dict = {}
+    last = t0
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for raw in r:
+                line = raw.decode(errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    ev = json.loads(payload)
+                except ValueError:
+                    continue
+                chunks += 1
+                if ev.get("usage"):
+                    usage = ev["usage"]
+                for ch in ev.get("choices") or []:
+                    d = ch.get("delta") or {}
+                    th, bo = d.get("reasoning_content"), d.get("content")
+                    if first_any is None and (th or bo):
+                        first_any = time.monotonic()
+                        if progress:
+                            print(f"     prefill done at "
+                                  f"{first_any - t0:.1f}s", flush=True)
+                    if th:
+                        think_chars += len(th)
+                    if bo:
+                        if first_content is None:
+                            first_content = time.monotonic()
+                            if progress and think_chars:
+                                print(f"     thinking done at "
+                                      f"{first_content - t0:.1f}s "
+                                      f"({think_chars:,} chars)", flush=True)
+                        content_chars += len(bo)
+                last = time.monotonic()
+    except urllib.error.HTTPError as e:
+        return {"err": f"HTTP {e.code}", "detail": e.read().decode()[:140],
+                "wall": time.monotonic() - t0}
+    except Exception as e:
+        return {"err": type(e).__name__, "detail": str(e)[:140],
+                "wall": time.monotonic() - t0}
+
+    wall = last - t0
+    prefill = (first_any - t0) if first_any else wall
+
+    # Thinking is the span from the first token of ANY kind to the first
+    # CONTENT token. When content never arrives -- which is the failure this
+    # tool exists to catch -- first_content is None, and attributing the
+    # whole span to generation is exactly backwards: it reports "lower
+    # max_tokens" for a call that produced nothing BECAUSE its budget was
+    # too small to finish thinking.
+    #
+    # So: if reasoning was emitted and content was not, everything after
+    # prefill is thinking.
+    if first_content and first_any:
+        think = first_content - first_any
+    elif think_chars and not content_chars:
+        think = max(0.0, wall - prefill)
+    else:
+        think = 0.0
+
+    return {"wall": wall, "prefill": prefill, "think": think,
+            "gen": max(0.0, wall - prefill - think),
+            "think_chars": think_chars, "content_chars": content_chars,
+            "chunks": chunks,
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0)}
+
+
+def verdict(r: dict) -> tuple[str, str]:
+    """Which phase dominates, and what to do about it.
+
+    Named rather than left to be eyeballed, because the phases have different
+    fixes and two of them make max_tokens irrelevant -- one of them makes
+    LOWERING it actively harmful.
+    """
+    total = r["prefill"] + r["think"] + r["gen"]
+    if total <= 0:
+        return "?", ""
+
+    # Reasoning emitted, no content: the budget ran out mid-thought. This is
+    # NOT "generation-bound", and the fix is the opposite of what a naive
+    # phase comparison would say -- a lower max_tokens produces MORE of
+    # these, not fewer. Measured on the 27B: 32,000 budget returned 3,905
+    # tokens and finished; 2,000 budget returned nothing at all.
+    if r["think_chars"] and not r["content_chars"]:
+        return ("truncated thinking (no content returned)",
+                "the budget ran out mid-thought. RAISING max_tokens or "
+                "turning reasoning OFF both fix this; LOWERING it makes it "
+                "worse, and the failure is silent -- HTTP 200 with an empty "
+                "answer.")
+    phase, secs = max((("prefill", r["prefill"]), ("thinking", r["think"]),
+                       ("generation", r["gen"])), key=lambda x: x[1])
+    share = secs / total * 100
+    advice = {
+        "prefill": "smaller batches. max_tokens is IRRELEVANT here -- output "
+                   "size does not affect the time spent reading input.",
+        "thinking": "reasoning off, or a much larger budget. A lower "
+                    "max_tokens only truncates the thinking, it does not "
+                    "shorten it.",
+        "generation": "lower max_tokens, proportionally. This is the one case "
+                      "where the token/concurrency trade is real.",
+    }[phase]
+    return f"{phase} ({share:.0f}% of wall)", advice
+
+
+def row(label: str, r: dict) -> None:
+    if "err" in r:
+        print(f"    {label:26} {r['err']} after {r['wall']:.0f}s: "
+              f"{r['detail'][:60]}")
+        return
+    pt, ct = r["prompt_tokens"] or 0, r["completion_tokens"] or 0
+    pin = pt / r["prefill"] if r["prefill"] else 0
+    gsec = r["think"] + r["gen"]
+    gout = ct / gsec if gsec else 0
+    flag = ("  TRUNCATED THINKING" if (r["think_chars"] and
+                                        not r["content_chars"])
+            else "  EMPTY" if not r["content_chars"] else "")
+    print(f"    {label:26}in={pt:>6} ttft={r['prefill']:>6.1f}s "
+          f"({pin:>6.0f} tok/s in)  think={r['think']:>6.1f}s  "
+          f"gen={r['gen']:>6.1f}s  out={ct:>6} ({gout:>5.1f} tok/s){flag}")
+
+
+# ----------------------------------------------------------------- commands
+
+def cmd_phases(args) -> None:
+    sizes = [int(x) for x in args.sizes.split(",")]
+    print("Phases: ttft is prefill. think is first-token-to-first-CONTENT --")
+    print("on a reasoning model, the thinking block. gen is the rest.\n")
+    for model in (args.model or MODELS):
+        base, key = resolve(model, args.direct, args.base)
+        win = window_of(base, key, model)
+        print(f"{BOLD}{model}{RESET}  {DIM}{base}  window {win:,}{RESET}")
+        rates = []
+        for size in sizes:
+            if size + args.max_tokens > win:
+                print(f"    {str(size) + ' in':26}skipped: "
+                      f"{size:,} + {args.max_tokens:,} exceeds the "
+                      f"{win:,} window")
+                continue
+            for i in range(args.repeat):
+                r = stream(base, key, model, filler(size, i, args.warm),
+                           args.max_tokens, False, args.timeout)
+                row(f"{size} in, think off", r)
+                if "err" not in r and r["prefill"]:
+                    rates.append((r["prompt_tokens"] or size) / r["prefill"])
+        if rates:
+            lo, hi = min(rates), max(rates)
+            print(f"    {'':26}-> prefill {statistics.median(rates):.0f} tok/s "
+                  f"median, {lo:.0f}-{hi:.0f} range")
+            # A rate that FALLS with input size means attention cost is
+            # biting super-linearly. A rate that rises is fixed overhead
+            # amortising, and means larger batches are fine.
+            if len(rates) > 2 and rates[-1] < rates[0] * 0.7:
+                print(f"    {'':26}   rate falls with size -- batch size "
+                      f"matters more than linearly")
+        print()
+
+
+def cmd_repro(args) -> None:
+    model = (args.model or ["qwen3.8-27b"])[0]
+    base, key = resolve(model, args.direct, args.base)
+    win = window_of(base, key, model)
+    total = args.input_tokens + args.max_tokens
+    print(f"{BOLD}{model}{RESET}  {DIM}{base}{RESET}")
+    print(f"  input~{args.input_tokens:,}  max_tokens={args.max_tokens:,}  "
+          f"temp={args.temperature}  "
+          f"thinking={'OFF' if args.no_think else 'ON'}  "
+          f"timeout={args.timeout}s")
+    print(f"  filler: {'REPEATED (cache-friendly)' if args.repeated_filler else 'unique per block'}")
+    if total > win:
+        print(f"  {BOLD}! {total:,} exceeds the {win:,} window -- vLLM will "
+              f"reject this{RESET}")
+    print(f"  floor at ~46 tok/s generation: "
+          f"{args.max_tokens / 46 / 60:.1f} min if the model fills its budget")
+    print("  running...", flush=True)
+
+    prompt = ("You are an application security auditor. Analyze the following "
+              "code against ASVS requirements for authentication and "
+              "authorization. Report findings as JSON with severity, file, "
+              "description, remediation.\n\n## Code\n"
+              + code_filler(args.input_tokens, not args.repeated_filler,
+                            args.warm)
+              + "\n\n## Task\nProduce your findings now.")
+
+    r = stream(base, key, model, prompt, args.max_tokens,
+               False if args.no_think else None, args.timeout,
+               temperature=args.temperature, progress=True)
+
+    if "err" in r:
+        print(f"\n  FAILED after {r['wall']:.0f}s: {r['err']}: "
+              f"{r['detail'][:100]}")
+        return
+
+    print(f"\n  completed in {r['wall']:.1f}s")
+    if r["think_chars"] and not r["content_chars"]:
+        print(f"  {BOLD}ZERO CONTENT{RESET}: {r['think_chars']:,} chars of "
+              f"reasoning, no answer. HTTP 200, no error.")
+    print(f"    prefill     {r['prefill']:>8.1f}s   "
+          f"{r['prompt_tokens']:>8,} tok in"
+          + (f"  ({r['prompt_tokens'] / r['prefill']:.0f} tok/s)"
+             if r["prefill"] else ""))
+    print(f"    thinking    {r['think']:>8.1f}s   {r['think_chars']:>8,} chars")
+    print(f"    generation  {r['gen']:>8.1f}s   {r['content_chars']:>8,} chars, "
+          f"{r['completion_tokens']:,} tok")
+    phase, advice = verdict(r)
+    print(f"\n  dominant: {BOLD}{phase}{RESET}")
+    print(f"  -> {advice}")
+
+
+def cmd_budget(args) -> None:
+    """How much max_tokens does reasoning need to COMPLETE?
+
+    The question that matters for a reasoning tier, and the one neither
+    `phases` nor `repro` answers. Turning reasoning off is not an option when
+    deep analysis is the point; the real choice is a budget large enough to
+    finish thinking and still answer.
+
+    Measured on the 27B at 38k input before this existed:
+
+        32,000 budget  ->  completed, used 3,905 tokens
+         2,000 budget  ->  TRUNCATED, no content at all
+
+    So the ceiling was 8x larger than the model needed, and the failure at
+    2,000 was silent. Somewhere between is the answer, and it is worth
+    knowing rather than guessing -- too low returns empty answers that read
+    as clean results, too high lets a runaway generation hold a slot for
+    minutes.
+    """
+    model = (args.model or ["qwen3.8-27b"])[0]
+    base, key = resolve(model, args.direct, args.base)
+    win = window_of(base, key, model)
+    budgets = [int(x) for x in args.budgets.split(",")]
+
+    print(f"{BOLD}{model}{RESET}  {DIM}{base}  window {win:,}{RESET}")
+    print(f"  {args.input_tokens:,}-token input, reasoning ON, "
+          f"temp={args.temperature}\n")
+    print(f"    {'budget':>8}  {'wall':>7}  {'think':>8}  {'content':>8}  "
+          f"{'used':>7}  outcome")
+    print(f"    {'-'*8}  {'-'*7}  {'-'*8}  {'-'*8}  {'-'*7}  -------")
+
+    prompt = ("You are an application security auditor. Analyze the following "
+              "code against ASVS requirements for authentication and "
+              "authorization. Report findings as JSON with severity, file, "
+              "description, remediation.\n\n## Code\n"
+              + code_filler(args.input_tokens, True, args.warm)
+              + "\n\n## Task\nProduce your findings now.")
+
+    first_ok = None
+    results = []
+    for b in budgets:
+        if args.input_tokens + b > win:
+            print(f"    {b:>8}  skipped: {args.input_tokens + b:,} exceeds "
+                  f"the {win:,} window")
+            continue
+        r = stream(base, key, model, prompt, b, True, args.timeout,
+                   temperature=args.temperature)
+        if "err" in r:
+            print(f"    {b:>8}  {r['err']}: {r['detail'][:40]}")
+            continue
+        used = r["completion_tokens"]
+        if r["content_chars"]:
+            outcome = "completed"
+            if first_ok is None:
+                first_ok = b
+        elif r["think_chars"]:
+            outcome = f"{BOLD}TRUNCATED{RESET} -- no answer"
+        else:
+            outcome = "empty, no reasoning either"
+        print(f"    {b:>8}  {r['wall']:>6.1f}s  {r['think_chars']:>7,}c  "
+              f"{r['content_chars']:>7,}c  {used:>7,}  {outcome}")
+        results.append((b, r))
+
+    print()
+    ok = [(b, r) for b, r in results if r["content_chars"]]
+    if not ok:
+        print("  Nothing completed. Either every budget here is too small, or")
+        print("  this input does not produce an answer at all -- try "
+              "--no-think to")
+        print("  see whether the model can answer this prompt without "
+              "reasoning.")
+        return
+
+    needed = max(r["completion_tokens"] for _, r in ok)
+    cheapest = min(b for b, _ in ok)
+    print(f"  {BOLD}Smallest budget that completed: {cheapest:,}{RESET}")
+    print(f"  Most tokens any completed call used: {needed:,}")
+    if cheapest > needed * 1.5:
+        print(f"  Headroom suggests something between {needed:,} and "
+              f"{cheapest:,} may also work --")
+        print(f"  narrow it with --budgets if the difference matters.")
+    print()
+    print(f"  Setting a ceiling BELOW {cheapest:,} on this shape produces "
+          f"empty answers,")
+    print(f"  not shorter ones. They arrive as HTTP 200 with no error, which "
+          f"in a")
+    print(f"  pipeline reads as a clean result rather than a failure.")
+
+    slow = [(b, r) for b, r in ok if r["wall"] > 60]
+    if slow:
+        print()
+        print(f"  Calls over 60s: {', '.join(str(b) for b, _ in slow)}. Under "
+              f"concurrency")
+        print(f"  those multiply -- 8 simultaneous on one box is roughly 8x "
+              f"the queue,")
+        print(f"  which is how a 109s call becomes a 1800s timeout.")
+
+
+def cmd_cache(args) -> None:
+    """Is the workload shaped to use the prefix cache it already has?
+
+    vLLM matches a prefix only from the first token, exactly:
+
+        [ shared inventory ][ per-file content ]  -> hit on the shared part
+        [ per-file content ][ shared inventory ]  -> never a hit
+
+    If the pipeline appends shared context AFTER per-file content, every call
+    re-prefills it.
+    """
+    model = (args.model or ["qwen3.8-27b"])[0]
+    base, key = resolve(model, args.direct, args.base)
+    win = window_of(base, key, model)
+    shared_n, uniq_n = args.shared_tokens, args.unique_tokens
+    if shared_n + uniq_n + 64 > win:
+        shared_n = int((win - 64) * 0.75)
+        uniq_n = int((win - 64) * 0.2)
+        print(f"  sizes reduced to fit the {win:,} window\n")
+
+    shared = filler(shared_n, 0, args.warm)
+    print(f"{BOLD}{model}{RESET}  {DIM}{base}{RESET}")
+    print(f"  {shared_n:,} shared + {uniq_n:,} unique tokens, "
+          f"{args.n} calls each\n")
+
+    def run(order_shared_first: bool) -> list[float]:
+        times = []
+        for i in range(args.n):
+            uniq = filler(uniq_n, i + (1 if order_shared_first else 101),
+                          args.warm)
+            prompt = (f"{shared}\n\n{uniq}\n\nReply OK."
+                      if order_shared_first else
+                      f"{uniq}\n\n{shared}\n\nReply OK.")
+            r = stream(base, key, model, prompt, 16, False, args.timeout)
+            if "err" in r:
+                print(f"     call {i+1}: {r['err']}")
+                continue
+            times.append(r["prefill"])
+            print(f"     call {i+1}: prefill {r['prefill']:>6.2f}s "
+                  f"({r['prompt_tokens']:,} tok)")
+        return times
+
+    print("  A. shared context FIRST, then per-call content")
+    a = run(True)
+    print("\n  B. per-call content FIRST, then shared context")
+    b = run(False)
+
+    if len(a) > 1 and len(b) > 1:
+        # Skip the first of each: it is the cold call that populates the
+        # cache. The warm remainder is what a steady-state pipeline sees.
+        aw = statistics.mean(a[1:])
+        bw = statistics.mean(b[1:])
+        print(f"\n  warm prefill   A {aw:>6.2f}s    B {bw:>6.2f}s")
+        if bw > aw * 1.3:
+            print(f"\n  {BOLD}Prompt ORDER matters: "
+                  f"{(1 - aw / bw) * 100:.0f}% faster with shared content "
+                  f"first.{RESET}")
+            print("  Worth checking how the pipeline assembles prompts. If "
+                  "shared context")
+            print("  -- inventory, ASVS requirement text, security profile -- "
+                  "is appended")
+            print("  AFTER per-file content, every call re-prefills it.")
+            print("\n  asvs_audit's call_llm takes a cache_prefix argument for "
+                  "exactly this.")
+        elif aw < 0.2 and bw < 0.2:
+            print("\n  Both arrangements are fast enough that prefill is not "
+                  "measurable here.")
+            print("  Raise --shared-tokens, or check whether a previous run "
+                  "left this")
+            print("  content cached -- runs are salted per process, but "
+                  "--warm disables that.")
+        else:
+            print("\n  Order makes little difference. Either the cache is not "
+                  "engaging for")
+            print("  this shape, or prefill is not what dominates -- check "
+                  "`phases`.")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("command",
+                    choices=["phases", "repro", "budget", "cache", "all"])
+    ap.add_argument("--model", action="append",
+                    help="repeatable; defaults to all three for phases, "
+                         "qwen3.8-27b for repro/cache")
+    ap.add_argument("--direct", action="store_true",
+                    help="bypass the gateway; discovers the box from "
+                         "LiteLLM's routing table")
+    ap.add_argument("--base", help="endpoint override, http://HOST:PORT/v1")
+    ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--warm", action="store_true",
+                    help="reuse the SAME prompts across runs, so the prefix "
+                         "cache is hit. Default is cold: every run sends "
+                         "unique text. Use --warm only when you mean to "
+                         "measure the cached path")
+
+    ap.add_argument("--sizes", default="2000,8000,20000,38000",
+                    help="phases: input sizes to sweep")
+    ap.add_argument("--max-tokens", type=int, default=None,
+                    help="phases: 400 (isolates prefill). repro: 32000")
+    ap.add_argument("--repeat", type=int, default=1, help="phases")
+
+    ap.add_argument("--input-tokens", type=int, default=38000, help="repro")
+    ap.add_argument("--temperature", type=float, default=1.0, help="repro")
+    ap.add_argument("--no-think", action="store_true", help="repro")
+    ap.add_argument("--repeated-filler", action="store_true",
+                    help="repro: build the prompt from ONE repeated block, "
+                         "which measures the prefix cache rather than the "
+                         "model. A deliberate contrast, not a realistic shape")
+
+    ap.add_argument("--budgets", default="1000,2000,4000,8000,16000,32000",
+                    help="budget: max_tokens values to try, reasoning ON")
+
+    ap.add_argument("--shared-tokens", type=int, default=20000, help="cache")
+    ap.add_argument("--unique-tokens", type=int, default=4000, help="cache")
+    ap.add_argument("-n", type=int, default=4, help="cache: calls each")
+
+    args = ap.parse_args()
+
+    if args.command == "phases":
+        if args.max_tokens is None:
+            args.max_tokens = 400
+        cmd_phases(args)
+    elif args.command == "repro":
+        if args.max_tokens is None:
+            args.max_tokens = 32000
+        cmd_repro(args)
+    elif args.command == "budget":
+        cmd_budget(args)
+    elif args.command == "cache":
+        cmd_cache(args)
+    else:
+        if args.max_tokens is None:
+            args.max_tokens = 400
+        cmd_phases(args)
+        print()
+        # Salted prompts mean these are not contaminated by the sweep that
+        # preceded them. Before that fix, `all` reported "order makes little
+        # difference" purely because both arrangements were reading the
+        # sweep's cached blocks.
+        cmd_budget(args)
+        print()
+        cmd_cache(args)
+
+
+if __name__ == "__main__":
+    main()
