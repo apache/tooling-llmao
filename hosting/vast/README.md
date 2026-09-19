@@ -20,7 +20,7 @@ There is no Python process manager.
 
   ```bash
   FLEET_KEY=<shared-secret>   # bake into the template
-  ASFQUART_URL=https://llm.apache.org:8443
+  ASFQUART_URL=https://llm.apache.org
   ```
 
   Put the instance public IP under `fleet.hosts` in `config.yaml`. Do not set
@@ -29,12 +29,8 @@ There is no Python process manager.
 ## On-create
 
 Point Vast on-start at `hosting/vast/provision.sh`. Today it pulls
-`install_set.py` from `main`; pin a commit when this is no longer a moving
-target.
-
-`SSL_VERIFY=0` is the default in `provision.sh` because asfquart is still
-on **:8443** with a self-signed cert. **Remove that when llm.apache.org
-serves :443** with a public CA.
+`install_set.py` from `main`; pin a commit SHA when this is no longer a
+moving target (safety: a broken main would brick every box on next create).
 
 ## Smoke
 

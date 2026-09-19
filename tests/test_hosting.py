@@ -19,7 +19,6 @@
 
 import http.server
 import json
-import ssl
 import sys
 import threading
 from pathlib import Path
@@ -107,7 +106,7 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     assert written[0].stat().st_mode & 0o777 == 0o600
 
 
-def test_fetch_json(monkeypatch):
+def test_fetch_json():
     body = json.dumps(SAMPLE).encode()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -129,7 +128,6 @@ def test_fetch_json(monkeypatch):
     httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    monkeypatch.setenv("SSL_VERIFY", "1")
     url = f"http://127.0.0.1:{port}/vllm/config"
     data = inst.fetch_config(url, "fleet-secret")
     httpd.shutdown()
@@ -138,13 +136,6 @@ def test_fetch_json(monkeypatch):
 
 def test_config_url_strips_slash():
     assert inst.config_url("https://x.example/") == "https://x.example/vllm/config"
-
-
-def test_ssl_verify_off(monkeypatch):
-    monkeypatch.setenv("SSL_VERIFY", "0")
-    ctx = inst.ssl_context()
-    assert ctx.check_hostname is False
-    assert ctx.verify_mode == ssl.CERT_NONE
 
 
 def _spec(name="gemma4-26b", vram=None, disk=None):

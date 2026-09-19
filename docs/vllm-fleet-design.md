@@ -164,8 +164,7 @@ Host row (`fleet_path` → `hosts`): `[model_name, port]` or `[model_name, port,
 
 Notes:
 - `args` may be a list of strings or a single string; the installer normalises either form.
-- `SSL_VERIFY=0` is a stopgap while **llm.apache.org is on :8443**. Drop it
-  when that host serves **:443** with a public CA.
+- Boxes fetch `https://llm.apache.org/vllm/config` with default TLS verify.
 
 ---
 

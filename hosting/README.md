@@ -25,15 +25,9 @@ Supervisor units at box-start. There is no long-lived Python launcher.
 Required:
 
 - `FLEET_KEY` — shared secret on the **template**; `Authorization: Bearer`
-- `ASFQUART_URL` — origin only, e.g. `https://llm.apache.org:8443`
+- `ASFQUART_URL` — origin only, e.g. `https://llm.apache.org`
 - `DATA_DIRECTORY` — Vast template workspace (typically `/workspace`). HF cache
   and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
-
-Optional:
-
-- `SSL_VERIFY` — `0` skips TLS verify. **Stopgap** while llm.apache.org is
-  on **:8443** with a self-signed cert. **Drop `SSL_VERIFY=0` when that
-  host moves to :443** with a public CA.
 
 ## Boot (Vast)
 

@@ -27,7 +27,6 @@ import json
 import os
 import re
 import shlex
-import ssl
 import subprocess
 import sys
 import urllib.error
@@ -52,22 +51,6 @@ def config_url(asfquart_url: str) -> str:
     return asfquart_url.rstrip("/") + CONFIG_PATH
 
 
-def ssl_context() -> ssl.SSLContext:
-    # SSL_VERIFY=0: stopgap while llm.apache.org is :8443 (self-signed).
-    # Drop when that host serves :443 with a public CA.
-    raw = os.environ.get("SSL_VERIFY", "1").strip().lower()
-    if raw in ("0", "false", "no"):
-        print(
-            "SSL_VERIFY=0: skipping TLS verify (remove when llm.apache.org is on :443)",
-            file=sys.stderr,
-        )
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
-    return ssl.create_default_context()
-
-
 def fetch_config(url: str, fleet_key: str, timeout_s: float = 30.0) -> dict[str, Any]:
     scheme = urllib.parse.urlparse(url).scheme
     if scheme not in ("http", "https"):
@@ -78,7 +61,7 @@ def fetch_config(url: str, fleet_key: str, timeout_s: float = 30.0) -> dict[str,
         method="GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s, context=ssl_context()) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             status = getattr(resp, "status", 200)
             if status != 200:
                 raise SystemExit(f"config fetch HTTP {status} from {url}")
