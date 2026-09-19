@@ -302,5 +302,6 @@ model_list.yaml.example  → model_list.yaml (catalog for llmao; no secrets)
 certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, litellm_client, fleet
 hosting/vast/            provision.sh + install_set.py
+hosting/runpod/          RunPod template notes (image not built yet)
 tests/                   offline seam, fleet, hosting installer
 ```

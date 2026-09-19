@@ -212,6 +212,18 @@ Notes:
 The template is identical for every box. Placement is keyed by public IP in
 `fleet_path` → `hosts`.
 
+### RunPod (planned)
+
+- Image: our `llmao-vllm-box` (registry TBD / Infra). Not a stock RunPod
+  Jupyter template. COPY the installer; do not curl GitHub at boot.
+- Same env: `FLEET_KEY`, `ASFQUART_URL=https://llm.apache.org`,
+  `DATA_DIRECTORY`.
+- Supervisord, same units as Vast (several `vllm serve` per pod).
+- Ports: expose every listen port. Public mapping via REST v2
+  `portMappings` or the HTTP proxy `https://<podId>-<listen>.proxy.runpod.net`
+  once proven. The optional fourth `fleet.hosts` field is a stopgap.
+- See `hosting/runpod/README.md`.
+
 ---
 
 ## 8. Security Considerations

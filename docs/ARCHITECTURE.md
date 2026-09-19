@@ -56,7 +56,8 @@ keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
-**GPU fleet (vLLM on Vast, later RunPod):** `docs/vllm-fleet-design.md`.
+**GPU fleet (vLLM on Vast; RunPod next):** `docs/vllm-fleet-design.md`.
+`hosting/runpod/README.md` is the template/image contract (not built yet).
 `APP.fleet` (`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
 `fleet.key`) maps client IP (`X-Forwarded-For` or peer) to `fleet.hosts`.
 JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
