@@ -29,7 +29,7 @@ from asfquart.auth import Requirements
 from quart import jsonify, request
 
 from llmao.auth import current_identity
-from llmao.fleet import UnknownHostError, client_ip, config_for_host
+from llmao.fleet import HOST_HEADER, UnknownHostError, client_ip, config_for_host
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -114,7 +114,7 @@ def _fleet_key() -> str:
 @APP.get("/vllm/config")
 @api
 async def vllm_config():
-    """JSON for the calling box. Bearer fleet key; host from peer IP / X-Forwarded-For."""
+    """JSON for the calling box. Bearer fleet key; host from X-LLMAO-Host, else peer / XFF."""
     expected = _fleet_key()
     if not expected or expected.startswith("CHANGE_ME"):
         raise HttpError(503, "fleet.key is not configured")
@@ -128,6 +128,7 @@ async def vllm_config():
     host = client_ip(
         remote_addr=request.remote_addr,
         forwarded_for=request.headers.get("X-Forwarded-For"),
+        claimed_host=request.headers.get(HOST_HEADER),
     )
     try:
         payload = config_for_host(host, cfg=APP.cfg)

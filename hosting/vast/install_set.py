@@ -19,6 +19,9 @@
 
 Not a process manager. supervisord owns vllm serve. Other providers GET
 the same /vllm/config JSON and emit their own artifacts.
+
+Sends X-LLMAO-Host from PUBLIC_IPADDR so lookup works when the TCP peer is
+Vast's transparent proxy (no X-Forwarded-For).
 """
 
 from __future__ import annotations
@@ -51,13 +54,25 @@ def config_url(asfquart_url: str) -> str:
     return asfquart_url.rstrip("/") + CONFIG_PATH
 
 
-def fetch_config(url: str, fleet_key: str, timeout_s: float = 30.0) -> dict[str, Any]:
+HOST_HEADER = "X-LLMAO-Host"
+
+
+def fetch_config(
+    url: str,
+    fleet_key: str,
+    *,
+    public_ip: str | None = None,
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
     scheme = urllib.parse.urlparse(url).scheme
     if scheme not in ("http", "https"):
         raise SystemExit(f"config url must be http(s), got {scheme!r}")
+    headers = {"Authorization": f"Bearer {fleet_key}", "Accept": "application/json"}
+    if public_ip:
+        headers[HOST_HEADER] = public_ip
     req = urllib.request.Request(
         url,
-        headers={"Authorization": f"Bearer {fleet_key}", "Accept": "application/json"},
+        headers=headers,
         method="GET",
     )
     try:
@@ -267,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     del argv
     fleet_key = require_env("FLEET_KEY")
     asfquart_url = require_env("ASFQUART_URL")
+    public_ip = require_env("PUBLIC_IPADDR")
     url = config_url(asfquart_url)
-    data = fetch_config(url, fleet_key)
+    data = fetch_config(url, fleet_key, public_ip=public_ip)
 
     # Refuse before writing units rather than after a long weights pull. The
     # provisioning log is where this is read, so the message has to stand on

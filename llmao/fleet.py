@@ -62,11 +62,33 @@ def normalize_peer_ip(addr: str | None) -> str:
     return ip
 
 
-def client_ip(*, remote_addr: str | None, forwarded_for: str | None) -> str:
-    """Box public IP: leftmost X-Forwarded-For (one reverse proxy), else peer.
+# Box-claimed public IP (Vast PUBLIC_IPADDR). Not X-Forwarded-For.
+HOST_HEADER = "X-LLMAO-Host"
 
-    Werkzeug ProxyFix is WSGI and cannot wrap Quart asgi_app (ASGI).
+
+def client_ip(
+    *,
+    remote_addr: str | None,
+    forwarded_for: str | None,
+    claimed_host: str | None = None,
+) -> str:
+    """Lookup key for fleet.hosts.
+
+    If X-LLMAO-Host is present, it is the only key (Vast sits behind a
+    transparent proxy; the TCP peer is not the instance). Otherwise leftmost
+    X-Forwarded-For (one reverse proxy) or the peer. Werkzeug ProxyFix is WSGI
+    and cannot wrap Quart asgi_app (ASGI).
     """
+    claimed = normalize_peer_ip(claimed_host)
+    if claimed:
+        _LOGGER.info(
+            "%s=%r remote_addr=%r X-Forwarded-For=%r",
+            HOST_HEADER,
+            claimed,
+            remote_addr,
+            forwarded_for,
+        )
+        return claimed
     if forwarded_for and forwarded_for.strip():
         chosen = normalize_peer_ip(forwarded_for.split(",")[0])
         _LOGGER.info("X-Forwarded-For=%r remote_addr=%r client_ip=%s", forwarded_for, remote_addr, chosen)

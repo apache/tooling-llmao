@@ -117,6 +117,9 @@ def test_fetch_json():
             if self.path != "/vllm/config":
                 self.send_error(404)
                 return
+            if self.headers.get("X-LLMAO-Host"):
+                self.send_error(400)
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -131,6 +134,34 @@ def test_fetch_json():
     url = f"http://127.0.0.1:{port}/vllm/config"
     data = inst.fetch_config(url, "fleet-secret")
     httpd.shutdown()
+    assert data["servers"][0]["name"] == "model-a"
+
+
+def test_fetch_sends_public_ip_header():
+    body = json.dumps(SAMPLE).encode()
+    seen = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["host"] = self.headers.get("X-LLMAO-Host")
+            if self.headers.get("Authorization") != "Bearer fleet-secret":
+                self.send_error(403)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{port}/vllm/config"
+    data = inst.fetch_config(url, "fleet-secret", public_ip="98.142.241.142")
+    httpd.shutdown()
+    assert seen["host"] == "98.142.241.142"
     assert data["servers"][0]["name"] == "model-a"
 
 

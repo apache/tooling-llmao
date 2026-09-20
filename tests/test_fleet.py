@@ -24,6 +24,7 @@ import yaml
 from easydict import EasyDict
 
 from llmao.fleet import (
+    HOST_HEADER,
     Fleet,
     UnknownHostError,
     client_ip,
@@ -141,6 +142,27 @@ def test_client_ip_xff_leftmost():
 def test_client_ip_no_xff():
     assert client_ip(remote_addr="203.0.113.10", forwarded_for=None) == "203.0.113.10"
     assert client_ip(remote_addr="::ffff:203.0.113.10", forwarded_for="") == "203.0.113.10"
+
+
+def test_client_ip_claimed_host_not_peer():
+    """Vast transparent proxy: TCP peer is not the instance. Header is the key."""
+    assert (
+        client_ip(
+            remote_addr="10.0.0.9",
+            forwarded_for=None,
+            claimed_host="203.0.113.10",
+        )
+        == "203.0.113.10"
+    )
+    assert (
+        client_ip(
+            remote_addr="10.0.0.9",
+            forwarded_for="198.51.100.1",
+            claimed_host="203.0.113.10",
+        )
+        == "203.0.113.10"
+    )
+    assert HOST_HEADER == "X-LLMAO-Host"
 
 
 def test_norm_base_strips_trailing_v1():

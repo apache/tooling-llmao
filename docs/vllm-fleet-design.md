@@ -60,9 +60,10 @@ flowchart TB
   - Their LiteLLM configuration
   - The real API keys used between LiteLLM and each vLLM server
   - Logical **hosts** (models + ports on one GPU box, keyed by public IP)
-- Each GPU box receives the **fleet key** on the template. asfquart maps
-  leftmost `X-Forwarded-For` if present, else `request.remote_addr` (Apache/Hypercorn in front)
-  to fleet membership.
+- Each GPU box receives the **fleet key** on the template. asfquart looks up
+  `X-LLMAO-Host` when present (Vast `PUBLIC_IPADDR`; TCP peer may be a
+  transparent proxy), else leftmost `X-Forwarded-For`, else
+  `request.remote_addr`.
 - At box-start, the provider installer fetches JSON for that IP
   and installs native process units (Vast: Supervisor). There is no on-disk
   `servers.yaml` and no Python process manager.
@@ -81,6 +82,9 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
 
 - A single shared secret known to asfquart and to every GPU box.
 - Presented as `Authorization: Bearer <fleet-key>` when fetching configuration.
+- Vast stock container + custom template: `install_set.py` also sends
+  `X-LLMAO-Host: $PUBLIC_IPADDR` (no query string). That header is a claim,
+  not a proof; the fleet key is the gate.
 - Chosen over per-instance secrets for operational simplicity (one value to manage, works across providers).
 - Acceptable risk for a small, operator-controlled fleet. Can be hardened later (instance binding, short-lived tokens, etc.) without changing the rest of the design.
 
@@ -129,12 +133,15 @@ programs. Same payload; never a `servers.yaml`.
 ```
 GET /vllm/config
 Authorization: Bearer <fleet-key>
+X-LLMAO-Host: <public-ip>    # required on Vast; absent locally is peer/XFF
 
 Response: 200 application/json
 ```
 
 - asfquart validates the fleet key (not OAuth).
-- Looks up `hosts` by client IP (`X-Forwarded-For` or `request.remote_addr`).
+- If `X-LLMAO-Host` is present, that is the only `fleet.hosts` key (404 if
+  unknown). Do not fall back to the proxy peer.
+- Else: `X-Forwarded-For` or `request.remote_addr`.
 - Emits JSON (host, servers: name, HF weights id, host, port, args, API keys).
 
 ---
