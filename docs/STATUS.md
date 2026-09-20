@@ -19,14 +19,14 @@
 
 ## Done (today — thin)
 
-Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `model_list.yaml` inventory; PAT UX (**My Keys** / **Other Keys**); **Models** catalog (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
+Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `models.yaml` definitions; PAT UX (**My Keys** / **Other Keys**); **Models** page (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
 
-**Models page:** catalog-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing serving or no deployment is No. Sort puts No last. Per-process state is on `/fleet`.
+**Models page:** definitions-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing serving or no deployment is No. Sort puts No last. Per-process state is on `/fleet`.
 
-**Catalog vs LiteLLM:** `model_list.yaml` is not included by the proxy.
-`litellm.yaml` `general_settings.store_model_in_db: true` (Puppet may also set the env). `self_hosted` is a required boolean. Commercial rows need a static `api_base` (fail-fast). Standalone watches `config.yaml`; Puppet restarts on change.
+**models.yaml vs LiteLLM:** admin definitions; the proxy does **not** include this file.
+`litellm.yaml` `general_settings.store_model_in_db: true` (Puppet may also set the env). `self_hosted` is a required boolean. Commercial rows need a static `api_base` (fail-fast). Self-host `litellm_params.model` is `hosted_vllm/<name>` (not `openai/`). Standalone watches `config.yaml`; Puppet restarts on change. YAML edit ≠ live deployment until llmao POSTs `/model/new` again.
 
-**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/fleet` is signed-in (host:port admin). Green serving = vLLM up **and** LiteLLM has that `api_base`. Self-host: `/model/new` after serving, `/model/delete` on down (catalog YAML). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/fleet` is signed-in (host:port admin). Green serving = vLLM up **and** LiteLLM has that `api_base`. Self-host: `/model/new` after serving, `/model/delete` on down (`models.yaml` template). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner.
 
 **Public port resolution differs by provider.** Vast exposes its container→public mapping through an API and resolves automatically. RunPod does not, so a host row takes an optional fourth element pinning the public port. RunPod also reassigns the port on every pod recreate, even when the pod lands on the same machine — so a pinned value is expected to change, not to be stable.
 
@@ -216,21 +216,17 @@ Home = role-aware launchpad (not keys-only)
 
 ## Engineering backlog (non-UX or infra)
 
-1. **`hosted_vllm/` provider prefix.** Routes are created as
-   `openai/<name>`; LiteLLM's docs specify `hosted_vllm/` for an
-   OpenAI-compatible vLLM server. Three symptoms point at it:
-   `reasoning_effort` validated against OpenAI's vocabulary, tool use
-   routed to the Responses API with a `tool_choice` shape vLLM rejects,
-   and backend errors translating badly — a vLLM 422 arriving as HTTP 200
-   with a null body. Worth verifying with a parallel test route before
-   changing the push code.
-2. **Route registration is not idempotent.** A host that changes address
-   leaves the old route behind, and nothing removes it — one model had
-   accumulated twelve identical routes, invisible in both UIs. The
+1. **`hosted_vllm/` — done in `models.yaml`.** New `/model/new` bodies use
+   that prefix. LiteLLM DB rows created as `openai/` stay until deleted and
+   re-pushed.
+2. **Deployment registration is not idempotent.** A host that changes
+   address leaves the old deployment behind, and nothing removes it — one
+   model had accumulated twelve identical rows, invisible in both UIs. The
    `bases - fleet_bases` branch of the skew check is exactly this case and
    should delete rather than only report. Pair with reconciliation at
-   startup.
-3. **Catalog does not record `reasoning_effort` levels** per model.
+   startup. A Models/Fleet **sync** action when skew is found is a later UX.
+3. **`models.yaml` does not record `reasoning_effort` levels** per model
+   (Qwen 3.8 lists them; not a uniform field).
 4. Harden PAT against LiteLLM pagination / delete ids
 5. Automation creator policy after RAI decides §5.1.1
 6. Site admin via `rai` PMC (optional keep cfg list)

@@ -15,16 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""vLLM host JSON: validate at process start, join catalog at request time.
+"""vLLM host JSON: validate at process start, join models.yaml at request time.
 
 GPU boxes fetch GET /vllm/config (no servers.yaml). Placement is fleet.hosts
 keyed by client IP.
 
-Terminology: the **catalog** is model_list.yaml. A **model** is one catalog
-recipe (`model_name`). A **VllmServer** is one vLLM process. A
-**FleetDeployment** is one intended LiteLLM backend (self-host public
-api_base or commercial static api_base). The LiteLLM **Router** is the whole
-proxy. Box JSON `servers[].model` is still the HF weights id.
+Terminology: **models.yaml** is admin definitions. A **model** is one row
+(`model_name`). A **VllmServer** is one vLLM process. A **FleetDeployment**
+is one intended LiteLLM backend (self-host public api_base or commercial
+static api_base). The LiteLLM **Router** is the whole proxy. Box JSON
+`servers[].model` is still the HF weights id.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from typing import Any
 
 import httpx
 
-from llmao.models import load_model_list, validate_catalog
+from llmao.models import load_models, validate_models
 from llmao.vast_client import fetch_port_map
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int 
 
 
 def validate_fleet(cfg: Any, models: list | None = None) -> None:
-    """Fail-fast if fleet.hosts or the catalog cannot be joined. Call at startup."""
+    """Fail-fast if fleet.hosts or models.yaml cannot be joined. Call at startup."""
     if "fleet" not in cfg:
         raise ValueError("config.yaml: missing fleet")
     if "hosts" not in cfg.fleet:
@@ -135,9 +135,9 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
         if not key:
             raise ValueError("config.yaml: fleet.vast.api_key is required")
 
-    models = models if models is not None else load_model_list(cfg=cfg)
-    validate_catalog(models)
-    catalog = {str(model.model_name) for model in models}
+    models = models if models is not None else load_models(cfg=cfg)
+    validate_models(models)
+    known = {str(model.model_name) for model in models}
     by_name = {str(model.model_name): model for model in models}
     for host, rows in hosts.items():
         host = str(host).strip()
@@ -149,7 +149,7 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
         seen_ports: set[int] = set()
         for i, raw in enumerate(rows):
             model_name, port, label, _ = parse_host_row(raw, host, i)
-            if model_name not in catalog:
+            if model_name not in known:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
             if not by_name[model_name].model_info.self_hosted:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: {model_name} is not self_hosted")
@@ -171,7 +171,7 @@ def config_for_host(
     host = normalize_peer_ip(host)
     if not host or host not in cfg.fleet.hosts:
         raise UnknownHostError(host)
-    models = models if models is not None else load_model_list(cfg=cfg)
+    models = models if models is not None else load_models(cfg=cfg)
     by_name = {model.model_name: model for model in models}
     servers = []
     for i, raw in enumerate(cfg.fleet.hosts[host]):
@@ -274,7 +274,7 @@ class VllmServer:
             # Bearer token the box passes to `vllm serve --api-key`, and the
             # same value LiteLLM presents when calling that server.
             #
-            # A catalog entry may still carry one (older model_list.yaml did),
+            # A models.yaml row may still carry one (older files did),
             # but it is not a property of the model -- it is a credential for
             # one machine. The fleet-wide value in config is the current
             # source; per-instance keys generated at host-add time are the
@@ -389,10 +389,10 @@ class VllmServer:
 
 
 class FleetDeployment:
-    """One intended LiteLLM deployment (catalog + api_base).
+    """One intended LiteLLM deployment (definitions + api_base).
 
     Self-hosted: wraps a VllmServer (public port may be unset). Commercial:
-    static api_base from the catalog. Skew/health live here, not on VllmServer.
+    static api_base from models.yaml. Skew/health live here, not on VllmServer.
     """
 
     def __init__(
@@ -454,15 +454,15 @@ class Fleet:
         cfg: Any,
         servers: list[VllmServer],
         deployments: list[FleetDeployment] | None = None,
-        catalog: dict[str, Any] | None = None,
+        models: dict[str, Any] | None = None,
         after_probe=None,
     ):
         self.cfg = cfg
         self.servers = servers
         self.deployments = deployments if deployments is not None else [FleetDeployment.from_vllm(s) for s in servers]
-        # model_name → catalog row. POST /model/new copies litellm_params from
-        # here; LiteLLM /model/info encrypts them on the way back.
-        self.catalog = catalog if catalog is not None else {}
+        # model_name → models.yaml row. POST /model/new copies litellm_params
+        # from here; LiteLLM /model/info encrypts them on the way back.
+        self.models = models if models is not None else {}
         # Awaitable after each vLLM probe tick (LiteLLMBackend.sync_selfhost).
         # Wired from create_app so this module does not import the LiteLLM client.
         self.after_probe = after_probe
@@ -470,7 +470,7 @@ class Fleet:
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
-        models = models if models is not None else load_model_list(cfg=cfg)
+        models = models if models is not None else load_models(cfg=cfg)
         by_name = {model.model_name: model for model in models}
         local = "vast" not in cfg.fleet
         servers = []
@@ -490,7 +490,7 @@ class Fleet:
         for model in models:
             if not model.model_info.self_hosted:
                 deployments.append(FleetDeployment.from_commercial(model))
-        return cls(cfg, servers, deployments, catalog=by_name)
+        return cls(cfg, servers, deployments, models=by_name)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
         self.config_fetch_at[host] = now if now is not None else time.time()
@@ -535,7 +535,7 @@ class Fleet:
         return self.BADGE_MIXED
 
     def model_in_litellm(self, model_name: str) -> bool:
-        """True if any vLLM for this catalog id has a LiteLLM deployment (skew)."""
+        """True if any vLLM for this model_name has a LiteLLM deployment (skew)."""
         return any(d.model_name == model_name and d.in_litellm for d in self.deployments)
 
     async def probe_all(

@@ -20,13 +20,13 @@
 from easydict import EasyDict
 
 from llmao.fleet import Fleet
-from llmao.models import load_model_list
+from llmao.models import load_models
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS, _cfg
 from tests.test_fleet_health import _server
 
 
 def test_from_cfg_one_deployment_per_vllm():
-    fleet = Fleet.from_cfg(_cfg({"127.0.0.1": [["gemma4-26b", 8001]]}), models=load_model_list(EXAMPLE))
+    fleet = Fleet.from_cfg(_cfg({"127.0.0.1": [["gemma4-26b", 8001]]}), models=load_models(EXAMPLE))
     assert len(fleet.servers) == 1
     assert len(fleet.deployments) == 1
     dep = fleet.deployments[0]
@@ -36,7 +36,7 @@ def test_from_cfg_one_deployment_per_vllm():
 
 
 def test_commercial_deployment_from_catalog():
-    models = list(load_model_list(EXAMPLE))
+    models = list(load_models(EXAMPLE))
     models.append(
         EasyDict(
             model_name="paid-chat",

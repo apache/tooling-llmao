@@ -23,7 +23,7 @@ import pytest
 from easydict import EasyDict
 
 from llmao.fleet import Fleet, VllmServer, validate_fleet
-from llmao.models import load_model_list
+from llmao.models import load_models
 from llmao.vast_client import port_map_from_body, ports_from_instance
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS
 
@@ -118,7 +118,7 @@ def test_validate_fleet_requires_vast_api_key():
         }
     )
     with pytest.raises(ValueError, match=r"fleet\.vast\.api_key"):
-        validate_fleet(cfg, models=load_model_list(EXAMPLE))
+        validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
 def test_validate_fleet_vast_ok():
@@ -132,8 +132,8 @@ def test_validate_fleet_vast_ok():
             "models_path": str(EXAMPLE),
         }
     )
-    validate_fleet(cfg, models=load_model_list(EXAMPLE))
-    fleet = Fleet.from_cfg(cfg, models=load_model_list(EXAMPLE))
+    validate_fleet(cfg, models=load_models(EXAMPLE))
+    fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
     assert fleet.servers[0].public_port is None
 
 
@@ -148,7 +148,7 @@ def test_refresh_uses_dotted_api_key():
             "models_path": str(EXAMPLE),
         }
     )
-    fleet = Fleet.from_cfg(cfg, models=load_model_list(EXAMPLE))
+    fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
 
     class _Client:
         async def get(self, url, **kwargs):

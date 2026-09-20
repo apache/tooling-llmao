@@ -34,7 +34,7 @@ check: install
 	uv run prek run --all-files
 
 # Run the LiteLLM proxy. Requires litellm.yaml (from *.example).
-# model_list.yaml is the llmao catalog (not included by the proxy).
+# models.yaml is admin definitions (not included by the proxy).
 proxy: install
 	@test -f litellm.yaml || (echo "Missing litellm.yaml — copy litellm.yaml.example" >&2; exit 1)
 	uv run litellm --config litellm.yaml

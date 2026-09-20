@@ -38,15 +38,15 @@ def _backend(fleet):
     return LiteLLMBackend(cfg, fleet)
 
 
-def test_deployment_body_from_catalog():
+def test_deployment_body_from_models():
     s = _server()
-    catalog = {
-        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="openai/gemma4-26b")),
+    models = {
+        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], catalog=catalog)
+    fleet = Fleet(None, [s], models=models)
     body = _backend(fleet).deployment_body(fleet.deployments[0])
     assert body["model_name"] == "gemma4-26b"
-    assert body["litellm_params"]["model"] == "openai/gemma4-26b"
+    assert body["litellm_params"]["model"] == "hosted_vllm/gemma4-26b"
     # api_base keeps the /v1 LiteLLM needs (it appends /chat/completions to it);
     # asf_api_base is the normalised comparison identity, suffix and all.
     assert body["litellm_params"]["api_base"] == "http://10.0.0.1:8001/v1"
@@ -58,10 +58,10 @@ def test_deployment_body_from_catalog():
 def test_sync_selfhost_posts_new_when_serving():
     s = _server()
     s.state = VllmServer.SERVING
-    catalog = {
-        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="openai/gemma4-26b")),
+    models = {
+        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], catalog=catalog)
+    fleet = Fleet(None, [s], models=models)
     be = _backend(fleet)
     calls = []
 
@@ -85,10 +85,10 @@ def test_sync_selfhost_posts_new_when_serving():
 def test_sync_selfhost_deletes_when_down():
     s = _server()
     s.state = VllmServer.DOWN
-    catalog = {
-        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="openai/gemma4-26b")),
+    models = {
+        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], catalog=catalog)
+    fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
     be = _backend(fleet)
 
@@ -127,12 +127,12 @@ def test_ensure_commercial():
             model_info=EasyDict(self_hosted=False),
         )
     )
-    catalog = {
+    models = {
         "paid-chat": EasyDict(
             litellm_params=EasyDict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
         )
     }
-    fleet = Fleet(None, [], deployments=[dep], catalog=catalog)
+    fleet = Fleet(None, [], deployments=[dep], models=models)
     be = _backend(fleet)
     calls = []
 

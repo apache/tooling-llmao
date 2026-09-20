@@ -71,8 +71,9 @@ flowchart TB
 
 ## 3. Core Concepts
 
-**Catalog** — `model_list.yaml`: how to serve each recipe. **Model** — one
-catalog recipe (`model_name`, e.g. `gemma4-26b`). **VllmServer** — one vLLM
+**Definitions** — `models.yaml`: how to serve each model. **Model** — one
+row (`model_name`, e.g. `gemma4-26b`). **Deployment** — one LiteLLM backend
+row (`/model/new`; `hosted_vllm/` for self-host). **VllmServer** — one vLLM
 process on a host (`port`). Box JSON `servers[].model` is the **HF
 weights id** (`model_info.vllm.model`); that field name is deferred.
 
@@ -90,7 +91,7 @@ A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
 (`vllm serve --port` / box JSON). Vast's proxy publishes a different public
 HostPort; llmao records that as `VllmServer.public_port`.
 Without `fleet.vast`, public equals listen. Optional **name** lets two
-processes share a catalog model (e.g. two qwen3 on one box).
+processes share a models.yaml row (e.g. two qwen3 on one box).
 
 asfquart owns placement. The catalog is how to serve, not where. Changing
 placement is a control-plane change only; GPU templates stay identical (shared

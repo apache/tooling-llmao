@@ -27,21 +27,21 @@ from easydict import EasyDict
 from litellm.types.router import Deployment
 
 from llmao.models import (
-    load_model_list,
+    load_models,
     model_available_for,
     model_in_service,
     models_path_from_cfg,
     public_models,
     ux_models,
-    validate_catalog,
+    validate_models,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-EXAMPLE = ROOT / "model_list.yaml.example"
+EXAMPLE = ROOT / "models.yaml"
 
 
-def test_example_model_list_loads_for_ux():
-    models = load_model_list(EXAMPLE)
+def test_models_yaml_loads_for_ux():
+    models = load_models(EXAMPLE)
     assert len(models) >= 2
     names = {m.model_name for m in models}
     assert models[0].model_info.vllm.model
@@ -57,16 +57,16 @@ def test_example_model_list_loads_for_ux():
         assert p.get("openness")
 
 
-def test_missing_model_list_fails_fast():
-    missing = ROOT / "model_list.yaml.does-not-exist"
-    with pytest.raises(FileNotFoundError, match=r"model_list\.yaml\.example"):
-        load_model_list(missing)
+def test_missing_models_yaml_fails_fast():
+    missing = ROOT / "models.yaml.does-not-exist"
+    with pytest.raises(FileNotFoundError, match="Missing"):
+        load_models(missing)
 
 
 def test_models_path_from_cfg():
-    cfg = EasyDict({"models_path": "model_list.yaml.example"})
+    cfg = EasyDict({"models_path": "models.yaml"})
     p = models_path_from_cfg(cfg)
-    assert p.name == "model_list.yaml.example"
+    assert p.name == "models.yaml"
     assert p.is_file()
 
 
@@ -89,12 +89,12 @@ def test_ux_models_redacts_supply_path_for_non_admins():
         assert "\n" not in f["notes"]
 
 
-def test_catalog_requires_self_hosted():
-    models = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["model_list"]
+def test_definitions_require_self_hosted():
+    models = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"]
     row = EasyDict(models[0])
     del row.model_info["self_hosted"]
     with pytest.raises(ValueError, match="self_hosted"):
-        validate_catalog([row])
+        validate_models([row])
 
 
 def test_commercial_requires_api_base():
@@ -106,9 +106,9 @@ def test_commercial_requires_api_base():
         }
     )
     with pytest.raises(ValueError, match="api_base"):
-        validate_catalog([row])
+        validate_models([row])
     row.litellm_params.api_base = "https://api.openai.com/v1"
-    validate_catalog([row])
+    validate_models([row])
 
 
 def test_model_in_service():
@@ -158,9 +158,9 @@ def test_litellm_deployment_preserves_model_info_extras():
 
 
 def test_roundtrip_yaml_through_deployment():
-    """Example catalog models must construct as LiteLLM Deployments."""
+    """models.yaml rows must construct as LiteLLM Deployments."""
     data = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
-    for entry in data["model_list"]:
+    for entry in data["models"]:
         # Deployment requires api_key etc.; example has CHANGE_ME placeholders — fine.
         dep = Deployment(**entry)
         assert dep.model_name

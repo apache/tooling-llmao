@@ -44,7 +44,7 @@ def _cfg():
                 "duration": "30d",
             },
             "site_admins": ["root"],
-            "models_path": "model_list.yaml.example",
+            "models_path": "models.yaml",
         }
     )
 

@@ -67,17 +67,17 @@ def create_app():
 
     from llmao.auth import make_token_handler
 
-    # Fail-fast: model_list.yaml is required (same presumption as config.yaml).
+    # Fail-fast: models.yaml is required (same presumption as config.yaml).
     from llmao.fleet import Fleet, validate_fleet
     from llmao.litellm_client import LiteLLMBackend
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
-    from llmao.models import load_model_list
+    from llmao.models import load_models
     from llmao.seam import Seam
 
-    catalog = load_model_list(cfg=app.cfg)
-    validate_fleet(app.cfg, models=catalog)
-    fleet = Fleet.from_cfg(app.cfg, models=catalog)
+    definitions = load_models(cfg=app.cfg)
+    validate_fleet(app.cfg, models=definitions)
+    fleet = Fleet.from_cfg(app.cfg, models=definitions)
 
     backend = LiteLLMBackend(app.cfg, fleet)
     fleet.after_probe = backend.sync_selfhost

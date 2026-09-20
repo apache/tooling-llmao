@@ -1,23 +1,26 @@
-# Model catalog — what ASF offers, and the recipe for serving it.
+# Model definitions — admin SoT for models we expose through the proxy.
+# No secrets. Committed. Users see the Models page, not this file.
 #
-#   cp model_list.yaml.example model_list.yaml
+# Not the LiteLLM deployment table. LiteLLM must NOT include this file:
+# self-host rows have no api_base until registration; include would send
+# traffic to api.openai.com. Deployments live in LiteLLM's database
+# (store_model_in_db). llmao copies litellm_params, adds the instance
+# api_base, POSTs /model/new. Self-hosted litellm_params.model is
+# hosted_vllm/<name>, not openai/ (openai/ breaks Anthropic /v1/messages
+# tool use). Existing DB rows keep the old prefix until deleted and re-pushed.
 #
-# THIS IS NOT THE ROUTING TABLE. Routes live in LiteLLM's database
-# (store_model_in_db) and are created by llmao when a vLLM server is serving,
-# one per running instance. This file defines the MODELS; deployments are
-# instances of them. litellm.yaml does NOT include this file -- doing so would
-# create routes with no api_base, which sends every call to api.openai.com.
+# Editing this file does not change a live deployment until llmao posts
+# again (reload llmao, not LiteLLM). Commercial: POST at llmao startup.
+# Self-host: POST when vLLM is SERVING; delete when down.
 #
-# Two consumers:
-#   llmao/models.py     public_models() strips litellm_params and surfaces
-#                       model_info as the catalog UX
-#   llmao route build   copies litellm_params, adds the per-instance api_base
-#                       and api_key, and POSTs /model/new
+# Consumers:
+#   /models UX          display fields (litellm_params stripped)
+#   GET /vllm/config    vLLM recipe for the box
+#   POST /model/new     litellm_params + instance api_base
 #
-# So this carries what is true of the MODEL, never what is true of one machine.
-# self_hosted (boolean, required): true = vLLM recipe + fleet.hosts placement;
-# api_base/api_key are per instance at registration. false = commercial; require
-# a static litellm_params.api_base (fail-fast). Nothing here is secret.
+# True of the MODEL, never of one machine. self_hosted (required boolean):
+# true = vLLM recipe + fleet.hosts; api_base per instance. false = commercial;
+# require static litellm_params.api_base (fail-fast).
 #
 # On --max-num-batched-tokens, which every self-hosted entry sets:
 # vLLM defaults it to 2048, and that default admitted only 2-3 concurrent
@@ -31,7 +34,7 @@
 # /v1/messages is translated to vLLM's /v1/responses and the Anthropic tool_choice
 # object is passed through unconverted, which vLLM rejects -- that is what breaks
 # tool use for Claude Code.
-model_list:
+models:
   - model_name: gemma4-26b
     # Protocol and served name only. api_base and api_key are added per
     # instance at registration.

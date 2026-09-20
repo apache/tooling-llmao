@@ -109,9 +109,9 @@ def test_box_json_listen_not_public():
 def test_local_from_cfg_public_equals_listen():
     from pathlib import Path
 
-    from llmao.models import load_model_list
+    from llmao.models import load_models
 
-    example = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
+    example = Path(__file__).resolve().parent.parent / "models.yaml"
     cfg = EasyDict(
         {
             "fleet": {
@@ -126,7 +126,7 @@ def test_local_from_cfg_public_equals_listen():
             "models_path": str(example),
         }
     )
-    fleet = Fleet.from_cfg(cfg, models=load_model_list(example))
+    fleet = Fleet.from_cfg(cfg, models=load_models(example))
     assert fleet.servers[0].listen_port == 8001
     assert fleet.servers[0].public_port == 8001
     assert fleet.servers[0].state == VllmServer.PENDING

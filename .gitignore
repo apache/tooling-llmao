@@ -21,7 +21,8 @@ apptoken.txt
 # LiteLLM proxy config with secrets — use litellm.yaml.example
 litellm.yaml
 
-# Catalog (no secrets; copy from model_list.yaml.example)
+# Model definitions are models.yaml (committed, no secrets).
+# Legacy local copy from the old copy-from-example dance — do not commit.
 model_list.yaml
 
 # third-party fetch scratch (bin/fetch-thirdparty.sh)

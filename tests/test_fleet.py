@@ -33,9 +33,9 @@ from llmao.fleet import (
     validate_fleet,
 )
 from llmao.litellm_client import _norm_base
-from llmao.models import load_model_list
+from llmao.models import load_models
 
-EXAMPLE = Path(__file__).resolve().parent.parent / "model_list.yaml.example"
+EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
 
 FLEET_KNOBS = {
@@ -59,7 +59,7 @@ def _cfg(hosts, models_path=EXAMPLE):
 
 def test_example_primary_host():
     cfg = EasyDict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
-    models = load_model_list(EXAMPLE)
+    models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     payload = config_for_host("127.0.0.1", models=models, cfg=cfg)
     assert payload["host"] == "127.0.0.1"
@@ -75,7 +75,7 @@ def test_example_primary_host():
 
 def test_unknown_host():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    models = load_model_list(EXAMPLE)
+    models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     with pytest.raises(UnknownHostError):
         config_for_host("10.0.0.9", models=models, cfg=cfg)
@@ -90,7 +90,7 @@ def test_optional_name_two_copies():
             ]
         }
     )
-    models = load_model_list(EXAMPLE)
+    models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
     assert [s["name"] for s in payload["servers"]] == ["qwen3-8b", "qwen3-8b-b"]
@@ -107,7 +107,7 @@ def test_duplicate_name():
         }
     )
     with pytest.raises(ValueError, match="duplicate name"):
-        validate_fleet(cfg, models=load_model_list(EXAMPLE))
+        validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
 def test_duplicate_port():
@@ -120,13 +120,13 @@ def test_duplicate_port():
         }
     )
     with pytest.raises(ValueError, match="duplicate port"):
-        validate_fleet(cfg, models=load_model_list(EXAMPLE))
+        validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
 def test_unknown_model():
     cfg = _cfg({"10.0.0.1": [["nope", 9]]})
     with pytest.raises(ValueError, match="unknown model"):
-        validate_fleet(cfg, models=load_model_list(EXAMPLE))
+        validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
 def test_normalize_peer_ip():
@@ -185,7 +185,7 @@ def test_from_row_falls_back_to_fleet_api_key():
     """Empty means vLLM starts unauthenticated on a public port."""
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003]]})
     cfg.fleet.selfhost_api_key = "sk-fleet"
-    models = load_model_list(EXAMPLE)  # catalog carries no api_key
+    models = load_models(EXAMPLE)  # definitions carry no api_key
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
     assert payload["servers"][0]["api_key"] == "sk-fleet"
 
@@ -230,7 +230,7 @@ def test_pinned_port_survives_apply_port_map():
     future resolver could replace a correct pinned value with a guess.
     """
     cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003, None, 15601]]})
-    fleet = Fleet.from_cfg(cfg, models=load_model_list(EXAMPLE))
+    fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
     srv = fleet.servers[0]
     assert srv.public_port == 15601
     assert srv.public_port_pinned is True
@@ -245,7 +245,7 @@ def test_pinned_port_survives_apply_port_map():
 
 def test_unpinned_port_still_follows_the_provider_map():
     cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003]]})
-    fleet = Fleet.from_cfg(cfg, models=load_model_list(EXAMPLE))
+    fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
     srv = fleet.servers[0]
     assert srv.public_port_pinned is False
     fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})

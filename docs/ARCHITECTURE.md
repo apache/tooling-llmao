@@ -40,9 +40,10 @@ process talks to LiteLLM over the **admin** surface (master key, **async
 httpx**) to provision teams and mint or revoke virtual keys—see design
 §5–6. Project names are LDAP/session names (asfquart); no rename map.
 
-**Model catalog** is `model_list.yaml` (llmao UX + vLLM recipe). LiteLLM does
-**not** include it. `store_model_in_db: true` in `litellm.yaml`
-`general_settings` (Puppet may also set the env). Routes are pushed by llmao.
+**Model definitions** are `models.yaml` (llmao UX + vLLM recipe + `/model/new`
+template). LiteLLM does **not** include it. `store_model_in_db: true` in
+`litellm.yaml` `general_settings` (Puppet may also set the env). Deployments
+are pushed by llmao. Self-host prefix is `hosted_vllm/`.
 `self_hosted` is a required boolean. Governance fields live under
 `model_info`. Standalone asfquart watches `config.yaml` (`runx` extra_files);
 production Puppet restarts the service after a change.
@@ -64,7 +65,7 @@ JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
 (not Vast's public HostPort). No `hf_home`/`log_dir`. Vast
 `hosting/vast/install_set.py` writes Supervisor units. Lifecycle/skew:
 `app.add_runner` (`fleet-lifecycle`, `litellm-skew`). After probes,
-`Fleet.after_probe` POSTs `/model/new` / `/model/delete`. `Fleet.catalog` is
+`Fleet.after_probe` POSTs `/model/new` / `/model/delete`. `Fleet.models` is
 the YAML recipe. `FleetDeployment` is one intended LiteLLM backend (self-host
 or commercial). `VllmServer` states: `pending` / `starting` / `serving` /
 `down`. `/fleet` shows serving only when vLLM is up **and** LiteLLM has a

@@ -15,11 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Load the shared model inventory (model_list.yaml).
+"""Load admin model definitions (models.yaml).
 
-Catalog for llmao UX and vLLM recipes. LiteLLM does not include this file.
-Fail-fast if missing — same presumption as config.yaml and litellm.yaml
-(copy from *.example).
+UX, vLLM recipes, and the template for POST /model/new. LiteLLM does not
+include this file. Fail-fast if missing.
 """
 
 from __future__ import annotations
@@ -32,11 +31,11 @@ import yaml
 from easydict import EasyDict
 
 # Default path: repo / install root (next to main.py).
-DEFAULT_MODELS_PATH = pathlib.Path(__file__).resolve().parent.parent / "model_list.yaml"
+DEFAULT_MODELS_PATH = pathlib.Path(__file__).resolve().parent.parent / "models.yaml"
 
 
 def models_path_from_cfg(cfg: Any = None) -> pathlib.Path:
-    """Resolve model_list path from APP.cfg.models_path or the default."""
+    """Resolve models.yaml path from APP.cfg.models_path or the default."""
     if cfg is not None and getattr(cfg, "models_path", None):
         p = pathlib.Path(cfg.models_path)
         if not p.is_absolute():
@@ -45,27 +44,24 @@ def models_path_from_cfg(cfg: Any = None) -> pathlib.Path:
     return DEFAULT_MODELS_PATH
 
 
-def load_model_list(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
-    """Load model_list from YAML. Raises FileNotFoundError if absent."""
+def load_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
+    """Load models.yaml. Raises FileNotFoundError if absent."""
     path = path or models_path_from_cfg(cfg)
     if not path.is_file():
-        raise FileNotFoundError(
-            f"Missing {path}. Copy model_list.yaml.example to model_list.yaml "
-            f"(same pattern as config.yaml and litellm.yaml)."
-        )
+        raise FileNotFoundError(f"Missing {path} (admin model definitions).")
     data = EasyDict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-    if "model_list" not in data or not isinstance(data.model_list, list):
-        raise ValueError(f"{path}: expected top-level model_list: [ ... ]")
-    validate_catalog(data.model_list, path=path)
-    return data.model_list
+    if "models" not in data or not isinstance(data.models, list):
+        raise ValueError(f"{path}: expected top-level models: [ ... ]")
+    validate_models(data.models, path=path)
+    return data.models
 
 
-def validate_catalog(models: list, *, path: pathlib.Path | str = "model_list.yaml") -> None:
+def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -> None:
     """Fail-fast: self_hosted boolean; vLLM recipe vs commercial api_base."""
     seen: set[str] = set()
     for model in models:
         if "model_name" not in model or not model.model_name:
-            raise ValueError(f"{path}: catalog model missing model_name")
+            raise ValueError(f"{path}: model missing model_name")
         name = str(model.model_name)
         if name in seen:
             raise ValueError(f"{path}: duplicate model_name {name}")
@@ -94,10 +90,10 @@ def validate_catalog(models: list, *, path: pathlib.Path | str = "model_list.yam
 def public_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
     """Models for UX: model_name + model_info (no litellm_params / secrets)."""
     out = []
-    for entry in load_model_list(path, cfg=cfg):
+    for entry in load_models(path, cfg=cfg):
         name = entry.get("model_name")
         info = dict(entry.get("model_info") or {})
-        # Never surface api credentials or api_base in the catalog UX.
+        # Never surface api credentials or api_base on the Models page.
         out.append({"model_name": name, **info})
     return out
 
@@ -129,7 +125,7 @@ def _hosting_label(m: dict[str, Any]) -> str:
 
 
 def model_available_for(identity: Any, model: dict[str, Any]) -> bool:
-    """Policy: whether this user is allowed the catalog model.
+    """Policy: whether this user is allowed this model.
 
     Always True until team allow-lists, envelope, and other gates exist
     (STATUS P5). Combine with ``model_in_service`` for the Available column.
@@ -138,7 +134,7 @@ def model_available_for(identity: Any, model: dict[str, Any]) -> bool:
 
 
 def model_in_service(health: str, *, self_hosted: bool) -> bool:
-    """Whether the catalog model can take traffic right now.
+    """Whether this model can take traffic right now.
 
     ``health`` is Fleet.model_health: up / starting / down / mixed / empty.
     Self-hosted with no serving replica is not in service. Vendor models
@@ -157,7 +153,7 @@ def ux_models(
     cfg: Any = None,
     reveal_supply: bool = False,
 ) -> list[dict[str, Any]]:
-    """Shape inventory for the Models page (table + detail modal).
+    """Shape rows for the Models page (table + detail modal).
 
     When ``reveal_supply`` is False (normal committers), omit fields that
     describe procurement, weight paths, or commercial partnerships.

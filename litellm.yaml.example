@@ -2,14 +2,14 @@
 # Copy to litellm.yaml (gitignored) and replace CHANGE_ME_* values.
 #
 #   cp litellm.yaml.example litellm.yaml
-#   cp model_list.yaml.example model_list.yaml   # catalog for llmao, not included here
 #   ./bin/gen-litellm-master-key.sh   # print sk-…; paste into config.yaml + litellm.yaml
 #   make proxy                       # litellm --config litellm.yaml
 #
-# Do not include model_list.yaml. That file is the catalog (UX + vLLM recipe).
-# Routes live in Postgres (store_model_in_db) and are pushed by llmao
-# (/model/new). Including the catalog would create routes with no api_base
-# (LiteLLM then sends traffic to api.openai.com).
+# Do not include models.yaml. That file is admin definitions (UX + vLLM recipe).
+# Deployments live in Postgres (store_model_in_db) and are pushed by llmao
+# (/model/new). Including it would create deployments with no api_base
+# (LiteLLM then sends traffic to api.openai.com). Self-host litellm_params
+# use hosted_vllm/, not openai/.
 #
 # Production secrets: Puppet/eyaml. Puppet may also set STORE_MODEL_IN_DB in
 # the process env; the YAML flag below is what local `make proxy` uses.

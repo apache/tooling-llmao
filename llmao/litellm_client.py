@@ -476,10 +476,10 @@ class LiteLLMBackend:
         return []
 
     def deployment_body(self, dep) -> dict:
-        """POST /model/new payload from the catalog + this deployment's api_base."""
-        entry = self.fleet.catalog.get(dep.model_name)
+        """POST /model/new payload from models.yaml + this deployment's api_base."""
+        entry = self.fleet.models.get(dep.model_name)
         if entry is None:
-            raise BackendUnavailableError(f"catalog missing {dep.model_name}; cannot POST /model/new")
+            raise BackendUnavailableError(f"models.yaml missing {dep.model_name}; cannot POST /model/new")
         params = dict(entry.litellm_params)
         if not dep.api_base:
             raise BackendUnavailableError(f"{dep.name}: no api_base for /model/new")
@@ -551,7 +551,7 @@ class LiteLLMBackend:
         _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.api_base, found)
 
     async def ensure_commercial(self) -> None:
-        """At startup: POST /model/new for each commercial catalog deployment."""
+        """At startup: POST /model/new for each commercial models.yaml deployment."""
         for dep in self.fleet.deployments:
             if dep.self_hosted or not dep.api_base:
                 continue

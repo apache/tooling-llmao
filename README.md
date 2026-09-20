@@ -4,7 +4,7 @@ Tooling’s **implementation** of the ASF LLM gateway at `llm.apache.org`.
 
 **What this app is for:** Apache-facing control plane for **shared, attributed,
 limited** access to Foundation-sanctioned inference. You sign in with ASF,
-manage **PATs** (and later project envelopes), and browse the model catalog.
+manage **PATs** (and later project envelopes), and browse **Models**.
 **Inference** goes to the **LiteLLM proxy** with a PAT — not through a chat UI
 here.
 
@@ -35,20 +35,20 @@ for `localhost.apache.org` (see `certs/README.md`).
 
 Requires [uv](https://docs.astral.sh/uv/) on your `PATH`.
 
-Required on-disk YAML (copy from `*.example`; app and `make proxy` **fail-fast**
-if missing — same presumption as STeVe-style config):
+Required secret YAML (copy from `*.example`; app and `make proxy` **fail-fast**
+if missing). `models.yaml` is committed (no secrets). Do not join
+`config.yaml` and `litellm.yaml`.
 
 | File | From | Role |
 |------|------|------|
 | `config.yaml` | `config.yaml.example` | llmao / asfquart |
-| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`store_model_in_db`; do **not** include the catalog) |
-| `model_list.yaml` | `model_list.yaml.example` | Catalog (UX + vLLM recipe; not the live route table) |
+| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`store_model_in_db`; do **not** include `models.yaml`) |
+| `models.yaml` | (in git) | Admin definitions: UX + vLLM recipe + `/model/new` template |
 
 ```bash
 make install
 cp config.yaml.example config.yaml
 cp litellm.yaml.example litellm.yaml
-cp model_list.yaml.example model_list.yaml
 # generate certs under certs/ (mkcert) — certs/README.md
 make run                               # uv run python main.py
 ```
@@ -71,13 +71,16 @@ make run
 Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
 with ASF.
 
-PAT metadata lives in LiteLLM’s Postgres. The **catalog** is `model_list.yaml`
-(llmao only; not included by LiteLLM). Routes live in the DB
+PAT metadata lives in LiteLLM’s Postgres. **models.yaml** is admin
+definitions (llmao only; not included by LiteLLM). Routes live in the DB
 (`store_model_in_db`). Commercial entries need a static `api_base`;
-self-host `api_base` is per instance.
+self-host `api_base` is per instance. Self-host `litellm_params.model` is
+`hosted_vllm/<name>`, not `openai/`.
 
-After Puppet/VCS updates model list or litellm config, **restart LiteLLM**
-(systemd notify in p6 later). Production secrets are on-disk YAML, not env vars.
+Editing `models.yaml` does not change a live **deployment** until llmao
+POSTs `/model/new` again (reload **llmao**, not LiteLLM). After Puppet/VCS
+updates `litellm.yaml`, **restart LiteLLM**. Production secrets are on-disk
+YAML, not env vars.
 
 ASGI (TLS on the reverse proxy):
 
@@ -86,7 +89,7 @@ uv run python -m hypercorn main:llmao_app --bind 0.0.0.0:8080
 ```
 
 ```bash
-make test          # offline seam + model_list tests (no OAuth session automation yet)
+make test          # offline seam + models.yaml tests (no OAuth session automation yet)
 ```
 
 ---
@@ -163,7 +166,8 @@ sets it. Gemma accepts all five levels, so no flag is needed there.
 **Tool use is currently broken through the Anthropic path.** LiteLLM routes
 it to vLLM's `/v1/responses` endpoint with a `tool_choice` shape vLLM does
 not accept, so web search and other tools fail with a validation error.
-Tracked — the likely fix is the `hosted_vllm/` provider prefix on routes.
+`models.yaml` now uses `hosted_vllm/`; re-push deployments if a DB row is
+still `openai/`.
 Plain conversation is unaffected.
 
 ### Pi
@@ -218,7 +222,7 @@ the handler still runs.
    No production env-var secret channel.
 
 3. **LiteLLM** with Postgres (`database_url` in `litellm.yaml`) and
-   `store_model_in_db: true`. Do not include `model_list.yaml`. llmao POSTs
+   `store_model_in_db: true`. Do not include `models.yaml`. llmao POSTs
    `/model/new` when a self-host vLLM is serving (and at startup for commercial).
 
 4. **Serve** llmao (`main.py` or Hypercorn). Point client tools at the
@@ -229,21 +233,21 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
-Self-host catalog models run as **vLLM** processes on GPU boxes (Vast and
+Self-host models run as **vLLM** processes on GPU boxes (Vast and
 RunPod today). LiteLLM stays in front for PATs and project budgets, and is
 also where fleet state lives: a **deployment** `api_base` is the public host
 and port. `GET /vllm/config` still comes from `fleet.hosts` (listen ports)
-plus the catalog. Boxes fetch it with template `FLEET_KEY`.
+plus `models.yaml`. Boxes fetch it with template `FLEET_KEY`.
 
 See [`hosting/README.md`](hosting/README.md),
 [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) and
 [`docs/fleet-state.md`](docs/fleet-state.md). Operational detail — what is
 running where, and the exact launch commands — is kept out of this repo.
 
-`model_list.yaml` is the **catalog** — what each model is, its licence and
-provenance, and the vLLM recipe. Routes are *instances* of a catalog entry and
-live in LiteLLM's database (`store_model_in_db`), created when a server is
-serving and removed when it goes down. Cache and logs live under
+`models.yaml` is **admin definitions** — served id, licence, provenance, and
+the vLLM recipe. A LiteLLM **deployment** is one instance of a row (one
+`api_base`) in the proxy database (`store_model_in_db`), created when a
+server is serving and removed when it goes down. Cache and logs live under
 `$DATA_DIRECTORY` on the box (typically `/workspace`), not in the config JSON.
 
 **Port resolution differs by provider.** Vast exposes its container-to-public
@@ -297,8 +301,8 @@ bin/llmao-smoke          end-to-end checks across every model
 bin/llmao-saturate       concurrency ramp; finds the queueing point
 bin/_discover.py         endpoint discovery shared by both (no committed IPs)
 config.yaml.example      → config.yaml (gitignored; secrets)
-litellm.yaml.example     → litellm.yaml (no catalog include; store_model_in_db)
-model_list.yaml.example  → model_list.yaml (catalog for llmao; no secrets)
+litellm.yaml.example     → litellm.yaml (do not include models.yaml; store_model_in_db)
+models.yaml              admin definitions (committed; no secrets)
 certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, litellm_client, fleet
 hosting/vast/            provision.sh + install_set.py

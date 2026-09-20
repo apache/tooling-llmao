@@ -2,13 +2,12 @@
 #
 #   cp config.yaml.example config.yaml
 #   cp litellm.yaml.example litellm.yaml
-#   cp model_list.yaml.example model_list.yaml
 #   ./bin/gen-litellm-master-key.sh   # paste same sk-… into config.yaml + litellm.yaml
 #
-# All three YAML files are required at runtime (copy from *.example). Fail-fast
-# if missing. Production: Puppet/hiera/eyaml writes secrets into on-disk YAML.
-# Do not rely on environment variables for production secrets.
-# Model inventory SoT is model_list.yaml (included by litellm.yaml).
+# config.yaml and litellm.yaml are required (copy from *.example; secrets).
+# models.yaml is committed (no secrets). Do not join the two secret files.
+# Do not include models.yaml from litellm.yaml. Production: Puppet/hiera/eyaml
+# writes secrets into on-disk YAML. Not environment variables.
 
 server:
   # Port for the asfquart process. Behind a reverse proxy in production.
@@ -37,9 +36,9 @@ budgets:
 site_admins: []
 
 
-# Catalog (llmao UX + vLLM recipe). Not included by litellm.yaml.
-# Relative to app root.
-models_path: model_list.yaml
+# Admin model definitions (UX + vLLM recipe + /model/new template).
+# Not included by litellm.yaml. Relative to app root.
+models_path: models.yaml
 
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
 # GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
@@ -48,10 +47,10 @@ fleet:
   key: CHANGE_ME_FLEET_KEY
   # Bearer token every self-hosted vLLM is started with (--api-key) and that
   # LiteLLM presents when calling it. One shared value for the fleet; a
-  # catalog entry may override per model, and per-instance keys generated at
+  # models.yaml row may override per model, and per-instance keys generated at
   # host-add time will eventually replace both.
   #
-  # If this is unset AND the catalog carries no api_key, vLLM starts
+  # If this is unset AND models.yaml carries no api_key, vLLM starts
   # UNAUTHENTICATED on a public port.
   selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
   # Seconds between vLLM GET /health probes (unauthenticated; private path only).
