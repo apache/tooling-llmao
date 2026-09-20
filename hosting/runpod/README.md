@@ -15,12 +15,12 @@ image and `fleet.hosts` row must satisfy.
 - Template env: `FLEET_KEY`, `ASFQUART_URL=https://llm.apache.org`,
   `DATA_DIRECTORY` (typically `/workspace`). TLS verify is on; there is
   no skip flag.
-- **Supervisord** runs one `vllm serve` per catalog row (several listens
+- **Supervisord** runs one `vllm serve` per `models.yaml` row (several listens
   in one pod). That is the usual shape for a GPU *pod*, not a one-process
   web container, and it matches Vast.
 - Weights and logs live on the volume (`$DATA_DIRECTORY/hf-cache`,
   `.../logs`), not in the image.
-- Pre-pull fit check: catalog `vram_gb` / `disk_gb` against the card and
+- Pre-pull fit check: `models.yaml` `vram_gb` / `disk_gb` against the card and
   `statvfs`. That is **not** vLLM: vLLM only sizes KV after the weights
   are on disk (`torch` / HIP `mem_get_info`). NVIDIA probe today is
   `nvidia-smi`; missing probe is not a failure. AMD (`rocm-smi`) when we

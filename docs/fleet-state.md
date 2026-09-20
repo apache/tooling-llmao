@@ -25,7 +25,7 @@ State lives in LiteLLM's database. There is no second store.
 
 | field | fleet meaning |
 |---|---|
-| `model_name` | the catalog model, and the routing key |
+| `model_name` | the `models.yaml` id (LiteLLM model group) |
 | `litellm_params.api_base` | **which host, which port** |
 | `litellm_params.api_key` | the bearer token for that vLLM |
 | `model_info` | arbitrary dict — carries the recipe and provenance |
@@ -37,8 +37,8 @@ caller's IP, return their `model_info.vllm` blocks and ports.
 
 Set `general_settings.store_model_in_db: true` in `litellm.yaml`. Puppet may
 also set `STORE_MODEL_IN_DB=True` in the process env. Without the flag,
-`/model/new` returns HTTP 500. The YAML catalog is the recipe, not the live
-route table.
+`/model/new` returns HTTP 500. `models.yaml` is the recipe, not the live
+deployment table.
 
 ---
 
@@ -112,10 +112,10 @@ the confusion:
 |---|---|---|
 | **baked** | `ASFQUART_URL`, `FLEET_KEY` in the instance template | re-provision |
 | **boot** | the vLLM assignment — model, port, launch args | box must re-fetch and restart vLLM |
-| **live** | routes, keys, budgets in LiteLLM | immediate |
+| **live** | deployments, keys, budgets in LiteLLM | immediate |
 
-Changing `max_model_len` does nothing until that box restarts vLLM. The catalog
-says one thing and the server does another, silently.
+Changing `max_model_len` does nothing until that box restarts vLLM. The
+definitions file says one thing and the server does another, silently.
 
 **This is a second kind of skew.** `check_config_skew` compares llmao against
 LiteLLM. Nothing compares llmao's *intended* launch args against what a box is
@@ -155,11 +155,11 @@ Same `model_name`, different recipes — fine:
 
 Different `model_name` required:
 
-- different served context window — a 32k route cannot take a 100k prompt
+- different served context window — a 32k deployment cannot take a 100k prompt
 - different reasoning parser, or thinking on by default versus off
 - anything that changes the shape of a response
 
-**If two routes share a `model_name`, their caller-visible parameters must
+**If two deployments share a `model_name`, their caller-visible parameters must
 match.** Otherwise identical requests behave differently depending on which
 backend they land on. Where a pool is uneven, advertise the **minimum** — a
 pool with a 40k and a 128k server advertises 40k, or it is not a pool.
@@ -183,7 +183,7 @@ model_info:
 
 Three reasons to separate `source` from `model`: the box can check fit before
 downloading; credentials differ by source kind; and a box that already holds
-the weights should not re-download because the catalog names an HF repo.
+the weights should not re-download because `models.yaml` names an HF repo.
 
 ### 4.3 Host capacity is discovered, not declared
 
@@ -227,7 +227,7 @@ which makes "nobody else could hold it" an assumption.
 - **Group by provider in the UI.** The useful question is "how many rented
   boxes are still alive", not an alphabetical list of IPs.
 - **`model_name` pools need a minimum-advertising rule** (§4.1), which cannot
-  be a static catalog value once a pool is uneven.
+  be a static `models.yaml` value once a pool is uneven.
 - **A `notes` field is worth considering.** "Rented for the superset scan, kill
   after" is obvious for a week and unrecoverable after a month.
 
@@ -244,7 +244,7 @@ which makes "nobody else could hold it" an assumption.
 
 Health state is correctly ephemeral — a live measurement, not a record.
 
-With routes in Postgres, a lost database means the proxy no longer knows what
+With deployments in Postgres, a lost database means the proxy no longer knows what
 to proxy, not merely who may call it. Virtual keys are stored hashed and shown
 once at mint, so recovery also means re-minting every key and reconfiguring
 every consumer.

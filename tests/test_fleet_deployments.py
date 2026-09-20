@@ -35,7 +35,7 @@ def test_from_cfg_one_deployment_per_vllm():
     assert dep.api_base == "http://127.0.0.1:8001/v1"
 
 
-def test_commercial_deployment_from_catalog():
+def test_commercial_deployment_from_definitions():
     models = list(load_models(EXAMPLE))
     models.append(
         EasyDict(

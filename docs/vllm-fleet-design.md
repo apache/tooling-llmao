@@ -97,11 +97,11 @@ HostPort; llmao records that as `VllmServer.public_port`.
 Without `fleet.vast`, public equals listen. Optional **name** lets two
 processes share a models.yaml row (e.g. two qwen3 on one box).
 
-asfquart owns placement. The catalog is how to serve, not where. Changing
+asfquart owns placement. `models.yaml` is how to serve, not where. Changing
 placement is a control-plane change only; GPU templates stay identical (shared
 `FLEET_KEY`).
 
-Fleet state lives in LiteLLM: a route's `api_base` is the host and port, and
+Fleet state lives in LiteLLM: a deployment's `api_base` is the host and port, and
 `model_info` carries the recipe and provenance. See
 [fleet-state.md](fleet-state.md) for ownership, lifecycle, and recovery.
 
@@ -114,7 +114,7 @@ about why an edit "did nothing":
 |---|---|---|
 | **baked** | `ASFQUART_URL`, `FLEET_KEY` in the template | re-provision |
 | **boot** | the vLLM assignment — model, port, launch args | box re-fetches, restarts vLLM |
-| **live** | routes, keys, budgets in LiteLLM | immediate |
+| **live** | deployments, keys, budgets in LiteLLM | immediate |
 
 Changing `max_model_len` does nothing until that box restarts vLLM. A revision
 hash on the config response, reported back by the box, is what makes the
@@ -122,9 +122,9 @@ difference between intended and running visible.
 
 ### 3.4 Host config JSON
 
-asfquart builds JSON from `hosts.<client-ip>` joined to the catalog. Vast
-`install_set.py` fetches `GET /vllm/config` at box-start and writes Supervisor
-programs. Same payload; never a `servers.yaml`.
+asfquart builds JSON from `hosts.<client-ip>` joined to `models.yaml`. Box
+boot is `hosting/README.md` (Vast `PROVISIONING_SCRIPT` → `provision.sh` →
+`install_set.py`). Same payload; never a `servers.yaml`.
 
 ---
 
@@ -283,7 +283,7 @@ The template is identical for every box. Placement is keyed by public IP in
 1. Smoke remaining box issues.
 2. Vast public HostPort — **done** (`vast_client` when `fleet.vast.api_key` is set).
 3. `/model/new` / `/model/delete` — **done**. Delete id via `model_info.asf_api_base`
-   (catalog params; LiteLLM encrypts `litellm_params` on readback).
+   (`models.yaml` params; LiteLLM encrypts `litellm_params` on readback).
 4. Config revision on `/vllm/config`, reported back by the box, so a stale
    vLLM cannot pretend to be current (see 3.3).
 

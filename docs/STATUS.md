@@ -43,7 +43,7 @@ overhead and run roughly half these. Single-stream decode is
 memory-bandwidth bound, so the models sit closer together than their sizes
 suggest — the difference between them is concurrency, not per-request speed.
 
-**Fit validation:** the catalog declares `vram_gb` and `disk_gb`, and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. Requirements sum across co-resident servers. Silent when `nvidia-smi` is absent — an unknown is not a failure.
+**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. Requirements sum across co-resident servers. Silent when `nvidia-smi` is absent — an unknown is not a failure.
 
 **Observed state:** `/fleet` shows measured KV cache against the served context window, scraped from vLLM's `/metrics` on the transition into SERVING. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
 

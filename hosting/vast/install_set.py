@@ -139,7 +139,7 @@ def servers_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
 def free_vram_gb() -> float | None:
     """Free VRAM on GPU 0, or None if nvidia-smi is unavailable.
 
-    Capacity is read from the card rather than declared in the catalog: a
+    Capacity is read from the card rather than declared in models.yaml: a
     hand-typed figure is wrong the first time a provider supplies a different
     GPU than was ordered, and with rented instances that is a matter of when.
     """
@@ -178,7 +178,7 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
 
     Checked before writing units because the alternative is a fifteen-minute
     weights pull followed by an engine-init failure whose message does not
-    mention memory. Requirements come from the catalog; capacity is read from
+    mention memory. Requirements come from models.yaml; capacity is read from
     the box.
 
     Silent when nvidia-smi is unavailable or a model declares no vram_gb --

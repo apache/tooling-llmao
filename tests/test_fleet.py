@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""config_for_host: JSON for a client IP from fleet.hosts + catalog."""
+"""config_for_host: JSON for a client IP from fleet.hosts + models.yaml."""
 
 from pathlib import Path
 
@@ -195,10 +195,10 @@ def test_norm_base_makes_skew_comparison_match():
     """The comparison this exists for.
 
     check_config_skew compares VllmServer.api_base against what LiteLLM reports.
-    VllmServer.api_base ends in /v1; a route pushed before that, or a catalog
-    entry, may lack it. Without normalisation on both sides the same route
-    never matches, and the skew check reports a missing route that is actually
-    present.
+    VllmServer.api_base ends in /v1; a deployment pushed before that, or a
+    models.yaml row, may lack it. Without normalisation on both sides the
+    same deployment never matches, and the skew check reports a missing
+    deployment that is actually present.
     """
     assert _norm_base("http://100.105.28.100:8003/v1") == _norm_base("http://100.105.28.100:8003")
 

@@ -95,7 +95,7 @@
     </table>
   </div>
   [else]
-  <p class="text-muted">No intended deployments (empty fleet.hosts and no commercial catalog rows).</p>
+  <p class="text-muted">No intended deployments (empty fleet.hosts and no commercial models.yaml rows).</p>
   [end]
 </div>
 [include "footer.ezt"]
