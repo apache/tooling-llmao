@@ -128,8 +128,9 @@ def create_app():
     return app
 
 
-def run_standalone() -> None:
-    """Run as a standalone server (asfquart runx + optional TLS)."""
+def _configure_logging():
+
+    # NOTE: no-op if Hypercorn has set up the root logger.
     logging.basicConfig(
         level=logging.DEBUG,
         style="{",
@@ -137,6 +138,7 @@ def run_standalone() -> None:
         datefmt=DATE_FORMAT,
     )
 
+    # We don't want DEBUG messages from these modules.
     for modname in {
         "selector_events",
         "hpack",
@@ -144,9 +146,18 @@ def run_standalone() -> None:
         "asyncio",
         "httpcore.http11",
         "httpcore.connection",
+        "watchfiles.main",
     }:
         logging.getLogger(modname).setLevel(logging.INFO)
 
+    # Regardless of the root logger, use DEBUG for this module.
+    _LOGGER.setLevel(logging.DEBUG)
+
+
+def run_standalone() -> None:
+    """Run as a standalone server (asfquart runx + optional TLS)."""
+
+    _configure_logging()
     _LOGGER.info(" ** Run-mode: Standalone")
 
     if not (THIS_DIR / "config.yaml").is_file():
@@ -186,16 +197,8 @@ def run_standalone() -> None:
 
 def run_asgi() -> None:
     """Run as an ASGI process (e.g. Hypercorn imports main:llmao_app)."""
-    # NOTE: no-op if Hypercorn has set up the root logger.
-    logging.basicConfig(
-        level=logging.DEBUG,
-        style="{",
-        format="[{asctime}|{levelname}|{name}] {message}",
-        datefmt=DATE_FORMAT,
-    )
-    logging.getLogger("watchfiles.main").setLevel(logging.INFO)
-    _LOGGER.setLevel(logging.DEBUG)
 
+    _configure_logging()
     _LOGGER.info(" ** Run-mode: ASGI")
 
     global llmao_app
