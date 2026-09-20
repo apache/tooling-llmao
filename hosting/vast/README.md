@@ -35,9 +35,12 @@ That value must match a `fleet.hosts` key. There is no `?host=` query.
 
 ## On-create
 
-Point Vast on-start at `hosting/vast/provision.sh`. Today it pulls
-`install_set.py` from `main`; pin a commit SHA when this is no longer a
-moving target (safety: a broken main would brick every box on next create).
+Set template env `PROVISIONING_SCRIPT` to the raw GitHub URL of
+`hosting/vast/provision.sh` (not `install_set.py`). Vast fetches that into
+`/provisioning.sh` and runs it as a **shell** script; see
+[`../README.md`](../README.md) (boot). `provision.sh` then curls
+`install_set.py` from `main`; pin that second URL to a commit SHA when this
+is no longer a moving target (a broken `main` would brick every new box).
 
 ## Smoke
 

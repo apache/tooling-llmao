@@ -57,22 +57,26 @@ keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
-**GPU fleet (vLLM on Vast; RunPod next):** `docs/vllm-fleet-design.md`.
-`hosting/runpod/README.md` is the template/image contract (not built yet).
-`APP.fleet` (`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
+**GPU fleet (control plane):** `docs/vllm-fleet-design.md`. `APP.fleet`
+(`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
 `fleet.key`) maps `X-LLMAO-Host` (Vast `PUBLIC_IPADDR`) or
 `X-Forwarded-For` / peer to `fleet.hosts`.
 JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
-(not Vast's public HostPort). No `hf_home`/`log_dir`. Vast
-`hosting/vast/install_set.py` writes Supervisor units. Lifecycle/skew:
-`app.add_runner` (`fleet-lifecycle`, `litellm-skew`). After probes,
-`Fleet.after_probe` POSTs `/model/new` / `/model/delete`. `Fleet.models` is
-the YAML recipe. `FleetDeployment` is one intended LiteLLM backend (self-host
-or commercial). `VllmServer` states: `pending` / `starting` / `serving` /
-`down`. `/fleet` shows serving only when vLLM is up **and** LiteLLM has a
-deployment. Host:port and LiteLLM UI are site-admin.
-JSON handlers use `@api` in `api.py`. Do not wrap Quart `asgi_app` with
-Werkzeug ProxyFix.
+(not Vast's public HostPort). Lifecycle/skew: `app.add_runner`
+(`fleet-lifecycle`, `litellm-skew`). After probes, `Fleet.after_probe`
+POSTs `/model/new` / `/model/delete`. `Fleet.models` is the YAML recipe.
+`FleetDeployment` is one intended LiteLLM backend. `VllmServer` states:
+`pending` / `starting` / `serving` / `down`. `/fleet` shows serving only
+when vLLM is up **and** LiteLLM has a deployment. Host:port and LiteLLM UI
+are site-admin. JSON handlers use `@api` in `api.py`. Do not wrap Quart
+`asgi_app` with Werkzeug ProxyFix.
+
+**GPU boxes are not this process.** Vast: custom template,
+`PROVISIONING_SCRIPT` → `provision.sh` → curl `install_set.py` (stock
+container). RunPod: later, COPY in our image. Detail:
+[`hosting/README.md`](../hosting/README.md). Runbook:
+[`hosting/vast/README.md`](../hosting/vast/README.md);
+[`hosting/runpod/README.md`](../hosting/runpod/README.md) (image not built).
 
 Build status and backlog: **`docs/STATUS.md`**.
 
