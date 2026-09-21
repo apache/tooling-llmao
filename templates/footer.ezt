@@ -2,7 +2,10 @@
     <div class="container">
         <p class="text-muted mb-0 small">
             Apache llmao — gateway seam for ASF LiteLLM access.
-            litellm mode: <code>[llm_mode]</code>
+        </p>
+        <p class="text-muted mb-0 small">
+            See <a href="[repo]">the webapp source</a>; running on
+            <a href="[repo]/commit/[commit]">[commit]</a>
         </p>
     </div>
 </footer>

@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# Hayward — generated, runtime, and local-only files
+# llmao — generated, runtime, and local-only files
 # ---------------------------------------------------------------------------
 
 # Runtime state written by the app (StateStore) and its atomic-write temp files.
-# Default path is ./hayward-state.json; HAYWARD_STATE_PATH may point elsewhere.
-hayward-state.json
+# Default path is ./llmao-state.json; LLMAO_STATE_PATH may point elsewhere.
+llmao-state.json
 demo-state.json
 *-state.json
 *.tmp
@@ -21,8 +21,8 @@ apptoken.txt
 # LiteLLM proxy config with secrets — use litellm.yaml.example
 litellm.yaml
 
-# Model inventory with provider keys (api_base is cleartext; keys from eyaml)
-# use model_list.yaml.example
+# Model definitions are models.yaml (committed, no secrets).
+# Legacy local copy from the old copy-from-example dance — do not commit.
 model_list.yaml
 
 # third-party fetch scratch (bin/fetch-thirdparty.sh)
@@ -69,6 +69,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .tox/
+
+# Cache for deploy
+.uv-cache
 
 # ---------------------------------------------------------------------------
 # Editors / OS

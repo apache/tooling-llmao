@@ -1,0 +1,70 @@
+Subject: llmao progress — Tooling seam since GitHub import (4–9 Aug)
+
+Hi all,
+
+A short update on Apache llmao for the team and anyone watching.
+
+Why this exists
+---------------
+llmao sits under the larger RAI initiative: a Foundation-wide way for
+committers, projects, and communities to reach sanctioned inference and
+related AI capabilities without every PMC holding its own provider keys.
+The intent is one governed chokepoint — attribution, budgets, and policy —
+for work in an AI-capable ASF. Tooling’s job is the asfquart seam in front
+of LiteLLM; product design lives with RAI; production packaging with Infra.
+
+Background
+----------
+apache/tooling-llmao was imported to GitHub with history on 4 August. This
+note covers work since then (first commit: uv packaging on the 5th).
+
+Where we are
+------------
+tooling-llmao is no longer a chat UI or a second completion proxy. Callers
+use LiteLLM’s OpenAI-compatible API with virtual keys (PATs). asfquart
+handles ASF OAuth, project↔LiteLLM team mapping, and committer-facing key
+management. Detail: tooling-llmao docs/STATUS.md. Design:
+rai-private services/llmao/README.md.
+
+What landed (tooling-llmao)
+---------------------------
+• Packaging: pip/venv → uv (pyproject, lockfile, Makefile/Docker).
+• Always-on asfquart; STeVe-style main.py + local TLS for OAuth; EZT +
+  Bootstrap shell; ASGI entry for Hypercorn.
+• LiteLLM: litellm.yaml example, shared master-key helper, secrets as
+  on-disk YAML (eyaml in prod intent); async httpx admin client; APP.cfg
+  EasyDict; single model_list.yaml inventory (LiteLLM include); system
+  PostgreSQL + prisma (make db) — not containers for the DB story.
+• PAT UX against a live proxy: list/create/revoke personal keys
+  (user + project + purpose) and provisional automation keys (team-scoped,
+  purpose required; any PMC of the project or site admin for now). Secret
+  shown once; team ensure creates the LiteLLM team only, not a shared
+  product team PAT.
+
+Related
+-------
+• rai-private design: multi-repo map, personal vs automation credentials,
+  open who-creates automation PATs, and planned Models/Reports surfaces.
+• p6 modules/llmao on env/llmao: Puppet scaffold and ops notes only.
+
+Open & next
+-----------
+• RAI decision: who may create team-scoped automation PATs — RAI-only,
+  Chair/VP, or any PMC (current provisional default)?
+• Harden PAT UX; PMC lifecycle email; budgets/capacity; Models page
+  (models available to you) and Reports (PMC by-user usage, self-hosted
+  utilization, Board roll-ups, donated credit burn-down, Commons fairness);
+  real Puppet for Postgres/eyaml/systemd.
+
+Pointers
+--------
+  https://github.com/apache/tooling-llmao
+  Design: rai-private → services/llmao/README.md
+  Status: tooling-llmao → docs/STATUS.md
+
+Questions welcome.
+
+Cheers,
+-g
+
+ps. email assist from Grok, if it wasn't obvious :)

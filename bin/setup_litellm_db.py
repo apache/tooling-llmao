@@ -27,6 +27,7 @@ Usage:
 
 Then paste the printed database_url into litellm.yaml (general_settings).
 """
+
 from __future__ import annotations
 
 import os
@@ -83,23 +84,16 @@ $$;
     )
     # CREATE DATABASE cannot run inside a DO block.
     r = subprocess.run(
-        ["sudo", "-u", "postgres", "psql", "-tAc",
-         f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'"],
+        ["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'"],
         check=True,
         capture_output=True,
         text=True,
     )
     if r.stdout.strip() != "1":
-        _psql_as_postgres(
-            f"CREATE DATABASE {DB_NAME} OWNER {DB_USER};"
-        )
+        _psql_as_postgres(f"CREATE DATABASE {DB_NAME} OWNER {DB_USER};")
     else:
-        _psql_as_postgres(
-            f"ALTER DATABASE {DB_NAME} OWNER TO {DB_USER};"
-        )
-    _psql_as_postgres(
-        f"GRANT ALL PRIVILEGES ON DATABASE {DB_NAME} TO {DB_USER};"
-    )
+        _psql_as_postgres(f"ALTER DATABASE {DB_NAME} OWNER TO {DB_USER};")
+    _psql_as_postgres(f"GRANT ALL PRIVILEGES ON DATABASE {DB_NAME} TO {DB_USER};")
 
 
 def _litellm_schema_path() -> pathlib.Path:

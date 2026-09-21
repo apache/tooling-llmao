@@ -1,0 +1,14 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <p class="small mb-2">
+    <a href="/projects">← Projects</a>
+  </p>
+  <h1 class="h3 mb-3">[project]</h1>
+
+  <p class="text-muted">
+    Project overview (budget meters, by-person usage) is next.
+  </p>
+</div>
+[include "footer.ezt"]

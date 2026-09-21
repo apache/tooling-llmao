@@ -5,3 +5,18 @@ body {
 .llmao-lede {
   max-width: 40rem;
 }
+
+/* Dark grey bar (not pure black) so the logo disc edge stays visible. */
+.navbar.llmao-navbar {
+  background-color: #343a40;
+}
+.navbar.llmao-navbar .navbar-brand,
+.navbar.llmao-navbar .nav-link {
+  color: rgba(255, 255, 255, 0.8);
+}
+.navbar.llmao-navbar .navbar-brand:hover,
+.navbar.llmao-navbar .navbar-brand:focus,
+.navbar.llmao-navbar .nav-link:hover,
+.navbar.llmao-navbar .nav-link:focus {
+  color: #fff;
+}

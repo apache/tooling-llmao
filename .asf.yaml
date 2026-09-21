@@ -1,0 +1,26 @@
+github:
+  description: "llmao"
+  homepage: https://tooling.apache.org/
+  del_branch_on_merge: true
+  features:
+    issues: true
+  enabled_merge_buttons:
+    merge:   true
+    rebase:  true
+  custom_subjects:
+    new_pr: "[PR] {title} ({repository})"
+    close_pr: "Re: [PR] {title} ({repository})"
+    comment_pr: "Re: [PR] {title} ({repository})"
+    merge_pr: "Re: [PR] {title} ({repository})"
+    new_issue: "[I] {title} ({repository})"
+    comment_issue: "Re: [I] {title} ({repository})"
+    close_issue: "Re: [I] {title} ({repository})"
+    catchall: "[GH] {title} ({repository})"
+  protected_branches:
+    main: {}
+
+notifications:
+  commits:      commits@tooling.apache.org
+  issues:       commits@tooling.apache.org
+  pullrequests: commits@tooling.apache.org
+  discussions:  commits@tooling.apache.org

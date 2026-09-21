@@ -1,4 +1,21 @@
 #!/usr/bin/env -S uv run --script
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """Standalone / ASGI entrypoint for llmao (Apache STeVe-style).
 
 Loads config.yaml next to this file, serves with optional TLS from certs/,
@@ -11,6 +28,7 @@ and uses asfquart OAuth so redirect URIs work with localhost.apache.org.
   # ASGI (e.g. Hypercorn):
   #   uv run python -m hypercorn main:llmao_app
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,9 +54,7 @@ def create_app():
     import asfquart.generics
 
     # Pin classic oauth.apache.org URLs (same pattern as Apache STeVe).
-    asfquart.generics.OAUTH_URL_INIT = (
-        "https://oauth.apache.org/auth?state=%s&redirect_uri=%s"
-    )
+    asfquart.generics.OAUTH_URL_INIT = "https://oauth.apache.org/auth?state=%s&redirect_uri=%s"
     asfquart.generics.OAUTH_URL_CALLBACK = "https://oauth.apache.org/token?code=%s"
 
     app = asfquart.construct(
@@ -50,81 +66,109 @@ def create_app():
     )
 
     from llmao.auth import make_token_handler
-    from llmao.litellm_client import make_backend
-    from llmao.seam import Seam
-    from llmao.store import StateStore
+
+    # Fail-fast: models.yaml is required (same presumption as config.yaml).
+    from llmao.fleet import Fleet, validate_fleet
+    from llmao.litellm_client import LiteLLMBackend
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
-    from llmao.models import load_model_list
+    from llmao.models import load_models
+    from llmao.seam import Seam
 
-    # Fail-fast: model_list.yaml is required (same presumption as config.yaml).
-    load_model_list(cfg=app.cfg)
+    definitions = load_models(cfg=app.cfg)
+    validate_fleet(app.cfg, models=definitions)
+    fleet = Fleet.from_cfg(app.cfg, models=definitions)
 
-    store = StateStore(app.cfg.state_path)
-    backend = make_backend(app.cfg, store)
+    backend = LiteLLMBackend(app.cfg, fleet)
+    fleet.after_probe = backend.sync_selfhost
+    app.fleet = fleet
+    app.add_runner(fleet.run_lifecycle, name="fleet-lifecycle")
+    app.add_runner(backend.run_skew, name="litellm-skew")
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
     app.config["LLMAO_SEAM"] = seam
     app.config["LLMAO_BACKEND"] = backend
 
-    from quart import jsonify, request as quart_request
+    from quart import jsonify
+    from quart import request as quart_request
 
     @app.errorhandler(500)
     async def _on_500(exc):
         if quart_request.path.startswith("/v1/"):
-            resp = jsonify({
-                "error": {
-                    "message": "internal error in gateway; check the server log",
-                    "type": "llmao_error",
-                    "code": 500,
+            resp = jsonify(
+                {
+                    "error": {
+                        "message": "internal error in gateway; check the server log",
+                        "type": "llmao_error",
+                        "code": 500,
+                    }
                 }
-            })
+            )
             resp.status_code = 500
             return resp
         return exc
+
+    @app.before_serving
+    async def _warm_backend():
+        # Fail-fast if LiteLLM is down (puppet starts proxy first; local: make proxy).
+        await backend.warm()
+        _LOGGER.info(
+            "LiteLLM team cache warmed (%d project→team_id mappings)",
+            len(backend._team_ids),
+        )
 
     @app.after_serving
     async def _close_backend():
         await backend.aclose()
 
     # Register routes (decorators bind to asfquart.APP).
-    import pages  # noqa: F401
     import api  # noqa: F401
+    import pages  # noqa: F401
 
     return app
 
 
-def run_standalone() -> None:
-    """Run as a standalone server (asfquart runx + optional TLS)."""
+def _configure_logging():
+
+    # NOTE: no-op if Hypercorn has set up the root logger.
     logging.basicConfig(
         level=logging.DEBUG,
         style="{",
         format="[{asctime}|{levelname}|{name}] {message}",
         datefmt=DATE_FORMAT,
     )
-    logging.getLogger("selector_events").setLevel(logging.INFO)
-    logging.getLogger("hpack").setLevel(logging.INFO)
-    logging.getLogger("sslproto").setLevel(logging.INFO)
-    logging.getLogger("asyncio").setLevel(logging.INFO)
 
+    # We don't want DEBUG messages from these modules.
+    for modname in {
+        "selector_events",
+        "hpack",
+        "sslproto",
+        "asyncio",
+        "httpcore.http11",
+        "httpcore.connection",
+        "watchfiles.main",
+    }:
+        logging.getLogger(modname).setLevel(logging.INFO)
+
+    # Regardless of the root logger, use DEBUG for this module.
+    _LOGGER.setLevel(logging.DEBUG)
+
+
+def run_standalone() -> None:
+    """Run as a standalone server (asfquart runx + optional TLS)."""
+
+    _configure_logging()
     _LOGGER.info(" ** Run-mode: Standalone")
 
     if not (THIS_DIR / "config.yaml").is_file():
-        _LOGGER.error(
-            "Missing config.yaml next to main.py. "
-            "Copy config.yaml.example to config.yaml and edit secrets."
-        )
+        _LOGGER.error("Missing config.yaml next to main.py. Copy config.yaml.example to config.yaml and edit secrets.")
         sys.exit(1)
 
     app = create_app()
 
     kwargs = {}
     server = getattr(app.cfg, "server", None) or {}
-    port = int(
-        getattr(server, "port", None)
-        or (server.get("port") if hasattr(server, "get") else None)
-        or 8443
-    )
+    port = int(getattr(server, "port", None) or (server.get("port") if hasattr(server, "get") else None) or 8443)
 
     certfile = getattr(server, "certfile", None) if server is not None else None
     keyfile = getattr(server, "keyfile", None) if server is not None else None
@@ -153,16 +197,8 @@ def run_standalone() -> None:
 
 def run_asgi() -> None:
     """Run as an ASGI process (e.g. Hypercorn imports main:llmao_app)."""
-    # NOTE: no-op if Hypercorn has set up the root logger.
-    logging.basicConfig(
-        level=logging.DEBUG,
-        style="{",
-        format="[{asctime}|{levelname}|{name}] {message}",
-        datefmt=DATE_FORMAT,
-    )
-    logging.getLogger("watchfiles.main").setLevel(logging.INFO)
-    _LOGGER.setLevel(logging.DEBUG)
 
+    _configure_logging()
     _LOGGER.info(" ** Run-mode: ASGI")
 
     global llmao_app

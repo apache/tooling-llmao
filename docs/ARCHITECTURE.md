@@ -5,10 +5,10 @@ credential rules, ownership, and non-goals live in the **master design**:
 
 - **Committers:** `apache/rai-private` → `services/llmao/README.md`
 
-This app is the **asfquart / Tooling half** of the gateway: identity, ASF
-project ↔ LiteLLM team mapping, authorization, and (next) PAT lifecycle UX.
-**LiteLLM** is the OpenAI-compatible inference path, budgets, virtual keys, and
-metering. Completions are **not** re-proxied through this process.
+This app is the **asfquart / Tooling half** of the gateway: identity, project
+vocabulary, PAT UX, and (planned) project envelope UX. **LiteLLM** is the
+inference pipe and meter. Completions are **not** re-proxied through this process.
+Product concepts: rai-private design; planned UI work: `docs/STATUS.md`.
 
 ## Always asfquart
 
@@ -26,7 +26,7 @@ both bind to `asfquart.APP` after construct. Standalone: `python main.py`
 
 Local TLS: `config.yaml` `server.certfile` / `keyfile` under `certs/`, typically
 mkcert for **`localhost.apache.org`**. `config.yaml` is gitignored (secrets).
-Loaded as **`APP.cfg`** (EasyDict); use dotted access (`APP.cfg.litellm.mode`).
+Loaded as **`APP.cfg`** (EasyDict); use dotted access (`APP.cfg.litellm.base_url`).
 
 ## The two halves
 
@@ -37,28 +37,65 @@ Foundation level. LDAP-backed `ClientSession` carries `uid`, committer
 **LiteLLM proxy** holds *teams, users, virtual keys (PATs), budgets, capacity
 limits, and spend*. Clients call its OpenAI-compatible API with a PAT. This
 process talks to LiteLLM over the **admin** surface (master key, **async
-httpx**) to provision teams and (soon) mint or revoke virtual keys—see design
+httpx**) to provision teams and mint or revoke virtual keys—see design
 §5–6. Project names are LDAP/session names (asfquart); no rename map.
 
-**Model inventory** is `model_list.yaml` only (LiteLLM `include`; no
-`STORE_MODEL_IN_DB`). llmao loads the same file for UX (`llmao/models.py`).
-Governance fields live flat under each entry’s `model_info`. API keys in that
-file are secrets (eyaml); `api_base` is cleartext. Restart LiteLLM after
-inventory changes (Puppet/systemd later).
+**Model definitions** are `models.yaml` (llmao UX + vLLM recipe + `/model/new`
+template). LiteLLM does **not** include it. `store_model_in_db: true` in
+`litellm.yaml` `general_settings` (Puppet may also set the env). Deployments
+are pushed by llmao. Self-host prefix is `hosted_vllm/`.
+`self_hosted` is a required boolean. Governance fields live under
+`model_info`. Standalone asfquart watches `config.yaml` (`runx` extra_files);
+production Puppet restarts the service after a change.
 
 **LiteLLM virtual keys / teams** need Postgres + Prisma (`litellm[proxy,extra-proxy]`).
-Developers: system PostgreSQL + `make db` (`bin/setup_litellm_db.py`). Production:
-Puppet creates the DB and deploys on-disk `database_url`.
+Developers: system PostgreSQL + `make db`. Production: Puppet + on-disk
+`database_url`.
 
-`litellm.mode: mock` in config is only an offline stand-in for team/usage
-storage in tests and laptop work without a proxy—not a second auth system.
+**PATs:** personal keys bind ASF uid + project team + purpose; automation
+keys are team-scoped exceptions (who may create them is an **open RAI
+policy** question — see design + `docs/STATUS.md`). Secrets shown once;
+metadata in LiteLLM.
+
+**GPU fleet (control plane):** `docs/vllm-fleet-design.md`. `APP.fleet`
+(`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
+`fleet.key`) maps `X-LLMAO-Host` (Vast `PUBLIC_IPADDR`) or
+`X-Forwarded-For` / peer to `fleet.hosts`.
+JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
+(not Vast's public HostPort). Lifecycle/skew: `app.add_runner`
+(`fleet-lifecycle`, `litellm-skew`). After probes, `Fleet.after_probe`
+POSTs `/model/new` / `/model/delete`. `Fleet.models` is the YAML recipe.
+`FleetDeployment` is one intended LiteLLM backend. `VllmServer` states:
+`pending` / `starting` / `serving` / `down`. `/fleet` shows serving only
+when vLLM is up **and** LiteLLM has a deployment. Host:port and LiteLLM UI
+are site-admin. JSON handlers use `@api` in `api.py`. Do not wrap Quart
+`asgi_app` with Werkzeug ProxyFix.
+
+**GPU boxes are not this process.** Vast: custom template,
+`PROVISIONING_SCRIPT` → `provision.sh` → curl `install_set.py` (stock
+container). RunPod: later, COPY in our image. Detail:
+[`hosting/README.md`](../hosting/README.md). Runbook:
+[`hosting/vast/README.md`](../hosting/vast/README.md);
+[`hosting/runpod/README.md`](../hosting/runpod/README.md) (image not built).
+
+Build status and backlog: **`docs/STATUS.md`**.
+
+The app **always** uses **LiteLLMBackend** against a real LiteLLM admin API.
+Offline **MockBackend** lives under `tests/` and is injected only by unit
+tests—not a second runtime mode.
+
+**Team ids:** in-process cache `project (team_alias) → team_id` only (immutable
+under our rules). Warmed at startup (`before_serving` + `warm()`, fail-fast if
+LiteLLM is down). Spend/budget always from live `team/info` when the id is
+known; after a cache-miss `team/list`, use list-row fields (no redundant
+`team/info`). No on-disk state store.
 
 ## The seam
 
 `seam.py`:
 
 1. **authorizes** project membership / PMC admin after asfquart has authenticated;
-2. **resolves** the ASF project to a LiteLLM team (budget on first use).
+2. **delegates** project-scoped team/key ops to the backend (product API speaks project).
 
 ## Request path (this process)
 
@@ -66,8 +103,10 @@ storage in tests and laptop work without a proxy—not a second auth system.
 browser → HTTPS (local mkcert or prod proxy)
        → asfquart OAuth / session
        → @require + seam.authorize
-       → LiteLLM admin API (team/budget; soon PATs)
+       → LiteLLM admin API (team/budget/PATs; deployments)
 ```
+
+HTML mutations are `POST /do-*` only, then **303** to a GET display (flash for status; created-key secret is a `raw` HTML flash). JSON API is separate.
 
 ## Inference path (LiteLLM)
 

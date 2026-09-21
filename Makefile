@@ -5,7 +5,7 @@
 # Local run needs config.yaml (from config.yaml.example) and, for OAuth,
 # TLS certs under certs/ — see certs/README.md.
 
-.PHONY: install run test proxy db build clean thirdparty
+.PHONY: install run test proxy db clean thirdparty check hooks
 
 install:
 	uv sync
@@ -24,15 +24,20 @@ run: install
 test: install
 	uv run pytest tests/ -q
 
-# Run the LiteLLM proxy. Requires litellm.yaml + model_list.yaml (from *.example).
+# Install the git hooks for this checkout (ruff, formatting, hygiene checks).
+# Add `prek install --hook-type pre-push` for the pre-push test suite.
+hooks: install
+	uv run prek install
+
+# Run every pre-commit hook against the whole tree, as CI does.
+check: install
+	uv run prek run --all-files
+
+# Run the LiteLLM proxy. Requires litellm.yaml (from *.example).
+# models.yaml is admin definitions (not included by the proxy).
 proxy: install
 	@test -f litellm.yaml || (echo "Missing litellm.yaml — copy litellm.yaml.example" >&2; exit 1)
-	@test -f model_list.yaml || (echo "Missing model_list.yaml — copy model_list.yaml.example" >&2; exit 1)
 	uv run litellm --config litellm.yaml
-
-# Build the production Docker image (optional; systemd is the preferred deploy).
-build:
-	docker build -t llmao:latest .
 
 clean:
 	rm -f llmao-state.json demo-state.json *.tmp

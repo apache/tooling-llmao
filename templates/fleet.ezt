@@ -1,0 +1,101 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <h1 class="h3 mb-3">Fleet</h1>
+  <p class="text-muted small">
+    Intended LiteLLM deployments (self-hosted vLLM and commercial).
+    <span class="badge text-bg-success">serving</span> means traffic can
+    route. Self-host also needs vLLM up; commercial uses LiteLLM
+    <code>/health</code> only.
+    [if-any is_site_admin]
+    Host and port are site-admin only.
+    LiteLLM <code>/health</code> is stored from the skew runner (not probed
+    again here).
+    <a href="[litellm_ui]">LiteLLM Admin UI</a>.
+    [end]
+  </p>
+
+  [if-any servers]
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead>
+        <tr>
+          [if-any is_site_admin]
+          <th>Host</th>
+          [end]
+          <th>Name</th>
+          [if-any is_site_admin]
+          <th>Listen</th>
+          <th>Public</th>
+          [end]
+          <th>State</th>
+          <th>Context</th>
+          <th>KV cache</th>
+          <th>Last ok</th>
+          [if-any is_site_admin]
+          <th>LiteLLM health</th>
+          <th>Config request</th>
+          <th>Skew</th>
+          [end]
+        </tr>
+      </thead>
+      <tbody>
+        [for servers]
+        <tr>
+          [if-any is_site_admin]
+          <td class="font-monospace small">[servers.host]</td>
+          [end]
+          <td>
+            [servers.name]
+            [if-any servers.self_hosted][else]
+            <span class="badge text-bg-secondary ms-1">external</span>
+            [end]
+          </td>
+          [if-any is_site_admin]
+          <td class="font-monospace small">[servers.listen]</td>
+          <td class="font-monospace small">[servers.public]</td>
+          [end]
+          <td>
+            [if-any servers.serving]
+            <span class="badge text-bg-success">serving</span>
+            [end]
+            [if-any servers.no_deployment]
+            <span class="badge text-bg-warning text-dark">no deployment</span>
+            [end]
+            [if-any servers.starting]
+            <span class="badge text-bg-secondary">[servers.state]</span>
+            [end]
+            [if-any servers.down]
+            <span class="badge text-bg-danger">[servers.state]</span>
+            [end]
+            [if-any servers.pending]
+            <span class="badge text-bg-light text-dark">[servers.state]</span>
+            [end]
+          </td>
+          <td class="small font-monospace">[servers.context]</td>
+          <td class="small font-monospace">
+            [if-any servers.oversized]
+            <span class="badge text-bg-danger" title="Context window exceeds the measured KV cache. vLLM will hang on a request that needs the space rather than refuse it.">[servers.kv_cache]</span>
+            [else]
+            [servers.kv_cache]
+            [end]
+          </td>
+          <td class="small">[servers.last_ok]</td>
+          [if-any is_site_admin]
+          <td class="small">[servers.litellm_health]
+            <span class="text-muted">[servers.litellm_health_ago]</span>
+          </td>
+          <td class="small">[servers.config_ago]</td>
+          <td class="small">[servers.skew]</td>
+          [end]
+        </tr>
+        [end]
+      </tbody>
+    </table>
+  </div>
+  [else]
+  <p class="text-muted">No intended deployments (empty fleet.hosts and no commercial models.yaml rows).</p>
+  [end]
+</div>
+[include "footer.ezt"]

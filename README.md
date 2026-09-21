@@ -1,36 +1,28 @@
 # llmao
 
-Tooling’s **implementation** of the ASF LLM gateway seam at `llm.apache.org`:
-asfquart for Apache identity and (soon) PAT lifecycle; admin access to LiteLLM
-for teams, budgets, and virtual keys.
+Tooling’s **implementation** of the ASF LLM gateway at `llm.apache.org`.
 
-### Product design (by reference)
+**What this app is for:** Apache-facing control plane for **shared, attributed,
+limited** access to Foundation-sanctioned inference. You sign in with ASF,
+manage **PATs** (and later project envelopes), and browse **Models**.
+**Inference** goes to the **LiteLLM proxy** with a PAT — not through a chat UI
+here.
 
-The **authoritative product design** is not duplicated here. Committers with
-access: **`apache/rai-private`** → `services/llmao/README.md` (goals, credential
-model, teams/limits, ownership, non-goals, rejected alternatives).
-
-| Tree | Role |
-|------|------|
-| `apache/rai-private` → `services/llmao/` | Master design (RAI) |
-| **this repo** (`apache/tooling-llmao`) | Software Tooling builds |
-| Infra `p6/modules/llmao` | Puppet / production deploy |
-
-asfquart owns identity and per-PMC authorization. **LiteLLM** owns teams,
-**virtual keys** (the PATs), budgets, metering, and the OpenAI-compatible API
-that **clients** use. This process is the **seam** (project → team mapping,
-authz, key management UX next)—not a second completion proxy.
-
-Scripted workloads are primary (design §2 / §5). Point Cursor, CLIs, and SDKs
-at the LiteLLM OpenAI endpoint with a project PAT (`sk-…`), not at a chat form
-in this app.
+| Doc | Role |
+|-----|------|
+| **`apache/rai-private` → `services/llmao/README.md`** | Product design (concepts, policy) |
+| **[`docs/STATUS.md`](docs/STATUS.md)** | Build status + **planned UX** backlog |
+| **This README** | How to run and use the software |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
+| [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) | GPU fleet: control-plane contract, box provisioning |
+| [`docs/fleet-state.md`](docs/fleet-state.md) | Fleet membership: ownership, lifecycle, recovery |
+| Infra `p6/modules/llmao` | Production deploy |
 
 ```
-ASF id ──oauth/JWT──►  asfquart / llmao     ──admin──►  litellm proxy
-                       (who you are,                    (teams, budgets,
-                        what PMCs, PATs)                 virtual keys)
-
-client tools ────────────────────────────────PAT────►  litellm ──► models
+ASF id ──oauth──►  llmao (identity, PAT UX, project governance UI)
+                         │ admin
+                         ▼
+client tools ──PAT──►  LiteLLM proxy ──► models
 ```
 
 ---
@@ -43,32 +35,27 @@ for `localhost.apache.org` (see `certs/README.md`).
 
 Requires [uv](https://docs.astral.sh/uv/) on your `PATH`.
 
-Required on-disk YAML (copy from `*.example`; app and `make proxy` **fail-fast**
-if missing — same presumption as STeVe-style config):
+Required secret YAML (copy from `*.example`; app and `make proxy` **fail-fast**
+if missing). `models.yaml` is committed (no secrets). Do not join
+`config.yaml` and `litellm.yaml`.
 
 | File | From | Role |
 |------|------|------|
 | `config.yaml` | `config.yaml.example` | llmao / asfquart |
-| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`include: model_list.yaml`) |
-| `model_list.yaml` | `model_list.yaml.example` | **Model inventory SoT** (routes + UX metadata) |
+| `litellm.yaml` | `litellm.yaml.example` | LiteLLM proxy (`store_model_in_db`; do **not** include `models.yaml`) |
+| `models.yaml` | (in git) | Admin definitions: UX + vLLM recipe + `/model/new` template |
 
 ```bash
 make install
 cp config.yaml.example config.yaml
 cp litellm.yaml.example litellm.yaml
-cp model_list.yaml.example model_list.yaml
 # generate certs under certs/ (mkcert) — certs/README.md
 make run                               # uv run python main.py
 ```
 
-Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
-with ASF. Default `litellm.mode: mock` needs no LiteLLM process (still needs
-`model_list.yaml` for inventory).
-
-### Real LiteLLM (proxy mode)
-
-Needs **system PostgreSQL** (Ubuntu packages; same idea as production — not
-containers) and the **prisma** client from `litellm[proxy,extra-proxy]`.
+Local run is **production-shaped**: LiteLLM + system Postgres (not an in-app
+mock mode). Needs **system PostgreSQL** and **prisma** from
+`litellm[proxy,extra-proxy]`.
 
 ```bash
 # Postgres running (e.g. apt install postgresql; service started)
@@ -77,18 +64,23 @@ make db                                # bin/setup_litellm_db.py
 ./bin/gen-litellm-master-key.sh        # print sk-…; paste into BOTH:
 #   litellm.yaml  → general_settings.master_key
 #   config.yaml   → litellm.master_key
-# set api keys in model_list.yaml (eyaml in production)
-# config.yaml → litellm.mode: proxy
 make proxy                             # litellm --config litellm.yaml
 make run
 ```
 
-PAT metadata lives in LiteLLM’s Postgres. Model inventory is **only**
-`model_list.yaml` (not DB `STORE_MODEL_IN_DB`). Provider **API keys** in that
-file come from eyaml in production; **`api_base` is cleartext** (not shown in UX).
+Open `https://localhost.apache.org:8443/` (port from `config.yaml`), sign in
+with ASF.
 
-After Puppet/VCS updates model list or litellm config, **restart LiteLLM**
-(systemd notify in p6 later). Production secrets are on-disk YAML, not env vars.
+PAT metadata lives in LiteLLM’s Postgres. **models.yaml** is admin
+definitions (llmao only; not included by LiteLLM). Routes live in the DB
+(`store_model_in_db`). Commercial entries need a static `api_base`;
+self-host `api_base` is per instance. Self-host `litellm_params.model` is
+`hosted_vllm/<name>`, not `openai/`.
+
+Editing `models.yaml` does not change a live **deployment** until llmao
+POSTs `/model/new` again (reload **llmao**, not LiteLLM). After Puppet/VCS
+updates `litellm.yaml`, **restart LiteLLM**. Production secrets are on-disk
+YAML, not env vars.
 
 ASGI (TLS on the reverse proxy):
 
@@ -97,25 +89,106 @@ uv run python -m hypercorn main:llmao_app --bind 0.0.0.0:8080
 ```
 
 ```bash
-make test          # offline seam + model_list tests (no OAuth session automation yet)
+make test          # offline seam + models.yaml tests (no OAuth session automation yet)
 ```
 
 ---
 
-## What this includes today
+## Using the gateway (after sign-in)
 
-| Capability | Where it lives | Notes |
-|---|---|---|
-| ASF login + PMC authz | asfquart always + `auth.py` | `@asfquart.auth.require`; project scope in seam |
-| Per-PMC budgets & spend (read) | litellm teams / `MockBackend` | one litellm *team* per ASF project |
-| Project ↔ team mapping | `seam.py` | provision team on first use |
-| Model inventory | `model_list.yaml` | LiteLLM `include` + llmao loader; metadata in `model_info` |
-| Per-project activity view | `api.py` | PMC admins / site admins only |
-| HTML shell | `pages.py` + EZT + `static/` | Bootstrap; PAT UI next |
-| Local TLS + configs | `main.py`, `config.yaml`, `litellm.yaml` | examples committed; secrets gitignored |
+1. **My Keys** — create a personal PAT for a project you belong to (purpose optional).
+   Copy the secret **once**.
+2. Point your client at the LiteLLM OpenAI-compatible base URL with that `sk-…` key.
+   Use a **model id** from **Models** as the `model` parameter.
+3. **Other Keys** (PMC / site admin) — automation keys; who minted them is recorded as `created_by`.
+4. **Models** — sanctioned inventory (supply-path details for site admins only).
 
-**Next:** mint/list/revoke LiteLLM virtual keys (metadata from `/key/list`);
-budget updates via the gateway.
+**Projects** (envelopes, member caps, by-person usage) and **Reports** are product intent — see design §6 and the UX backlog in [`docs/STATUS.md`](docs/STATUS.md).
+
+### Things worth knowing before you call a model
+
+**Reasoning defaults differ by model, and the failure is silent.** Some models
+reason unless told not to; others do the reverse. A request with a small
+`max_tokens` to a reasoning model can spend the whole budget thinking and
+return **nothing** — HTTP 200, empty `content`, `finish_reason: length`, no
+error. To turn it off:
+
+```json
+"chat_template_kwargs": {"enable_thinking": false}
+```
+
+**Prompt and output share the context window.** vLLM rejects a request where
+prompt tokens + `max_tokens` exceeds the model's window, so the two are not
+independent. A client configured with a max-tokens larger than the window gets
+a 400 before any prompt is counted — and raising the client's context setting
+makes it worse, not better.
+
+**Truncation at a round number is a budget, not the model.** Raise
+`max_tokens`. Truncation at a round wall-clock time is a proxy timeout.
+
+The **Models** page carries context window, licence and provenance per model.
+
+---
+
+## Connecting your agent
+
+The gateway speaks both the OpenAI and Anthropic APIs, so most agents work
+with environment variables alone.
+
+### Claude Code
+
+```bash
+export ANTHROPIC_BASE_URL=https://llm.apache.org
+export ANTHROPIC_AUTH_TOKEN=<your PAT from My Keys>
+export ANTHROPIC_MODEL=gemma4-26b
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000
+claude
+```
+
+LiteLLM exposes `/v1/messages`, so Claude Code talks to it without a shim.
+
+**`CLAUDE_CODE_MAX_CONTEXT_TOKENS` matters.** Claude Code assumes a 200k
+window for a model it does not recognise and auto-compacts too late; requests
+then fail once prompt + output exceeds the real window. Set it below the
+model's window — 120000 against 131072 leaves room for the response.
+
+**Pick a model whose reasoning is off by default.** A model that reasons
+before answering emits nothing for a minute or more, and Claude Code abandons
+the stream and retries. The retries stack: we watched a box run the same
+expensive generation twice for a response nobody was reading. `gemma4-26b`
+starts emitting immediately and works well.
+
+**`--effort` may be needed.** Claude Code sends `reasoning_effort: high` by
+default, and not every model accepts that value — Qwen3.8-27B takes only
+`xhigh`, `medium` and `low`, and 400s on `high`. `claude --effort medium`
+sets it. Gemma accepts all five levels, so no flag is needed there.
+
+**Tool use is currently broken through the Anthropic path.** LiteLLM routes
+it to vLLM's `/v1/responses` endpoint with a `tool_choice` shape vLLM does
+not accept, so web search and other tools fail with a validation error.
+`models.yaml` now uses `hosted_vllm/`; re-push deployments if a DB row is
+still `openai/`.
+Plain conversation is unaffected.
+
+### Pi
+
+_Placeholder._
+
+Pi connects over the OpenAI-compatible API. Known so far: its `contextWindow`
+and `maxTokens` settings must sum to less than the model's window, or vLLM
+rejects the request — `maxTokens` larger than the window on its own is an
+immediate 400.
+
+To be filled in with a working configuration.
+
+### Anything OpenAI-compatible
+
+```bash
+export OPENAI_BASE_URL=https://llm.apache.org/v1
+export OPENAI_API_KEY=<your PAT>
+```
+
+`GET /v1/models` lists what your key can reach.
 
 ---
 
@@ -149,8 +222,8 @@ the handler still runs.
    No production env-var secret channel.
 
 3. **LiteLLM** with Postgres (`database_url` in `litellm.yaml`) and
-   `litellm --config litellm.yaml`. Model routes and provider keys live in
-   that file (inventory design still open).
+   `store_model_in_db: true`. Do not include `models.yaml`. llmao POSTs
+   `/model/new` when a self-host vLLM is serving (and at startup for commercial).
 
 4. **Serve** llmao (`main.py` or Hypercorn). Point client tools at the
    **LiteLLM** base URL with PATs, not at llmao for chat.
@@ -160,32 +233,58 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
-The self-host catalog entries are served by **vLLM** — one vLLM process per
-model, each exposing an OpenAI-compatible endpoint — with the litellm proxy in
-front for per-PMC budgets (budgets live in litellm; vLLM has none). Each model
-runs on its own port; litellm routes to the right one by `model_name`
-(Option A), so there is no model-swap latency.
+Self-host models run as **vLLM** processes on GPU boxes (Vast and
+RunPod today). LiteLLM stays in front for PATs and project budgets, and is
+also where fleet state lives: a **deployment** `api_base` is the public host
+and port. `GET /vllm/config` still comes from `fleet.hosts` (listen ports)
+plus `models.yaml`. Boxes fetch it with template `FLEET_KEY`.
 
-The PoC self-host tier (sized for a single 48GB GPU, e.g. an L40S) is three
-Apache-2.0 open-weight models:
+See [`hosting/README.md`](hosting/README.md),
+[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) and
+[`docs/fleet-state.md`](docs/fleet-state.md). Operational detail — what is
+running where, and the exact launch commands — is kept out of this repo.
 
-| Catalog model | vLLM served name | HF weights | Role |
-|---|---|---|---|
-| Gemma 4 26B-A4B | `gemma4-26b` | `google/gemma-4-26b-a4b` | general / multimodal / agentic |
-| Qwen 3.6-27B | `qwen3.6-27b` | `Qwen/Qwen3.6-27B` | coding |
-| Qwen3-8B | `qwen3-8b` | `Qwen/Qwen3-8B` | fast / routine calls |
+`models.yaml` is **admin definitions** — served id, licence, provenance, and
+the vLLM recipe. A LiteLLM **deployment** is one instance of a row (one
+`api_base`) in the proxy database (`store_model_in_db`), created when a
+server is serving and removed when it goes down. Cache and logs live under
+`$DATA_DIRECTORY` on the box (typically `/workspace`), not in the config JSON.
 
-Each model is served by a vLLM container, for example:
+**Port resolution differs by provider.** Vast exposes its container-to-public
+mapping through an API, so those hosts resolve automatically. RunPod does not,
+so a RunPod host must state its public port in the `fleet.hosts` row — an
+optional fourth element. RunPod also reassigns the port on every pod recreate,
+even when the pod lands on the same machine.
+
+---
+
+## Testing and load
+
+Both scripts discover endpoints at runtime rather than carrying them in the
+repo. See [`bin/README.md`](bin/README.md).
 
 ```bash
-docker run --rm --gpus all --ipc=host -p 8003:8003 \
-  -v ~/.cache/huggingface:/root/.cache/huggingface -e HF_TOKEN=$HF_TOKEN \
-  vllm/vllm-openai:v0.6.6 \
-  --model Qwen/Qwen3-8B --served-model-name qwen3-8b --port 8003
+export LLMAO_KEY=<a PAT>
+./bin/llmao-smoke                    # every model: completion, reasoning
+                                     # control, tool calling, vision, long
+                                     # output, large prompt
+./bin/llmao-smoke --direct           # bypass LiteLLM; the difference between
+                                     # the two runs is the gateway's overhead
 ```
 
-Self-host `api_base` values live in **`model_list.yaml`** (cleartext). The
-compose stack under `infra/docker/` is optional reference.
+```bash
+export VLLM_API_KEY=<llmao::selfhost_api_key>
+./bin/llmao-saturate --model <model> # ramp concurrency until something queues,
+                                     # and say whether the limit is the
+                                     # scheduler or memory
+```
+
+`llmao-smoke` exits non-zero on failure, so it works in CI. Run it after any
+change to a model, a box, or the gateway.
+
+`llmao-saturate` needs to reach the boxes directly, so it runs on the gateway
+host. **Do not run the two together** — smoke queueing behind a saturation
+ramp produces numbers that look like a regression and are not.
 
 ---
 
@@ -194,14 +293,19 @@ compose stack under `infra/docker/` is optional reference.
 ```
 main.py                  entry: create_app, run_standalone / run_asgi
 pages.py                 HTML + /static
-api.py                   JSON /healthz and /v1/*
+api.py                   JSON /healthz, /vllm/config, /v1/*
 templates/ static/       EZT + Bootstrap
 bin/fetch-thirdparty.sh  vendor Bootstrap/icons
 bin/gen-litellm-master-key.sh   print sk-… for admin key
-config.yaml.example      → config.yaml (gitignored)
-litellm.yaml.example     → litellm.yaml (include model_list.yaml)
-model_list.yaml.example  → model_list.yaml (inventory SoT; keys from eyaml)
+bin/llmao-smoke          end-to-end checks across every model
+bin/llmao-saturate       concurrency ramp; finds the queueing point
+bin/_discover.py         endpoint discovery shared by both (no committed IPs)
+config.yaml.example      → config.yaml (gitignored; secrets)
+litellm.yaml.example     → litellm.yaml (do not include models.yaml; store_model_in_db)
+models.yaml              admin definitions (committed; no secrets)
 certs/                   mkcert PEMs + README
-llmao/                   seam, auth, models, litellm_client, store
-tests/                   offline seam + model_list / LiteLLM metadata tests
+llmao/                   seam, auth, models, litellm_client, fleet
+hosting/vast/            provision.sh + install_set.py
+hosting/runpod/          RunPod template notes (image not built yet)
+tests/                   offline seam, fleet, hosting installer
 ```

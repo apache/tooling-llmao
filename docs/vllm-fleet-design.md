@@ -1,0 +1,303 @@
+# Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
+
+**Box contract and control-plane protocol** (host = IP, fleet key,
+`GET /vllm/config` shape, listen vs public, identical templates). Live
+state, mix, recovery, HMAC `api_key`: [`fleet-state.md`](fleet-state.md).
+Box boot: [`../hosting/README.md`](../hosting/README.md). Do not merge those
+docs.
+
+**Status:** Operating — boxes fetch `GET /vllm/config` (`X-LLMAO-Host` on
+Vast). Listen vs public ports; Vast HostPort (`vast_client`); health-gated
+`/model/new` / `/model/delete`; commercial register at llmao startup.
+Remaining: long vLLM boot, config revision, box smoke. HMAC `api_key` is
+specified in fleet-state §2.3; not yet emitted on `/vllm/config`.
+**Date:** 2026-09-10
+**Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
+
+---
+
+## 1. Goals
+
+- Run multiple distinct LLM models efficiently across a small fleet of GPU boxes (initially Vast.ai; later RunPod and others).
+- Amortize fixed instance cost by placing 1–3 vLLM servers on the same machine when VRAM allows.
+- Keep all model secrets and configuration in one place (the asfquart control plane).
+- Use a single shared authentication secret ("fleet key") so GPU boxes can securely fetch their configuration.
+- Support non-trivial per-model vLLM arguments without complicating the GPU-side template.
+- Make the same mechanism reusable for other GPU providers.
+
+**Non-goals (for now):**
+- Automatic scaling / serverless.
+- Per-instance *random* secrets or short-lived tokens. Per-vLLM `api_key` is
+  **derived** (HMAC of `fleet.key`); see fleet-state §2.3.
+- Reverse proxy / path-based routing on the GPU box (LiteLLM talks directly to the vLLM ports).
+
+---
+
+## 2. High-Level Architecture
+
+```mermaid
+flowchart TB
+    A["asfquart application<br/>(LiteLLM config + secrets + hosts)"]
+    B["GET /vllm/config<br/>Authorization: Bearer &lt;fleet-key&gt;<br/>host = client IP"]
+    C["JSON response<br/>(with secrets)"]
+
+    subgraph BoxA["Vast.ai box A — IP in fleet membership"]
+        A1["vllm :8000 (model)"]
+        A2["vllm :8001 (model)"]
+        A3["vllm :8002 (model)"]
+    end
+
+    subgraph BoxB["Vast.ai box B — IP in fleet membership"]
+        B1["vllm :8000 (model)"]
+        B2["vllm :8001 (model)"]
+    end
+
+    Dots["… up to ~6 boxes"]
+
+    L["LiteLLM proxy<br/>(OpenAI-compatible)"]
+
+    A -- B --> C
+    C --> BoxA
+    C --> BoxB
+    BoxA -- OpenAI-compatible --> L
+    BoxB -- OpenAI-compatible --> L
+```
+
+- **asfquart** is the single source of truth for:
+  - Which models exist
+  - Their LiteLLM configuration
+  - The real API keys used between LiteLLM and each vLLM server
+  - Logical **hosts** (models + ports on one GPU box, keyed by public IP)
+- Each GPU box receives the **fleet key** on the template. asfquart looks up
+  `X-LLMAO-Host` when present (Vast `PUBLIC_IPADDR`; TCP peer may be a
+  transparent proxy), else leftmost `X-Forwarded-For`, else
+  `request.remote_addr`.
+- At box-start, the provider installer fetches JSON for that IP
+  and installs native process units (Vast: Supervisor). There is no on-disk
+  `servers.yaml` and no Python process manager.
+
+---
+
+## 3. Core Concepts
+
+**Definitions** — `models.yaml`: how to serve each model. **Model** — one
+row (`model_name`, e.g. `gemma4-26b`). **Deployment** — one LiteLLM backend
+row (`/model/new`; `hosted_vllm/` for self-host). **VllmServer** — one vLLM
+process on a host (`port`). Box JSON `servers[].model` is the **HF
+weights id** (`model_info.vllm.model`); that field name is deferred.
+
+### 3.1 Fleet Key
+
+- A single shared secret known to asfquart and to every GPU box.
+- Presented as `Authorization: Bearer <fleet-key>` when fetching configuration.
+- Vast stock container + custom template: `install_set.py` also sends
+  `X-LLMAO-Host: $PUBLIC_IPADDR` (no query string). That header is a claim,
+  not a proof; the fleet key is the gate.
+- Chosen over per-instance *random* secrets for operational simplicity (one
+  value to manage, works across providers). Each vLLM `--api-key` is HMAC of
+  this key plus host and listen port ([fleet-state §2.3](fleet-state.md)).
+  `/vllm/config` still sends the shared `selfhost_api_key` until that lands.
+- Acceptable risk for a small, operator-controlled fleet. Can be hardened later (instance binding, short-lived tokens, etc.) without changing the rest of the design.
+
+### 3.2 Hosts
+
+A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
+`[model, port, name]` rows. That **port is the container listen port**
+(`vllm serve --port` / box JSON). Vast's proxy publishes a different public
+HostPort; llmao records that as `VllmServer.public_port`.
+Without `fleet.vast`, public equals listen. Optional **name** lets two
+processes share a models.yaml row (e.g. two qwen3 on one box).
+
+asfquart owns placement. `models.yaml` is how to serve, not where. Changing
+placement is a control-plane change only; GPU templates stay identical (shared
+`FLEET_KEY`).
+
+Fleet state lives in LiteLLM: a deployment's `api_base` is the host and port, and
+`model_info` carries the recipe and provenance. See
+[fleet-state.md](fleet-state.md) for ownership, lifecycle, and recovery.
+
+### 3.3 Config lifetimes
+
+Config has three change costs, and conflating them causes most of the confusion
+about why an edit "did nothing":
+
+| lifetime | what | to change it |
+|---|---|---|
+| **baked** | `ASFQUART_URL`, `FLEET_KEY` in the template | re-provision |
+| **boot** | the vLLM assignment — model, port, launch args | box re-fetches, restarts vLLM |
+| **live** | deployments, keys, budgets in LiteLLM | immediate |
+
+Changing `max_model_len` does nothing until that box restarts vLLM. A revision
+hash on the config response, reported back by the box, is what makes the
+difference between intended and running visible.
+
+### 3.4 Host config JSON
+
+asfquart builds JSON from `hosts.<client-ip>` joined to `models.yaml`. Box
+boot is `hosting/README.md` (Vast `PROVISIONING_SCRIPT` → `provision.sh` →
+`install_set.py`). Same payload; never a `servers.yaml`.
+
+---
+
+## 4. Endpoint Contract
+
+```
+GET /vllm/config
+Authorization: Bearer <fleet-key>
+X-LLMAO-Host: <public-ip>    # required on Vast; absent locally is peer/XFF
+
+Response: 200 application/json
+```
+
+- asfquart validates the fleet key (not OAuth).
+- If `X-LLMAO-Host` is present, that is the only `fleet.hosts` key (404 if
+  unknown). Do not fall back to the proxy peer.
+- Else: `X-Forwarded-For` or `request.remote_addr`.
+- Emits JSON (host, servers: name, HF weights id, host, port, args, API keys).
+
+---
+
+## 5. JSON schema
+
+```json
+{
+  "host": "127.0.0.1",
+  "servers": [
+    {
+      "name": "model-a",
+      "model": "org/model-name",
+      "host": "127.0.0.1",
+      "port": 8000,
+      "api_key": "sk-...",
+      "gpu_memory_utilization": 0.42,
+      "max_model_len": 16384,
+      "args": ["--dtype", "auto"]
+    }
+  ]
+}
+```
+
+Catalog model (`model_info.vllm`): HF weights id, optional util, max len, `args`.
+Host row (`fleet_path` → `hosts`): `[model_name, port]` or `[model_name, port, name]`.
+`api_key` comes from `litellm_params` (same secret LiteLLM presents).
+
+Notes:
+- `args` may be a list of strings or a single string; the installer normalises either form.
+- Boxes fetch `https://llm.apache.org/vllm/config` with default TLS verify.
+
+---
+
+## 6. GPU Box Provisioning Flow
+
+1. Instance is created from a common Vast.ai template with at least:
+
+   ```bash
+   -e FLEET_KEY=<shared-secret>
+   ```
+
+   plus the usual image, ports (8000–8002), disk size, SSH, etc.
+
+2. Provisioning (`hosting/vast/provision.sh` → `install_set.py`):
+   - GETs JSON from asfquart.
+   - Writes one Supervisor `[program:vllm-<name>]` per server.
+   - `supervisorctl update`. supervisord runs:
+
+     ```bash
+     vllm serve <model> --host 0.0.0.0 --port <port> \
+       --api-key <api_key> \
+       --gpu-memory-utilization … \
+       --max-model-len … \
+       <extra args…>
+     ```
+
+   Logs go to `$DATA_DIRECTORY/logs/<name>.log` on Vast. Restart is Supervisor
+   `autorestart` / `startretries`.
+
+3. LiteLLM (managed by asfquart) is configured with matching `api_base` values and the same API keys, so it can reach each vLLM server.
+
+---
+
+## 7. Vast.ai Template Requirements (summary)
+
+- Image: `vastai/vllm:…` or `vllm/vllm-openai:…` (or a thin derivative).
+- Launch mode: SSH (or Jupyter + SSH).
+- Ports: 8000, 8001, 8002 mapped.
+- Disk: large enough for the heaviest set of models that will be assigned.
+- Environment:
+  - `FLEET_KEY` (template)
+  - `ASFQUART_URL`
+- On-create: `provision.sh` → `install_set.py` (JSON → Supervisor units).
+
+The template is identical for every box. Placement is keyed by public IP in
+`fleet_path` → `hosts`.
+
+### RunPod (planned)
+
+- Image: our `llmao-vllm-box` (registry TBD / Infra). Not a stock RunPod
+  Jupyter template. COPY the installer; do not curl GitHub at boot.
+- Same env: `FLEET_KEY`, `ASFQUART_URL=https://llm.apache.org`,
+  `DATA_DIRECTORY`.
+- Supervisord, same units as Vast (several `vllm serve` per pod).
+- Ports: expose every listen port. Public mapping via REST v2
+  `portMappings` or the HTTP proxy `https://<podId>-<listen>.proxy.runpod.net`
+  once proven. The optional fourth `fleet.hosts` field is a stopgap.
+- See `hosting/runpod/README.md`.
+
+---
+
+## 8. Security Considerations
+
+- Fleet key is the only long-lived secret that must be present on GPU boxes.
+- Real model API keys exist only inside asfquart and in the short-lived YAML that is fetched at boot.
+- Endpoint must be served over HTTPS.
+- Recommended: restrict endpoint reachability (private network, Tailscale, Cloudflare Access, IP allow-list, etc.).
+- vLLM `GET /health` has **no API key**. The host:port from fleet membership
+  must be on a private path (Tailscale / WireGuard / allow-list). Tunnels are
+  out of scope for v1.
+- Future hardening options (not required for v1):
+  - Instance-ID binding
+  - Short-lived bootstrap tokens
+  - Signed JWTs instead of a static fleet key
+
+---
+
+## 9. Future Extensions
+
+- Same endpoint + fleet key used by RunPod (or any other provider) instances.
+- Additional set metadata (preferred GPU type, minimum VRAM, etc.) for scheduling.
+- Automatic re-fetch of configuration on SIGHUP or periodic interval.
+- Do **not** use LiteLLM `GET /health` as the vLLM boot probe (it runs real
+  completions). asfquart probes vLLM `/health` and, rarely, LiteLLM `/health`
+  only to detect **skew**. Health-gated `/model/new` is implemented.
+
+---
+
+## 10. Open Points / Decisions Still Soft
+
+- Restart policy details (Supervisor `autorestart` / give up after N, …).
+- Where pending assignments live between "host added" and "vLLM healthy".
+  A route only exists once the server is serving, so the assignment needs a
+  home before that. Preferred: a small table in the same Postgres.
+- Whether a retired host keeps a record. Deleting a route deletes the row.
+- Remaining Vast operational nits (framework works; boxes fetch config).
+
+**Resolved:** `GET /vllm/config` (no path) is still keyed from `fleet.hosts`
+(not yet derived from LiteLLM rows). Deployments live in Postgres
+(`store_model_in_db` in YAML and/or env). Registration is health-gated.
+`ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
+`servers.yaml`; no Werkzeug ProxyFix on Quart ASGI.
+
+---
+
+## 11. Leftover implementation
+
+1. Smoke remaining box issues.
+2. Vast public HostPort — **done** (`vast_client` when `fleet.vast.api_key` is set).
+3. `/model/new` / `/model/delete` — **done**. Delete id via `model_info.asf_api_base`
+   (`models.yaml` params; LiteLLM encrypts `litellm_params` on readback).
+4. Config revision on `/vllm/config`, reported back by the box, so a stale
+   vLLM cannot pretend to be current (see 3.3).
+
+---
+
+*End of design document.*

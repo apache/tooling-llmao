@@ -2,13 +2,12 @@
 #
 #   cp config.yaml.example config.yaml
 #   cp litellm.yaml.example litellm.yaml
-#   cp model_list.yaml.example model_list.yaml
 #   ./bin/gen-litellm-master-key.sh   # paste same sk-… into config.yaml + litellm.yaml
 #
-# All three YAML files are required at runtime (copy from *.example). Fail-fast
-# if missing. Production: Puppet/hiera/eyaml writes secrets into on-disk YAML.
-# Do not rely on environment variables for production secrets.
-# Model inventory SoT is model_list.yaml (included by litellm.yaml).
+# config.yaml and litellm.yaml are required (copy from *.example; secrets).
+# models.yaml is committed (no secrets). Do not join the two secret files.
+# Do not include models.yaml from litellm.yaml. Production: Puppet/hiera/eyaml
+# writes secrets into on-disk YAML. Not environment variables.
 
 server:
   # Port for the asfquart process. Behind a reverse proxy in production.
@@ -21,9 +20,8 @@ server:
   keyfile: localhost.apache.org+3-key.pem
 
 litellm:
-  # mock = in-process fake teams/usage (no LiteLLM process).
-  # proxy = real LiteLLM admin API at base_url (requires litellm.yaml + Postgres).
-  mode: mock
+  # Always talks to a real LiteLLM admin API (same shape as production).
+  # Local: make db && make proxy (system Postgres + litellm.yaml).
   base_url: http://127.0.0.1:4000
   # Same value as litellm.yaml → general_settings.master_key (must start with sk-).
   # Bearer token for /team/* and /key/* from this process.
@@ -37,7 +35,45 @@ budgets:
 # uids that may view any project's activity (plus asfquart isRoot)
 site_admins: []
 
-state_path: ./llmao-state.json
 
-# Shared model inventory (LiteLLM include + llmao UX). Relative to app root.
-models_path: model_list.yaml
+# Admin model definitions (UX + vLLM recipe + /model/new template).
+# Not included by litellm.yaml. Relative to app root.
+models_path: models.yaml
+
+# Shared secret GPU boxes present as Authorization: Bearer when fetching
+# GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
+# Placement is keyed by the box public IP (request.remote_addr / X-Forwarded-For).
+fleet:
+  key: CHANGE_ME_FLEET_KEY
+  # Bearer token every self-hosted vLLM is started with (--api-key) and that
+  # LiteLLM presents when calling it. One shared value for the fleet; a
+  # models.yaml row may override per model, and per-instance keys generated at
+  # host-add time will eventually replace both.
+  #
+  # If this is unset AND models.yaml carries no api_key, vLLM starts
+  # UNAUTHENTICATED on a public port.
+  selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
+  # Seconds between vLLM GET /health probes (unauthenticated; private path only).
+  health_interval_s: 45
+  # Per-probe HTTP timeout for vLLM /health.
+  health_timeout_s: 3
+  # After first observation, stay "starting" this long before treating never-up as down.
+  health_grace_s: 1800
+  # Consecutive failed probes before a previously healthy server is marked down.
+  health_fail_threshold: 3
+  # Seconds between LiteLLM /model/info vs fleet.hosts config-skew checks.
+  skew_interval_s: 180
+  # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
+  litellm_health_interval_s: 14400
+  # Host row port is the container listen port (vLLM --port / box JSON).
+  # Without fleet.vast, the public port equals the listen port (local).
+  # fleet.hosts is loaded once at process start. Standalone (runx) watches
+  # config.yaml and reloads. Production: Puppet restart after a change.
+  # Production: set fleet.vast.api_key (gitignored config.yaml). Lifecycle
+  # fetches Vast HostPorts; never send those to the box.
+  # vast:
+  #   api_key: CHANGE_ME_VAST_API_KEY
+  hosts:
+    127.0.0.1:
+      - [gemma4-26b, 8001]
+      - [qwen3-8b, 8003]

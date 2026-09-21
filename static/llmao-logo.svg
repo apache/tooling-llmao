@@ -1,0 +1,51 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="darkSide" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#152a47"/>
+      <stop offset="100%" stop-color="#040810"/>
+    </linearGradient>
+    <linearGradient id="blueSide" x1="15%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6fc6ff"/>
+      <stop offset="55%" stop-color="#2e8ff2"/>
+      <stop offset="100%" stop-color="#0d57c9"/>
+    </linearGradient>
+    <clipPath id="circleClip">
+      <circle cx="256" cy="256" r="256"/>
+    </clipPath>
+  </defs>
+
+  <!-- Everything except the arrow tip is clipped to the badge circle -->
+  <g clip-path="url(#circleClip)">
+    <!-- Dark "client" side fills the whole badge -->
+    <rect x="0" y="0" width="512" height="512" fill="url(#darkSide)"/>
+
+    <!-- Blue "LLM" side: a true pie-slice sector (~1/3 of the circle), not a chord.
+         The triangle's two far corners sit well outside the circle along the same
+         two rays from the center, so clipping leaves straight radii + a curved
+         outer edge, exactly like a slice of pie. -->
+    <polygon points="256,256 100.7,-323.5 835.5,411.3" fill="url(#blueSide)"/>
+
+    <!-- Client node: the request originates here, on the dark side -->
+    <circle cx="172" cy="214" r="30" fill="none" stroke="#ffffff" stroke-width="16"/>
+
+    <!-- Request path: curves from the client node toward the LLM side -->
+    <path d="M 198 196 C 248 152 298 122 348 112 C 376 107 396 98 412 88"
+          fill="none" stroke="#ffffff" stroke-width="16"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Checkpoint marker where the request crosses into the LLM side (the gateway) -->
+    <circle cx="233" cy="168" r="11" fill="#ffffff"/>
+
+    <!-- Measurement bars: floating above the baseline with a gap, not touching it -->
+    <rect x="170" y="336" width="40" height="44"  rx="7" fill="#ffffff"/>
+    <rect x="230" y="290" width="40" height="90"  rx="7" fill="#ffffff"/>
+    <rect x="290" y="244" width="40" height="136" rx="7" fill="#ffffff"/>
+
+    <!-- Baseline / measurement axis -->
+    <line x1="146" y1="400" x2="358" y2="400" stroke="#ffffff" stroke-width="16" stroke-linecap="round"/>
+  </g>
+
+  <!-- Arrowhead drawn unclipped, on top: its tip pokes just past the circle edge
+       for the same bit of visual interest the original had. -->
+  <polygon points="446,67 419.5,118.9 415.5,86.1 387.7,68.1" fill="#ffffff"/>
+</svg>

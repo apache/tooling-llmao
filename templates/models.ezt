@@ -1,0 +1,127 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <h1 class="h3 mb-3">Models</h1>
+  <p class="text-muted small">
+    Models you can call with a personal key. Use the <strong>ID</strong> as
+    the <code>model</code> parameter. Context, license, and hosting are in
+    Details.
+  </p>
+
+  [if-any models]
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>ID</th>
+          <th>Available</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        [for models]
+        <tr[if-any models.unavailable] class="table-secondary text-muted"[end]>
+          <td>
+            [models.display_name]
+            [if-any models.modality]
+            <span class="badge text-bg-secondary ms-1">[models.modality]</span>
+            [end]
+            [if-any models.supports_thinking]
+            <span class="badge text-bg-info ms-1">thinking</span>
+            [end]
+          </td>
+          <td class="font-monospace small">[models.model_name]</td>
+          <td>
+            [if-any models.available]
+            <span class="badge text-bg-success">Yes</span>
+            [else]
+            <span class="badge text-bg-secondary">No</span>
+            [end]
+          </td>
+          <td class="text-end text-nowrap">
+            [if-any models.available]
+            <a class="btn btn-outline-primary btn-sm me-1"
+               href="/keys/new?model=[models.model_name]">Request a key</a>
+            [else]
+            <span class="btn btn-outline-secondary btn-sm me-1 disabled"
+                  title="Not available to you">Request a key</span>
+            [end]
+            <button type="button" class="btn btn-outline-secondary btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#modelDetailModal"
+                    data-model-name="[models.model_name]"
+                    data-display-name="[models.display_name]"
+                    data-hosting="[models.hosting_label]"
+                    data-context="[models.context_window]"
+                    data-license="[models.license]"
+                    data-modality="[models.modality]"
+                    data-openness="[models.openness]"
+                    data-thinking="[models.supports_thinking]"
+                    data-thinks-default="[models.thinks_by_default]"
+                    data-notes="[models.notes]"
+                    data-reveal-supply="[models.reveal_supply]"
+                    data-weights="[models.weights_distribution]"
+                    data-training="[models.training_data_provenance]"
+                    data-provenance="[models.provenance_record]">
+              Details
+            </button>
+          </td>
+        </tr>
+        [end]
+      </tbody>
+    </table>
+  </div>
+  [else]
+  <p class="text-muted">No models in the inventory.</p>
+  [end]
+</div>
+
+<div class="modal fade" id="modelDetailModal" tabindex="-1"
+     aria-labelledby="modelDetailModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title fs-5" id="modelDetailModalLabel">Model details</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="row small mb-0" id="modelDetailBody">
+          <dt class="col-sm-3">Name</dt>
+          <dd class="col-sm-9" id="mdDisplayName"></dd>
+          <dt class="col-sm-3">ID</dt>
+          <dd class="col-sm-9 font-monospace" id="mdModelName"></dd>
+          <dt class="col-sm-3">Hosting</dt>
+          <dd class="col-sm-9" id="mdHosting"></dd>
+          <dt class="col-sm-3">Context</dt>
+          <dd class="col-sm-9 font-monospace" id="mdContext"></dd>
+          <dt class="col-sm-3">License</dt>
+          <dd class="col-sm-9" id="mdLicense"></dd>
+          <dt class="col-sm-3">Modality</dt>
+          <dd class="col-sm-9" id="mdModality"></dd>
+          <dt class="col-sm-3">Openness</dt>
+          <dd class="col-sm-9" id="mdOpenness"></dd>
+          <dt class="col-sm-3">Thinking</dt>
+          <dd class="col-sm-9" id="mdThinking"></dd>
+          <dt class="col-sm-3">Notes</dt>
+          <dd class="col-sm-9" id="mdNotes"></dd>
+        </dl>
+        <div id="mdSupplyBlock" class="mt-3 d-none">
+          <h3 class="h6 text-muted">Supply path (site admins)</h3>
+          <dl class="row small mb-0">
+            <dt class="col-sm-3">Weights</dt>
+            <dd class="col-sm-9" id="mdWeights"></dd>
+            <dt class="col-sm-3">Training data</dt>
+            <dd class="col-sm-9" id="mdTraining"></dd>
+            <dt class="col-sm-3">Provenance record</dt>
+            <dd class="col-sm-9" id="mdProvenance"></dd>
+          </dl>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+[include "footer.ezt"]
