@@ -4,10 +4,25 @@ Scripts for llmao; needs more for others but this documents model perf testing.
 
 | | when | how long |
 |---|---|---|
+| `llmao-vllm-api-key` | hand-launched box: print derived `--api-key` | instant |
 | `llmao-smoke` | after any change to a model, box or the gateway | ~1 min/model |
 | `llmao-saturate` | when deciding whether a card is the right size | 5–30 min |
 
-Both are stdlib-only Python 3 — nothing to install.
+Smoke and saturate are stdlib-only Python 3. `llmao-vllm-api-key` uses
+`llmao.vllm_api_key` and `config.yaml` unless `--fleet-key` is passed.
+
+## llmao-vllm-api-key
+
+HMAC of `fleet.key` + host + listen port. Same string auto-provisioned boxes
+will get from `GET /vllm/config` after that is wired. See
+[`docs/fleet-state.md`](../docs/fleet-state.md) §2.3.
+
+```bash
+bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001
+bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001 --fleet-key sk-...
+```
+
+Paste into `vllm serve --api-key` / Supervisor on a hand-launched box.
 
 ## llmao-smoke
 

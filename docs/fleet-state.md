@@ -1,9 +1,11 @@
 # Design: Fleet State — Ownership, Lifecycle, and Recovery
 
-Companion to [`vllm-fleet-design.md`](vllm-fleet-design.md), which defines the
-control-plane contract: what a host is, how a box fetches its assignment, and
-what the JSON looks like. This document covers **where fleet state lives, how
-it changes, and what happens when it is lost**.
+**Where live fleet state lives, how it changes, and what happens when it is
+lost.** Not the box JSON contract — that is
+[`vllm-fleet-design.md`](vllm-fleet-design.md) (host = IP, fleet key,
+`GET /vllm/config` shape, listen vs public). Box boot:
+[`../hosting/README.md`](../hosting/README.md). Do not merge the two fleet
+docs.
 
 ---
 
@@ -30,8 +32,9 @@ State lives in LiteLLM's database. There is no second store.
 | `litellm_params.api_key` | the bearer token for that vLLM |
 | `model_info` | arbitrary dict — carries the recipe and provenance |
 
-`GET /vllm/config` becomes: select deployments whose `api_base` host matches the
-caller's IP, return their `model_info.vllm` blocks and ports.
+`GET /vllm/config` is still built from `fleet.hosts` + `models.yaml` (claimed
+IP / `X-LLMAO-Host`), not a SELECT on LiteLLM deployments. Traffic SoT is
+the deployment row; assignment SoT for the box is still YAML.
 
 ### 1.2 Enabling it
 
@@ -51,17 +54,47 @@ backend is not yet serving will fail every request routed to it.
 The Router is the whole proxy; a deployment is one backend (`/model/new` row).
 
 ```
-add host    -> record assignment, generate api_key, no deployment yet
+add host    -> fleet.hosts row; api_key is HMAC (below), no deployment yet
 box boots   -> GET /vllm/config
-health OK   -> POST /model/new
+health OK   -> POST /model/new (same api_key)
 health DOWN -> POST /model/delete
-retire      -> delete deployment, drop assignment
+retire      -> delete deployment, drop fleet.hosts row
 ```
 
-Uniform, with no special cases. An earlier draft proposed registering at
-add-time when the `model_name` already had healthy peers and deferring
-otherwise — that makes the same operation behave differently depending on the
-state of unrelated servers, which is fine when written and baffling later.
+Every host follows that sequence. Adding a host does not create a LiteLLM
+deployment. `/model/new` runs only when that box's vLLM is serving;
+`/model/delete` when it is not.
+
+Do not special-case "this model already has a healthy peer, so register the
+new box now." That makes the same operation depend on other servers.
+
+### 2.3 Per-vLLM `api_key` (HMAC, not a table)
+
+The box needs `--api-key` **before** `vllm serve`. LiteLLM needs the **same**
+bearer at `/model/new` **after** SERVING. `/health` is unauthenticated;
+`GET /v1/models` on the box (KV scrape) is not. LiteLLM encrypts
+`litellm_params` on readback, so the portal cannot recover plaintext from
+`/model/info`.
+
+We do **not** store the key in Postgres. `fleet.key` is not rotated in
+place (a change means redeploy every box). Derive:
+
+```
+HMAC-SHA256(fleet.key, "llmao.vllm.api_key\n" + host + "\n" + listen_port)
+→ sk- + urlsafe-base64 (no padding)
+```
+
+`host` is the `fleet.hosts` IP (normalized). `listen_port` is the container
+port, not Vast's public HostPort. HMAC-SHA256 as a PRF, one domain label
+(other secrets from `fleet.key` must use a different label). Not HKDF (one
+output). Not SHA256(secret||msg). Not random+table.
+
+**Today** `/vllm/config` still sends `fleet.selfhost_api_key`. After review,
+it will send this HMAC so auto-provisioned boxes match the CLI.
+
+**Hand-launched boxes:** `bin/llmao-vllm-api-key --host <ip> --port <listen>`
+(reads `config.yaml` `fleet.key` unless `--fleet-key`). Paste into
+`vllm serve --api-key` / Supervisor. Same function as future JSON.
 
 ### 2.1 Why not register early and let cooldown absorb it
 
@@ -86,20 +119,12 @@ window, uncooled. Health-gating is the only mechanism available.
 
 ### 2.2 The pending assignment
 
-Health-gating means an assignment must exist before its route does. That state
-is small — IP, port, model name, generated key, per pending host — but it is
-state.
+Health-gating means an assignment exists (`fleet.hosts` YAML) before a
+LiteLLM deployment does. IP, port, and model live in that YAML. The vLLM
+bearer is HMAC of `fleet.key` (§2.3), not a generated value to persist.
 
-Options, preferred first:
-
-- **A table in the same Postgres.** Not LiteLLM's schema, but the same
-  database, so no new backup story and no new failure mode. "State-free" meant
-  no *second* datastore; this respects that.
-- **In memory, accepting loss on restart.** A box that already fetched keeps
-  running; one that has not gets 404 and retries. Zero persistence, but a
-  restart mid-provisioning strands a box being paid for.
-- **Register immediately and tolerate the failures.** Simplest, and a bad
-  default given §2.1.
+A second store for the key is not required. Registering immediately to
+avoid pending state is still a bad default (§2.1).
 
 ---
 

@@ -1,9 +1,16 @@
 # Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
 
-**Status:** Operating — boxes fetch `GET /vllm/config` by client IP. Listen vs
-public ports; Vast HostPort (`vast_client`); health-gated `/model/new` /
-`/model/delete`; commercial register at llmao startup. Remaining: long vLLM
-boot, config revision, box smoke, pending-assignment table.
+**Box contract and control-plane protocol** (host = IP, fleet key,
+`GET /vllm/config` shape, listen vs public, identical templates). Live
+state, mix, recovery, HMAC `api_key`: [`fleet-state.md`](fleet-state.md).
+Box boot: [`../hosting/README.md`](../hosting/README.md). Do not merge those
+docs.
+
+**Status:** Operating — boxes fetch `GET /vllm/config` (`X-LLMAO-Host` on
+Vast). Listen vs public ports; Vast HostPort (`vast_client`); health-gated
+`/model/new` / `/model/delete`; commercial register at llmao startup.
+Remaining: long vLLM boot, config revision, box smoke. HMAC `api_key` is
+specified in fleet-state §2.3; not yet emitted on `/vllm/config`.
 **Date:** 2026-09-10
 **Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
 
@@ -20,7 +27,8 @@ boot, config revision, box smoke, pending-assignment table.
 
 **Non-goals (for now):**
 - Automatic scaling / serverless.
-- Per-instance secrets or short-lived tokens (can be added later).
+- Per-instance *random* secrets or short-lived tokens. Per-vLLM `api_key` is
+  **derived** (HMAC of `fleet.key`); see fleet-state §2.3.
 - Reverse proxy / path-based routing on the GPU box (LiteLLM talks directly to the vLLM ports).
 
 ---
@@ -85,7 +93,10 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
 - Vast stock container + custom template: `install_set.py` also sends
   `X-LLMAO-Host: $PUBLIC_IPADDR` (no query string). That header is a claim,
   not a proof; the fleet key is the gate.
-- Chosen over per-instance secrets for operational simplicity (one value to manage, works across providers).
+- Chosen over per-instance *random* secrets for operational simplicity (one
+  value to manage, works across providers). Each vLLM `--api-key` is HMAC of
+  this key plus host and listen port ([fleet-state §2.3](fleet-state.md)).
+  `/vllm/config` still sends the shared `selfhost_api_key` until that lands.
 - Acceptable risk for a small, operator-controlled fleet. Can be hardened later (instance binding, short-lived tokens, etc.) without changing the rest of the design.
 
 ### 3.2 Hosts
