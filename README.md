@@ -273,7 +273,7 @@ export LLMAO_KEY=<a PAT>
 ```
 
 ```bash
-export VLLM_API_KEY=<llmao::selfhost_api_key>
+export VLLM_API_KEY=$(bin/llmao-vllm-api-key --host <ip> --port <listen>)
 ./bin/llmao-saturate --model <model> # ramp concurrency until something queues,
                                      # and say whether the limit is the
                                      # scheduler or memory

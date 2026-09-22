@@ -15,14 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Derive a per-vLLM api_key from the fleet key (HMAC-SHA256).
+"""Derive a per-vLLM api_key from fleet.vllm_api_salt (HMAC-SHA256).
 
-Not wired into GET /vllm/config yet. Operators of hand-launched boxes run
-bin/llmao-vllm-api-key. Auto-provisioned boxes will get the same string in
-the config JSON later.
+The salt stays in llmao config. fleet.key is only the bearer for
+GET /vllm/config. A box that copied FLEET_KEY cannot compute another box's
+key. GET /vllm/config returns the derived bearer; that is how Vast boxes
+receive it (instance env injection does not work).
+
+Prefix sk-vllm- marks the key as a vLLM server bearer.
 
 HMAC, not HKDF (one output). Not SHA256(secret||msg). Not a Postgres table.
-fleet.key is not rotated in place; a change means redeploy every box.
+Changing the salt invalidates every derived bearer.
 """
 
 from __future__ import annotations
@@ -33,15 +36,17 @@ import hmac
 
 from llmao.fleet import normalize_peer_ip
 
-# Domain label: other secrets from fleet.key must use a different string.
+# Domain label: other secrets from fleet.vllm_api_salt must use a different string.
 _LABEL = "llmao.vllm.api_key"
 
 
-def derive_vllm_api_key(fleet_key: str, host: str, listen_port: int) -> str:
-    """sk- + urlsafe-b64(HMAC-SHA256(fleet_key, label\\nhost\\nport)), no pad."""
-    key = (fleet_key or "").strip()
+def derive_vllm_api_key(salt: str, host: str, listen_port: int) -> str:
+    """sk-vllm- + urlsafe-b64(HMAC-SHA256(salt, label\\nhost\\nport)), no pad."""
+    if not isinstance(salt, str):
+        raise ValueError("fleet.vllm_api_salt is not defined")
+    key = salt.strip()
     if not key or key.startswith("CHANGE_ME"):
-        raise ValueError("fleet.key is missing or CHANGE_ME")
+        raise ValueError("fleet.vllm_api_salt is missing or CHANGE_ME")
     ip = normalize_peer_ip(host)
     if not ip:
         raise ValueError("host is empty")
@@ -49,4 +54,4 @@ def derive_vllm_api_key(fleet_key: str, host: str, listen_port: int) -> str:
         raise ValueError(f"listen_port must be a positive int, got {listen_port!r}")
     msg = f"{_LABEL}\n{ip}\n{listen_port}".encode()
     digest = hmac.new(key.encode(), msg, hashlib.sha256).digest()
-    return "sk-" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return "sk-vllm-" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")

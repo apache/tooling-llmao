@@ -45,13 +45,13 @@ models_path: models.yaml
 # Placement is keyed by the box public IP (request.remote_addr / X-Forwarded-For).
 fleet:
   key: CHANGE_ME_FLEET_KEY
-  # Bearer token every self-hosted vLLM is started with (--api-key) and that
-  # LiteLLM presents when calling it. One shared value for the fleet; a
-  # models.yaml row may override per model, and per-instance keys generated at
-  # host-add time will eventually replace both.
-  #
-  # If this is unset AND models.yaml carries no api_key, vLLM starts
-  # UNAUTHENTICATED on a public port.
+  # HMAC secret for each vLLM --api-key. This file and Puppet eyaml only.
+  # Never the Vast template. GET /vllm/config returns sk-vllm-… from this
+  # salt plus host and listen port. A missing attribute fails fleet build.
+  # Changing it invalidates every box bearer. See docs/fleet-state.md §2.3.
+  vllm_api_salt: CHANGE_ME_VLLM_API_SALT
+  # Legacy shared bearer. The fleet path does not read this. Left so existing
+  # configs still parse until Puppet drops llmao::selfhost_api_key.
   selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
   # Seconds between vLLM GET /health probes (unauthenticated; private path only).
   health_interval_s: 45

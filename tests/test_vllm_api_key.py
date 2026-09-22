@@ -15,21 +15,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import pytest
+
 from llmao.vllm_api_key import derive_vllm_api_key
 
-# HMAC-SHA256("test-fleet-key", "llmao.vllm.api_key\n203.0.113.10\n8001")
-_GOLDEN = "sk-YoZ3PTx1GrKDXoNUcdWVT4W_KZdUMywEv3BJuH0bNxo"
+# HMAC-SHA256("test-vllm-salt", "llmao.vllm.api_key\n203.0.113.10\n8001")
+_GOLDEN = "sk-vllm-YU9F3Sgfr-gNOZKZHGc84-cbgua6IiDkhr3XlaX35Tc"
 
 
 def test_golden_vector():
-    assert derive_vllm_api_key("test-fleet-key", "203.0.113.10", 8001) == _GOLDEN
+    assert derive_vllm_api_key("test-vllm-salt", "203.0.113.10", 8001) == _GOLDEN
 
 
 def test_port_changes_key():
-    a = derive_vllm_api_key("test-fleet-key", "203.0.113.10", 8001)
-    b = derive_vllm_api_key("test-fleet-key", "203.0.113.10", 8002)
+    a = derive_vllm_api_key("test-vllm-salt", "203.0.113.10", 8001)
+    b = derive_vllm_api_key("test-vllm-salt", "203.0.113.10", 8002)
     assert a != b
+    assert a.startswith("sk-vllm-")
 
 
 def test_normalizes_v4mapped_host():
-    assert derive_vllm_api_key("test-fleet-key", "::ffff:203.0.113.10", 8001) == _GOLDEN
+    assert derive_vllm_api_key("test-vllm-salt", "::ffff:203.0.113.10", 8001) == _GOLDEN
+
+
+def test_missing_salt_raises():
+    with pytest.raises(ValueError, match="not defined"):
+        derive_vllm_api_key(None, "203.0.113.10", 8001)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="missing or CHANGE_ME"):
+        derive_vllm_api_key("CHANGE_ME_VLLM_API_SALT", "203.0.113.10", 8001)

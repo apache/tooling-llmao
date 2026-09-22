@@ -183,6 +183,19 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             seen_ports.add(port)
 
 
+def _vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
+    # Not a top-level import. vllm_api_key.py imports normalize_peer_ip from
+    # this module. Importing derive_vllm_api_key up here would make each file
+    # load the other before either finished initializing.
+    #
+    # cfg.fleet.vllm_api_salt is required. A missing attribute raises here.
+    # Do not substitute "" — derive_vllm_api_key would then be the only check,
+    # and a future edit could HMAC an empty salt and ship a public bearer.
+    from llmao.vllm_api_key import derive_vllm_api_key
+
+    return derive_vllm_api_key(cfg.fleet.vllm_api_salt, host, listen_port)
+
+
 def config_for_host(
     host: str,
     *,
@@ -293,22 +306,12 @@ class VllmServer:
             host=host,
             listen_port=port,
             hf_model=str(vllm.model),
-            # Bearer token the box passes to `vllm serve --api-key`, and the
-            # same value LiteLLM presents when calling that server.
-            #
-            # A models.yaml row may still carry one (older files did),
-            # but it is not a property of the model -- it is a credential for
-            # one machine. The fleet-wide value in config is the current
-            # source; per-instance keys generated at host-add time are the
-            # eventual one.
-            #
-            # An empty result means vLLM starts UNAUTHENTICATED on a public
-            # port, so this must resolve to something.
-            api_key=str(
-                model.litellm_params.get("api_key")
-                or (cfg.fleet.get("selfhost_api_key") if cfg is not None else "")
-                or ""
-            ),
+            # Bearer for `vllm serve --api-key` and for LiteLLM at /model/new.
+            # HMAC of fleet.vllm_api_salt plus this host and listen port.
+            # Not fleet.key (boxes have that). Not a models.yaml field.
+            # Not selfhost_api_key. Missing salt raises; an empty bearer
+            # would start vLLM with no auth on a public port.
+            api_key=_vllm_api_key(cfg, host, port),
             args=[str(a) for a in args],
             gpu_memory_utilization=float(util) if util is not None else None,
             max_model_len=int(maxlen) if maxlen is not None else None,

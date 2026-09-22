@@ -9,8 +9,9 @@ docs.
 **Status:** Operating — boxes fetch `GET /vllm/config` (`X-LLMAO-Host` on
 Vast). Listen vs public ports; Vast HostPort (`vast_client`); health-gated
 `/model/new` / `/model/delete`; commercial register at llmao startup.
-Remaining: long vLLM boot, config revision, box smoke. HMAC `api_key` is
-specified in fleet-state §2.3; not yet emitted on `/vllm/config`.
+Remaining: long vLLM boot, config revision, box smoke. Per-vLLM `api_key`
+is HMAC of `fleet.vllm_api_salt` and is returned on `/vllm/config`
+(fleet-state §2.3). A leaked host/port map is accepted for today.
 **Date:** 2026-09-10
 **Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
 
@@ -28,7 +29,8 @@ specified in fleet-state §2.3; not yet emitted on `/vllm/config`.
 **Non-goals (for now):**
 - Automatic scaling / serverless.
 - Per-instance *random* secrets or short-lived tokens. Per-vLLM `api_key` is
-  **derived** (HMAC of `fleet.key`); see fleet-state §2.3.
+  **derived** (HMAC of `fleet.vllm_api_salt`, not `fleet.key`); see
+  fleet-state §2.3. A leaked host/port map is accepted for today.
 - Reverse proxy / path-based routing on the GPU box (LiteLLM talks directly to the vLLM ports).
 
 ---
@@ -95,8 +97,10 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
   not a proof; the fleet key is the gate.
 - Chosen over per-instance *random* secrets for operational simplicity (one
   value to manage, works across providers). Each vLLM `--api-key` is HMAC of
-  this key plus host and listen port ([fleet-state §2.3](fleet-state.md)).
-  `/vllm/config` still sends the shared `selfhost_api_key` until that lands.
+  `fleet.vllm_api_salt` plus host and listen port
+  ([fleet-state §2.3](fleet-state.md)). `fleet.key` does not mint that
+  bearer. `/vllm/config` returns it. A leaked host/port map is accepted for
+  today; revisit is recorded in fleet-state §2.3.
 - Acceptable risk for a small, operator-controlled fleet. Can be hardened later (instance binding, short-lived tokens, etc.) without changing the rest of the design.
 
 ### 3.2 Hosts

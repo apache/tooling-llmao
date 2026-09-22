@@ -126,6 +126,7 @@ def test_validate_fleet_vast_ok():
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "vllm_api_salt": "test-vllm-salt",
                 "vast": {"api_key": "abc"},
                 **FLEET_KNOBS,
             },
@@ -142,6 +143,7 @@ def test_refresh_uses_dotted_api_key():
         {
             "fleet": {
                 "hosts": {"203.0.113.10": [["gemma4-26b", 8001]]},
+                "vllm_api_salt": "test-vllm-salt",
                 "vast": {"api_key": "secret"},
                 **FLEET_KNOBS,
             },

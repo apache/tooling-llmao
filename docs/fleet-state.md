@@ -76,25 +76,44 @@ bearer at `/model/new` **after** SERVING. `/health` is unauthenticated;
 `litellm_params` on readback, so the portal cannot recover plaintext from
 `/model/info`.
 
-We do **not** store the key in Postgres. `fleet.key` is not rotated in
-place (a change means redeploy every box). Derive:
+We do **not** store the key in Postgres. `fleet.vllm_api_salt` is not
+rotated in place (a change means a new bearer on every box, a vLLM restart,
+and a new `/model/new`). `fleet.key` is not an input. Derive:
 
 ```
-HMAC-SHA256(fleet.key, "llmao.vllm.api_key\n" + host + "\n" + listen_port)
-→ sk- + urlsafe-base64 (no padding)
+HMAC-SHA256(fleet.vllm_api_salt, "llmao.vllm.api_key\n" + host + "\n" + listen_port)
+→ sk-vllm- + urlsafe-base64 (no padding)
 ```
 
 `host` is the `fleet.hosts` IP (normalized). `listen_port` is the container
-port, not Vast's public HostPort. HMAC-SHA256 as a PRF, one domain label
-(other secrets from `fleet.key` must use a different label). Not HKDF (one
-output). Not SHA256(secret||msg). Not random+table.
+port, not Vast's public HostPort. Prefix `sk-vllm-` marks a vLLM server
+bearer, distinct from the fleet key, LiteLLM keys, and PATs. HMAC-SHA256 as
+a PRF, one domain label (other secrets from this salt must use a different
+label). Not HKDF (one output). Not SHA256(secret||msg). Not random+table.
 
-**Today** `/vllm/config` still sends `fleet.selfhost_api_key`. After review,
-it will send this HMAC so auto-provisioned boxes match the CLI.
+The salt lives only in llmao `config.yaml` (Puppet eyaml). It is not in the
+Vast template. A missing attribute raises when the fleet is built. There is
+no fallback to `selfhost_api_key` or a `models.yaml` `api_key`.
 
-**Hand-launched boxes:** `bin/llmao-vllm-api-key --host <ip> --port <listen>`
-(reads `config.yaml` `fleet.key` unless `--fleet-key`). Paste into
-`vllm serve --api-key` / Supervisor. Same function as future JSON.
+`GET /vllm/config` returns this bearer in `servers[].api_key`. Instance env
+injection was tried and does not work on Vast; the JSON is how the box
+learns `--api-key`. `install_set.py` writes it into Supervisor as
+`VLLM_API_KEY`. Hand-launched boxes use the same function:
+`bin/llmao-vllm-api-key --host <ip> --port <listen>` (reads
+`fleet.vllm_api_salt`, or `--salt`).
+
+**Who can mint.** The salt never leaves llmao, so a third party cannot
+compute a key. That includes a box that copied `FLEET_KEY`. Host and listen
+port are still required inputs.
+
+**Leaked host/port map.** A list of fleet IPs and listen ports can leak
+(config, logs, the public Vast mapping). Accepted for today: the map alone
+does not mint bearers, and we are not hiding membership beyond the fleet
+key on `GET /vllm/config`. Revisit if a leaked map should be insufficient
+even for someone who also holds `FLEET_KEY` — that caller can still claim
+`X-LLMAO-Host` for each listed IP and receive the derived key. Those fetches
+are logged (claimed host, TCP peer, `X-Forwarded-For`). Per-instance
+bootstrap tokens stay out of scope until that revisit.
 
 ### 2.1 Why not register early and let cooldown absorb it
 
@@ -121,7 +140,7 @@ window, uncooled. Health-gating is the only mechanism available.
 
 Health-gating means an assignment exists (`fleet.hosts` YAML) before a
 LiteLLM deployment does. IP, port, and model live in that YAML. The vLLM
-bearer is HMAC of `fleet.key` (§2.3), not a generated value to persist.
+bearer is HMAC of `fleet.vllm_api_salt` (§2.3), not a generated value to persist.
 
 A second store for the key is not required. Registering immediately to
 avoid pending state is still a bad default (§2.1).

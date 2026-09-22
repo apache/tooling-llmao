@@ -46,7 +46,11 @@ def test_commercial_deployment_from_definitions():
     )
     cfg = EasyDict(
         {
-            "fleet": {"hosts": {"127.0.0.1": [["gemma4-26b", 8001]]}, **FLEET_KNOBS},
+            "fleet": {
+                "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "vllm_api_salt": "test-vllm-salt",
+                **FLEET_KNOBS,
+            },
             "models_path": str(EXAMPLE),
         }
     )

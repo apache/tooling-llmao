@@ -116,6 +116,7 @@ def test_local_from_cfg_public_equals_listen():
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "vllm_api_salt": "test-vllm-salt",
                 "health_interval_s": 45,
                 "health_timeout_s": 3,
                 "health_grace_s": 1800,

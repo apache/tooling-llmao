@@ -18,11 +18,11 @@
 
 """Print the derived vLLM --api-key for a host listen port.
 
-Hand-launched boxes: paste into vllm serve / Supervisor. Auto-provisioned
-boxes will get the same value from GET /vllm/config later.
+Same string GET /vllm/config returns. Hand-launched boxes: paste into
+vllm serve / Supervisor.
 
     bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001
-    bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001 --fleet-key sk-...
+    bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001 --salt '…'
 """
 
 from __future__ import annotations
@@ -39,31 +39,33 @@ import yaml  # noqa: E402
 from llmao.vllm_api_key import derive_vllm_api_key  # noqa: E402
 
 
-def fleet_key_from_config(path: pathlib.Path) -> str:
+def salt_from_config(path: pathlib.Path) -> str:
     if not path.is_file():
-        raise SystemExit(f"Missing {path} (pass --fleet-key or create config.yaml)")
+        raise SystemExit(f"Missing {path} (pass --salt or create config.yaml)")
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     fleet = data.get("fleet") or {}
-    key = str(fleet.get("key") or "").strip()
-    if not key or key.startswith("CHANGE_ME"):
-        raise SystemExit(f"{path}: fleet.key is missing or CHANGE_ME")
-    return key
+    if "vllm_api_salt" not in fleet:
+        raise SystemExit(f"{path}: fleet.vllm_api_salt is not defined")
+    salt = fleet["vllm_api_salt"]
+    if not isinstance(salt, str) or not salt.strip() or salt.strip().startswith("CHANGE_ME"):
+        raise SystemExit(f"{path}: fleet.vllm_api_salt is missing or CHANGE_ME")
+    return salt.strip()
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Derive vLLM api_key (HMAC of fleet.key)")
+    p = argparse.ArgumentParser(description="Derive vLLM api_key (HMAC of fleet.vllm_api_salt)")
     p.add_argument("--host", required=True, help="fleet.hosts IP (listen identity)")
     p.add_argument("--port", required=True, type=int, help="container listen port")
-    p.add_argument("--fleet-key", help="override; default config.yaml fleet.key")
+    p.add_argument("--salt", help="override; default config.yaml fleet.vllm_api_salt")
     p.add_argument(
         "--config",
         type=pathlib.Path,
         default=ROOT / "config.yaml",
-        help="config.yaml for fleet.key (default: repo config.yaml)",
+        help="config.yaml for fleet.vllm_api_salt (default: repo config.yaml)",
     )
     args = p.parse_args(argv)
-    key = args.fleet_key.strip() if args.fleet_key else fleet_key_from_config(args.config)
-    print(derive_vllm_api_key(key, args.host, args.port))
+    salt = args.salt.strip() if args.salt else salt_from_config(args.config)
+    print(derive_vllm_api_key(salt, args.host, args.port))
     return 0
 
 

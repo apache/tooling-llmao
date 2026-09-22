@@ -23,6 +23,7 @@ import pytest
 import yaml
 from easydict import EasyDict
 
+from llmao.vllm_api_key import derive_vllm_api_key
 from llmao.fleet import (
     HOST_HEADER,
     Fleet,
@@ -52,7 +53,7 @@ FLEET_KNOBS = {
 def _cfg(hosts, models_path=EXAMPLE):
     return EasyDict(
         {
-            "fleet": {"hosts": hosts, **FLEET_KNOBS},
+            "fleet": {"hosts": hosts, "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS},
             "models_path": str(models_path),
         }
     )
@@ -60,6 +61,7 @@ def _cfg(hosts, models_path=EXAMPLE):
 
 def test_example_primary_host():
     cfg = EasyDict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
+    cfg.fleet.vllm_api_salt = "test-vllm-salt"
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     payload = config_for_host("127.0.0.1", models=models, cfg=cfg)
@@ -203,13 +205,26 @@ def test_norm_base_makes_skew_comparison_match():
     assert _norm_base("http://100.105.28.100:8003/v1") == _norm_base("http://100.105.28.100:8003")
 
 
-def test_from_row_falls_back_to_fleet_api_key():
-    """Empty means vLLM starts unauthenticated on a public port."""
+def test_from_row_api_key_is_salt_hmac():
+    """Box JSON carries the salt HMAC, not the legacy shared bearer."""
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003]]})
     cfg.fleet.selfhost_api_key = "sk-fleet"
     models = load_models(EXAMPLE)  # definitions carry no api_key
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
-    assert payload["servers"][0]["api_key"] == "sk-fleet"
+    assert payload["servers"][0]["api_key"] == derive_vllm_api_key("test-vllm-salt", "10.0.0.1", 8003)
+    assert payload["servers"][0]["api_key"] != "sk-fleet"
+
+
+def test_from_row_requires_salt():
+    """A fleet config that never defines the salt fails at attribute access."""
+    cfg = EasyDict(
+        {
+            "fleet": {"hosts": {"10.0.0.1": [["qwen3-8b", 8003]]}, **FLEET_KNOBS},
+            "models_path": str(EXAMPLE),
+        }
+    )
+    with pytest.raises(AttributeError):
+        config_for_host("10.0.0.1", models=load_models(EXAMPLE), cfg=cfg)
 
 
 def test_host_row_pins_public_port():
