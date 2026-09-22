@@ -23,7 +23,6 @@ import pytest
 import yaml
 from easydict import EasyDict
 
-from llmao.vllm_api_key import derive_vllm_api_key
 from llmao.fleet import (
     HOST_HEADER,
     Fleet,
@@ -36,6 +35,7 @@ from llmao.fleet import (
 )
 from llmao.litellm_client import _norm_base
 from llmao.models import load_models
+from llmao.vllm_api_key import derive_vllm_api_key
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
