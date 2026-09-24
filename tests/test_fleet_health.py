@@ -21,13 +21,29 @@ import asyncio
 
 from easydict import EasyDict
 
-from llmao.fleet import Fleet, VllmServer, fetch_observed, parse_kv_cache_tokens, parse_max_model_len
+from llmao.fleet import (
+    Fleet,
+    FleetDeployment,
+    VllmServer,
+    add_refusal,
+    fetch_observed,
+    parse_kv_cache_tokens,
+    parse_max_model_len,
+)
+from llmao.litellm_client import (
+    SKEW_HEALTH_VLLM_DOWN,
+    SKEW_HEALTH_VLLM_UP,
+    SKEW_ROUTE_NOT_UP,
+    SKEW_ROUTE_UP,
+    LiteLLMBackend,
+)
 
 
 class _Resp:
     def __init__(self, status_code=200, text="", body=None):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode() if isinstance(text, str) else b""
         self._body = body
 
     def json(self):
@@ -95,6 +111,94 @@ def test_note_config_fetch():
     fleet = Fleet(cfg=None, servers=[])
     fleet.note_config_fetch("primary", now=42.0)
     assert fleet.config_fetch_at["primary"] == 42.0
+
+
+def test_unknown_config_fetch_drops_once_in_hosts():
+    cfg = EasyDict({"fleet": {"hosts": {"203.0.113.10": []}}})
+    fleet = Fleet(cfg=cfg, servers=[])
+    fleet.note_unknown_config_fetch("198.51.100.8", now=10)
+    fleet.note_unknown_config_fetch("198.51.100.8", now=20)
+    assert fleet.unknown_config_fetches["198.51.100.8"]["count"] == 2
+    fleet.note_unknown_config_fetch("203.0.113.10", now=30)
+    assert "203.0.113.10" not in fleet.unknown_config_fetches
+    cfg.fleet.hosts["198.51.100.8"] = []
+    fleet.note_unknown_config_fetch("203.0.113.9", now=40)
+    assert "198.51.100.8" not in fleet.unknown_config_fetches
+    assert "203.0.113.9" in fleet.unknown_config_fetches
+
+
+def test_add_refusal_until_serving():
+    dep = FleetDeployment.from_vllm(_server())
+    assert add_refusal(dep) == "vLLM is not serving yet"
+    dep.vllm.state = VllmServer.SERVING
+    assert add_refusal(dep) is None
+    dep.in_litellm = True
+    assert add_refusal(dep) == "already in LiteLLM"
+
+
+class _Backend:
+    def __init__(self, fleet, info, health):
+        self.fleet = fleet
+        self.info = info
+        self.health = health
+        self.added = []
+
+    async def _request(self, method, path, **kwargs):
+        body = self.info if path == "model/info" else self.health
+        resp = _Resp(body=body)
+        resp.content = b"{}"
+        return resp
+
+    def _raise_http(self, resp):
+        return None
+
+    async def add_deployment(self, dep):
+        self.added.append(dep)
+        dep.in_litellm = True
+
+
+def test_skew_sentences_replace_old_phrases():
+    srv = _server()
+    srv.state = VllmServer.PENDING
+    dep = FleetDeployment.from_vllm(srv)
+    dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
+    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
+    backend = _Backend(fleet, info=[], health={})
+    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    assert SKEW_ROUTE_NOT_UP in dep.skew
+    assert "missing from LiteLLM" not in dep.skew
+    srv.state = VllmServer.SERVING
+    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    assert SKEW_ROUTE_UP in dep.skew
+    assert "missing from LiteLLM" not in dep.skew
+    base = srv.api_base
+    backend.health = {"unhealthy_endpoints": [{"api_base": base}], "healthy_endpoints": []}
+    asyncio.run(LiteLLMBackend.check_health_skew(backend))
+    assert SKEW_HEALTH_VLLM_UP in dep.skew
+    srv.state = VllmServer.DOWN
+    backend.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
+    asyncio.run(LiteLLMBackend.check_health_skew(backend))
+    assert SKEW_HEALTH_VLLM_DOWN in dep.skew
+    assert "LiteLLM health disagrees" not in dep.skew
+
+
+def test_add_calls_deployment_only_when_serving():
+    srv = _server()
+    dep = FleetDeployment.from_vllm(srv)
+    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
+    backend = _Backend(fleet, info=[], health={})
+
+    async def attempt():
+        if add_refusal(dep):
+            return
+        await backend.add_deployment(dep)
+
+    asyncio.run(attempt())
+    assert backend.added == []
+    srv.state = VllmServer.SERVING
+    asyncio.run(attempt())
+    assert backend.added == [dep]
+    assert dep.in_litellm is True
 
 
 def test_box_json_listen_not_public():

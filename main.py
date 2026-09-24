@@ -86,8 +86,8 @@ def create_app():
     app.add_runner(backend.run_skew, name="litellm-skew")
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
-    app.config["LLMAO_SEAM"] = seam
-    app.config["LLMAO_BACKEND"] = backend
+    app.seam = seam
+    app.backend = backend
 
     from quart import jsonify
     from quart import request as quart_request

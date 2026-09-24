@@ -34,7 +34,7 @@ from dunamai import Version
 from easydict import EasyDict
 
 from llmao.auth import current_identity
-from llmao.fleet import VllmServer
+from llmao.fleet import VllmServer, add_refusal
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
@@ -268,6 +268,41 @@ async def fleet_page(result):
     litellm = APP.cfg.litellm.base_url.rstrip("/")
     result.litellm_ui = f"{litellm}/ui" if admin else ""
     rows = []
+    if admin:
+        unknown = sorted(
+            fleet.unknown_config_fetches.items(),
+            key=lambda item: item[1]["last_seen"],
+            reverse=True,
+        )
+        for host, rec in unknown:
+            rows.append(
+                EasyDict(
+                    host=host,
+                    name="—",
+                    self_hosted=ezt.boolean(False),
+                    listen="—",
+                    public="—",
+                    state="Fleet key presented; this IP is not in config.yaml",
+                    last_ok="—",
+                    config_ago=f"{_ago(rec['last_seen'], now)} · {int(rec['count'])}",
+                    skew="",
+                    kv_cache="—",
+                    context="—",
+                    oversized=ezt.boolean(False),
+                    in_litellm=ezt.boolean(False),
+                    litellm_health="—",
+                    litellm_health_ago="",
+                    no_deployment=ezt.boolean(False),
+                    serving=ezt.boolean(False),
+                    starting=ezt.boolean(False),
+                    down=ezt.boolean(False),
+                    pending=ezt.boolean(False),
+                    unknown=ezt.boolean(True),
+                    row_class="table-warning",
+                    show_add=ezt.boolean(False),
+                    add_enabled=ezt.boolean(False),
+                )
+            )
     for dep in fleet.deployments:
         srv = dep.vllm
         fetched = fleet.config_fetch_at.get(srv.host) if srv else None
@@ -335,10 +370,42 @@ async def fleet_page(result):
                 starting=ezt.boolean(starting),
                 down=ezt.boolean(down),
                 pending=ezt.boolean(pending),
+                unknown=ezt.boolean(False),
+                row_class="",
+                show_add=ezt.boolean(admin and dep.self_hosted and not dep.in_litellm),
+                add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
             )
         )
     result.servers = rows
     return result
+
+
+@APP.post("/do-add-deployment")
+@asfquart.auth.require
+async def do_add_deployment():
+    """Site admin posts one self-hosted row. add_refusal is the gate."""
+    ident = await current_identity(APP.cfg)
+    if not ident.is_site_admin:
+        await flash_danger("Only site admins can add a fleet deployment.")
+        return _see_other("/fleet")
+    form = await quart.request.form
+    name = (form.get("name") or "").strip()
+    host = (form.get("host") or "").strip()
+    matches = [d for d in APP.fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
+    if len(matches) != 1:
+        await flash_danger(f"No deployment {name} on {host}.")
+        return _see_other("/fleet")
+    reason = add_refusal(matches[0])
+    if reason:
+        await flash_danger(reason)
+        return _see_other("/fleet")
+    try:
+        await APP.backend.add_deployment(matches[0])
+    except BackendUnavailableError as e:
+        await flash_danger(str(e))
+        return _see_other("/fleet")
+    await flash_success(f"Added {matches[0].name} at {matches[0].api_base}.")
+    return _see_other("/fleet")
 
 
 def _money(amount: float) -> str:
@@ -377,7 +444,7 @@ def _project_list_rows(rows) -> list:
 async def projects_list(result):
     """Projects you belong to, with project-budget summary."""
     ident = await current_identity(APP.cfg)
-    result.project_rows = _project_list_rows(await APP.config["LLMAO_SEAM"].list_projects_for(ident))
+    result.project_rows = _project_list_rows(await APP.seam.list_projects_for(ident))
     return result
 
 
@@ -389,7 +456,7 @@ async def project_stub(result, project: str):
     """Member-gated stub until P0.3 overview."""
     result.title = project
     result.project = project
-    await APP.config["LLMAO_SEAM"].team_status(await current_identity(APP.cfg), project)
+    await APP.seam.team_status(await current_identity(APP.cfg), project)
     return result
 
 
@@ -430,7 +497,7 @@ async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_c
 async def keys_list(result):
     """My Keys — personal PATs only (one list_keys call)."""
     ident = await current_identity(APP.cfg)
-    result.keys = _key_rows(await APP.config["LLMAO_SEAM"].list_my_keys(ident), after_path="/keys")
+    result.keys = _key_rows(await APP.seam.list_my_keys(ident), after_path="/keys")
     return result
 
 
@@ -443,7 +510,7 @@ async def keys_other_list(result):
     if not result.can_create_automation:
         raise AuthzError("Other Keys is limited to PMC members and site admins.")
     ident = await current_identity(APP.cfg)
-    seam = APP.config["LLMAO_SEAM"]
+    seam = APP.seam
     admin_projects = ident.all_projects() if ident.is_site_admin else list(ident.committees)
     by_id: dict[str, KeyInfo] = {}
     for p in admin_projects:
@@ -475,7 +542,7 @@ async def do_create_key():
     purpose = (form.get("purpose") or "").strip()
     try:
         ident = await current_identity(APP.cfg)
-        seam = APP.config["LLMAO_SEAM"]
+        seam = APP.seam
         created = await seam.create_personal_key(ident, project, purpose)
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
@@ -510,7 +577,7 @@ async def do_create_other_key():
         await flash_danger("Only PMC members and site admins may create automation keys.")
         return _see_other("/keys/other/new")
     try:
-        seam = APP.config["LLMAO_SEAM"]
+        seam = APP.seam
         created = await seam.create_automation_key(ident, project, purpose)
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
@@ -532,7 +599,7 @@ async def do_revoke_key():
     after_path = _safe_after_path(form.get("after_path"))
     try:
         ident = await current_identity(APP.cfg)
-        seam = APP.config["LLMAO_SEAM"]
+        seam = APP.seam
         await seam.revoke_key(ident, token_id)
         await flash_success("Key revoked.")
     except (AuthzError, BackendUnavailableError) as e:

@@ -492,6 +492,8 @@ class Fleet:
         # Wired from create_app so this module does not import the LiteLLM client.
         self.after_probe = after_probe
         self.config_fetch_at: dict[str, float] = {}
+        # Fleet-key GETs for IPs not in fleet.hosts. Process memory only.
+        self.unknown_config_fetches: dict[str, dict[str, float | int]] = {}
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
@@ -519,6 +521,36 @@ class Fleet:
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
         self.config_fetch_at[host] = now if now is not None else time.time()
+        self.unknown_config_fetches.pop(normalize_peer_ip(host), None)
+
+    def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
+        """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.
+
+        Membership comes from config already checked by validate_fleet. Cap is
+        50, dropping the oldest last-seen. A member IP is removed and not recorded.
+        """
+        host = normalize_peer_ip(host)
+        stamp = time.time() if now is None else now
+        members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
+        for known in list(self.unknown_config_fetches):
+            if known in members:
+                del self.unknown_config_fetches[known]
+        if host in members:
+            return
+        rec = self.unknown_config_fetches.get(host)
+        if rec is None:
+            self.unknown_config_fetches[host] = {"first_seen": stamp, "last_seen": stamp, "count": 1}
+        else:
+            rec["last_seen"] = stamp
+            rec["count"] = int(rec["count"]) + 1
+        extra = len(self.unknown_config_fetches) - 50
+        if extra > 0:
+            oldest = sorted(
+                self.unknown_config_fetches,
+                key=lambda ip: float(self.unknown_config_fetches[ip]["last_seen"]),
+            )
+            for ip in oldest[:extra]:
+                del self.unknown_config_fetches[ip]
 
     def apply_port_map(self, mapping: Any) -> None:
         """Set public_port from Vast IP → listen → HostPort. Leave unset if missing.
@@ -623,6 +655,21 @@ class Fleet:
             except Exception:
                 _LOGGER.exception("fleet lifecycle probe failed")
             await asyncio.sleep(interval)
+
+
+def add_refusal(dep) -> str | None:
+    """Why the Fleet Add button must not call add_deployment.
+
+    None means the row is self-hosted, not already in LiteLLM, and vLLM is
+    SERVING. add_deployment itself does not apply this gate.
+    """
+    if not dep.self_hosted or dep.vllm is None:
+        return "not a self-hosted deployment"
+    if dep.in_litellm:
+        return "already in LiteLLM"
+    if dep.vllm.state != VllmServer.SERVING:
+        return "vLLM is not serving yet"
+    return None
 
 
 def parse_kv_cache_tokens(metrics_text: str) -> int | None:

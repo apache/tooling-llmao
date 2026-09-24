@@ -415,9 +415,10 @@ One artifact now, rather than a database dump plus a state file.
    Commercial `/model/new` at llmao startup.
 4. Somewhere for pending assignments (§2.2) — still `fleet.hosts` YAML
 5. Config revision on `/vllm/config`, reported back by `install_set.py`
-6. UI: Add on an existing Fleet row once vLLM is serving (§2.4). The tab
-   does not edit hosts, ports, or models. Retire and edit still open.
-   Unknown config fetches are highlighted rows on that tab (§2.4).
+6. UI: Add on an existing Fleet row once vLLM is serving (§2.4) — **done**
+   (`POST /do-add-deployment`). The tab does not edit hosts, ports, or
+   models. Retire and edit still open. Unknown config fetches are
+   highlighted rows on that tab (§2.4) — **done**, process memory only.
 
 ---
 

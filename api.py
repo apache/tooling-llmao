@@ -133,6 +133,7 @@ async def vllm_config():
     try:
         payload = config_for_host(host, cfg=APP.cfg)
     except UnknownHostError:
+        APP.fleet.note_unknown_config_fetch(host)
         raise HttpError(404, f"unknown fleet host: {host}") from None
     APP.fleet.note_config_fetch(host)
     return payload
@@ -142,7 +143,7 @@ async def vllm_config():
 @asfquart.auth.require
 @api
 async def project_usage(project: str):
-    seam = APP.config["LLMAO_SEAM"]
+    seam = APP.seam
     ident = await current_identity(APP.cfg)
     rows = await seam.project_activity(ident, project)
     total = round(sum(r.get("cost_usd", 0.0) for r in rows), 6)
@@ -158,7 +159,7 @@ async def project_usage(project: str):
 @asfquart.auth.require({Requirements.committer})
 @api
 async def project_budget(project: str):
-    seam = APP.config["LLMAO_SEAM"]
+    seam = APP.seam
     ident = await current_identity(APP.cfg)
     info = await seam.team_status(ident, project)
     if info is None:

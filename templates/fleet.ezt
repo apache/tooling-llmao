@@ -13,6 +13,8 @@
     LiteLLM <code>/health</code> is stored from the skew runner (not probed
     again here).
     <a href="[litellm_ui]">LiteLLM Admin UI</a>.
+    A highlighted row presented the fleet key and is not in config.yaml.
+    That is a box being set up, or a caller that should not have the key.
     [end]
   </p>
 
@@ -37,19 +39,22 @@
           <th>LiteLLM health</th>
           <th>Config request</th>
           <th>Skew</th>
+          <th></th>
           [end]
         </tr>
       </thead>
       <tbody>
         [for servers]
-        <tr>
+        <tr class="[servers.row_class]">
           [if-any is_site_admin]
           <td class="font-monospace small">[servers.host]</td>
           [end]
           <td>
             [servers.name]
+            [if-any servers.unknown][else]
             [if-any servers.self_hosted][else]
             <span class="badge text-bg-secondary ms-1">external</span>
+            [end]
             [end]
           </td>
           [if-any is_site_admin]
@@ -57,6 +62,9 @@
           <td class="font-monospace small">[servers.public]</td>
           [end]
           <td>
+            [if-any servers.unknown]
+            [servers.state]
+            [else]
             [if-any servers.serving]
             <span class="badge text-bg-success">serving</span>
             [end]
@@ -71,6 +79,7 @@
             [end]
             [if-any servers.pending]
             <span class="badge text-bg-light text-dark">[servers.state]</span>
+            [end]
             [end]
           </td>
           <td class="small font-monospace">[servers.context]</td>
@@ -88,6 +97,19 @@
           </td>
           <td class="small">[servers.config_ago]</td>
           <td class="small">[servers.skew]</td>
+          <td>
+            [if-any servers.show_add]
+            [if-any servers.add_enabled]
+            <form method="post" action="/do-add-deployment" class="d-inline">
+              <input type="hidden" name="name" value="[servers.name]">
+              <input type="hidden" name="host" value="[servers.host]">
+              <button type="submit" class="btn btn-sm btn-primary">Add</button>
+            </form>
+            [else]
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="vLLM is not serving yet">Add</button>
+            [end]
+            [end]
+          </td>
           [end]
         </tr>
         [end]
