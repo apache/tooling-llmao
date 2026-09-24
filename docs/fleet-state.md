@@ -9,32 +9,45 @@ docs.
 
 ---
 
-## 1. LiteLLM is the source of truth
+## 1. llmao config is the source of truth
 
-An earlier draft of this document proposed a runtime-owned YAML file for
-membership, on the grounds that a GPU box rebooting during a database outage
-could still fetch its assignment.
+Assignments, definitions, and the vLLM bearer live in llmao: `config.yaml`
+`fleet.hosts` plus `models.yaml`. `GET /vllm/config` is built from that
+(claimed IP / `X-LLMAO-Host`). It is not a SELECT on LiteLLM deployments.
+That is the decision, not a migration left undone. See
+[`vllm-fleet-design.md`](vllm-fleet-design.md) §2.
+
+LiteLLM's Postgres is the working copy the proxy needs in order to route.
+`POST /model/new` sends `litellm_params.api_base` and `litellm_params.api_key`.
+LiteLLM encrypts `litellm_params` on readback. llmao does not decrypt that
+key and does not use the stored value as the source for the box or for the
+next `/model/new`. The box receives the same bearer from `GET /vllm/config`,
+derived from `fleet.vllm_api_salt`. Delete finds the row by plaintext
+`model_info.asf_api_base`.
+
+`run_skew` reports drift: intended `api_base` against `GET /model/info`, and
+vLLM `/health` against LiteLLM `/health`.
+
+An earlier draft proposed a runtime-owned YAML file for membership, on the
+grounds that a GPU box rebooting during a database outage could still fetch
+its assignment.
 
 **That argument does not hold.** During a Postgres outage LiteLLM cannot
 authenticate any request — virtual keys live there — and with
 `STORE_MODEL_IN_DB` it cannot route either. The gateway is down regardless, so
 a box that fetches its config during that window comes up serving a model
-nothing can reach. The resilience buys nothing.
-
-State lives in LiteLLM's database. There is no second store.
+nothing can reach. The resilience buys nothing. That is not a claim that
+LiteLLM is the only store.
 
 ### 1.1 What a deployment already carries
 
 | field | fleet meaning |
 |---|---|
 | `model_name` | the `models.yaml` id (LiteLLM model group) |
-| `litellm_params.api_base` | **which host, which port** |
-| `litellm_params.api_key` | the bearer token for that vLLM |
+| `litellm_params.api_base` | host and public port, stored for LiteLLM; ciphertext on readback |
+| `litellm_params.api_key` | the vLLM bearer, stored for LiteLLM; not read back |
+| `model_info.asf_api_base` | plaintext host identity llmao matches on delete and skew |
 | `model_info` | arbitrary dict — carries the recipe and provenance |
-
-`GET /vllm/config` is still built from `fleet.hosts` + `models.yaml` (claimed
-IP / `X-LLMAO-Host`), not a SELECT on LiteLLM deployments. Traffic SoT is
-the deployment row; assignment SoT for the box is still YAML.
 
 ### 1.2 Enabling it
 
@@ -76,7 +89,10 @@ bearer at `/model/new` **after** SERVING. `/health` is unauthenticated;
 `litellm_params` on readback, so the portal cannot recover plaintext from
 `/model/info`.
 
-We do **not** store the key in Postgres. `fleet.vllm_api_salt` is not
+llmao does not keep its own key table. `/model/new` does write this bearer
+into LiteLLM's Postgres, encrypted with the rest of `litellm_params`, and
+that copy is what the proxy uses. llmao never reads it back (§1).
+`fleet.vllm_api_salt` is not
 rotated in place (a change means a new bearer on every box, a vLLM restart,
 and a new `/model/new`). `fleet.key` is not an input. Derive:
 
@@ -140,10 +156,12 @@ window, uncooled. Health-gating is the only mechanism available.
 
 Health-gating means an assignment exists (`fleet.hosts` YAML) before a
 LiteLLM deployment does. IP, port, and model live in that YAML. The vLLM
-bearer is HMAC of `fleet.vllm_api_salt` (§2.3), not a generated value to persist.
+bearer is HMAC of `fleet.vllm_api_salt` (§2.3), so the pending row does not
+need its own key column. LiteLLM receives that same bearer later, at
+`/model/new`.
 
-A second store for the key is not required. Registering immediately to
-avoid pending state is still a bad default (§2.1).
+Registering immediately to avoid pending state is still a bad default
+(§2.1).
 
 ---
 
@@ -320,8 +338,8 @@ One artifact now, rather than a database dump plus a state file.
 ## 7. Implementation
 
 1. `store_model_in_db` in YAML (and/or env) — **done** in examples; Puppet env too
-2. Derive `GET /vllm/config` from LiteLLM deployments matching the caller IP —
-   **not done**; still `fleet.hosts`
+2. `GET /vllm/config` from `fleet.hosts` + `models.yaml` — **decided**
+   (not derived from LiteLLM rows; §1)
 3. `/model/new` on serving, `/model/delete` on down — **done** (`asf_api_base`
    on `model_info` for delete). Public port in `api_base`; box JSON listen.
    Commercial `/model/new` at llmao startup.
@@ -342,10 +360,12 @@ One artifact now, rather than a database dump plus a state file.
   normalises or drops unknown nested keys, recipes cannot live there. Testable
   against a local proxy with `STORE_MODEL_IN_DB=True`.
 
-**Resolved:** LiteLLM is the source of truth; no second datastore; registration
-is health-gated; there is no per-deployment enable/disable and cooldown does
-not cover the boot window; host capacity is discovered, not declared;
-`model_name` is a caller contract and `model_info.vllm` a box recipe.
+**Resolved:** llmao config is the source of truth (`fleet.hosts` +
+`models.yaml`); LiteLLM holds the deployment copy, including the encrypted
+bearer; registration is health-gated; there is no per-deployment
+enable/disable and cooldown does not cover the boot window; host capacity is
+discovered, not declared; `model_name` is a caller contract and
+`model_info.vllm` a box recipe.
 
 ---
 

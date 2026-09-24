@@ -285,8 +285,9 @@ The template is identical for every box. Placement is keyed by public IP in
 - Whether a retired host keeps a record. Deleting a route deletes the row.
 - Remaining Vast operational nits (framework works; boxes fetch config).
 
-**Resolved:** `GET /vllm/config` (no path) is still keyed from `fleet.hosts`
-(not yet derived from LiteLLM rows). Deployments live in Postgres
+**Resolved:** `GET /vllm/config` (no path) is keyed from `fleet.hosts`.
+That stays; it is not derived from LiteLLM rows
+([`fleet-state.md`](fleet-state.md) §1). Deployments live in Postgres
 (`store_model_in_db` in YAML and/or env). Registration is health-gated.
 `ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
 `servers.yaml`; no Werkzeug ProxyFix on Quart ASGI.
