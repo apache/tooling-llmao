@@ -287,7 +287,10 @@ The template is identical for every box. Placement is keyed by public IP in
 
 **Resolved:** `GET /vllm/config` (no path) is keyed from `fleet.hosts`.
 That stays; it is not derived from LiteLLM rows
-([`fleet-state.md`](fleet-state.md) §1). Deployments live in Postgres
+([`fleet-state.md`](fleet-state.md) §1). A fleet-key fetch from an IP not in
+`fleet.hosts` is remembered in memory and shown as a highlighted Fleet row;
+Add into LiteLLM is on the existing row and waits until that vLLM is serving
+([`fleet-state.md`](fleet-state.md) §2.4). Deployments live in Postgres
 (`store_model_in_db` in YAML and/or env). Registration is health-gated.
 `ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
 `servers.yaml`; no Werkzeug ProxyFix on Quart ASGI.

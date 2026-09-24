@@ -163,6 +163,76 @@ need its own key column. LiteLLM receives that same bearer later, at
 Registering immediately to avoid pending state is still a bad default
 (§2.1).
 
+### 2.4 Config fetch before membership
+
+A new box presents the fleet key and calls `GET /vllm/config` before its IP
+is in `fleet.hosts`. Today that is a 404 and the Fleet tab does not show it.
+vLLM cannot be serving the assignment yet: the box has no model, listen port,
+or bearer until YAML names them and a later fetch succeeds.
+
+Record the request in process memory (host, first seen, last seen, count;
+cap 50 newest). Still 404. Do not write `config.yaml`. Do not call LiteLLM.
+The list dies on process restart. `config.yaml` itself is read at process
+start (the dev reloader watches the file; production needs a restart). The
+Fleet tab does not edit hosts, ports, or models.
+
+The only new row is an IP that is not in `config.yaml`. Once the operator
+adds `fleet.hosts.<ip>: [[model_name, listen_port]]` and restarts llmao, that
+IP is an ordinary deployment row. vLLM not up is already the State cell
+(`PENDING`, `STARTING`, or `DOWN`). In LiteLLM or not is already the
+no-deployment badge. Those stay separate. There is no combined "member, vLLM
+not up" state.
+
+Site-admin only for the new row, the highlight, the skew sentences, and Add.
+
+**Not in `config.yaml`.** The IP is a row in the Fleet table, Bootstrap
+`table-warning`, not a second table. A fleet key from an IP outside
+`config.yaml` is a box being set up, or a caller that should not have the
+key. The highlight does not decide which. State cell: `Fleet key presented;
+this IP is not in config.yaml`. Config-request column: last-seen age and
+count (`2m · 14`). Other columns are `—`. No Add button. No Skew cell.
+Caption under the heading: `A highlighted row presented the fleet key and is
+not in config.yaml. That is a box being set up, or a caller that should not
+have the key.`
+
+**In `config.yaml`.** The next fetch returns the assignment. Add is an
+Actions control on that existing self-hosted row. It is disabled while vLLM
+is not `SERVING`, title `vLLM is not serving yet`, and no `/model/new` runs,
+so a `DOWN` probe has nothing to delete. It is enabled when vLLM is
+`SERVING` and `in_litellm` is false. `POST /do-add-deployment` (same shape as
+`/do-create-key` and `/do-revoke-key`; no `/fleet/` route) calls the existing
+`add_deployment`: LiteLLM `POST /model/new` with the derived bearer and
+`model_info.asf_api_base`. One deployment per click. Success sets
+`in_litellm`, hides Add, and clears the no-route skew note. Failure flashes
+the LiteLLM error and leaves the button. `sync_selfhost` already posts
+`/model/new` at this same gate and still deletes on `DOWN` after that. The
+button is that action on the row when the runner has not fired or the last
+post failed. It does not register early. Commercial rows stay on startup
+`/model/new` and do not get the button.
+
+The Skew cell is the description on rows that are in `config.yaml`. Replace
+`missing from LiteLLM` and `LiteLLM health disagrees`.
+
+| Situation | Skew cell |
+|---|---|
+| In `fleet.hosts`, vLLM is not `SERVING`, LiteLLM has no route | `vLLM is not up yet, so there is no LiteLLM route` |
+| In `fleet.hosts`, vLLM is `SERVING`, LiteLLM has no route | `vLLM is up and there is no LiteLLM route` |
+| vLLM is `SERVING`, LiteLLM `/health` lists the endpoint down | `vLLM is up; LiteLLM reports this endpoint down` |
+| vLLM is `DOWN`, LiteLLM `/health` lists the endpoint up | `vLLM is down; LiteLLM reports this endpoint up` |
+
+The first sentence is the existing not-up row, which is already not in
+LiteLLM. The second is the same row once vLLM is `SERVING`, next to the
+enabled Add button. The last two replace the single health note, so a
+disagreement says which side is up.
+
+A LiteLLM `api_base` that matches no intended deployment stays a log line,
+not a Fleet row.
+
+Not in this design: editing `config.yaml` from the tab, picking a model for
+an unknown IP, persisting the request list, a partial 404 body, auto-restart
+of the GPU box, a retire button, registering before vLLM is up, alerting or
+blocking a highlighted IP.
+
 ---
 
 ## 3. Three config lifetimes
@@ -345,7 +415,9 @@ One artifact now, rather than a database dump plus a state file.
    Commercial `/model/new` at llmao startup.
 4. Somewhere for pending assignments (§2.2) — still `fleet.hosts` YAML
 5. Config revision on `/vllm/config`, reported back by `install_set.py`
-6. UI: add, retire, edit
+6. UI: Add on an existing Fleet row once vLLM is serving (§2.4). The tab
+   does not edit hosts, ports, or models. Retire and edit still open.
+   Unknown config fetches are highlighted rows on that tab (§2.4).
 
 ---
 
