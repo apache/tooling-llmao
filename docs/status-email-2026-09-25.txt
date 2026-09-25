@@ -1,0 +1,81 @@
+Subject: llmao — shared, attributed access to ASF inference
+
+Hi all,
+
+llmao is the Tooling app behind llm.apache.org. It is how a committer
+gets a key to Foundation-sanctioned models, with the call attributed to
+them and bounded by a project budget. This note is what that service is,
+and where the software stands.
+
+What it does
+------------
+You sign in with your ASF id. llmao shows the models you can call and
+lets you create a personal access token (a PAT) for a project. Your own
+tools — an editor, a script, an agent — send that PAT to the LiteLLM
+proxy on llm.apache.org. llmao is not a chat window. Inference does not
+pass through it.
+
+The proxy enforces the project budget and records spend against the
+key. Behind it are commercial APIs and a small GPU fleet we run
+ourselves. Today that fleet is one Vast.ai box and two RunPod boxes,
+brought up by hand and pointed at the gateway. A signed-in user can see
+which of those backends are serving. Host and port details stay with
+the operators.
+
+A model is "available" only when it is in service and the proxy has a
+route to it. The Models page is the catalog: name, id, and whether you
+can request a key.
+
+Why it exists
+-------------
+The Foundation needs one place for sanctioned inference, so usage is
+attributable and spend has an owner. Project keys and budgets live with
+the proxy. llmao is the ASF-facing control plane: identity, the catalog,
+and the key UX. The code is apache/tooling-llmao. The product design
+(who may spend, automation keys, envelopes) is in rai-private,
+services/llmao/README.md.
+
+Lately, in the software
+-----------------------
+Since the 10 September note to this list's predecessors:
+
+• Definitions of what we serve live in models.yaml, maintained with the
+  app. The proxy does not include that file. A live route is a row in
+  the proxy's database, created when a self-hosted model is actually up
+  (commercial APIs are registered when llmao starts).
+
+• Each GPU box asks llmao for its config with a fleet key. A new box can
+  ask before we have listed it. That request does not receive a config.
+  On the Fleet page it shows up highlighted, so an operator can tell a
+  machine being set up from one that merely has the key. Once the box is
+  listed and its model process is serving, Add registers that one
+  backend with the proxy. The page does not edit the host list.
+
+• Each self-hosted server has its own API key, derived by llmao and
+  handed to the box and to the proxy. We do not keep a separate key
+  table. This is in the code and is not yet how the running boxes are
+  keyed.
+
+Open
+----
+• Walk a new Vast box through that Fleet path on the running service.
+• Operator follow-ups: long model load, a box reporting which config it
+  applied, smoke checks. We do not auto-restart a GPU box.
+• RunPod is in use by hand. An image we build and reuse is not.
+• Who may create a project-scoped automation key is still a RAI
+  question. Provisional answer: any PMC member.
+• Project budget pages beyond a read-only overview are not built yet.
+
+Pointers
+--------
+  https://llm.apache.org
+  https://github.com/apache/tooling-llmao
+  Design: rai-private → services/llmao/README.md
+  Status: tooling-llmao → docs/STATUS.md
+
+Questions welcome.
+
+Cheers,
+-g
+
+ps. email assist from Grok, if it wasn't obvious :)
