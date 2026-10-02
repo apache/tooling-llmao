@@ -76,7 +76,9 @@ from _discover import direct_endpoints  # noqa: E402
 # assumed -- the claim is only worth having if it works.
 VISION = {"gemma4-26b", "qwen3.8-27b"}
 
-OK, BAD, WARN = "\033[32m✓\033[0m", "\033[31m✗\033[0m", "\033[33m!\033[0m"
+# 92 is bright green. 32 is the dark green that disappears on a black
+# terminal; bright green still contrasts on a white one.
+OK, BAD, WARN = "\033[92m✓\033[0m", "\033[31m✗\033[0m", "\033[33m!\033[0m"
 
 
 def red_square_png() -> str:
