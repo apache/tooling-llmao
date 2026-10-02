@@ -93,8 +93,13 @@ distinguishes "the parser declined" from "the model never called".
 
 ## Testing
 
-Two scripts in `bin/`, stdlib-only, with no endpoints committed — they
-discover from LiteLLM's routing table at runtime.
+Two scripts in `bin/`, with no endpoints committed — they discover from
+LiteLLM's routing table at runtime. `llmao-saturate` is stdlib-only.
+`llmao-smoke` reads `litellm.master_key` from `config.yaml` via PyYAML.
+`LLMAO_KEY` overrides it; load that from a file
+(`read -r LLMAO_KEY < ~/.llmao-key && export LLMAO_KEY`). A key typed on
+the command line is stored in shell history and is visible to other users
+via `ps`.
 
 | | what it answers |
 |---|---|

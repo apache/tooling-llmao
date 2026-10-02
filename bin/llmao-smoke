@@ -6,9 +6,12 @@ catalog says a model accepts, and fails when the model does not behave as the
 catalog says it will. Use probe.py to discover what a model can do; use this
 to notice when that stops being true.
 
-    export LLMAO_KEY=sk-...          # a PAT from My Keys
-    llmao-smoke                      # all models
+    llmao-smoke                      # all models; bearer is config.yaml litellm.master_key
     llmao-smoke --model qwen3-8b
+    # Optional override. Read the key from a file. A literal
+    # LLMAO_KEY=sk-... on the command line is stored in shell history and
+    # is visible to other users via ps.
+    #   read -r LLMAO_KEY < ~/.llmao-key && export LLMAO_KEY
     llmao-smoke --direct             # bypass LiteLLM; needs VLLM_API_KEY
 
 Run this after any change to a model, a box, or the gateway. It is the
@@ -50,6 +53,7 @@ import argparse
 import base64
 import json
 import os
+import pathlib
 import struct
 import sys
 import time
@@ -57,7 +61,10 @@ import urllib.error
 import urllib.request
 import zlib
 
+import yaml
+
 GATEWAY = "https://llm.apache.org/v1/chat/completions"
+CONFIG = pathlib.Path(__file__).resolve().parent.parent / "config.yaml"
 
 # No endpoints are committed here. --direct discovers them from LiteLLM's
 # routing table on the gateway host, or from LLMAO_DIRECT_<MODEL> env vars
@@ -386,16 +393,30 @@ def check(model: str, url: str, key: str) -> int:
     return fails
 
 
+def master_key_from_config(path: pathlib.Path) -> str:
+    if not path.is_file():
+        raise SystemExit(f"Missing {path} (set LLMAO_KEY or create config.yaml)")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    litellm = data.get("litellm") or {}
+    key = litellm.get("master_key")
+    if not isinstance(key, str) or not key.strip() or key.strip().startswith("CHANGE_ME"):
+        raise SystemExit(f"{path}: litellm.master_key is missing or CHANGE_ME")
+    return key.strip()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="append")
     ap.add_argument("--direct", action="store_true", help="hit the boxes directly; isolates gateway problems")
+    ap.add_argument("--config", type=pathlib.Path, default=CONFIG, help="config.yaml for litellm.master_key")
     args = ap.parse_args()
 
-    var = "VLLM_API_KEY" if args.direct else "LLMAO_KEY"
-    key = os.environ.get(var)
-    if not key:
-        sys.exit(f"export {var} first")
+    if args.direct:
+        key = os.environ.get("VLLM_API_KEY")
+        if not key:
+            sys.exit("export VLLM_API_KEY first")
+    else:
+        key = os.environ.get("LLMAO_KEY") or master_key_from_config(args.config)
 
     endpoints = direct_endpoints() if args.direct else {}
     if args.direct and not endpoints:

@@ -8,8 +8,9 @@ Scripts for llmao; needs more for others but this documents model perf testing.
 | `llmao-smoke` | after any change to a model, box or the gateway | ~1 min/model |
 | `llmao-saturate` | when deciding whether a card is the right size | 5–30 min |
 
-Smoke and saturate are stdlib-only Python 3. `llmao-vllm-api-key` uses
-`llmao.vllm_api_key` and `config.yaml` unless `--fleet-key` is passed.
+`llmao-saturate` is stdlib-only Python 3. `llmao-smoke` uses PyYAML to read
+`litellm.master_key` from `config.yaml`. `llmao-vllm-api-key` uses
+`llmao.vllm_api_key` and `config.yaml` unless `--salt` is passed.
 
 ## llmao-vllm-api-key
 
@@ -19,7 +20,7 @@ will get from `GET /vllm/config` after that is wired. See
 
 ```bash
 bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001
-bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001 --fleet-key sk-...
+bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001 --salt sk-...
 ```
 
 Paste into `vllm serve --api-key` / Supervisor on a hand-launched box.
@@ -27,11 +28,14 @@ Paste into `vllm serve --api-key` / Supervisor on a hand-launched box.
 ## llmao-smoke
 
 ```bash
-export LLMAO_KEY=sk-...        # a PAT from My Keys
 llmao-smoke                    # every model the gateway advertises
 llmao-smoke --model qwen3-8b
+# optional override; the file holds the PAT, one line, no quotes
+read -r LLMAO_KEY < ~/.llmao-key && export LLMAO_KEY
 llmao-smoke --direct           # bypass LiteLLM; needs VLLM_API_KEY
 ```
+
+The gateway bearer is `litellm.master_key` in `config.yaml`. `LLMAO_KEY` overrides it. Do not put the key on the command line (`LLMAO_KEY=sk-... llmao-smoke` or `export LLMAO_KEY=sk-...`): the value is stored in shell history and is visible to other users via `ps`. `read` from a file leaves the secret out of both.
 
 Six checks per model: completion, thinking-off, tool calling, vision,
 sustained output, and a 25k-token prompt. Exits non-zero if anything fails,
