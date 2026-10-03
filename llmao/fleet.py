@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -443,6 +444,8 @@ class FleetDeployment:
         self.litellm_healthy: bool | None = None
         self.litellm_health_at: float | None = None
         self.skew: list[str] = []
+        # Set by the config skew pass when LiteLLM has this api_base under another model_name.
+        self.config_mismatch = False
 
     @classmethod
     def from_vllm(cls, srv: VllmServer) -> FleetDeployment:
@@ -471,6 +474,16 @@ class FleetDeployment:
         return self._api_base
 
 
+@dataclass(frozen=True)
+class ExtraLiteLLM:
+    """One LiteLLM route that config.yaml does not list."""
+
+    host: str
+    port: int | None
+    model_name: str
+    skew: tuple[str, ...]
+
+
 class Fleet:
     """Live fleet: vLLM servers, intended deployments, lifecycle probes."""
 
@@ -494,6 +507,10 @@ class Fleet:
         self.config_fetch_at: dict[str, float] = {}
         # Fleet-key GETs for IPs not in fleet.hosts. Process memory only.
         self.unknown_config_fetches: dict[str, dict[str, float | int]] = {}
+        # LiteLLM routes that match no deployment. Rebuilt each config skew pass.
+        # Identity is host, port, and model name. api_base is not a primary key:
+        # one host serves several ports, and one host:port can report more than one model.
+        self.extra_litellm: list[ExtraLiteLLM] = []
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
@@ -666,6 +683,7 @@ def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
     misses = int(cfg.health_fail_threshold)
     grace = float(cfg.health_grace_s)
     litellm_at = now if dep.litellm_healthy is not None else None
+    mismatch = bool(dep.config_mismatch)
     srv = dep.vllm
     if srv is None:
         return DeploymentSnapshot(
@@ -674,6 +692,7 @@ def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
             in_litellm=dep.in_litellm,
             litellm_healthy=dep.litellm_healthy,
             litellm_health_at=litellm_at,
+            config_mismatch=mismatch,
         )
     if srv.state == HEALTHY:
         probe_ok, fails, last_ok, seen, probed = True, 0, now, srv.seen_at, now
@@ -696,6 +715,7 @@ def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
         litellm_health_at=litellm_at,
         context_window=srv.observed_max_model_len or srv.max_model_len,
         kv_cache_tokens=srv.kv_cache_tokens,
+        config_mismatch=mismatch,
     )
 
 

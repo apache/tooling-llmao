@@ -35,6 +35,8 @@ from llmao.model_status import (
     AVAILABLE,
     HEALTHY,
     LOADING,
+    SKEW_CONFIG_MISMATCH,
+    SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_INTENDED_NOT_IN_LITELLM,
     SKEW_VLLM_DOWN_LITELLM_UP,
     SKEW_VLLM_UP_LITELLM_DOWN,
@@ -190,6 +192,46 @@ def test_skew_sentences_replace_old_phrases():
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
     assert SKEW_VLLM_DOWN_LITELLM_UP in dep.skew
     assert "LiteLLM health disagrees" not in dep.skew
+
+
+def _skew_backend(fleet, info):
+    backend = _Backend(fleet, info=info, health={})
+    backend._cfg = fleet.cfg
+    backend._store_skew = lambda dep, now: LiteLLMBackend._store_skew(backend, dep, now)
+    return backend
+
+
+def test_extra_routes_are_per_port_and_model():
+    srv = _server()
+    dep = FleetDeployment.from_vllm(srv)
+    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    info = [
+        {"model_name": "other-a", "litellm_params": {"api_base": "http://10.0.0.1:9001/v1"}},
+        {"model_name": "other-b", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
+        {"model_name": "other-c", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
+    ]
+    asyncio.run(LiteLLMBackend.check_config_skew(_skew_backend(fleet, info)))
+    found = {(row.host, row.port, row.model_name) for row in fleet.extra_litellm}
+    assert found == {("10.0.0.1", 9001, "other-a"), ("10.0.0.1", 9002, "other-b"), ("10.0.0.1", 9002, "other-c")}
+    assert all(SKEW_IN_LITELLM_NOT_IN_CONFIG in row.skew for row in fleet.extra_litellm)
+    assert SKEW_IN_LITELLM_NOT_IN_CONFIG not in dep.skew
+
+
+def test_model_name_mismatch_survives_health_check():
+    srv = _server()
+    srv.state = HEALTHY
+    dep = FleetDeployment.from_vllm(srv)
+    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    backend = _skew_backend(fleet, [{"model_name": "not-gemma", "litellm_params": {"api_base": srv.api_base}}])
+    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    assert SKEW_CONFIG_MISMATCH in dep.skew
+    backend.health = {"healthy_endpoints": [{"api_base": srv.api_base}], "unhealthy_endpoints": []}
+    asyncio.run(LiteLLMBackend.check_health_skew(backend))
+    assert SKEW_CONFIG_MISMATCH in dep.skew
+    backend.info = [{"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}]
+    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    assert SKEW_CONFIG_MISMATCH not in dep.skew
+    assert fleet.extra_litellm == []
 
 
 def test_add_calls_deployment_only_when_serving():

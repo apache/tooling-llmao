@@ -31,11 +31,20 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
-from llmao.fleet import snapshot_for_status
-from llmao.model_status import HEALTHY, SKEW_PHRASE, STALLED, UNHEALTHY, deployment_status
+from llmao.fleet import ExtraLiteLLM, snapshot_for_status
+from llmao.model_status import (
+    HEALTHY,
+    SKEW_IN_LITELLM_NOT_IN_CONFIG,
+    SKEW_PHRASE,
+    STALLED,
+    UNHEALTHY,
+    DeploymentSnapshot,
+    deployment_status,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -598,15 +607,35 @@ class LiteLLMBackend:
     async def check_config_skew(self) -> None:
         resp = await self._request("GET", "model/info")
         self._raise_http(resp)
-        bases = _api_bases_from_model_info(resp.json())
+        routes = _routes_from_model_info(resp.json())
+        by_base: dict[str, list[str]] = {}
+        for norm, _host, _port, model_name in routes:
+            by_base.setdefault(norm, []).append(model_name)
         intended = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base}
+        now = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
-            dep.in_litellm = bool(base) and base in bases
-            self._store_skew(dep, time.time())
-        extra = bases - intended
+            names = by_base.get(base, []) if base else []
+            dep.in_litellm = bool(names)
+            dep.config_mismatch = any(name != dep.model_name for name in names)
+            self._store_skew(dep, now)
+        extra: list[ExtraLiteLLM] = []
+        for norm, host, port, model_name in routes:
+            if norm in intended:
+                continue
+            view = deployment_status(
+                DeploymentSnapshot(model_name=model_name, self_hosted=False, litellm_only=True),
+                self._cfg.fleet,
+                now,
+            )
+            extra.append(ExtraLiteLLM(host=host, port=port, model_name=model_name, skew=view.skew))
+        self.fleet.extra_litellm = extra
         if extra:
-            _LOGGER.warning("skew: LiteLLM api_base not an intended deployment: %s", sorted(extra))
+            _LOGGER.warning(
+                "skew: %s %s",
+                SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG],
+                [(row.host, row.port, row.model_name) for row in extra],
+            )
 
     async def check_health_skew(self) -> None:
         resp = await self._request("GET", "health")
@@ -667,17 +696,25 @@ def _norm_base(url: Any) -> str:
     return s
 
 
-def _api_bases_from_model_info(body: Any) -> set[str]:
+def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str]]:
+    """Each LiteLLM row as (normalised api_base, host, port, model_name).
+
+    Host and port stay separate. One machine serves several ports, and one
+    host:port can still report more than one model name.
+    """
     rows = []
     if isinstance(body, list):
         rows = body
     elif isinstance(body, dict):
         rows = body.get("data") or body.get("models") or []
-    bases: set[str] = set()
+    out: list[tuple[str, str, int | None, str]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         params = row.get("litellm_params") or {}
-        if isinstance(params, dict) and params.get("api_base"):
-            bases.add(_norm_base(params["api_base"]))
-    return bases
+        if not isinstance(params, dict) or not params.get("api_base"):
+            continue
+        norm = _norm_base(params["api_base"])
+        parsed = urlparse(norm)
+        out.append((norm, parsed.hostname or "", parsed.port, str(row.get("model_name") or "")))
+    return out
