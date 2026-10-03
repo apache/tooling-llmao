@@ -34,7 +34,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from llmao.fleet import VllmServer
+from llmao.model_status import HEALTHY, STALLED, UNHEALTHY
 
 # Skew cell text. The sentence is the description. Old phrases are stripped when seen.
 SKEW_ROUTE_NOT_UP = "vLLM is not up yet, so there is no LiteLLM route"
@@ -589,9 +589,9 @@ class LiteLLMBackend:
             if not dep.self_hosted or dep.vllm is None:
                 continue
             srv = dep.vllm
-            if srv.state == VllmServer.SERVING and dep.api_base and not dep.in_litellm:
+            if srv.state == HEALTHY and dep.api_base and not dep.in_litellm:
                 await self.add_deployment(dep)
-            elif srv.state == VllmServer.DOWN and dep.in_litellm:
+            elif srv.state in (UNHEALTHY, STALLED) and dep.in_litellm:
                 await self.delete_deployment(dep)
 
     async def run_skew(self) -> None:
@@ -685,15 +685,15 @@ class LiteLLMBackend:
 def _route_skew_note(dep) -> str:
     if dep.vllm is None:
         return SKEW_ROUTE_COMMERCIAL
-    if dep.vllm.state == VllmServer.SERVING:
+    if dep.vllm.state == HEALTHY:
         return SKEW_ROUTE_UP
     return SKEW_ROUTE_NOT_UP
 
 
 def _health_skew_note(state: str, *, litellm_up: bool, litellm_down: bool) -> str:
-    if state == VllmServer.SERVING and litellm_down:
+    if state == HEALTHY and litellm_down:
         return SKEW_HEALTH_VLLM_UP
-    if state == VllmServer.DOWN and litellm_up:
+    if state in (UNHEALTHY, STALLED) and litellm_up:
         return SKEW_HEALTH_VLLM_DOWN
     return ""
 

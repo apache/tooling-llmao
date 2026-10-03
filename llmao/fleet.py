@@ -35,7 +35,16 @@ import time
 from typing import Any
 
 import httpx
+from easydict import EasyDict as edict  # noqa: N813
 
+from llmao.model_status import (
+    HEALTHY,
+    LOADING,
+    STALLED,
+    UNHEALTHY,
+    DeploymentSnapshot,
+    self_hosted_lifecycle,
+)
 from llmao.models import load_models, validate_models
 from llmao.vast_client import fetch_port_map
 
@@ -223,11 +232,6 @@ def config_for_host(
 class VllmServer:
     """One vLLM process from fleet.hosts (live health + box JSON)."""
 
-    PENDING = "pending"
-    STARTING = "starting"
-    SERVING = "serving"
-    DOWN = "down"
-
     def __init__(
         self,
         *,
@@ -276,7 +280,9 @@ class VllmServer:
         self.kv_cache_tokens: int | None = None
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
-        self.state = self.PENDING
+        # Named by model_status. Loading until the first probe: seen_at is now,
+        # which is still inside health_grace_s.
+        self.state = LOADING
         self.seen_at = time.time()
         self.last_ok = None
         self.last_error = None
@@ -385,32 +391,29 @@ class VllmServer:
         fail_threshold: int,
         err: str | None = None,
     ) -> None:
+        was = self.state
         if ok:
-            if self.state != self.SERVING:
-                _LOGGER.info("fleet server %s@%s serving", self.name, self.api_base)
-            self.state = self.SERVING
             self.last_ok = now
             self.last_error = None
             self.fails = 0
-            return
-        self.fails += 1
-        self.last_error = err or "unhealthy"
-        if self.state == self.SERVING:
-            if self.fails >= fail_threshold:
-                self.state = self.DOWN
-                _LOGGER.warning("fleet server %s@%s down (%s)", self.name, self.api_base, self.last_error)
-            return
-        if (now - self.seen_at) < grace_s:
-            self.state = self.STARTING
-            return
-        if self.state != self.DOWN:
-            _LOGGER.warning(
-                "fleet server %s@%s still not healthy after grace (%s)",
-                self.name,
-                self.api_base,
-                self.last_error,
-            )
-        self.state = self.DOWN
+        else:
+            self.fails += 1
+            self.last_error = err or "unhealthy"
+        # The counters above are the observation. The name comes from one place.
+        cfg = edict(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
+        snap = DeploymentSnapshot(
+            model_name=self.model_name,
+            self_hosted=True,
+            seen_at=self.seen_at,
+            probe_ok=ok,
+            fails=self.fails,
+            last_ok=self.last_ok,
+        )
+        self.state = self_hosted_lifecycle(snap, cfg, now)
+        if self.state == HEALTHY and was != HEALTHY:
+            _LOGGER.info("fleet server %s@%s healthy", self.name, self.api_base)
+        elif self.state in (UNHEALTHY, STALLED) and was not in (UNHEALTHY, STALLED):
+            _LOGGER.warning("fleet server %s@%s %s (%s)", self.name, self.api_base, self.state, self.last_error)
 
 
 class FleetDeployment:
@@ -581,13 +584,13 @@ class Fleet:
         if not states:
             return ""
         uniq = set(states)
-        if uniq == {VllmServer.SERVING}:
+        if uniq == {HEALTHY}:
             return self.BADGE_UP
-        if uniq <= {VllmServer.STARTING, VllmServer.PENDING}:
+        if uniq <= {LOADING}:
             return self.BADGE_STARTING
-        if uniq == {VllmServer.DOWN}:
+        if uniq <= {UNHEALTHY, STALLED}:
             return self.BADGE_DOWN
-        if VllmServer.SERVING in uniq and uniq <= {VllmServer.SERVING, VllmServer.STARTING, VllmServer.PENDING}:
+        if HEALTHY in uniq and uniq <= {HEALTHY, LOADING}:
             return self.BADGE_UP
         return self.BADGE_MIXED
 
@@ -619,7 +622,7 @@ class Fleet:
                 # Scrape on the edge into SERVING, and once more if an earlier
                 # attempt came back empty. Both values are fixed at engine
                 # init, so re-reading them every probe would be waste.
-                if srv.state == srv.SERVING and (was != srv.SERVING or srv.kv_cache_tokens is None):
+                if srv.state == HEALTHY and (was != HEALTHY or srv.kv_cache_tokens is None):
                     root = srv.root_url
                     if root:
                         kv, mml = await fetch_observed(client, root, srv.api_key)
@@ -667,7 +670,7 @@ def add_refusal(dep) -> str | None:
         return "not a self-hosted deployment"
     if dep.in_litellm:
         return "already in LiteLLM"
-    if dep.vllm.state != VllmServer.SERVING:
+    if dep.vllm.state != HEALTHY:
         return "vLLM is not serving yet"
     return None
 

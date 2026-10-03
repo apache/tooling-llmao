@@ -5,7 +5,7 @@
   <h1 class="h3 mb-3">Fleet</h1>
   <p class="text-muted small">
     Intended LiteLLM deployments (self-hosted vLLM and commercial).
-    <span class="badge text-bg-success">serving</span> means traffic can
+    <span class="badge text-bg-success">healthy</span> means traffic can
     route. Self-host also needs vLLM up; commercial uses LiteLLM
     <code>/health</code> only.
     [if-any is_site_admin]
@@ -66,15 +66,15 @@
             [servers.state]
             [else]
             [if-any servers.serving]
-            <span class="badge text-bg-success">serving</span>
+            <span class="badge text-bg-success">[servers.state]</span>
             [end]
             [if-any servers.no_deployment]
             <span class="badge text-bg-warning text-dark">no deployment</span>
             [end]
-            [if-any servers.starting]
+            [if-any servers.loading]
             <span class="badge text-bg-secondary">[servers.state]</span>
             [end]
-            [if-any servers.down]
+            [if-any servers.unhealthy]
             <span class="badge text-bg-danger">[servers.state]</span>
             [end]
             [if-any servers.pending]

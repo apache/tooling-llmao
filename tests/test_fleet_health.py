@@ -37,6 +37,7 @@ from llmao.litellm_client import (
     SKEW_ROUTE_UP,
     LiteLLMBackend,
 )
+from llmao.model_status import HEALTHY, LOADING, STALLED, UNHEALTHY
 
 
 class _Resp:
@@ -68,7 +69,7 @@ def _server(**kwargs):
 def test_probe_serving():
     s = _server()
     s.record_probe(True, now=100.0, grace_s=1800, fail_threshold=3)
-    assert s.state == VllmServer.SERVING
+    assert s.state == HEALTHY
     assert s.last_ok == 100.0
 
 
@@ -76,14 +77,14 @@ def test_starting_inside_grace():
     s = _server()
     s.seen_at = 0.0
     s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
-    assert s.state == VllmServer.STARTING
+    assert s.state == LOADING
 
 
 def test_down_after_grace():
     s = _server()
     s.seen_at = 0.0
     s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="timeout")
-    assert s.state == VllmServer.DOWN
+    assert s.state == STALLED
 
 
 def test_serving_needs_consecutive_fails():
@@ -91,16 +92,16 @@ def test_serving_needs_consecutive_fails():
     s.record_probe(True, now=1.0, grace_s=1800, fail_threshold=3)
     s.record_probe(False, now=2.0, grace_s=1800, fail_threshold=3)
     s.record_probe(False, now=3.0, grace_s=1800, fail_threshold=3)
-    assert s.state == VllmServer.SERVING
+    assert s.state == HEALTHY
     s.record_probe(False, now=4.0, grace_s=1800, fail_threshold=3)
-    assert s.state == VllmServer.DOWN
+    assert s.state == UNHEALTHY
 
 
 def test_model_health_aggregate():
     a = _server(name="a", listen_port=1)
     b = _server(name="b", listen_port=2, model_name="qwen3-8b")
-    a.state = VllmServer.SERVING
-    b.state = VllmServer.STARTING
+    a.state = HEALTHY
+    b.state = LOADING
     fleet = Fleet(cfg=None, servers=[a, b])
     assert fleet.model_health("gemma4-26b") == Fleet.BADGE_UP
     assert fleet.model_health("qwen3-8b") == Fleet.BADGE_STARTING
@@ -130,7 +131,7 @@ def test_unknown_config_fetch_drops_once_in_hosts():
 def test_add_refusal_until_serving():
     dep = FleetDeployment.from_vllm(_server())
     assert add_refusal(dep) == "vLLM is not serving yet"
-    dep.vllm.state = VllmServer.SERVING
+    dep.vllm.state = HEALTHY
     assert add_refusal(dep) is None
     dep.in_litellm = True
     assert add_refusal(dep) == "already in LiteLLM"
@@ -159,7 +160,7 @@ class _Backend:
 
 def test_skew_sentences_replace_old_phrases():
     srv = _server()
-    srv.state = VllmServer.PENDING
+    srv.state = LOADING
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
     fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
@@ -167,7 +168,7 @@ def test_skew_sentences_replace_old_phrases():
     asyncio.run(LiteLLMBackend.check_config_skew(backend))
     assert SKEW_ROUTE_NOT_UP in dep.skew
     assert "missing from LiteLLM" not in dep.skew
-    srv.state = VllmServer.SERVING
+    srv.state = HEALTHY
     asyncio.run(LiteLLMBackend.check_config_skew(backend))
     assert SKEW_ROUTE_UP in dep.skew
     assert "missing from LiteLLM" not in dep.skew
@@ -175,7 +176,7 @@ def test_skew_sentences_replace_old_phrases():
     backend.health = {"unhealthy_endpoints": [{"api_base": base}], "healthy_endpoints": []}
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
     assert SKEW_HEALTH_VLLM_UP in dep.skew
-    srv.state = VllmServer.DOWN
+    srv.state = UNHEALTHY
     backend.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
     assert SKEW_HEALTH_VLLM_DOWN in dep.skew
@@ -195,7 +196,7 @@ def test_add_calls_deployment_only_when_serving():
 
     asyncio.run(attempt())
     assert backend.added == []
-    srv.state = VllmServer.SERVING
+    srv.state = HEALTHY
     asyncio.run(attempt())
     assert backend.added == [dep]
     assert dep.in_litellm is True
@@ -234,7 +235,7 @@ def test_local_from_cfg_public_equals_listen():
     fleet = Fleet.from_cfg(cfg, models=load_models(example))
     assert fleet.servers[0].listen_port == 8001
     assert fleet.servers[0].public_port == 8001
-    assert fleet.servers[0].state == VllmServer.PENDING
+    assert fleet.servers[0].state == LOADING
 
 
 def test_probe_skips_without_public_port():
@@ -261,7 +262,7 @@ def test_probe_skips_without_public_port():
 
     fleet = Fleet(cfg=cfg, servers=[s])
     asyncio.run(fleet.probe_all(client=_Boom(), now=1.0))
-    assert s.state == VllmServer.PENDING
+    assert s.state == LOADING
 
 
 def test_model_in_litellm():
@@ -285,10 +286,10 @@ def test_grace_boundary_is_exclusive():
     s = _server()
     s.seen_at = 0.0
     s.record_probe(False, now=1799.0, grace_s=1800, fail_threshold=3, err="refused")
-    assert s.state == VllmServer.STARTING
+    assert s.state == LOADING
 
     s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
-    assert s.state == VllmServer.DOWN
+    assert s.state == STALLED
 
 
 def test_recovers_from_down_on_a_single_probe():
@@ -303,11 +304,11 @@ def test_recovers_from_down_on_a_single_probe():
     s.seen_at = 0.0
     for _ in range(3):
         s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
-    assert s.state == VllmServer.DOWN
+    assert s.state == STALLED
     assert s.fails == 3
 
     s.record_probe(True, now=2100.0, grace_s=1800, fail_threshold=3)
-    assert s.state == VllmServer.SERVING
+    assert s.state == HEALTHY
     assert s.fails == 0
     assert s.last_error is None
 
@@ -332,7 +333,7 @@ def test_flapping_settles_rather_than_oscillating_per_probe():
         s.record_probe(True, now=now, grace_s=1800, fail_threshold=3)
         now += 45.0
 
-    assert s.state == VllmServer.SERVING
+    assert s.state == HEALTHY
     assert s.fails == 0
 
 
@@ -347,10 +348,10 @@ def test_down_stays_down_while_failing():
     s.seen_at = 0.0
     for _ in range(3):
         s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
-    assert s.state == VllmServer.DOWN
+    assert s.state == STALLED
 
     s.record_probe(False, now=9999.0, grace_s=1800, fail_threshold=3, err="refused")
-    assert s.state == VllmServer.DOWN
+    assert s.state == STALLED
     assert s.fails == 4
 
 
@@ -366,11 +367,11 @@ def test_never_healthy_box_goes_starting_then_down():
     now = 45.0
     while now < 1800.0:
         s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")
-        assert s.state == VllmServer.STARTING, f"flipped early at {now}s"
+        assert s.state == LOADING, f"flipped early at {now}s"
         now += 45.0
 
     s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
-    assert s.state == VllmServer.DOWN
+    assert s.state == STALLED
 
 
 _METRICS = """\
@@ -524,7 +525,7 @@ def test_probe_all_scrapes_from_root_not_api_base():
     fleet = Fleet(cfg=cfg, servers=[s])
     asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
 
-    assert s.state == VllmServer.SERVING
+    assert s.state == HEALTHY
     assert s.kv_cache_tokens == 855836
     assert s.observed_max_model_len == 131072
     assert calls == [f"{root}/health", f"{root}/metrics", f"{root}/v1/models"]

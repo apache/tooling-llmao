@@ -34,8 +34,9 @@ from dunamai import Version
 from easydict import EasyDict
 
 from llmao.auth import current_identity
-from llmao.fleet import VllmServer, add_refusal
+from llmao.fleet import add_refusal
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
+from llmao.model_status import HEALTHY, LOADING, STALLED, UNHEALTHY
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
@@ -294,8 +295,8 @@ async def fleet_page(result):
                     litellm_health_ago="",
                     no_deployment=ezt.boolean(False),
                     serving=ezt.boolean(False),
-                    starting=ezt.boolean(False),
-                    down=ezt.boolean(False),
+                    loading=ezt.boolean(False),
+                    unhealthy=ezt.boolean(False),
                     pending=ezt.boolean(False),
                     unknown=ezt.boolean(True),
                     row_class="table-warning",
@@ -308,11 +309,11 @@ async def fleet_page(result):
         fetched = fleet.config_fetch_at.get(srv.host) if srv else None
         if srv is not None:
             last_ok = srv.last_ok
-            no_deployment = srv.state == VllmServer.SERVING and not dep.in_litellm
-            serving = srv.state == VllmServer.SERVING and dep.in_litellm
-            starting = srv.state == VllmServer.STARTING
-            down = srv.state == VllmServer.DOWN
-            pending = srv.state == VllmServer.PENDING
+            no_deployment = srv.state == HEALTHY and not dep.in_litellm
+            serving = srv.state == HEALTHY and dep.in_litellm
+            loading = srv.state == LOADING
+            unhealthy = srv.state in (UNHEALTHY, STALLED)
+            pending = False
             state = srv.state
             listen = f"{srv.host}:{srv.listen_port}" if admin else ""
             public = (
@@ -332,10 +333,17 @@ async def fleet_page(result):
             last_ok = dep.litellm_health_at
             no_deployment = not dep.in_litellm
             serving = dep.in_litellm and dep.litellm_healthy is True
-            starting = False
-            down = dep.in_litellm and dep.litellm_healthy is False
+            loading = False
+            unhealthy = dep.in_litellm and dep.litellm_healthy is False
             pending = dep.in_litellm and dep.litellm_healthy is None
-            state = "serving" if serving else ("down" if down else ("pending" if pending else "no deployment"))
+            if serving:
+                state = "healthy"
+            elif unhealthy:
+                state = "unhealthy"
+            elif pending:
+                state = "pending"
+            else:
+                state = "no deployment"
             listen = "—" if admin else ""
             public = dep.api_base if admin else ""
             host = ""
@@ -367,8 +375,8 @@ async def fleet_page(result):
                 ),
                 no_deployment=ezt.boolean(no_deployment),
                 serving=ezt.boolean(serving),
-                starting=ezt.boolean(starting),
-                down=ezt.boolean(down),
+                loading=ezt.boolean(loading),
+                unhealthy=ezt.boolean(unhealthy),
                 pending=ezt.boolean(pending),
                 unknown=ezt.boolean(False),
                 row_class="",

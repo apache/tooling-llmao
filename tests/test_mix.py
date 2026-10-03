@@ -21,8 +21,9 @@ import asyncio
 
 from easydict import EasyDict
 
-from llmao.fleet import Fleet, FleetDeployment, VllmServer
+from llmao.fleet import Fleet, FleetDeployment
 from llmao.litellm_client import LiteLLMBackend
+from llmao.model_status import HEALTHY, UNHEALTHY
 from tests.test_fleet_health import _server
 
 
@@ -57,7 +58,7 @@ def test_deployment_body_from_models():
 
 def test_sync_selfhost_posts_new_when_serving():
     s = _server()
-    s.state = VllmServer.SERVING
+    s.state = HEALTHY
     models = {
         "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
     }
@@ -84,7 +85,7 @@ def test_sync_selfhost_posts_new_when_serving():
 
 def test_sync_selfhost_deletes_when_down():
     s = _server()
-    s.state = VllmServer.DOWN
+    s.state = UNHEALTHY
     models = {
         "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
     }
