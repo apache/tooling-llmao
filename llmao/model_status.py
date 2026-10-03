@@ -61,6 +61,15 @@ SKEW_VLLM_DOWN_LITELLM_UP = "vllm_down_litellm_up"
 SKEW_IN_LITELLM_NOT_IN_CONFIG = "in_litellm_not_in_config"
 SKEW_CONFIG_MISMATCH = "config_mismatch"
 
+# Display and log text for a badge. The stored value is the badge id.
+SKEW_PHRASE = {
+    SKEW_INTENDED_NOT_IN_LITELLM: "intended, not in LiteLLM",
+    SKEW_VLLM_UP_LITELLM_DOWN: "vLLM up, LiteLLM down",
+    SKEW_VLLM_DOWN_LITELLM_UP: "vLLM down, LiteLLM up",
+    SKEW_IN_LITELLM_NOT_IN_CONFIG: "in LiteLLM, not in config",
+    SKEW_CONFIG_MISMATCH: "config and LiteLLM disagree",
+}
+
 
 @dataclass(frozen=True)
 class DeploymentSnapshot:

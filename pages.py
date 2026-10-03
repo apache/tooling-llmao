@@ -36,7 +36,7 @@ from easydict import EasyDict
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
-from llmao.model_status import HEALTHY, LOADING, STALLED, UNHEALTHY
+from llmao.model_status import HEALTHY, LOADING, SKEW_PHRASE, STALLED, UNHEALTHY
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
@@ -234,9 +234,9 @@ async def models_page(result):
     rows = []
     for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
         row = EasyDict(m)
-        row.health = fleet.model_health(row.model_name)
+        row.health = fleet.model_rollup(row.model_name).rollup
         self_hosted = bool(m.get("self_hosted"))
-        avail = model_available_for(None, m) and model_in_service(row.health, self_hosted=self_hosted)
+        avail = model_available_for(None, m) and model_in_service(row.health)
         if self_hosted:
             avail = avail and fleet.model_in_litellm(row.model_name)
         row.available = ezt.boolean(avail)
@@ -362,7 +362,7 @@ async def fleet_page(result):
                 state=state,
                 last_ok=_ago(last_ok, now),
                 config_ago=config_ago,
-                skew="; ".join(dep.skew) if admin and dep.skew else "",
+                skew="; ".join(SKEW_PHRASE.get(n, n) for n in dep.skew) if admin and dep.skew else "",
                 kv_cache=kv_cache,
                 context=context,
                 oversized=ezt.boolean(oversized),

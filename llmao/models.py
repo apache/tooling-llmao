@@ -133,18 +133,13 @@ def model_available_for(identity: Any, model: dict[str, Any]) -> bool:
     return True
 
 
-def model_in_service(health: str, *, self_hosted: bool) -> bool:
+def model_in_service(health: str) -> bool:
     """Whether this model can take traffic right now.
 
-    ``health`` is Fleet.model_health: up / starting / down / mixed / empty.
-    Self-hosted with no serving replica is not in service. Vendor models
-    (not self-hosted, empty health) are treated as in service.
+    ``health`` is the model_status roll-up: available, degraded, or unavailable.
+    Available and Degraded have at least one fresh Healthy deployment.
     """
-    if health in ("up", "mixed"):
-        return True
-    if not health:
-        return not self_hosted
-    return False
+    return health in ("available", "degraded")
 
 
 def ux_models(

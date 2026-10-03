@@ -43,6 +43,8 @@ from llmao.model_status import (
     STALLED,
     UNHEALTHY,
     DeploymentSnapshot,
+    deployment_status,
+    model_status,
     self_hosted_lifecycle,
 )
 from llmao.models import load_models, validate_models
@@ -472,11 +474,6 @@ class FleetDeployment:
 class Fleet:
     """Live fleet: vLLM servers, intended deployments, lifecycle probes."""
 
-    BADGE_UP = "up"
-    BADGE_STARTING = "starting"
-    BADGE_DOWN = "down"
-    BADGE_MIXED = "mixed"
-
     def __init__(
         self,
         cfg: Any,
@@ -578,21 +575,19 @@ class Fleet:
                 _LOGGER.info("vast: %s@%s listen %s public %s", srv.name, srv.host, srv.listen_port, public)
                 srv.public_port = public
 
-    def model_health(self, model_name: str) -> str:
-        """Aggregate: up / starting / down / mixed, or empty if no servers."""
-        states = [s.state for s in self.servers if s.model_name == model_name]
-        if not states:
-            return ""
-        uniq = set(states)
-        if uniq == {HEALTHY}:
-            return self.BADGE_UP
-        if uniq <= {LOADING}:
-            return self.BADGE_STARTING
-        if uniq <= {UNHEALTHY, STALLED}:
-            return self.BADGE_DOWN
-        if HEALTHY in uniq and uniq <= {HEALTHY, LOADING}:
-            return self.BADGE_UP
-        return self.BADGE_MIXED
+    def model_rollup(self, model_name: str, now: float | None = None):
+        """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
+        stamp = time.time() if now is None else now
+        cfg = self.cfg.fleet
+        views = [deployment_status(snapshot_for_status(dep, cfg, stamp), cfg, stamp) for dep in self.deployments]
+        catalog = True
+        model = self.models.get(model_name) if self.models else None
+        if model is not None:
+            info = getattr(model, "model_info", None)
+            flag = getattr(info, "self_hosted", None) if info is not None else None
+            if flag is not None:
+                catalog = bool(flag)
+        return model_status(model_name, views, catalog_self_hosted=catalog)
 
     def model_in_litellm(self, model_name: str) -> bool:
         """True if any vLLM for this model_name has a LiteLLM deployment (skew)."""
@@ -658,6 +653,50 @@ class Fleet:
             except Exception:
                 _LOGGER.exception("fleet lifecycle probe failed")
             await asyncio.sleep(interval)
+
+
+def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
+    """Probe observations that make deployment_status reproduce dep.vllm.state.
+
+    The live object stores the lifecycle name, not the last probe boolean.
+    Rebuilding the counters from that name keeps the roll-up and the skew
+    badges on the same function the probe loop uses. cfg.fleet is the
+    validated interval block.
+    """
+    misses = int(cfg.health_fail_threshold)
+    grace = float(cfg.health_grace_s)
+    litellm_at = now if dep.litellm_healthy is not None else None
+    srv = dep.vllm
+    if srv is None:
+        return DeploymentSnapshot(
+            model_name=dep.model_name,
+            self_hosted=False,
+            in_litellm=dep.in_litellm,
+            litellm_healthy=dep.litellm_healthy,
+            litellm_health_at=litellm_at,
+        )
+    if srv.state == HEALTHY:
+        probe_ok, fails, last_ok, seen, probed = True, 0, now, srv.seen_at, now
+    elif srv.state == UNHEALTHY:
+        probe_ok, fails, last_ok, seen, probed = False, misses, srv.last_ok or now, srv.seen_at, now
+    elif srv.state == STALLED:
+        probe_ok, fails, last_ok, seen, probed = False, 1, None, now - grace, now
+    else:
+        probe_ok, fails, last_ok, seen, probed = None, 0, None, now, None
+    return DeploymentSnapshot(
+        model_name=dep.model_name,
+        self_hosted=True,
+        seen_at=seen,
+        probe_ok=probe_ok,
+        fails=fails,
+        last_ok=last_ok,
+        vllm_probed_at=probed,
+        in_litellm=dep.in_litellm,
+        litellm_healthy=dep.litellm_healthy,
+        litellm_health_at=litellm_at,
+        context_window=srv.observed_max_model_len or srv.max_model_len,
+        kv_cache_tokens=srv.kv_cache_tokens,
+    )
 
 
 def add_refusal(dep) -> str | None:

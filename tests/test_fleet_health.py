@@ -30,14 +30,19 @@ from llmao.fleet import (
     parse_kv_cache_tokens,
     parse_max_model_len,
 )
-from llmao.litellm_client import (
-    SKEW_HEALTH_VLLM_DOWN,
-    SKEW_HEALTH_VLLM_UP,
-    SKEW_ROUTE_NOT_UP,
-    SKEW_ROUTE_UP,
-    LiteLLMBackend,
+from llmao.litellm_client import LiteLLMBackend
+from llmao.model_status import (
+    AVAILABLE,
+    HEALTHY,
+    LOADING,
+    SKEW_INTENDED_NOT_IN_LITELLM,
+    SKEW_VLLM_DOWN_LITELLM_UP,
+    SKEW_VLLM_UP_LITELLM_DOWN,
+    STALLED,
+    UNAVAILABLE,
+    UNHEALTHY,
 )
-from llmao.model_status import HEALTHY, LOADING, STALLED, UNHEALTHY
+from tests.test_fleet import FLEET_KNOBS
 
 
 class _Resp:
@@ -97,15 +102,17 @@ def test_serving_needs_consecutive_fails():
     assert s.state == UNHEALTHY
 
 
-def test_model_health_aggregate():
+def test_model_rollup_aggregate():
     a = _server(name="a", listen_port=1)
     b = _server(name="b", listen_port=2, model_name="qwen3-8b")
     a.state = HEALTHY
     b.state = LOADING
-    fleet = Fleet(cfg=None, servers=[a, b])
-    assert fleet.model_health("gemma4-26b") == Fleet.BADGE_UP
-    assert fleet.model_health("qwen3-8b") == Fleet.BADGE_STARTING
-    assert fleet.model_health("nope") == ""
+    cfg = EasyDict({"fleet": dict(FLEET_KNOBS)})
+    fleet = Fleet(cfg=cfg, servers=[a, b])
+    assert fleet.model_rollup("gemma4-26b").rollup == AVAILABLE
+    # Loading is not counted, so a model with only that replica is unavailable.
+    assert fleet.model_rollup("qwen3-8b").rollup == UNAVAILABLE
+    assert fleet.model_rollup("nope").rollup == UNAVAILABLE
 
 
 def test_note_config_fetch():
@@ -163,23 +170,25 @@ def test_skew_sentences_replace_old_phrases():
     srv.state = LOADING
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
-    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     backend = _Backend(fleet, info=[], health={})
+    backend._cfg = fleet.cfg
+    backend._store_skew = lambda dep, now: LiteLLMBackend._store_skew(backend, dep, now)
     asyncio.run(LiteLLMBackend.check_config_skew(backend))
-    assert SKEW_ROUTE_NOT_UP in dep.skew
+    # Loading is not a missing-route badge. The old sentence is dropped.
+    assert dep.skew == []
     assert "missing from LiteLLM" not in dep.skew
     srv.state = HEALTHY
     asyncio.run(LiteLLMBackend.check_config_skew(backend))
-    assert SKEW_ROUTE_UP in dep.skew
-    assert "missing from LiteLLM" not in dep.skew
+    assert dep.skew == [SKEW_INTENDED_NOT_IN_LITELLM]
     base = srv.api_base
     backend.health = {"unhealthy_endpoints": [{"api_base": base}], "healthy_endpoints": []}
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
-    assert SKEW_HEALTH_VLLM_UP in dep.skew
+    assert SKEW_VLLM_UP_LITELLM_DOWN in dep.skew
     srv.state = UNHEALTHY
     backend.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
-    assert SKEW_HEALTH_VLLM_DOWN in dep.skew
+    assert SKEW_VLLM_DOWN_LITELLM_UP in dep.skew
     assert "LiteLLM health disagrees" not in dep.skew
 
 

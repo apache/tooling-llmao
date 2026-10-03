@@ -34,25 +34,8 @@ from typing import Any, Protocol
 
 import httpx
 
-from llmao.model_status import HEALTHY, STALLED, UNHEALTHY
-
-# Skew cell text. The sentence is the description. Old phrases are stripped when seen.
-SKEW_ROUTE_NOT_UP = "vLLM is not up yet, so there is no LiteLLM route"
-SKEW_ROUTE_UP = "vLLM is up and there is no LiteLLM route"
-SKEW_ROUTE_COMMERCIAL = "there is no LiteLLM route"
-SKEW_HEALTH_VLLM_UP = "vLLM is up; LiteLLM reports this endpoint down"
-SKEW_HEALTH_VLLM_DOWN = "vLLM is down; LiteLLM reports this endpoint up"
-_SKEW_ROUTE_NOTES = {
-    SKEW_ROUTE_NOT_UP,
-    SKEW_ROUTE_UP,
-    SKEW_ROUTE_COMMERCIAL,
-    "missing from LiteLLM",
-}
-_SKEW_HEALTH_NOTES = {
-    SKEW_HEALTH_VLLM_UP,
-    SKEW_HEALTH_VLLM_DOWN,
-    "LiteLLM health disagrees",
-}
+from llmao.fleet import snapshot_for_status
+from llmao.model_status import HEALTHY, SKEW_PHRASE, STALLED, UNHEALTHY, deployment_status
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -619,18 +602,8 @@ class LiteLLMBackend:
         intended = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base}
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
-            if base and base in bases:
-                dep.in_litellm = True
-                dep.skew = [n for n in dep.skew if n not in _SKEW_ROUTE_NOTES]
-            else:
-                dep.in_litellm = False
-                note = _route_skew_note(dep)
-                if base and note:
-                    fresh = note not in dep.skew
-                    dep.skew = [n for n in dep.skew if n not in _SKEW_ROUTE_NOTES]
-                    dep.skew.append(note)
-                    if fresh:
-                        _LOGGER.warning("skew: %s@%s %s", dep.name, dep.api_base, note)
+            dep.in_litellm = bool(base) and base in bases
+            self._store_skew(dep, time.time())
         extra = bases - intended
         if extra:
             _LOGGER.warning("skew: LiteLLM api_base not an intended deployment: %s", sorted(extra))
@@ -662,40 +635,15 @@ class LiteLLMBackend:
                 dep.litellm_health_at = stamp
             else:
                 dep.litellm_healthy = None
-            srv = dep.vllm
-            if srv is None:
-                continue
-            note = _health_skew_note(srv.state, litellm_up=litellm_up, litellm_down=litellm_down)
-            if note:
-                fresh = note not in dep.skew
-                dep.skew = [n for n in dep.skew if n not in _SKEW_HEALTH_NOTES]
-                dep.skew.append(note)
-                if fresh:
-                    _LOGGER.warning(
-                        "health skew: %s@%s fleet=%s litellm_up=%s",
-                        dep.name,
-                        dep.api_base,
-                        srv.state,
-                        litellm_up,
-                    )
-            else:
-                dep.skew = [n for n in dep.skew if n not in _SKEW_HEALTH_NOTES]
+            self._store_skew(dep, stamp)
 
-
-def _route_skew_note(dep) -> str:
-    if dep.vllm is None:
-        return SKEW_ROUTE_COMMERCIAL
-    if dep.vllm.state == HEALTHY:
-        return SKEW_ROUTE_UP
-    return SKEW_ROUTE_NOT_UP
-
-
-def _health_skew_note(state: str, *, litellm_up: bool, litellm_down: bool) -> str:
-    if state == HEALTHY and litellm_down:
-        return SKEW_HEALTH_VLLM_UP
-    if state in (UNHEALTHY, STALLED) and litellm_up:
-        return SKEW_HEALTH_VLLM_DOWN
-    return ""
+    def _store_skew(self, dep, now: float) -> None:
+        """Replace stored notes with the badges model_status computes now."""
+        view = deployment_status(snapshot_for_status(dep, self._cfg.fleet, now), self._cfg.fleet, now)
+        fresh = [badge for badge in view.skew if badge not in dep.skew]
+        dep.skew = list(view.skew)
+        for badge in fresh:
+            _LOGGER.warning("skew: %s@%s %s", dep.name, dep.api_base, SKEW_PHRASE[badge])
 
 
 def _norm_base(url: Any) -> str:

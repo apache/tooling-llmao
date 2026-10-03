@@ -112,12 +112,10 @@ def test_commercial_requires_api_base():
 
 
 def test_model_in_service():
-    assert model_in_service("up", self_hosted=True) is True
-    assert model_in_service("mixed", self_hosted=True) is True
-    assert model_in_service("starting", self_hosted=True) is False
-    assert model_in_service("down", self_hosted=True) is False
-    assert model_in_service("", self_hosted=True) is False
-    assert model_in_service("", self_hosted=False) is True
+    assert model_in_service("available") is True
+    assert model_in_service("degraded") is True
+    assert model_in_service("unavailable") is False
+    assert model_in_service("") is False
 
 
 def test_litellm_deployment_preserves_model_info_extras():
