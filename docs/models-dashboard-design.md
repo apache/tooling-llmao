@@ -164,12 +164,13 @@ Much of today's "skew" is just lifecycle ("vLLM isn't up yet, so there's no Lite
 
 | Skew type | Description |
 |---|---|
-| Intended, not in LiteLLM | Present in `config.yaml`, no LiteLLM deployment. |
-| vLLM up, LiteLLM down | `/healthz` passes but LiteLLM reports the endpoint unhealthy. |
-| In LiteLLM, not in config | Deployment exists without `config.yaml` backfill (expected briefly after Approve; flagged only past a grace period). |
-| Config/LiteLLM mismatch | Models or ports disagree between the two. |
+| Intended, not in LiteLLM | Present in `config.yaml`, no LiteLLM deployment. The runner emits this only for Healthy, or for a commercial deployment that is Configured. Loading with no route is lifecycle, not this badge. |
+| vLLM up, LiteLLM down | The vLLM probe passes but LiteLLM reports the endpoint unhealthy. |
+| vLLM down, LiteLLM up | The vLLM signal is down and LiteLLM still reports the endpoint healthy. |
+| In LiteLLM, not in config | A LiteLLM `model/info` route whose `api_base` matches no deployment. Stored beside the fleet table as host, port, and model name (one host can serve several ports; one host:port can report more than one model name). The runner flags every such route on each config pass. Flagging only past a grace period after Approve is still future behavior. |
+| Config/LiteLLM mismatch | The deployment's `api_base` is in `model/info` with a different model name ("config and LiteLLM disagree"). A matching name clears it. The flag is kept across the health pass. A different port is a different route, not this badge. |
 
-The list above is built from what is visible today; the skew runner may detect more (O4).
+The runner emits these five badges and nothing else (O4).
 
 ## 9. Roll-up: user-facing status
 
@@ -215,7 +216,7 @@ Open items for Pass 1 inputs: how deployment and state data is currently stored 
 | O1 | Beyond expiring approvals on Retire, also bind approval to the Vast instance ID? Is the ID available at bootstrap? | Expire on Retire; instance-ID binding is optional hardening. |
 | O2 | Do stale commercial deployments count as healthy, unhealthy, or excluded? | Excluded. |
 | O3 | Loading and Reboot timeout values? | ~20 minutes, configurable. |
-| O4 | What other skew types does the skew runner detect? | The four listed in section 8. |
+| O4 | What other skew types does the skew runner detect? | The five in section 8. The one the earlier draft omitted is vLLM down, LiteLLM up. |
 | O5 | How is a model with both private and external deployments labeled? | Least-private tier wins. |
 | O6 | ~~Does the public hop authenticate the caller?~~ | Resolved: every vLLM server has an API key, stored in LiteLLM and used when proxying. |
 | O7 | Final user-facing privacy wording, including the rented-VM caveat. | Draft in section 6. |
