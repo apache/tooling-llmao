@@ -20,7 +20,7 @@
 import asyncio
 import time
 
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import (
     Fleet,
@@ -117,7 +117,7 @@ def test_model_rollup_aggregate():
     a.record_probe(True, now=10_000.0, grace_s=1800, fail_threshold=3)
     b.config_served_at = 9_990.0
     b.record_probe(False, now=10_000.0, grace_s=1800, fail_threshold=3, err="refused")
-    cfg = EasyDict({"fleet": dict(FLEET_KNOBS)})
+    cfg = edict({"fleet": dict(FLEET_KNOBS)})
     fleet = Fleet(cfg=cfg, servers=[a, b])
     assert fleet.model_rollup("gemma4-26b", now=10_000.0).rollup == AVAILABLE
     # Loading is not counted, so a model with only that replica is unavailable.
@@ -132,7 +132,7 @@ def test_note_config_fetch():
 
 
 def test_unknown_config_fetch_drops_once_in_hosts():
-    cfg = EasyDict({"fleet": {"hosts": {"203.0.113.10": []}}})
+    cfg = edict({"fleet": {"hosts": {"203.0.113.10": []}}})
     fleet = Fleet(cfg=cfg, servers=[])
     fleet.note_unknown_config_fetch("198.51.100.8", now=10)
     fleet.note_unknown_config_fetch("198.51.100.8", now=20)
@@ -186,7 +186,7 @@ def test_skew_sentences_replace_old_phrases():
     assert srv.state == LOADING
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
-    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     backend = _Backend(fleet, info=[], health={})
     backend._cfg = fleet.cfg
     backend._store_skew = lambda dep, now: LiteLLMBackend._store_skew(backend, dep, now)
@@ -221,7 +221,7 @@ def _skew_backend(fleet, info):
 def test_extra_routes_are_per_port_and_model():
     srv = _server()
     dep = FleetDeployment.from_vllm(srv)
-    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     info = [
         {"model_name": "other-a", "litellm_params": {"api_base": "http://10.0.0.1:9001/v1"}},
         {"model_name": "other-b", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
@@ -238,7 +238,7 @@ def test_model_name_mismatch_survives_health_check():
     srv = _server()
     srv.state = HEALTHY
     dep = FleetDeployment.from_vllm(srv)
-    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     backend = _skew_backend(fleet, [{"model_name": "not-gemma", "litellm_params": {"api_base": srv.api_base}}])
     asyncio.run(LiteLLMBackend.check_config_skew(backend))
     assert SKEW_CONFIG_MISMATCH in dep.skew
@@ -254,7 +254,7 @@ def test_model_name_mismatch_survives_health_check():
 def test_add_calls_deployment_only_when_serving():
     srv = _server()
     dep = FleetDeployment.from_vllm(srv)
-    fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
     backend = _Backend(fleet, info=[], health={})
 
     async def attempt():
@@ -285,7 +285,7 @@ def test_local_from_cfg_public_equals_listen():
     from llmao.models import load_models
 
     example = Path(__file__).resolve().parent.parent / "models.yaml"
-    cfg = EasyDict(
+    cfg = edict(
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
@@ -314,9 +314,9 @@ def test_local_from_cfg_public_equals_listen():
 def test_probe_skips_without_public_port():
     s = _server(public_port=None)
     assert s.health_url is None
-    cfg = EasyDict(
+    cfg = edict(
         {
-            "fleet": EasyDict(
+            "fleet": edict(
                 {
                     "health_timeout_s": 1,
                     "health_grace_s": 1800,
@@ -594,7 +594,7 @@ def test_probe_all_scrapes_from_root_not_api_base():
                 return _Resp(200, body={"data": [{"max_model_len": 131072}]})
             return _Resp(404)
 
-    cfg = EasyDict({"fleet": EasyDict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    cfg = edict({"fleet": edict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
     fleet = Fleet(cfg=cfg, servers=[s])
     asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
 

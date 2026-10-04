@@ -17,7 +17,7 @@
 
 """FleetDeployment: commercial + vLLM intended backends."""
 
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet
 from llmao.models import load_models
@@ -38,13 +38,13 @@ def test_from_cfg_one_deployment_per_vllm():
 def test_commercial_deployment_from_definitions():
     models = list(load_models(EXAMPLE))
     models.append(
-        EasyDict(
+        edict(
             model_name="paid-chat",
-            litellm_params=EasyDict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
-            model_info=EasyDict(self_hosted=False, license="proprietary"),
+            litellm_params=edict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
+            model_info=edict(self_hosted=False, license="proprietary"),
         )
     )
-    cfg = EasyDict(
+    cfg = edict(
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},

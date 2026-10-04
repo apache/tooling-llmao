@@ -20,7 +20,7 @@
 import asyncio
 
 import pytest
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.litellm_client import GRANTOR_FREE_TIER, BackendUnavailableError, resolve_budget_duration
 from llmao.seam import (
@@ -32,7 +32,7 @@ from tests.mock_backend import MockBackend
 
 
 def _cfg():
-    return EasyDict(
+    return edict(
         {
             "litellm": {
                 "base_url": "http://127.0.0.1:4000",
@@ -60,7 +60,7 @@ def test_resolve_budget_duration_prefers_raw_then_cfg():
     assert resolve_budget_duration("7d", cfg) == "7d"
     assert resolve_budget_duration(None, cfg) == "30d"
     assert resolve_budget_duration("  ", cfg) == "30d"
-    bad = EasyDict({"budgets": {}})
+    bad = edict({"budgets": {}})
     with pytest.raises(BackendUnavailableError):
         resolve_budget_duration(None, bad)
 

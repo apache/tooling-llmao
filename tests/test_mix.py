@@ -19,7 +19,7 @@
 
 import asyncio
 
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment
 from llmao.litellm_client import LiteLLMBackend
@@ -28,13 +28,13 @@ from tests.test_fleet_health import _server
 
 
 def _backend(fleet):
-    cfg = EasyDict(
-        litellm=EasyDict(
+    cfg = edict(
+        litellm=edict(
             base_url="http://127.0.0.1:9",
             master_key="sk-x",
             request_timeout_s=1,
         ),
-        fleet=EasyDict(),
+        fleet=edict(),
     )
     return LiteLLMBackend(cfg, fleet)
 
@@ -42,7 +42,7 @@ def _backend(fleet):
 def test_deployment_body_from_models():
     s = _server()
     models = {
-        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(None, [s], models=models)
     body = _backend(fleet).deployment_body(fleet.deployments[0])
@@ -60,7 +60,7 @@ def test_sync_selfhost_posts_new_when_serving():
     s = _server()
     s.state = HEALTHY
     models = {
-        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(None, [s], models=models)
     be = _backend(fleet)
@@ -87,7 +87,7 @@ def test_sync_selfhost_deletes_when_down():
     s = _server()
     s.state = UNHEALTHY
     models = {
-        "gemma4-26b": EasyDict(litellm_params=EasyDict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
@@ -122,15 +122,15 @@ def test_sync_selfhost_deletes_when_down():
 
 def test_ensure_commercial():
     dep = FleetDeployment.from_commercial(
-        EasyDict(
+        edict(
             model_name="paid-chat",
-            litellm_params=EasyDict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
-            model_info=EasyDict(self_hosted=False),
+            litellm_params=edict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
+            model_info=edict(self_hosted=False),
         )
     )
     models = {
-        "paid-chat": EasyDict(
-            litellm_params=EasyDict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
+        "paid-chat": edict(
+            litellm_params=edict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
         )
     }
     fleet = Fleet(None, [], deployments=[dep], models=models)

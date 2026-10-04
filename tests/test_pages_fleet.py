@@ -29,7 +29,7 @@ import pathlib
 
 import asfquart
 import ezt
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment, VllmServer
 from llmao.model_status import AWAITING, HEALTHY, LOADING, STALLED
@@ -119,7 +119,7 @@ def test_fleet_rows_catches_a_missing_field():
     """Drop one field a row carries and the template must fail loudly."""
     pages, fleet = _fleet()
     rows = pages.fleet_rows(fleet, admin=True, now=NOW)
-    broken = [EasyDict({k: v for k, v in r.items() if k != "detail"}) for r in rows]
+    broken = [edict({k: v for k, v in r.items() if k != "detail"}) for r in rows]
     try:
         _render(broken)
     except Exception as e:
@@ -129,7 +129,7 @@ def test_fleet_rows_catches_a_missing_field():
 
 
 def _render(rows) -> str:
-    data = EasyDict(
+    data = edict(
         title="Fleet",
         is_site_admin=ezt.boolean(True),
         litellm_ui="",

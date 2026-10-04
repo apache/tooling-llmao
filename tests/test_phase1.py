@@ -27,14 +27,14 @@ import asyncio
 import time
 
 import pytest
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.seam import AuthzError, Identity, Seam
 from tests.mock_backend import MockBackend
 
 
 def _cfg():
-    return EasyDict(
+    return edict(
         {
             "litellm": {
                 "base_url": "http://127.0.0.1:4000",
@@ -74,7 +74,7 @@ def _seed_usage(backend: MockBackend, project: str, cost: float = 0.01) -> None:
 
 
 def test_cfg_dotted_access():
-    cfg = EasyDict(
+    cfg = edict(
         {
             "litellm": {"base_url": "http://llm:4000", "master_key": "sk-x"},
             "budgets": {"default_team_budget_usd": 50, "duration": "7d"},

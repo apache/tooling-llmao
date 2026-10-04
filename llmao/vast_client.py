@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 if TYPE_CHECKING:
     import httpx
@@ -43,10 +43,10 @@ def _ip(addr: Any) -> str:
     return ip
 
 
-def ports_from_instance(inst: dict[str, Any]) -> EasyDict:
+def ports_from_instance(inst: dict[str, Any]) -> edict:
     """Container listen port → Vast public HostPort from one instance row."""
     raw = inst.get("ports")
-    out = EasyDict()
+    out = edict()
     if not isinstance(raw, dict):
         return out
     for key, mappings in raw.items():
@@ -64,7 +64,7 @@ def ports_from_instance(inst: dict[str, Any]) -> EasyDict:
     return out
 
 
-def port_map_from_body(body: Any) -> EasyDict:
+def port_map_from_body(body: Any) -> edict:
     """public_ipaddr → {listen: HostPort}. Warn if the page is truncated."""
     if not isinstance(body, dict):
         raise ValueError("vast instances response must be an object")
@@ -79,7 +79,7 @@ def port_map_from_body(body: Any) -> EasyDict:
             ntotal = None
         if ntotal is not None and ntotal > len(instances):
             _LOGGER.warning("vast: total_instances=%s but page has %s; not paginating", ntotal, len(instances))
-    mapping = EasyDict()
+    mapping = edict()
     for inst in instances:
         if not isinstance(inst, dict):
             continue
@@ -93,7 +93,7 @@ def port_map_from_body(body: Any) -> EasyDict:
     return mapping
 
 
-async def fetch_port_map(api_key: str, *, client: httpx.AsyncClient) -> EasyDict:
+async def fetch_port_map(api_key: str, *, client: httpx.AsyncClient) -> edict:
     resp = await client.get(
         VAST_INSTANCES_URL,
         params={"limit": VAST_PAGE_LIMIT},

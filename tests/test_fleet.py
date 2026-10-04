@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import (
     HOST_HEADER,
@@ -51,7 +51,7 @@ FLEET_KNOBS = {
 
 
 def _cfg(hosts, models_path=EXAMPLE):
-    return EasyDict(
+    return edict(
         {
             "fleet": {"hosts": hosts, "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS},
             "models_path": str(models_path),
@@ -60,7 +60,7 @@ def _cfg(hosts, models_path=EXAMPLE):
 
 
 def test_example_primary_host():
-    cfg = EasyDict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
+    cfg = edict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
     cfg.fleet.vllm_api_salt = "test-vllm-salt"
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
@@ -217,7 +217,7 @@ def test_from_row_api_key_is_salt_hmac():
 
 def test_from_row_requires_salt():
     """A fleet config that never defines the salt fails at attribute access."""
-    cfg = EasyDict(
+    cfg = edict(
         {
             "fleet": {"hosts": {"10.0.0.1": [["qwen3-8b", 8003]]}, **FLEET_KNOBS},
             "models_path": str(EXAMPLE),

@@ -31,7 +31,7 @@ import asfquart.utils
 import ezt
 import quart
 from dunamai import Version
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal
@@ -64,7 +64,7 @@ def _flash_rows():
         msgs = quart.get_flashed_messages(with_categories=True)
     except Exception:
         return []
-    return [EasyDict(category=c, message=m) for c, m in msgs]
+    return [edict(category=c, message=m) for c, m in msgs]
 
 
 def _safe_back(default: str = "/") -> str:
@@ -137,9 +137,9 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     return deco
 
 
-async def basic_info(title: str = "llmao") -> EasyDict:
+async def basic_info(title: str = "llmao") -> edict:
     """Base-level EZT template data shared by HTML pages."""
-    basic = EasyDict()
+    basic = edict()
     basic.title = title
     basic.flashes = []
 
@@ -159,7 +159,7 @@ async def basic_info(title: str = "llmao") -> EasyDict:
                 + list(getattr(client_session, "projects", None) or [])
             )
         )
-        basic.projects = [EasyDict({"name": p}) for p in projects]
+        basic.projects = [edict({"name": p}) for p in projects]
         basic.projects_label = ", ".join(projects) if projects else None
         committees = list(getattr(client_session, "committees", None) or [])
         basic.committees = committees
@@ -172,7 +172,7 @@ async def basic_info(title: str = "llmao") -> EasyDict:
             admin_names = projects
         else:
             admin_names = committees
-        basic.admin_projects = [EasyDict({"name": p}) for p in admin_names]
+        basic.admin_projects = [edict({"name": p}) for p in admin_names]
     else:
         basic.uid = None
         basic.name = None
@@ -196,7 +196,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
         budget = k.max_budget
         budget_s = f"${budget:.4f}" if budget is not None else "—"
         rows.append(
-            EasyDict(
+            edict(
                 {
                     "token_id": k.token_id,
                     "purpose": k.purpose or "—",
@@ -233,7 +233,7 @@ async def models_page(result):
     fleet = APP.fleet
     rows = []
     for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
-        row = EasyDict(m)
+        row = edict(m)
         row.health = fleet.model_rollup(row.model_name).rollup
         self_hosted = bool(m.get("self_hosted"))
         avail = model_available_for(None, m) and model_in_service(row.health)
@@ -287,7 +287,7 @@ def fleet_rows(fleet, *, admin: bool, now: float) -> list:
         )
         for host, rec in unknown:
             rows.append(
-                EasyDict(
+                edict(
                     host=host,
                     name="—",
                     self_hosted=ezt.boolean(False),
@@ -375,7 +375,7 @@ def fleet_rows(fleet, *, admin: bool, now: float) -> list:
             context = "—"
             oversized = False
         rows.append(
-            EasyDict(
+            edict(
                 host=host,
                 name=dep.name,
                 self_hosted=ezt.boolean(dep.self_hosted),
@@ -451,7 +451,7 @@ def _project_list_rows(rows) -> list:
         else:
             pct_label = f"{r.pct_used:.0f}%"
         out.append(
-            EasyDict(
+            edict(
                 {
                     "name": r.project,
                     "href": f"/projects/{r.project}",
@@ -505,7 +505,7 @@ def _see_other(path: str):
 
 async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_create_another: str) -> None:
     """Render the created-key fragment and stash it as a raw HTML flash."""
-    data = EasyDict(
+    data = edict(
         {
             "secret": created.secret,
             "purpose": created.info.purpose or "—",

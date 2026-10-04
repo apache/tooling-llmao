@@ -28,7 +28,7 @@ from typing import Any
 
 import ezt
 import yaml
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 # Default path: repo / install root (next to main.py).
 DEFAULT_MODELS_PATH = pathlib.Path(__file__).resolve().parent.parent / "models.yaml"
@@ -49,7 +49,7 @@ def load_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[di
     path = path or models_path_from_cfg(cfg)
     if not path.is_file():
         raise FileNotFoundError(f"Missing {path} (admin model definitions).")
-    data = EasyDict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    data = edict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     if "models" not in data or not isinstance(data.models, list):
         raise ValueError(f"{path}: expected top-level models: [ ... ]")
     validate_models(data.models, path=path)

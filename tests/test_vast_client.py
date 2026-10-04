@@ -20,7 +20,7 @@
 import asyncio
 
 import pytest
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, VllmServer, validate_fleet
 from llmao.model_status import AWAITING
@@ -112,7 +112,7 @@ def test_apply_port_map_missing_host_stays_awaiting():
 
 
 def test_validate_fleet_requires_vast_api_key():
-    cfg = EasyDict(
+    cfg = edict(
         {
             "fleet": {"hosts": {"127.0.0.1": [["gemma4-26b", 8001]]}, "vast": {}, **FLEET_KNOBS},
             "models_path": str(EXAMPLE),
@@ -123,7 +123,7 @@ def test_validate_fleet_requires_vast_api_key():
 
 
 def test_validate_fleet_vast_ok():
-    cfg = EasyDict(
+    cfg = edict(
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
@@ -140,7 +140,7 @@ def test_validate_fleet_vast_ok():
 
 
 def test_refresh_uses_dotted_api_key():
-    cfg = EasyDict(
+    cfg = edict(
         {
             "fleet": {
                 "hosts": {"203.0.113.10": [["gemma4-26b", 8001]]},

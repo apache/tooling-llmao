@@ -23,7 +23,7 @@ import pathlib
 
 import pytest
 import yaml
-from easydict import EasyDict
+from easydict import EasyDict as edict  # noqa: N813
 from litellm.types.router import Deployment
 
 from llmao.models import (
@@ -64,7 +64,7 @@ def test_missing_models_yaml_fails_fast():
 
 
 def test_models_path_from_cfg():
-    cfg = EasyDict({"models_path": "models.yaml"})
+    cfg = edict({"models_path": "models.yaml"})
     p = models_path_from_cfg(cfg)
     assert p.name == "models.yaml"
     assert p.is_file()
@@ -91,14 +91,14 @@ def test_ux_models_redacts_supply_path_for_non_admins():
 
 def test_definitions_require_self_hosted():
     models = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"]
-    row = EasyDict(models[0])
+    row = edict(models[0])
     del row.model_info["self_hosted"]
     with pytest.raises(ValueError, match="self_hosted"):
         validate_models([row])
 
 
 def test_commercial_requires_api_base():
-    row = EasyDict(
+    row = edict(
         {
             "model_name": "paid-model",
             "litellm_params": {"model": "openai/gpt-4"},
