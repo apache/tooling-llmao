@@ -66,8 +66,8 @@ JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
 (`fleet-lifecycle`, `litellm-skew`). After probes, `Fleet.after_probe`
 POSTs `/model/new` / `/model/delete`. `Fleet.models` is the YAML recipe.
 `FleetDeployment` is one intended LiteLLM backend. `VllmServer` states:
-`pending` / `starting` / `serving` / `down`. `/fleet` shows serving only
-when vLLM is up **and** LiteLLM has a deployment. Host:port and LiteLLM UI
+Loading, Healthy, Unhealthy, Stalled. `/fleet` shows the Healthy badge only
+when the server is Healthy **and** LiteLLM has a deployment. Host:port and LiteLLM UI
 are site-admin. JSON handlers use `@api` in `api.py`. Do not wrap Quart
 `asgi_app` with Werkzeug ProxyFix.
 

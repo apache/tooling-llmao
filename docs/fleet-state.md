@@ -61,22 +61,22 @@ deployment table.
 ## 2. Registration is health-gated
 
 A provisioned instance can take fifteen minutes to load weights. A deployment whose
-backend is not yet serving will fail every request routed to it.
+backend is not yet Healthy will fail every request routed to it.
 
-**Rule: a deployment exists in LiteLLM if and only if its vLLM is serving.**
+**Rule: a deployment exists in LiteLLM if and only if its vLLM is Healthy.**
 The Router is the whole proxy; a deployment is one backend (`/model/new` row).
 
 ```
 add host    -> fleet.hosts row; api_key is HMAC (below), no deployment yet
 box boots   -> GET /vllm/config
-health OK   -> POST /model/new (same api_key)
-health DOWN -> POST /model/delete
+Healthy     -> POST /model/new (same api_key)
+Unhealthy or Stalled, and a route exists -> POST /model/delete
 retire      -> delete deployment, drop fleet.hosts row
 ```
 
 Every host follows that sequence. Adding a host does not create a LiteLLM
-deployment. `/model/new` runs only when that box's vLLM is serving;
-`/model/delete` when it is not.
+deployment. `/model/new` runs only when that box's vLLM is Healthy;
+`/model/delete` when it is Unhealthy or Stalled and a route exists.
 
 Do not special-case "this model already has a healthy peer, so register the
 new box now." That makes the same operation depend on other servers.
@@ -84,7 +84,7 @@ new box now." That makes the same operation depend on other servers.
 ### 2.3 Per-vLLM `api_key` (HMAC, not a table)
 
 The box needs `--api-key` **before** `vllm serve`. LiteLLM needs the **same**
-bearer at `/model/new` **after** SERVING. `/health` is unauthenticated;
+bearer at `/model/new` **after** Healthy. `/health` is unauthenticated;
 `GET /v1/models` on the box (KV scrape) is not. LiteLLM encrypts
 `litellm_params` on readback, so the portal cannot recover plaintext from
 `/model/info`.
@@ -179,7 +179,7 @@ Fleet tab does not edit hosts, ports, or models.
 The only new row is an IP that is not in `config.yaml`. Once the operator
 adds `fleet.hosts.<ip>: [[model_name, listen_port]]` and restarts llmao, that
 IP is an ordinary deployment row. vLLM not up is already the State cell
-(`PENDING`, `STARTING`, or `DOWN`). In LiteLLM or not is already the
+(Loading, Unhealthy, or Stalled). In LiteLLM or not is already the
 no-deployment badge. Those stay separate. There is no combined "member, vLLM
 not up" state.
 
@@ -196,37 +196,38 @@ not in config.yaml. That is a box being set up, or a caller that should not
 have the key.`
 
 **In `config.yaml`.** The next fetch returns the assignment. Add is an
-Actions control on that existing self-hosted row. It is disabled while vLLM
-is not `SERVING`, title `vLLM is not serving yet`, and no `/model/new` runs,
-so a `DOWN` probe has nothing to delete. It is enabled when vLLM is
-`SERVING` and `in_litellm` is false. `POST /do-add-deployment` (same shape as
-`/do-create-key` and `/do-revoke-key`; no `/fleet/` route) calls the existing
-`add_deployment`: LiteLLM `POST /model/new` with the derived bearer and
-`model_info.asf_api_base`. One deployment per click. Success sets
+Actions control on that existing self-hosted row. It is disabled until vLLM
+is Healthy, title `vLLM is not serving yet`, and no `/model/new` runs,
+so an Unhealthy or Stalled probe has nothing to delete until a route exists.
+It is enabled when vLLM is Healthy and `in_litellm` is false. `POST /do-add-deployment`
+(same shape as `/do-create-key` and `/do-revoke-key`; no `/fleet/` route) calls
+the existing `add_deployment`: LiteLLM `POST /model/new` with the derived bearer
+and `model_info.asf_api_base`. One deployment per click. Success sets
 `in_litellm`, hides Add, and clears the no-route skew note. Failure flashes
 the LiteLLM error and leaves the button. `sync_selfhost` already posts
-`/model/new` at this same gate and still deletes on `DOWN` after that. The
+`/model/new` at this same gate and still deletes on Unhealthy or Stalled after that. The
 button is that action on the row when the runner has not fired or the last
 post failed. It does not register early. Commercial rows stay on startup
 `/model/new` and do not get the button.
 
-The Skew cell is the description on rows that are in `config.yaml`. Replace
-`missing from LiteLLM` and `LiteLLM health disagrees`.
+The Skew cell is the description on rows that are in `config.yaml`. The stored
+value is a badge id; the cell and the log line use the short phrase.
 
 | Situation | Skew cell |
 |---|---|
-| In `fleet.hosts`, vLLM is not `SERVING`, LiteLLM has no route | `vLLM is not up yet, so there is no LiteLLM route` |
-| In `fleet.hosts`, vLLM is `SERVING`, LiteLLM has no route | `vLLM is up and there is no LiteLLM route` |
-| vLLM is `SERVING`, LiteLLM `/health` lists the endpoint down | `vLLM is up; LiteLLM reports this endpoint down` |
-| vLLM is `DOWN`, LiteLLM `/health` lists the endpoint up | `vLLM is down; LiteLLM reports this endpoint up` |
+| Healthy, or commercial Configured, and LiteLLM has no route | `intended, not in LiteLLM` |
+| vLLM signal up, LiteLLM `/health` lists the endpoint down | `vLLM up, LiteLLM down` |
+| vLLM signal down, LiteLLM `/health` lists the endpoint up | `vLLM down, LiteLLM up` |
+| Same `api_base`, different model name | `config and LiteLLM disagree` |
 
-The first sentence is the existing not-up row, which is already not in
-LiteLLM. The second is the same row once vLLM is `SERVING`, next to the
-enabled Add button. The last two replace the single health note, so a
-disagreement says which side is up.
+Loading with no route is not a badge. A different port is a different route,
+not a mismatch. The mismatch flag stays on the deployment across the health pass.
 
-A LiteLLM `api_base` that matches no intended deployment stays a log line,
-not a Fleet row.
+A LiteLLM `model/info` route whose `api_base` matches no deployment is
+`in LiteLLM, not in config`. It is stored on `Fleet.extra_litellm` as host,
+port, and model name (one host can serve several ports; one host:port can
+report more than one model name). It is not a Fleet table row. The log lists
+those triples.
 
 Not in this design: editing `config.yaml` from the tab, picking a model for
 an unknown IP, persisting the request list, a partial 404 body, auto-restart
@@ -410,12 +411,12 @@ One artifact now, rather than a database dump plus a state file.
 1. `store_model_in_db` in YAML (and/or env) — **done** in examples; Puppet env too
 2. `GET /vllm/config` from `fleet.hosts` + `models.yaml` — **decided**
    (not derived from LiteLLM rows; §1)
-3. `/model/new` on serving, `/model/delete` on down — **done** (`asf_api_base`
+3. `/model/new` on Healthy, `/model/delete` on Unhealthy or Stalled — **done** (`asf_api_base`
    on `model_info` for delete). Public port in `api_base`; box JSON listen.
    Commercial `/model/new` at llmao startup.
 4. Somewhere for pending assignments (§2.2) — still `fleet.hosts` YAML
 5. Config revision on `/vllm/config`, reported back by `install_set.py`
-6. UI: Add on an existing Fleet row once vLLM is serving (§2.4) — **done**
+6. UI: Add on an existing Fleet row once vLLM is Healthy (§2.4) — **done**
    (`POST /do-add-deployment`). The tab does not edit hosts, ports, or
    models. Retire and edit still open. Unknown config fetches are
    highlighted rows on that tab (§2.4) — **done**, process memory only.

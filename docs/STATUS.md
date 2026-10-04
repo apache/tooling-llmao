@@ -21,12 +21,12 @@
 
 Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `models.yaml` definitions; PAT UX (**My Keys** / **Other Keys**); **Models** page (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
 
-**Models page:** definitions-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing serving or no deployment is No. Sort puts No last. Per-process state is on `/fleet`.
+**Models page:** definitions-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing Healthy or no deployment is No. Sort puts No last. Per-process state is on `/fleet`.
 
 **models.yaml vs LiteLLM:** admin definitions; the proxy does **not** include this file.
 `litellm.yaml` `general_settings.store_model_in_db: true` (Puppet may also set the env). `self_hosted` is a required boolean. Commercial rows need a static `api_base` (fail-fast). Self-host `litellm_params.model` is `hosted_vllm/<name>` (not `openai/`). Standalone watches `config.yaml`; Puppet restarts on change. YAML edit ≠ live deployment until llmao POSTs `/model/new` again.
 
-**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/fleet` is signed-in (host:port admin). Green serving = vLLM up **and** LiteLLM has that `api_base`. Self-host: `/model/new` after serving, `/model/delete` on down (`models.yaml` template). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/fleet` is signed-in (host:port admin). The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy or Stalled when a route exists (`models.yaml` template). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner.
 
 **Public port resolution differs by provider.** Vast exposes its container→public mapping through an API and resolves automatically. RunPod does not, so a host row takes an optional fourth element pinning the public port. RunPod also reassigns the port on every pod recreate, even when the pod lands on the same machine — so a pinned value is expected to change, not to be stable.
 
@@ -45,7 +45,7 @@ suggest — the difference between them is concurrency, not per-request speed.
 
 **Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. Requirements sum across co-resident servers. Silent when `nvidia-smi` is absent — an unknown is not a failure.
 
-**Observed state:** `/fleet` shows measured KV cache against the served context window, scraped from vLLM's `/metrics` on the transition into SERVING. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
+**Observed state:** `/fleet` shows measured KV cache against the served context window, scraped from vLLM's `/metrics` on the transition into Healthy. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
 
 Remaining: long vLLM boot, config revision on the box, pending-assignment table, box smoke, and nothing restarting a GPU box automatically.
 
