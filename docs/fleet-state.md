@@ -341,7 +341,34 @@ accept LiteLLM's own audit trail as the record.
 
 Worth deciding rather than losing by default.
 
-### 5.2 Staleness
+### 5.2 Admin labels (Approved, Reboot requested)
+
+The admin applies **Approved** ("I vouched for this box; I intend to add it to
+`fleet.hosts`") and **Reboot requested** ("I started a reboot by hand; watching
+for it to re-request config"). They mark the manual steps that happen around a
+box, so the page can show where an onboarding stands.
+
+They are annotations the admin applies on top of the computed lifecycle. The
+lifecycle keeps reading probes and `config_served_at` exactly as before; a
+label is display state the page shows alongside it. One label per host: the
+two are phases of one onboarding.
+
+Labels are stored in process memory on `Fleet`, keyed by the normalized host IP
+(the same normalization the config fetches use), with the time they were set. A
+control-plane restart clears them, and clearing can never change a computed
+state. Losing one costs little and is easily recovered:
+
+| Label lost | Impact | Recovered by |
+|---|---|---|
+| Approved | The page stops showing that the box is vouched for; the box keeps its normal lifecycle (Awaiting, Loading, …) and the config serving it. | The vouch is durable in `fleet.hosts` itself — the admin re-applies the label. |
+| Reboot requested | The page stops showing that a reboot was requested and is being watched. | `config_served_at` reset and the box re-requesting config show up in the lifecycle as Loading — the reboot is visible again the moment the box comes back. Whether a request was ever made is lost. |
+
+Retirement uses no label: retiring a box is the manual removal in §5.1 (drop it
+from `fleet.hosts` and delete its LiteLLM route), so there is nothing to lose
+on a restart. Telling users that their PATs point at retired models is a
+separate display concern, decided when the portal shows it.
+
+### 5.3 Staleness
 
 `last_config_fetch` is the liveness signal — surface it as a coloured age,
 green under an hour, red over a week.
@@ -355,7 +382,7 @@ requires the fleet key with a constant-time compare, so the blast radius is
 bounded — but that key is a single shared secret baked into the box template,
 which makes "nobody else could hold it" an assumption.
 
-### 5.3 At a dozen hosts
+### 5.4 At a dozen hosts
 
 - **Group by provider in the UI.** The useful question is "how many rented
   boxes are still alive", not an alphabetical list of IPs.
