@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 from llmao.model_status import (
     AVAILABLE,
+    AWAITING,
     CONFIGURED,
     DEGRADED,
     EXTERNAL,
@@ -57,7 +58,7 @@ def _self(**kw) -> DeploymentSnapshot:
     base = dict(
         model_name=MODEL,
         self_hosted=True,
-        seen_at=NOW - 10,
+        config_served_at=NOW - 10,
         probe_ok=True,
         fails=0,
         last_ok=NOW,
@@ -90,7 +91,7 @@ def test_fleet_fixture_rollup_is_degraded():
                     in_litellm=False,
                     litellm_healthy=None,
                     litellm_health_at=None,
-                    seen_at=NOW - 60,
+                    config_served_at=NOW - 60,
                 ),
                 CFG,
                 NOW,
@@ -127,7 +128,6 @@ def test_loading_is_not_a_missing_route_badge():
             fails=1,
             last_ok=None,
             in_litellm=False,
-            seen_at=NOW - 10,
             litellm_healthy=None,
             litellm_health_at=None,
         ),
@@ -141,12 +141,82 @@ def test_loading_is_not_a_missing_route_badge():
 
 def test_grace_expired_without_success_is_stalled():
     view = deployment_status(
-        _self(probe_ok=False, fails=1, last_ok=None, seen_at=NOW - CFG.health_grace_s),
+        _self(probe_ok=False, fails=1, last_ok=None, config_served_at=NOW - CFG.health_grace_s),
         CFG,
         NOW,
     )
     assert view.lifecycle == STALLED
     assert view.counted is False
+
+
+def test_no_config_served_is_awaiting():
+    # No GET /vllm/config since we started: the box has not contacted us.
+    view = deployment_status(_self(config_served_at=None, probe_ok=None, last_ok=None, in_litellm=False), CFG, NOW)
+    assert view.lifecycle == AWAITING
+    assert view.counted is False
+    assert view.skew == ()
+
+
+def test_restart_recovery_was_serving_now_down():
+    # We restarted, no config served yet, but LiteLLM still lists the route
+    # and the probe fails: this was serving, so Unhealthy, not Awaiting.
+    view = deployment_status(
+        _self(config_served_at=None, probe_ok=False, fails=CFG.health_fail_threshold, last_ok=None),
+        CFG,
+        NOW,
+    )
+    assert view.lifecycle == UNHEALTHY
+    assert view.counted is True
+    assert view.skew == (SKEW_VLLM_DOWN_LITELLM_UP,)
+
+
+def test_awaiting_needs_no_probe():
+    # Same as awaiting, but the first probe already failed and the box is not
+    # in LiteLLM: still Awaiting contact, the failure is expected.
+    view = deployment_status(
+        _self(config_served_at=None, probe_ok=False, fails=1, last_ok=None, in_litellm=False),
+        CFG,
+        NOW,
+    )
+    assert view.lifecycle == AWAITING
+
+
+def test_config_served_within_grace_is_loading():
+    view = deployment_status(
+        _self(
+            config_served_at=NOW - 10,
+            probe_ok=False,
+            fails=1,
+            last_ok=None,
+            in_litellm=False,
+            litellm_healthy=None,
+            litellm_health_at=None,
+        ),
+        CFG,
+        NOW,
+    )
+    assert view.lifecycle == LOADING
+    assert view.counted is False
+
+
+def test_healthy_probe_wins_without_config_served():
+    # The box answers a health probe (e.g. it was booted out-of-band). Healthy
+    # comes from the probe alone; the missing fetch does not hold it back.
+    view = deployment_status(_self(config_served_at=None, in_litellm=False, litellm_healthy=None), CFG, NOW)
+    assert view.lifecycle == HEALTHY
+
+
+def test_reached_does_not_change_lifecycle():
+    # 503 while the model loads versus no connection: both are Loading; the
+    # detail only changes what the page says.
+    for reached in (True, False):
+        view = deployment_status(
+            _self(probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=reached),
+            CFG,
+            NOW,
+        )
+        assert view.lifecycle == LOADING
+        assert view.reached is reached
 
 
 def test_under_fail_threshold_stays_healthy():

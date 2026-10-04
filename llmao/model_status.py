@@ -19,8 +19,17 @@
 
 Pure functions. Callers pass probe observations and the fleet intervals from
 config.yaml. This module does not probe, and it does not read Fleet objects.
-Approved, Reboot requested, Config served, and Retired are not produced:
-nothing records those facts yet.
+
+The lifecycle splits into two kinds of thing:
+
+- **Computed state** -- derived here from probes, ``in_litellm`` and
+  ``config_served_at``. Recomputed after a control-plane restart; that is what
+  this module owns. "Config served" is one of those facts: it is recorded as
+  the in-memory ``config_served_at`` timestamp, which anchors the Loading
+  window and separates it from the Awaiting pre-state.
+- **Admin labels** -- Approved, Reboot requested, Retired. An admin applies
+  these; they are stored in memory for display and lost on restart. They are
+  not computed states, so this module does not produce them.
 
 ``health_fail_threshold`` is both the number of failed probes that turn a
 healthy server Unhealthy and the number of missed intervals after which a
@@ -35,6 +44,7 @@ from dataclasses import dataclass
 
 # Lifecycle. One per deployment, or Unknown for a fleet-key fetch from an IP
 # that is not in config.yaml.
+AWAITING = "awaiting"
 LOADING = "loading"
 HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
@@ -82,7 +92,6 @@ class DeploymentSnapshot:
 
     model_name: str
     self_hosted: bool
-    seen_at: float | None = None
     probe_ok: bool | None = None
     fails: int = 0
     last_ok: float | None = None
@@ -96,6 +105,13 @@ class DeploymentSnapshot:
     litellm_only: bool = False
     # Caller-supplied. The skew runner does not detect a model or port mismatch.
     config_mismatch: bool = False
+    # When we last handed this box its config. None until a GET /vllm/config
+    # succeeded for it since we started. Anchors the Loading window.
+    config_served_at: float | None = None
+    # Did the last health probe reach vLLM's HTTP server (an answer, e.g. a
+    # 503 while the model loads) as opposed to no connection at all? Display
+    # only; it does not change the lifecycle. None until the first probe.
+    reached: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +125,9 @@ class DeploymentStatus:
     context_window: int | None
     kv_cache_tokens: int | None
     counted: bool
+    # vLLM answered the last probe (e.g. a 503 while loading) as opposed to no
+    # connection. Display-only loading detail; None until the first probe.
+    reached: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -137,29 +156,29 @@ def self_hosted_lifecycle(
     cfg: object,
     now: float,
 ) -> str:
-    """Name the vLLM observation the same way the probe loop will in step 2.
+    """Name the vLLM observation.
 
-    Inside ``health_grace_s`` with no successful probe: Loading. Grace expired
-    and it never came up: Stalled. A passing probe: Healthy. After it has been
-    Healthy, ``health_fail_threshold`` failures: Unhealthy. Fewer failures keep
-    Healthy, matching today's hold-over-the-threshold behavior.
+    A passing probe: Healthy, always -- including the first probe after a
+    control-plane restart. No config served yet (``config_served_at`` is None):
+    Unhealthy if it is in LiteLLM and the probe failed (it was serving before
+    a restart, now down), otherwise Awaiting contact. Config served but not
+    yet up: Loading while inside ``health_grace_s`` of the config answer,
+    Stalled past it. After it has been Healthy, ``health_fail_threshold``
+    failures: Unhealthy; fewer keep Healthy (hold-over-the-threshold).
     """
     grace = float(cfg.health_grace_s)
     threshold = int(cfg.health_fail_threshold)
-    seen = snap.seen_at if snap.seen_at is not None else now
-    if snap.probe_ok is None:
-        if (now - seen) < grace:
-            return LOADING
-        return STALLED
-    if snap.probe_ok:
+    if snap.probe_ok is True:
         return HEALTHY
-    if snap.last_ok is not None:
-        if snap.fails >= threshold:
+    if snap.config_served_at is None:
+        if snap.in_litellm and snap.probe_ok is False:
             return UNHEALTHY
-        return HEALTHY
-    if (now - seen) < grace:
+        return AWAITING
+    if snap.last_ok is not None:
+        return UNHEALTHY if snap.fails >= threshold else HEALTHY
+    if snap.probe_ok is None:
         return LOADING
-    return STALLED
+    return LOADING if (now - snap.config_served_at) < grace else STALLED
 
 
 def commercial_lifecycle(snap: DeploymentSnapshot) -> str:
@@ -212,6 +231,7 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float) -> Depl
         context_window=snap.context_window,
         kv_cache_tokens=snap.kv_cache_tokens,
         counted=counted,
+        reached=snap.reached,
     )
 
 

@@ -18,6 +18,7 @@
 """Fleet VllmServer health state machine (no real vLLM)."""
 
 import asyncio
+import time
 
 from easydict import EasyDict
 
@@ -33,6 +34,7 @@ from llmao.fleet import (
 from llmao.litellm_client import LiteLLMBackend
 from llmao.model_status import (
     AVAILABLE,
+    AWAITING,
     HEALTHY,
     LOADING,
     SKEW_CONFIG_MISMATCH,
@@ -82,20 +84,21 @@ def test_probe_serving():
 
 def test_starting_inside_grace():
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
     assert s.state == LOADING
 
 
 def test_down_after_grace():
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="timeout")
     assert s.state == STALLED
 
 
 def test_serving_needs_consecutive_fails():
     s = _server()
+    s.config_served_at = 0.0  # box has already fetched its config
     s.record_probe(True, now=1.0, grace_s=1800, fail_threshold=3)
     s.record_probe(False, now=2.0, grace_s=1800, fail_threshold=3)
     s.record_probe(False, now=3.0, grace_s=1800, fail_threshold=3)
@@ -107,11 +110,16 @@ def test_serving_needs_consecutive_fails():
 def test_model_rollup_aggregate():
     a = _server(name="a", listen_port=1)
     b = _server(name="b", listen_port=2, model_name="qwen3-8b")
-    a.state = HEALTHY
-    b.state = LOADING
+    # The roll-up recomputes the lifecycle from the stored observation, so the
+    # state is set the way record_probe would.
+    # Probed "now" so the roll-up's staleness check (3 x 45s) keeps the
+    # signals fresh.
+    a.record_probe(True, now=10_000.0, grace_s=1800, fail_threshold=3)
+    b.config_served_at = 9_990.0
+    b.record_probe(False, now=10_000.0, grace_s=1800, fail_threshold=3, err="refused")
     cfg = EasyDict({"fleet": dict(FLEET_KNOBS)})
     fleet = Fleet(cfg=cfg, servers=[a, b])
-    assert fleet.model_rollup("gemma4-26b").rollup == AVAILABLE
+    assert fleet.model_rollup("gemma4-26b", now=10_000.0).rollup == AVAILABLE
     # Loading is not counted, so a model with only that replica is unavailable.
     assert fleet.model_rollup("qwen3-8b").rollup == UNAVAILABLE
     assert fleet.model_rollup("nope").rollup == UNAVAILABLE
@@ -169,7 +177,13 @@ class _Backend:
 
 def test_skew_sentences_replace_old_phrases():
     srv = _server()
-    srv.state = LOADING
+    # Loading: config served, first probe still failing. The skew runner
+    # reads the stored observation, so the state is set via probes.
+    # The skew runners compute signals at real time.time(), so the probe
+    # observation must be fresh for it to count.
+    srv.config_served_at = time.time() - 1.0
+    srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
+    assert srv.state == LOADING
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
     fleet = Fleet(cfg=EasyDict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
@@ -180,14 +194,17 @@ def test_skew_sentences_replace_old_phrases():
     # Loading is not a missing-route badge. The old sentence is dropped.
     assert dep.skew == []
     assert "missing from LiteLLM" not in dep.skew
-    srv.state = HEALTHY
+    srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
+    assert srv.state == HEALTHY
     asyncio.run(LiteLLMBackend.check_config_skew(backend))
     assert dep.skew == [SKEW_INTENDED_NOT_IN_LITELLM]
     base = srv.api_base
     backend.health = {"unhealthy_endpoints": [{"api_base": base}], "healthy_endpoints": []}
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
     assert SKEW_VLLM_UP_LITELLM_DOWN in dep.skew
-    srv.state = UNHEALTHY
+    for _ in range(3):
+        srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
+    assert srv.state == UNHEALTHY
     backend.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
     asyncio.run(LiteLLMBackend.check_health_skew(backend))
     assert SKEW_VLLM_DOWN_LITELLM_UP in dep.skew
@@ -286,6 +303,11 @@ def test_local_from_cfg_public_equals_listen():
     fleet = Fleet.from_cfg(cfg, models=load_models(example))
     assert fleet.servers[0].listen_port == 8001
     assert fleet.servers[0].public_port == 8001
+    # A fresh server awaits contact; serving its config starts the load.
+    assert fleet.servers[0].state == AWAITING
+    fleet.note_config_fetch("127.0.0.1", now=1.0)
+    assert fleet.servers[0].config_served_at == 1.0
+    fleet.servers[0].record_probe(False, now=2.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
     assert fleet.servers[0].state == LOADING
 
 
@@ -313,7 +335,7 @@ def test_probe_skips_without_public_port():
 
     fleet = Fleet(cfg=cfg, servers=[s])
     asyncio.run(fleet.probe_all(client=_Boom(), now=1.0))
-    assert s.state == LOADING
+    assert s.state == AWAITING
 
 
 def test_model_in_litellm():
@@ -329,13 +351,13 @@ def test_grace_boundary_is_exclusive():
     """A slow start must not be marked down one second early.
 
     health_grace_s is 1800, sized for a cold Gemma pull -- ~50GB of weights
-    before vLLM listens. The comparison is `(now - seen_at) < grace_s`, so
-    1799 is still STARTING and 1800 is DOWN. Pinned because moving to <= would
+    before vLLM listens. The comparison is `(now - config_served_at) < grace_s`,
+    so 1799 is still Loading and 1800 is Stalled. Pinned because moving to <= would
     shave a second off a window that was chosen deliberately, and the failure
     would look like a flaky box rather than an off-by-one.
     """
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     s.record_probe(False, now=1799.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == LOADING
 
@@ -352,7 +374,7 @@ def test_recovers_from_down_on_a_single_probe():
     worth stating rather than leaving as an accident of the code.
     """
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     for _ in range(3):
         s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
@@ -376,7 +398,7 @@ def test_flapping_settles_rather_than_oscillating_per_probe():
     knowing before trusting this signal to gate route registration.
     """
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     now = 100.0
     for _ in range(10):
         s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")
@@ -392,11 +414,11 @@ def test_down_stays_down_while_failing():
     """Once DOWN, further failures do not reset the grace window.
 
     The grace branch is only reached when state is not SERVING, and by then
-    now - seen_at is far past grace_s -- so a long-dead box cannot slip back
-    into STARTING and look like it is merely booting.
+    now - config_served_at is far past grace_s -- so a long-dead box cannot
+    slip back into Loading and look like it is merely booting.
     """
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     for _ in range(3):
         s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
@@ -414,7 +436,7 @@ def test_never_healthy_box_goes_starting_then_down():
     have fired for it.
     """
     s = _server()
-    s.seen_at = 0.0
+    s.config_served_at = 0.0
     now = 45.0
     while now < 1800.0:
         s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")

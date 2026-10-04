@@ -39,8 +39,8 @@ import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.model_status import (
+    AWAITING,
     HEALTHY,
-    LOADING,
     STALLED,
     UNHEALTHY,
     DeploymentSnapshot,
@@ -283,13 +283,19 @@ class VllmServer:
         self.kv_cache_tokens: int | None = None
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
-        # Named by model_status. Loading until the first probe: seen_at is now,
-        # which is still inside health_grace_s.
-        self.state = LOADING
-        self.seen_at = time.time()
+        # Named by model_status. Awaiting contact until the box fetches its
+        # config (config_served_at) and the probes run; see self_hosted_lifecycle.
+        self.state = AWAITING
+        self.config_served_at: float | None = None
         self.last_ok = None
         self.last_error = None
         self.fails = 0
+        # The last probe's observation, kept so the roll-up can re-run the
+        # lifecycle at the current time without reconstructing counters from
+        # the state name. None until the first probe.
+        self.last_probe_ok: bool | None = None
+        self.vllm_probed_at: float | None = None
+        self.reached: bool | None = None
 
     @classmethod
     def from_row(
@@ -393,6 +399,8 @@ class VllmServer:
         grace_s: float,
         fail_threshold: int,
         err: str | None = None,
+        reached: bool | None = None,
+        in_litellm: bool = False,
     ) -> None:
         was = self.state
         if ok:
@@ -402,15 +410,22 @@ class VllmServer:
         else:
             self.fails += 1
             self.last_error = err or "unhealthy"
+        self.last_probe_ok = ok
+        self.vllm_probed_at = now
+        if reached is not None:
+            self.reached = reached
         # The counters above are the observation. The name comes from one place.
         cfg = edict(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
         snap = DeploymentSnapshot(
             model_name=self.model_name,
             self_hosted=True,
-            seen_at=self.seen_at,
             probe_ok=ok,
             fails=self.fails,
             last_ok=self.last_ok,
+            vllm_probed_at=now,
+            in_litellm=in_litellm,
+            config_served_at=self.config_served_at,
+            reached=self.reached,
         )
         self.state = self_hosted_lifecycle(snap, cfg, now)
         if self.state == HEALTHY and was != HEALTHY:
@@ -537,7 +552,17 @@ class Fleet:
         return cls(cfg, servers, deployments, models=by_name)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
-        self.config_fetch_at[host] = now if now is not None else time.time()
+        """Record that we handed this box its config.
+
+        Stamps ``config_served_at`` on every server for the host, which is what
+        moves them from awaiting contact into the Loading window (the next
+        probe, or immediately for any probe running now, re-derives the state).
+        """
+        stamp = now if now is not None else time.time()
+        self.config_fetch_at[host] = stamp
+        for srv in self.servers:
+            if srv.host == host:
+                srv.config_served_at = stamp
         self.unknown_config_fetches.pop(normalize_peer_ip(host), None)
 
     def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
@@ -624,13 +649,22 @@ class Fleet:
         if own:
             client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
         try:
+            in_litellm_by_srv = {dep.vllm: dep.in_litellm for dep in self.deployments if dep.vllm is not None}
             for srv in self.servers:
                 url = srv.health_url
                 if url is None:
                     continue
                 was = srv.state
-                ok, err = await _get_health(client, url)
-                srv.record_probe(ok, now=stamp, grace_s=grace, fail_threshold=threshold, err=err)
+                ok, reached, err = await _get_health(client, url)
+                srv.record_probe(
+                    ok,
+                    now=stamp,
+                    grace_s=grace,
+                    fail_threshold=threshold,
+                    err=err,
+                    reached=reached,
+                    in_litellm=bool(in_litellm_by_srv.get(srv, False)),
+                )
                 # Scrape on the edge into SERVING, and once more if an earlier
                 # attempt came back empty. Both values are fixed at engine
                 # init, so re-reading them every probe would be waste.
@@ -673,15 +707,15 @@ class Fleet:
 
 
 def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
-    """Probe observations that make deployment_status reproduce dep.vllm.state.
+    """The last stored probe observation for this deployment.
 
-    The live object stores the lifecycle name, not the last probe boolean.
-    Rebuilding the counters from that name keeps the roll-up and the skew
-    badges on the same function the probe loop uses. cfg.fleet is the
+    record_probe keeps the counters (last_probe_ok, fails, last_ok,
+    vllm_probed_at) and config_served_at on the server, so deployment_status
+    can re-run the same lifecycle function the probe loop uses -- at the
+    current time, so a Loading deployment that has since outlasted the grace
+    window reads Stalled without waiting for the next probe. cfg.fleet is the
     validated interval block.
     """
-    misses = int(cfg.health_fail_threshold)
-    grace = float(cfg.health_grace_s)
     litellm_at = now if dep.litellm_healthy is not None else None
     mismatch = bool(dep.config_mismatch)
     srv = dep.vllm
@@ -694,28 +728,21 @@ def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
             litellm_health_at=litellm_at,
             config_mismatch=mismatch,
         )
-    if srv.state == HEALTHY:
-        probe_ok, fails, last_ok, seen, probed = True, 0, now, srv.seen_at, now
-    elif srv.state == UNHEALTHY:
-        probe_ok, fails, last_ok, seen, probed = False, misses, srv.last_ok or now, srv.seen_at, now
-    elif srv.state == STALLED:
-        probe_ok, fails, last_ok, seen, probed = False, 1, None, now - grace, now
-    else:
-        probe_ok, fails, last_ok, seen, probed = None, 0, None, now, None
     return DeploymentSnapshot(
         model_name=dep.model_name,
         self_hosted=True,
-        seen_at=seen,
-        probe_ok=probe_ok,
-        fails=fails,
-        last_ok=last_ok,
-        vllm_probed_at=probed,
+        probe_ok=srv.last_probe_ok,
+        fails=srv.fails,
+        last_ok=srv.last_ok,
+        vllm_probed_at=srv.vllm_probed_at,
         in_litellm=dep.in_litellm,
         litellm_healthy=dep.litellm_healthy,
         litellm_health_at=litellm_at,
         context_window=srv.observed_max_model_len or srv.max_model_len,
         kv_cache_tokens=srv.kv_cache_tokens,
         config_mismatch=mismatch,
+        config_served_at=srv.config_served_at,
+        reached=srv.reached,
     )
 
 
@@ -838,11 +865,15 @@ async def fetch_observed(client: httpx.AsyncClient, base: str, api_key: str) -> 
     return kv, mml
 
 
-async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, str | None]:
+async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:
+    """(ok, reached, err). ``reached`` is True when vLLM's HTTP server answered
+    at all (e.g. a 503 while the model is still loading); False for no
+    connection. ``ok`` is only a 200.
+    """
     try:
         resp = await client.get(url)
     except httpx.HTTPError as e:
-        return False, str(e)
+        return False, False, str(e)
     if resp.status_code == 200:
-        return True, None
-    return False, f"HTTP {resp.status_code}"
+        return True, True, None
+    return False, True, f"HTTP {resp.status_code}"

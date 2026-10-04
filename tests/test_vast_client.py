@@ -23,7 +23,7 @@ import pytest
 from easydict import EasyDict
 
 from llmao.fleet import Fleet, VllmServer, validate_fleet
-from llmao.model_status import LOADING
+from llmao.model_status import AWAITING
 from llmao.models import load_models
 from llmao.vast_client import port_map_from_body, ports_from_instance
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS
@@ -95,7 +95,7 @@ def test_apply_port_map():
     assert s.api_base == "http://203.0.113.10:41234/v1"
 
 
-def test_apply_port_map_missing_host_stays_pending():
+def test_apply_port_map_missing_host_stays_awaiting():
     s = VllmServer(
         model_name="gemma4-26b",
         name="gemma4-26b",
@@ -108,7 +108,7 @@ def test_apply_port_map_missing_host_stays_pending():
     fleet = Fleet(cfg=None, servers=[s])
     fleet.apply_port_map(port_map_from_body({"instances": [INSTANCE], "total_instances": 1}))
     assert s.public_port is None
-    assert s.state == LOADING
+    assert s.state == AWAITING
 
 
 def test_validate_fleet_requires_vast_api_key():
