@@ -1,11 +1,16 @@
-Subject: llmao — shared, attributed access to ASF inference
+Subject: llmao progress — model status, and the fleet (Sept–Oct)
 
 Hi all,
 
+A follow-up to the 10 September note. This covers tooling-llmao from
+then through 4 October. One note before we get into it: this was
+drafted with Qwen3.8-27B, one of the models on our own llm.apache.org
+fleet, driven through the Grok Build harness.
+
 llmao is the Tooling app behind llm.apache.org. It is how a committer
 gets a key to Foundation-sanctioned models, with the call attributed to
-them and bounded by a project budget. This note is what that service is,
-and where the software stands.
+them and bounded by a project budget. This note is where the software
+stands.
 
 What it does
 ------------
@@ -30,14 +35,14 @@ Why it exists
 -------------
 The Foundation needs one place for sanctioned inference, so usage is
 attributable and spend has an owner. Project keys and budgets live with
-the proxy. llmao is the ASF-facing control plane: identity, the catalog,
-and the key UX. The code is apache/tooling-llmao. The product design
-(who may spend, automation keys, envelopes) is in rai-private,
+the proxy. llmao is the ASF-facing control plane: identity, the
+catalog, and the key UX. The code is apache/tooling-llmao. The product
+design (who may spend, automation keys, envelopes) is in rai-private,
 services/llmao/README.md.
 
 Lately, in the software
 -----------------------
-Since the 10 September note to this list's predecessors:
+Since the 10 September note:
 
 • Definitions of what we serve live in models.yaml, maintained with the
   app. The proxy does not include that file. A live route is a row in
@@ -56,11 +61,18 @@ Since the 10 September note to this list's predecessors:
   table. This is in the code and is not yet how the running boxes are
   keyed.
 
+• llmao now tracks each self-hosted server through a health state:
+  Loading, Healthy, Unhealthy, or Stalled. Those roll up to a per-model
+  status — Available, Degraded, or Unavailable — that the Models page
+  shows. The Fleet page also flags drift between the config and the
+  proxy: routes that exist only in the proxy, or a model name that
+  differs between the two.
+
 Open
 ----
 • Walk a new Vast box through that Fleet path on the running service.
-• Operator follow-ups: long model load, a box reporting which config it
-  applied, smoke checks. We do not auto-restart a GPU box.
+• Operator follow-ups: a box reporting which config it applied, smoke
+  checks. We do not auto-restart a GPU box.
 • RunPod is in use by hand. An image we build and reuse is not.
 • Who may create a project-scoped automation key is still a RAI
   question. Provisional answer: any PMC member.
@@ -77,5 +89,3 @@ Questions welcome.
 
 Cheers,
 -g
-
-ps. email assist from Grok, if it wasn't obvious :)
