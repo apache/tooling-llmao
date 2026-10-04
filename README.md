@@ -172,14 +172,99 @@ Plain conversation is unaffected.
 
 ### Pi
 
-_Placeholder._
+This guide explains how to configure the **Pi coding agent** to use Apaache
+LLMAO.
 
-Pi connects over the OpenAI-compatible API. Known so far: its `contextWindow`
-and `maxTokens` settings must sum to less than the model's window, or vLLM
-rejects the request — `maxTokens` larger than the window on its own is an
-immediate 400.
+The configuration uses:
 
-To be filled in with a working configuration.
+- Pi coding agent
+- pi-localllm-provider extension
+- Apache LLMAO server URL: `https://llm.apache.org/v1`
+- Your Apache LLMAO API key that you should have already obtained
+
+The result is that the private models become available inside Pi alongside your
+normal frontier-model providers.
+
+---
+
+#### Prerequisites
+
+You need:
+
+
+```bash
+pi --version
+```
+
+If Pi isn't installed yet, install it according to the [Pi installation
+instructions](https://pi.dev).
+
+---
+
+#### Install pi-localllm-provider
+
+Install the LocalLLM provider extension. From the command line type:
+
+```text
+pi install npm:pi-localllm-provider
+```
+
+Then run Pi.
+
+At the pi command prompt, verify that the extension is available:
+
+```text
+/localllm
+```
+
+You should see the LocalLLM configuration interface.
+
+```text
+ LocalLLM - no servers configured
+
+ → ＋ Add server
+```
+
+Select **Add server** to configure your private LLM server. It will ask for
+a Name.  Type Apache LLMAO or what yu wish to call it:
+
+```text
+ Step 1/3 - Server name (e.g. "My vLLM", "Ollama", "LM Studio")
+
+> Apache LLMAO
+```
+
+Then it will ask for the **Base URL**. Enter the base URL of your private LLM server:
+
+```text
+ Step 2/3 - Base URL
+
+> https://llm.apache.org/v1
+```
+
+Finally, it will ask for your **API Key**. Enter your LLMAO API key:
+
+```text
+Step 3/3 - API key (leave blank if not required)
+
+> <your LLMAO API key>
+```
+
+If everything is entered correctly, you should see a confirmation message asking
+you to confirm the server addition. Confirm it, and you should see something
+similar to the following:
+
+```text
+ 3 models found via OpenAI-compatible - which to enable?
+
+ → All (3 models)
+   gemma4-26b
+   qwen3-8b
+   qwen3.8-27b
+```
+Select the models you want to enable in Pi. You can select all or just a subset.
+AT this point you should be able to use LLMAP models in Pi. You can now use the
+models in Pi alongside your other providers.
 
 ### Anything OpenAI-compatible
 
