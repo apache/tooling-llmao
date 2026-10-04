@@ -36,7 +36,7 @@ from easydict import EasyDict
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
-from llmao.model_status import HEALTHY, LOADING, SKEW_PHRASE, STALLED, UNHEALTHY
+from llmao.model_status import AWAITING, HEALTHY, LOADING, SKEW_PHRASE, STALLED, UNHEALTHY
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
@@ -268,6 +268,16 @@ async def fleet_page(result):
     admin = bool(result.is_site_admin)
     litellm = APP.cfg.litellm.base_url.rstrip("/")
     result.litellm_ui = f"{litellm}/ui" if admin else ""
+    result.servers = fleet_rows(fleet, admin=admin, now=now)
+    return result
+
+
+def fleet_rows(fleet, *, admin: bool, now: float) -> list:
+    """One table row per deployment (plus unknown fetches for admins).
+
+    Kept out of fleet_page so a test can build rows without a request and
+    render fleet.ezt against them.
+    """
     rows = []
     if admin:
         unknown = sorted(
@@ -284,6 +294,7 @@ async def fleet_page(result):
                     listen="—",
                     public="—",
                     state="Fleet key presented; this IP is not in config.yaml",
+                    detail="",
                     last_ok="—",
                     config_ago=f"{_ago(rec['last_seen'], now)} · {int(rec['count'])}",
                     skew="",
@@ -296,6 +307,7 @@ async def fleet_page(result):
                     no_deployment=ezt.boolean(False),
                     serving=ezt.boolean(False),
                     loading=ezt.boolean(False),
+                    awaiting=ezt.boolean(False),
                     unhealthy=ezt.boolean(False),
                     pending=ezt.boolean(False),
                     unknown=ezt.boolean(True),
@@ -313,8 +325,17 @@ async def fleet_page(result):
             serving = srv.state == HEALTHY and dep.in_litellm
             loading = srv.state == LOADING
             unhealthy = srv.state in (UNHEALTHY, STALLED)
+            awaiting = srv.state == AWAITING
             pending = False
             state = srv.state
+            # Awaiting contact: the box has not fetched its config yet, so
+            # there is nothing to load. Loading has a detail: vLLM is either
+            # up with a 503 while the model loads, or not listening at all.
+            detail = ""
+            if srv.state == AWAITING:
+                detail = "has not requested its config"
+            elif loading and srv.reached is not None:
+                detail = "vLLM up, model loading" if srv.reached else "vLLM not listening yet"
             listen = f"{srv.host}:{srv.listen_port}" if admin else ""
             public = (
                 f"{srv.host}:{srv.public_port}" if admin and srv.public_port is not None else ("—" if admin else "")
@@ -344,6 +365,7 @@ async def fleet_page(result):
                 state = "pending"
             else:
                 state = "no deployment"
+            detail = ""
             listen = "—" if admin else ""
             public = dep.api_base if admin else ""
             host = ""
@@ -360,6 +382,7 @@ async def fleet_page(result):
                 listen=listen,
                 public=public,
                 state=state,
+                detail=detail,
                 last_ok=_ago(last_ok, now),
                 config_ago=config_ago,
                 skew="; ".join(SKEW_PHRASE.get(n, n) for n in dep.skew) if admin and dep.skew else "",
@@ -376,6 +399,7 @@ async def fleet_page(result):
                 no_deployment=ezt.boolean(no_deployment),
                 serving=ezt.boolean(serving),
                 loading=ezt.boolean(loading),
+                awaiting=ezt.boolean(awaiting),
                 unhealthy=ezt.boolean(unhealthy),
                 pending=ezt.boolean(pending),
                 unknown=ezt.boolean(False),
@@ -384,8 +408,7 @@ async def fleet_page(result):
                 add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
             )
         )
-    result.servers = rows
-    return result
+    return rows
 
 
 @APP.post("/do-add-deployment")

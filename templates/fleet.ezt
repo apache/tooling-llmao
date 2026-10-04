@@ -74,12 +74,18 @@
             [if-any servers.loading]
             <span class="badge text-bg-secondary">[servers.state]</span>
             [end]
+            [if-any servers.awaiting]
+            <span class="badge text-bg-info text-dark">[servers.state]</span>
+            [end]
             [if-any servers.unhealthy]
             <span class="badge text-bg-danger">[servers.state]</span>
             [end]
             [if-any servers.pending]
             <span class="badge text-bg-light text-dark">[servers.state]</span>
             [end]
+            [end]
+            [if-any servers.detail]
+            <div class="text-muted small">[servers.detail]</div>
             [end]
           </td>
           <td class="small font-monospace">[servers.context]</td>
