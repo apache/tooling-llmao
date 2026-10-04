@@ -27,9 +27,11 @@ The lifecycle splits into two kinds of thing:
   this module owns. "Config served" is one of those facts: it is recorded as
   the in-memory ``config_served_at`` timestamp, which anchors the Loading
   window and separates it from the Awaiting pre-state.
-- **Admin labels** -- Approved, Reboot requested, Retired. An admin applies
-  these; they are stored in memory for display and lost on restart. They are
-  not computed states, so this module does not produce them.
+- **Admin labels** -- Approved and Reboot requested. In-memory, host-scoped
+  annotations the admin applies; they live on ``Fleet`` (see
+  ``Fleet.admin_label``), are orthogonal to the computed lifecycle, and are
+  lost on a control-plane restart. Retirement is the manual removal of a box
+  (drop it from ``fleet.hosts`` and delete its LiteLLM route), not a label.
 
 ``health_fail_threshold`` is both the number of failed probes that turn a
 healthy server Unhealthy and the number of missed intervals after which a
@@ -44,6 +46,12 @@ from dataclasses import dataclass
 
 # Lifecycle. One per deployment, or Unknown for a fleet-key fetch from an IP
 # that is not in config.yaml.
+# Admin labels (in-memory, host-scoped; stored on Fleet, lost on restart).
+# They annotate a box; they are not computed lifecycle states.
+APPROVED = "approved"
+REBOOT_REQUESTED = "reboot_requested"
+ADMIN_LABELS = frozenset({APPROVED, REBOOT_REQUESTED})
+
 AWAITING = "awaiting"
 LOADING = "loading"
 HEALTHY = "healthy"

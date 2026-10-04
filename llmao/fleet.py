@@ -39,6 +39,7 @@ import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.model_status import (
+    ADMIN_LABELS,
     AWAITING,
     HEALTHY,
     STALLED,
@@ -522,6 +523,11 @@ class Fleet:
         self.config_fetch_at: dict[str, float] = {}
         # Fleet-key GETs for IPs not in fleet.hosts. Process memory only.
         self.unknown_config_fetches: dict[str, dict[str, float | int]] = {}
+        # Admin labels (Approved, Reboot requested), keyed by normalized host IP.
+        # In-memory only: cleared on process restart, and they never affect the
+        # computed lifecycle -- the page reads them for display. See admin_label.
+        self.admin_labels: dict[str, str] = {}
+        self.admin_label_at: dict[str, float] = {}
         # LiteLLM routes that match no deployment. Rebuilt each config skew pass.
         # Identity is host, port, and model name. api_base is not a primary key:
         # one host serves several ports, and one host:port can report more than one model.
@@ -564,6 +570,32 @@ class Fleet:
             if srv.host == host:
                 srv.config_served_at = stamp
         self.unknown_config_fetches.pop(normalize_peer_ip(host), None)
+
+    def set_admin_label(self, host: str, label: str | None, *, now: float | None = None) -> None:
+        """Set, change, or clear a host's current admin label.
+
+        ``label`` is ``APPROVED`` / ``REBOOT_REQUESTED``, or ``None`` to clear.
+        The value is display-only: it is never read by the lifecycle, and it is
+        lost when the process restarts (see the restart-recovery notes in
+        docs/fleet-state.md). One label per host -- these are phases of one
+        onboarding, so a host is in at most one at a time.
+        """
+        if label is not None and label not in ADMIN_LABELS:
+            raise ValueError(f"Unknown admin label: {label!r}")
+        host = normalize_peer_ip(host)
+        if label is None:
+            self.admin_labels.pop(host, None)
+            self.admin_label_at.pop(host, None)
+            return
+        stamp = now if now is not None else time.time()
+        self.admin_labels[host] = label
+        self.admin_label_at[host] = stamp
+
+    def admin_label(self, host: str) -> tuple[str | None, float | None]:
+        """The host's current admin label and when it was set, else (None, None)."""
+        host = normalize_peer_ip(host)
+        label = self.admin_labels.get(host)
+        return label, self.admin_label_at.get(host) if label is not None else None
 
     def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
         """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.
