@@ -235,6 +235,8 @@ class Backend(Protocol):
     ) -> CreatedKey: ...
     async def delete_key(self, token_id: str) -> None: ...
     async def usage(self, project: str | None) -> list[dict]: ...
+    async def key_usage(self, user: str) -> dict[str, int]: ...
+    def invalidate_spend(self) -> None: ...
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance: ...
     def invalidate_allowance(self, user: str | None = None) -> None: ...
     async def aclose(self) -> None: ...
@@ -303,6 +305,11 @@ class LiteLLMBackend:
         # derived from the spend log on read; this keeps a page refresh from
         # costing a scan.
         self._allowance_cache: dict[str, tuple[float, dict[str, int]]] = {}
+        # (monotonic stamp, folded spend rows) for the current week.
+        self._spend_cache: tuple[float, list[dict]] | None = None
+        # model_name -> cost_basis, filled when routes are registered, so a
+        # spend row can be told from an invoice without a second lookup.
+        self._cost_basis: dict[str, str] = {}
         base = cfg.litellm.base_url.rstrip("/") + "/"
         timeout_s = int(cfg.litellm.request_timeout_s)
         self._client = httpx.AsyncClient(
@@ -742,9 +749,116 @@ class LiteLLMBackend:
         resp = await self._request("POST", "key/delete", json={"keys": [token_id]})
         self._raise_http(resp)
 
+    # Spend reads are cached for the same reason allowance reads are: a page
+    # refresh should not cost a log scan. Short enough that a running job's
+    # draw appears while it is still running.
+    _SPEND_TTL_S = 60
+
     async def usage(self, project: str | None) -> list[dict]:
-        # Spend APIs not wired yet.
-        return []
+        """Spend rows for a project, or across all projects when None.
+
+        One row per (user, model) pair over the current week, carrying tokens
+        and cost. Callers group it further -- the project page by member, My
+        Keys by project -- which is why this returns rows rather than a
+        summary: three pages want three groupings of the same query, and
+        three queries would be three chances to disagree.
+
+        `cost_basis` is carried through so a caller can tell an estimate from
+        an amount payable. Self-hosted routes are tagged derived_capacity by
+        deployment_body; commercial rows have no tag and their cost is real.
+        """
+        rows = await self._spend_rows()
+        if project is None:
+            return rows
+        return [r for r in rows if r.get("project") == project]
+
+    async def key_usage(self, user: str) -> dict[str, int]:
+        """Tokens drawn per key this week, for one person.
+
+        Same underlying query as usage(), grouped by key instead. The
+        allowance is per person; this is what each key contributed to it.
+        """
+        out: dict[str, int] = {}
+        for r in await self._spend_rows():
+            if r.get("user") != user:
+                continue
+            token = r.get("token_id")
+            if token:
+                out[token] = out.get(token, 0) + int(r.get("total_tokens") or 0)
+        return out
+
+    async def _spend_rows(self) -> list[dict]:
+        """This week's spend log, normalised and cached.
+
+        LiteLLM's /spend/logs returns one row per request. A busy week is
+        thousands of rows, so they are folded to one per
+        (user, project, model, key) before anything else sees them --
+        otherwise every caller pays to iterate the raw log.
+        """
+        now = time.monotonic()
+        if self._spend_cache is not None:
+            at, rows = self._spend_cache
+            if (now - at) < self._SPEND_TTL_S:
+                return rows
+
+        start = _dt.datetime.now(_dt.UTC).date() - _dt.timedelta(days=6)
+        resp = await self._request(
+            "GET", "spend/logs", params={"start_date": start.isoformat()},
+        )
+        self._raise_http(resp)
+        raw = resp.json()
+        if isinstance(raw, dict):
+            raw = raw.get("data") or raw.get("logs") or []
+        if not isinstance(raw, list):
+            raw = []
+
+        by_key: dict[tuple, dict] = {}
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            meta = row.get("metadata") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            # user_id is the request's principal; metadata.project is set by
+            # llmao when the key is minted. A row with neither is a call made
+            # with a key llmao did not issue, which is worth keeping rather
+            # than dropping -- it still consumed the fleet.
+            user = row.get("user") or row.get("user_id")
+            project = meta.get("project") or row.get("team_alias")
+            model = row.get("model")
+            token = row.get("api_key") or row.get("token")
+
+            total = row.get("total_tokens")
+            if total is None:
+                total = (row.get("prompt_tokens") or 0) + (row.get("completion_tokens") or 0)
+
+            k = (user, project, model, token)
+            acc = by_key.get(k)
+            if acc is None:
+                acc = by_key[k] = {
+                    "user": user,
+                    "project": project,
+                    "model": model,
+                    "token_id": token,
+                    "total_tokens": 0,
+                    "total_cost_usd": 0.0,
+                    "cost_basis": self._cost_basis.get(model),
+                    "requests": 0,
+                }
+            try:
+                acc["total_tokens"] += int(total or 0)
+                acc["total_cost_usd"] += float(row.get("spend") or 0.0)
+                acc["requests"] += 1
+            except (TypeError, ValueError):
+                continue
+
+        rows = list(by_key.values())
+        self._spend_cache = (now, rows)
+        return rows
+
+    def invalidate_spend(self) -> None:
+        """Drop the cached spend rows. Paired with invalidate_allowance."""
+        self._spend_cache = None
 
     # Allowance reads are cached: a committer refreshing a page should not
     # cost a spend-log scan each time. Short enough that a long job's draw
@@ -901,6 +1015,9 @@ class LiteLLMBackend:
                 # Marks the row as capacity rather than money, so a report can
                 # keep the two apart instead of adding them together.
                 info["cost_basis"] = "derived_capacity"
+                # Remembered so a spend row can be classified without a
+                # second call to /model/info per page load.
+                self._cost_basis[dep.model_name] = "derived_capacity"
 
         return {
             "model_name": dep.model_name,

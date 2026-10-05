@@ -254,7 +254,9 @@ class Seam:
         """
         try:
             return await self._backend.key_usage(identity.uid)
-        except (AttributeError, BackendUnavailableError):
+        except BackendUnavailableError:
+            # An empty map renders dashes rather than zeros. "0" claims the
+            # key is idle; we only know we could not ask.
             return {}
 
     async def my_key_approvals(self, identity: Identity) -> list[dict]:
