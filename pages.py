@@ -417,68 +417,6 @@ def _ago(ts, now: float) -> str:
     return f"{sec // 3600}h"
 
 
-@APP.get("/fleet")
-@asfquart.auth.require
-@APP.use_template(TEMPLATES / "fleet.ezt")
-@page(title="Fleet")
-async def fleet_page(result):
-    now = time.time()
-    fleet = APP.fleet
-    admin = bool(result.is_site_admin)
-    litellm = APP.cfg.litellm.base_url.rstrip("/")
-    result.litellm_ui = f"{litellm}/ui" if admin else ""
-    result.servers = fleet_rows(fleet, admin=admin, now=now)
-    return result
-
-
-def unknown_fetch_rows(fleet, *, now: float) -> list:
-    """Admin rows for fleet-key fetches from IPs not in fleet.hosts."""
-    rows = []
-    unknown = sorted(
-        fleet.unknown_config_fetches.items(),
-        key=lambda item: item[1]["last_seen"],
-        reverse=True,
-    )
-    for host, rec in unknown:
-        label_value, label_at = fleet.admin_label(host)
-        rows.append(
-            edict(
-                host=host,
-                name="—",
-                model_name="",
-                self_hosted=ezt.boolean(False),
-                listen="—",
-                public="—",
-                state="Fleet key presented; this IP is not in config.yaml",
-                detail="",
-                last_ok="—",
-                config_ago=f"{_ago(rec['last_seen'], now)} · {int(rec['count'])}",
-                skew="",
-                kv_cache="—",
-                context="—",
-                oversized=ezt.boolean(False),
-                in_litellm=ezt.boolean(False),
-                litellm_health="—",
-                litellm_health_ago="",
-                no_deployment=ezt.boolean(False),
-                serving=ezt.boolean(False),
-                loading=ezt.boolean(False),
-                awaiting=ezt.boolean(False),
-                unhealthy=ezt.boolean(False),
-                pending=ezt.boolean(False),
-                unknown=ezt.boolean(True),
-                row_class="table-warning",
-                show_add=ezt.boolean(False),
-                add_enabled=ezt.boolean(False),
-                label=label_value.replace("_", " ") if label_value else "",
-                label_value=label_value or "",
-                label_at=_ago(label_at, now) if label_at else "",
-                label_options=_LABEL_OPTIONS,
-            )
-        )
-    return rows
-
-
 def deployment_rows(fleet, *, admin: bool, now: float) -> list:
     """One table row per intended deployment, admin fields gated on ``admin``."""
     rows = []
@@ -592,13 +530,6 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
     return rows
 
 
-def fleet_rows(fleet, *, admin: bool, now: float) -> list:
-    """The /fleet page's rows: unknown fetches (admin) above the deployments."""
-    rows = unknown_fetch_rows(fleet, now=now) if admin else []
-    rows.extend(deployment_rows(fleet, admin=admin, now=now))
-    return rows
-
-
 @APP.post("/do-add-deployment")
 @asfquart.auth.require
 async def do_add_deployment():
@@ -606,25 +537,25 @@ async def do_add_deployment():
     ident = await current_identity(APP.cfg)
     if not ident.is_site_admin:
         await flash_danger("Only site admins can add a fleet deployment.")
-        return _see_other("/fleet")
+        return _see_other("/models")
     form = await quart.request.form
     name = (form.get("name") or "").strip()
     host = (form.get("host") or "").strip()
     matches = [d for d in APP.fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
     if len(matches) != 1:
         await flash_danger(f"No deployment {name} on {host}.")
-        return _see_other("/fleet")
+        return _see_other("/models")
     reason = add_refusal(matches[0])
     if reason:
         await flash_danger(reason)
-        return _see_other("/fleet")
+        return _see_other("/models")
     try:
         await APP.backend.add_deployment(matches[0])
     except BackendUnavailableError as e:
         await flash_danger(str(e))
-        return _see_other("/fleet")
+        return _see_other("/models")
     await flash_success(f"Added {matches[0].name} at {matches[0].api_base}.")
-    return _see_other("/fleet")
+    return _see_other("/models")
 
 
 @APP.post("/do-remove-deployment")
@@ -634,25 +565,25 @@ async def do_remove_deployment():
     ident = await current_identity(APP.cfg)
     if not ident.is_site_admin:
         await flash_danger("Only site admins can remove a fleet deployment.")
-        return _see_other("/fleet")
+        return _see_other("/models")
     form = await quart.request.form
     name = (form.get("name") or "").strip()
     host = (form.get("host") or "").strip()
     matches = [d for d in APP.fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
     if len(matches) != 1:
         await flash_danger(f"No deployment {name} on {host}.")
-        return _see_other("/fleet")
+        return _see_other("/models")
     reason = remove_refusal(matches[0])
     if reason:
         await flash_danger(reason)
-        return _see_other("/fleet")
+        return _see_other("/models")
     try:
         await APP.backend.delete_deployment(matches[0])
     except BackendUnavailableError as e:
         await flash_danger(str(e))
-        return _see_other("/fleet")
+        return _see_other("/models")
     await flash_success(f"Removed the route for {matches[0].name} at {matches[0].api_base}.")
-    return _see_other("/fleet")
+    return _see_other("/models")
 
 
 def apply_admin_label(fleet, host: str, label: str) -> tuple[bool, str]:

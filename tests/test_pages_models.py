@@ -243,8 +243,8 @@ def test_admin_rows_carry_their_models_deployments_and_summary():
     assert len(by_name["qwen"].deployments) == 1
     assert by_name["gemma"].replica_summary == "1 healthy / 1 unhealthy"
     assert by_name["qwen"].replica_summary == "1 loading"
-    # The rows are the fleet rows: same shape fleet.ezt renders.
-    assert pages.fleet_rows(fleet, admin=True, now=NOW)[0].model_name
+    # The rows are the deployment rows: same shape the drill-down renders.
+    assert pages.deployment_rows(fleet, admin=True, now=NOW)[0].model_name
 
 
 def test_non_admin_rows_have_no_admin_fields():
@@ -265,16 +265,6 @@ def test_admin_rows_carry_the_host_label():
     for r in pages.deployment_rows(fleet, admin=False, now=NOW):
         assert r.label == ""
         assert r.label_at == ""
-
-
-def test_unknown_fetch_rows_carry_the_approved_label():
-    pages = _app()
-    fleet = _fleet(_server("gemma"))
-    fleet.set_admin_label("192.0.2.9", "approved", now=NOW - 30)
-    fleet.unknown_config_fetches["192.0.2.9"] = {"first_seen": NOW - 40, "last_seen": NOW - 30, "count": 1}
-    rows = pages.unknown_fetch_rows(fleet, now=NOW)
-    assert rows[0].label == "approved"
-    assert rows[0].label_at == "30s"
 
 
 def test_apply_admin_label_sets_clears_and_rejects():
