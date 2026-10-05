@@ -27,17 +27,17 @@
                 <li class="nav-item">
                     <a class="nav-link" href="/keys">My Keys</a>
                 </li>
-                [if-any can_create_automation]
-                <li class="nav-item">
-                    <a class="nav-link" href="/keys/other">Other Keys</a>
-                </li>
-                [end]
                 <li class="nav-item">
                     <a class="nav-link" href="/models">Models</a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link" href="/projects">Projects</a>
                 </li>
+                [if-any is_site_admin]
+                <li class="nav-item">
+                    <a class="nav-link" href="/admin">Admin</a>
+                </li>
+                [end]
                 [end]
             </ul>
             <ul class="navbar-nav ms-auto mb-2 mb-lg-0">

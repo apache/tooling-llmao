@@ -207,7 +207,15 @@ async def basic_info(title: str = "llmao") -> edict:
     return basic
 
 
-def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
+def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys",
+              used_by_token: dict[str, int] | None = None) -> list:
+    """Template rows for a key table.
+
+    `used_by_token` carries this week's draw per key. Absent, the column shows
+    a dash rather than a zero -- "0" is a claim that the key is idle, and we
+    do not know that.
+    """
+    used_by_token = used_by_token or {}
     rows = []
     for k in keys:
         budget = k.max_budget
@@ -223,6 +231,11 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys") -> list:
                     "created_by": k.created_by or "—",
                     "spend": f"${k.spend:.6f}",
                     "max_budget": budget_s,
+                    "used_h": (
+                        _tokens_h(used_by_token[k.token_id])
+                        if k.token_id in used_by_token
+                        else "—"
+                    ),
                     "last_used": k.last_used or "—",
                     "created_at": k.created_at or "—",
                     "blocked": k.blocked,
@@ -714,10 +727,79 @@ async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_c
 @APP.use_template(TEMPLATES / "keys.ezt")
 @page(title="My Keys")
 async def keys_list(result):
-    """My Keys — personal PATs only (one list_keys call)."""
+    """My Keys — the allowance, the keys drawing on it, and project draw.
+
+    One page rather than two. The allowance is per PERSON: several free-tier
+    keys share one million tokens, so a per-key "remaining" column would print
+    the same figure on every row and imply each had its own budget. Per-key
+    USED is the useful number anyway — it is how you find the key left running
+    in a cron job.
+    """
     ident = await current_identity(APP.cfg)
-    result.keys = _key_rows(await APP.seam.list_my_keys(ident), after_path="/keys")
+    keys = await APP.seam.list_my_keys(ident)
+    result.keys = _key_rows(
+        keys, after_path="/keys",
+        used_by_token=await APP.seam.my_key_usage(ident),
+    )
+    result.has_project_keys = ezt.boolean(
+        any(getattr(k, "project", None) for k in keys)
+    )
+
+    # A page that fails because the allowance could not be read is worse than
+    # one that renders without it: the keys are what the person came for.
+    try:
+        result.allowance = _allowance_row(await APP.seam.my_allowance(ident))
+    except BackendUnavailableError:
+        result.allowance = None
+
+    try:
+        result.projects = await APP.seam.my_project_usage(ident)
+    except BackendUnavailableError:
+        result.projects = []
+
+    try:
+        result.approvals = [edict(a) for a in await APP.seam.my_key_approvals(ident)]
+    except (BackendUnavailableError, AttributeError):
+        result.approvals = []
     return result
+
+
+def _allowance_row(a):
+    """Template fields for the free-tier bar.
+
+    Computed here rather than in the template because ezt has no arithmetic,
+    and because the percentage, the warning threshold and the return date are
+    all judgements rather than data.
+    """
+    pct = min(100, int(a.used() / a.cap * 100)) if a.cap else 0
+    returns = a.returns()
+    row = {
+        "cap_h": _tokens_h(a.cap),
+        "used_h": _tokens_h(a.used()),
+        "remaining_h": _tokens_h(a.remaining()),
+        "window_days": a.window_days,
+        "pct": pct,
+        "exhausted": ezt.boolean(a.exhausted()),
+        # Warn before the wall rather than at it. Discovering a limit by
+        # hitting it mid-job is the experience worth designing away.
+        "nearly": ezt.boolean(pct >= 80),
+        # A capacity estimate at the fleet rate, so self-hosted work can be
+        # compared with commercial spend. Not a bill.
+        "capacity_h": f"${a.used() / 1_000_000 * CAPACITY_USD_PER_MTOK:,.2f}",
+        "next_return": None,
+        "next_return_amount_h": None,
+    }
+    if returns:
+        day, amount = returns[0]
+        row["next_return"] = _when_h(day)
+        row["next_return_amount_h"] = _tokens_h(amount)
+    return row
+
+
+# Fleet capacity estimate, dollars per million tokens. Derived from measured
+# throughput at a 50% planning utilisation -- it exists so self-hosted and
+# commercial work can appear in the same units, and is not an amount payable.
+CAPACITY_USD_PER_MTOK = 0.32
 
 
 def _tokens_h(n: int) -> str:
@@ -751,49 +833,41 @@ def _when_h(day) -> str:
 
 @APP.get("/usage")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "usage.ezt")
-@page(title="My usage")
-async def usage_mine(result):
-    """What this committer has drawn, and when more becomes available.
+async def usage_moved():
+    """Folded into My Keys. Redirect rather than 404 a bookmark."""
+    return quart.redirect("/keys")
 
-    The free-tier figure is a capacity share and the project figures include
-    real money, so the template keeps them visually apart. Adding them would
-    produce a number that means nothing.
+
+
+
+@APP.get("/admin")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "admin.ezt")
+@page(title="Admin")
+async def admin_index(result):
+    """One door for everything a site admin does.
+
+    Four pages that only make sense together, and none of which a committer
+    should have to scroll past in the nav.
     """
-    ident = await current_identity(APP.cfg)
-    allowance = await APP.seam.my_allowance(ident)
-
-    result.cap_h = _tokens_h(allowance.cap)
-    result.used_h = _tokens_h(allowance.used())
-    result.remaining_h = _tokens_h(allowance.remaining())
-    result.window_days = allowance.window_days
-    result.pct = min(100, int(allowance.used() / allowance.cap * 100)) if allowance.cap else 0
-    result.exhausted = ezt.boolean(allowance.exhausted())
-    # Warn before the wall rather than at it: discovering the limit by
-    # hitting it mid-job is the experience worth avoiding.
-    result.nearly = ezt.boolean(result.pct >= 80)
-
-    returns = allowance.returns()
-    if returns:
-        day, amount = returns[0]
-        result.next_return = _when_h(day)
-        result.next_return_amount_h = _tokens_h(amount)
-    else:
-        result.next_return = None
-        result.next_return_amount_h = None
-
-    result.projects = await APP.seam.my_project_usage(ident)
+    if not result.is_site_admin:
+        raise AuthzError("Admin is limited to site admins.")
     return result
 
 
 @APP.get("/keys/other")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "keys_other.ezt")
-@page(title="Other Keys")
+@page(title="Service keys")
 async def keys_other_list(result):
-    """Other Keys — automation / team-scoped (PMC / site admin)."""
+    """Service keys — every key with no human at the keyboard.
+
+    Reached from Admin rather than the committer nav: a committer seeing
+    other people's automation keys learned nothing and could act on none of
+    it. The URL is unchanged so existing links keep working.
+    """
     if not result.can_create_automation:
-        raise AuthzError("Other Keys is limited to PMC members and site admins.")
+        raise AuthzError("Service keys are limited to PMC members and site admins.")
     ident = await current_identity(APP.cfg)
     seam = APP.seam
     admin_projects = ident.all_projects() if ident.is_site_admin else list(ident.committees)

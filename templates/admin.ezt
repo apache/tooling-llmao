@@ -1,0 +1,49 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <h1 class="h3 mb-3">Admin</h1>
+  <p class="text-muted small">
+    Everything that needs a site admin, in one place.
+  </p>
+
+  <div class="list-group">
+    <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-start"
+       href="/admin/requests">
+      <div>
+        <div class="fw-semibold">Requests</div>
+        <div class="small text-muted">
+          Capacity bumps and key requests awaiting a decision.
+        </div>
+      </div>
+      [if-any pending_count]
+      <span class="badge text-bg-danger rounded-pill">[pending_count]</span>
+      [end]
+    </a>
+    <a class="list-group-item list-group-item-action" href="/admin/tiers">
+      <div class="fw-semibold">Tiers</div>
+      <div class="small text-muted">
+        Allowances and rate limits per tier. Applies to every key on the tier.
+      </div>
+    </a>
+    <a class="list-group-item list-group-item-action" href="/admin/at-limit">
+      <div class="fw-semibold">At the limit</div>
+      <div class="small text-muted">
+        Keys at or near their allowance, oldest first.
+      </div>
+    </a>
+    <a class="list-group-item list-group-item-action" href="/keys/other">
+      <div class="fw-semibold">Service keys</div>
+      <div class="small text-muted">
+        Every key with no human at the keyboard, and when it was last used.
+      </div>
+    </a>
+    <a class="list-group-item list-group-item-action" href="/fleet">
+      <div class="fw-semibold">Fleet</div>
+      <div class="small text-muted">
+        Hosts, serving state, and what has been committed against capacity.
+      </div>
+    </a>
+  </div>
+</div>
+[include "footer.ezt"]

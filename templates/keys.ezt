@@ -14,6 +14,65 @@
     attributed to you. The secret is shown once when you create the key.
   </p>
 
+  [if-any approvals]
+  [for approvals]
+  <div class="card border-success mb-3">
+    <div class="card-body py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <span class="fw-semibold font-monospace">[approvals.purpose]</span>
+        <span class="badge text-bg-success ms-1">approved</span><br>
+        <span class="small text-muted">
+          [approvals.tier] tier[if-any approvals.project] &middot; [approvals.project][else] &middot; no project[end]
+          &middot; [approvals.limits_h]
+          &middot; expires [approvals.expires_h]
+        </span>
+      </div>
+      <form method="post" action="/do-create-approved-key" class="mb-0">
+        <input type="hidden" name="approval_id" value="[approvals.id]">
+        <button type="submit" class="btn btn-success btn-sm">Create this key</button>
+      </form>
+    </div>
+  </div>
+  [end]
+  [end]
+
+  [if-any allowance]
+  <div class="card mb-4">
+    <div class="card-body py-3">
+      <div class="d-flex justify-content-between align-items-baseline mb-1">
+        <span class="fw-semibold">Free tier</span>
+        <span class="small text-muted">
+          [allowance.used_h] of [allowance.cap_h] tokens &middot;
+          rolling [allowance.window_days] days
+        </span>
+      </div>
+      <div class="progress" style="height:8px" role="progressbar"
+           aria-valuenow="[allowance.pct]" aria-valuemin="0" aria-valuemax="100"
+           aria-label="Free tier allowance used">
+        <div class="progress-bar[if-any allowance.exhausted] bg-danger[else][if-any allowance.nearly] bg-warning[end][end]"
+             style="width:[allowance.pct]%"></div>
+      </div>
+      [if-any allowance.exhausted]
+      <p class="small mb-0 mt-2">
+        <strong>Out for now.</strong>
+        [if-any allowance.next_return]
+        [allowance.next_return_amount_h] returns [allowance.next_return].
+        [end]
+        [if-any has_project_keys]Your project keys are unaffected.[end]
+      </p>
+      [else]
+      <p class="small text-muted mb-0 mt-2">
+        [allowance.remaining_h] left.
+        [if-any allowance.next_return]
+        [allowance.next_return_amount_h] more returns [allowance.next_return].
+        [end]
+        [if-any allowance.capacity_h]&middot; about [allowance.capacity_h] of capacity.[end]
+      </p>
+      [end]
+    </div>
+  </div>
+  [end]
+
   [if-any keys]
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle">
@@ -21,9 +80,8 @@
         <tr>
           <th>Purpose</th>
           <th>Project</th>
+          <th class="text-end">Used this week</th>
           <th>Last used</th>
-          <th>Spend</th>
-          <th>Limit</th>
           <th>Created</th>
           <th></th>
         </tr>
@@ -32,10 +90,9 @@
         [for keys]
         <tr>
           <td class="font-monospace small">[keys.purpose]</td>
-          <td>[keys.project]</td>
+          <td>[if-any keys.project][keys.project][else]<span class="text-muted">free tier</span>[end]</td>
+          <td class="small font-monospace text-end">[keys.used_h]</td>
           <td class="small text-muted">[keys.last_used]</td>
-          <td class="small font-monospace">[keys.spend]</td>
-          <td class="small font-monospace">[keys.max_budget]</td>
           <td class="small text-muted">[keys.created_at]</td>
           <td class="text-end">
             <button type="button" class="btn btn-outline-danger btn-sm"
@@ -52,6 +109,39 @@
   </div>
   [else]
   <p class="text-muted">No personal keys yet. <a href="/keys/new">Create one</a>.</p>
+  [end]
+
+  [if-any projects]
+  <h2 class="h5 mt-4 mb-2">My draw by project</h2>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th class="text-end">My tokens</th>
+          <th class="text-end">Project cap</th>
+          <th class="text-end">My spend</th>
+          <th class="text-end">Project budget</th>
+        </tr>
+      </thead>
+      <tbody>
+        [for projects]
+        <tr>
+          <td><a href="/projects/[projects.name]">[projects.name]</a></td>
+          <td class="text-end font-monospace small">[projects.tokens_h]</td>
+          <td class="text-end small text-muted">of [projects.cap_h]</td>
+          <td class="text-end font-monospace small">[projects.spend_h]</td>
+          <td class="text-end small text-muted">of [projects.budget_h]</td>
+        </tr>
+        [end]
+      </tbody>
+    </table>
+  </div>
+  <p class="text-muted small">
+    Your draw against each project&rsquo;s total. Spend is real money on
+    commercial models; tokens on ASF-hosted models are a share of fleet
+    capacity, estimated for comparison rather than billed.
+  </p>
   [end]
 </div>
 

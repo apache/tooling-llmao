@@ -178,6 +178,16 @@ def _aggregate_keys(
     return round(people, 6), round(automation, 6), by_person, auto_rows
 
 
+def _tokens_short(n) -> str:
+    """340k reads faster than 340,000, and these are glanced at."""
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 1_000:
+        return f"{n // 1_000}k"
+    return str(n)
+
+
 class Seam:
     def __init__(self, cfg: Any, backend: Backend):
         self._cfg = cfg
@@ -234,6 +244,30 @@ class Seam:
     async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
         return await self._backend.list_keys(user=identity.uid, size=100)
 
+    async def my_key_usage(self, identity: Identity) -> dict[str, int]:
+        """Tokens drawn per key, this week.
+
+        The allowance above is per person; this is what each key contributed
+        to it. Separate calls because they answer different questions and the
+        spend log groups differently for each.
+        """
+        try:
+            return await self._backend.key_usage(identity.uid)
+        except (AttributeError, BackendUnavailableError):
+            return {}
+
+    async def my_key_approvals(self, identity: Identity) -> list[dict]:
+        """Approved key requests this person can still act on.
+
+        Shown on My Keys as a row that is not yet a key. The approval records
+        what may be created; the secret is revealed once, at creation, to the
+        requester -- so it never passes through anyone else.
+        """
+        try:
+            return await self._backend.key_approvals(identity.uid)
+        except (AttributeError, BackendUnavailableError):
+            return []
+
     async def my_allowance(self, identity: Identity):
         """This committer's rolling free-tier allowance.
 
@@ -270,11 +304,24 @@ class Seam:
                 # here would put capacity into a column labelled dollars.
                 if row.get("cost_basis") != "derived_capacity":
                     spend += float(row.get("total_cost_usd") or 0.0)
+            # The project's own ceilings, so a personal figure has context.
+            # "1.2M" says nothing about whether to start a big job; "1.2M of
+            # 20M" does.
+            cap = budget = None
+            try:
+                info = await self._backend.team_info(project)
+                if info is not None:
+                    cap = getattr(info, "token_cap", None)
+                    budget = info.max_budget
+            except BackendUnavailableError:
+                pass
+
             out.append({
                 "name": project,
-                "tokens_h": f"{tokens / 1_000_000:.1f}M" if tokens >= 1_000_000
-                            else (f"{tokens // 1_000}k" if tokens >= 1000 else str(tokens)),
+                "tokens_h": _tokens_short(tokens),
+                "cap_h": _tokens_short(cap) if cap else "—",
                 "spend_h": f"${spend:,.2f}",
+                "budget_h": f"${budget:,.0f}" if budget else "—",
             })
         return out
 
