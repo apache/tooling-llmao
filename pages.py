@@ -852,6 +852,9 @@ async def admin_index(result):
     """
     if not result.is_site_admin:
         raise AuthzError("Admin is limited to site admins.")
+    # ezt's [if-any] tests truthiness but still requires the name to exist.
+    # None renders the badge away; the real count arrives with the request queue.
+    result.pending_count = None
     return result
 
 
