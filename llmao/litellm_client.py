@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from llmao import requests as _requests
 from llmao.fleet import ExtraLiteLLM, snapshot_for_status
 from llmao.model_status import (
     HEALTHY,
@@ -531,6 +532,74 @@ class LiteLLMBackend:
     # llmao's own state: llmao has no database, and the only thing worse than
     # a missing override is one that disagrees between two instances.
     _TIER_STORE_TEAM = "llmao-entitlement-defaults"
+
+    # ---- requests ------------------------------------------------------
+    #
+    # Stored on team metadata beside grantor and token_cap. llmao has no
+    # database of its own and ARCHITECTURE.md states that as a property, so a
+    # request is a row on a team rather than a row in a table llmao owns.
+    #
+    # The cost is that listing everything pending reads every team. warm()
+    # already enumerates them once per boot and at twenty projects this is
+    # noise; at three hundred it would not be, and that is the signal to lift
+    # it into a table. Nothing above this layer would have to change.
+
+    async def _team_metadata(self, project: str) -> tuple[str, dict[str, Any]]:
+        info = await self.ensure_team(project)
+        return info.team_id, dict(info.metadata or {})
+
+    async def add_request(self, req: Any) -> Any:
+        """Store a new request, or persist a decision on an existing one.
+
+        Projectless requests live on the reserved entitlement-defaults team,
+        which already exists for tier overrides.
+
+        Read-modify-write on the whole metadata blob: two admins answering
+        different requests in the same second can lose one. At pilot volume
+        that is theoretical, and if it stops being so that is a reason to
+        move this into a table rather than to add a lock here.
+        """
+        project = req.project or self._TIER_STORE_TEAM
+        team_id, meta = await self._team_metadata(project)
+        merged = _requests.upsert(_requests.load(meta), req)
+        meta[_requests.METADATA_KEY] = _requests.dump(_requests.prune(merged))
+        resp = await self._request(
+            "POST",
+            "team/update",
+            json={"team_id": team_id, "metadata": meta},
+        )
+        self._raise_http(resp)
+        return req
+
+    # Same operation; named for what the caller means.
+    save_request = add_request
+
+    async def list_requests(self, project: str | None = None) -> list[Any]:
+        """Requests for one project, or every one across the fleet.
+
+        With no project this reads every team. That is the ugly part of
+        storing them in metadata, and it is bounded by the number of PMCs
+        rather than by the number of requests.
+        """
+        if project is not None:
+            _, meta = await self._team_metadata(project)
+            return _requests.load(meta)
+
+        out: list[Any] = []
+        for row in await self._team_list_rows():
+            if not isinstance(row, dict):
+                continue
+            meta = row.get("metadata")
+            if not isinstance(meta, dict) or _requests.METADATA_KEY not in meta:
+                continue
+            out.extend(_requests.load(meta))
+        return out
+
+    async def find_request(self, request_id: str) -> Any | None:
+        for r in await self.list_requests():
+            if r.id == request_id:
+                return r
+        return None
 
     async def tier_entitlement(self, tier: str) -> dict[str, Any]:
         """A tier's effective limits: config, with any admin override on top.
