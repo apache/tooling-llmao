@@ -254,6 +254,52 @@ def test_non_admin_rows_have_no_admin_fields():
     assert not rows[0].keys() & {"deployments", "replica_summary"}
 
 
+def test_admin_rows_carry_the_host_label():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    fleet.set_admin_label("10.0.0.1", "approved", now=NOW - 20)
+    rows = pages.deployment_rows(fleet, admin=True, now=NOW)
+    assert rows[0].label == "approved"
+    assert rows[0].label_at == "20s"
+    # Non-admin rows never expose the label.
+    for r in pages.deployment_rows(fleet, admin=False, now=NOW):
+        assert r.label == ""
+        assert r.label_at == ""
+
+
+def test_unknown_fetch_rows_carry_the_approved_label():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    fleet.set_admin_label("192.0.2.9", "approved", now=NOW - 30)
+    fleet.unknown_config_fetches["192.0.2.9"] = {"first_seen": NOW - 40, "last_seen": NOW - 30, "count": 1}
+    rows = pages.unknown_fetch_rows(fleet, now=NOW)
+    assert rows[0].label == "approved"
+    assert rows[0].label_at == "30s"
+
+
+def test_apply_admin_label_sets_clears_and_rejects():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+
+    ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "approved")
+    assert ok and "approved" in msg
+    assert fleet.admin_label("10.0.0.1")[0] == "approved"
+
+    # A garbled value is rejected, and must not wipe the existing vouch.
+    ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "bogus")
+    assert not ok and "Unknown admin label" in msg
+    assert fleet.admin_label("10.0.0.1")[0] == "approved"
+
+    # Empty host is rejected.
+    ok, msg = pages.apply_admin_label(fleet, "", "approved")
+    assert not ok and "No host" in msg
+
+    # An empty label clears.
+    ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "")
+    assert ok and "Cleared" in msg
+    assert fleet.admin_label("10.0.0.1")[0] is None
+
+
 def _render(rows, attention=None) -> str:
     data = edict(
         title="Models",

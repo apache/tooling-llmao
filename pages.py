@@ -37,6 +37,7 @@ from llmao.auth import current_identity
 from llmao.fleet import add_refusal, snapshot_for_status
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
 from llmao.model_status import (
+    ADMIN_LABELS,
     AVAILABLE,
     AWAITING,
     DEGRADED,
@@ -410,6 +411,7 @@ def unknown_fetch_rows(fleet, *, now: float) -> list:
         reverse=True,
     )
     for host, rec in unknown:
+        label, label_at = fleet.admin_label(host)
         rows.append(
             edict(
                 host=host,
@@ -439,6 +441,8 @@ def unknown_fetch_rows(fleet, *, now: float) -> list:
                 row_class="table-warning",
                 show_add=ezt.boolean(False),
                 add_enabled=ezt.boolean(False),
+                label=label.replace("_", " ") if label else "",
+                label_at=_ago(label_at, now) if label_at else "",
             )
         )
     return rows
@@ -450,6 +454,14 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
     for dep in fleet.deployments:
         srv = dep.vllm
         fetched = fleet.config_fetch_at.get(srv.host) if srv else None
+        # The admin label is a host-scoped annotation; unknown-fetch rows
+        # above already carry the host and are labeled separately.
+        label, label_at = ("", "")
+        if admin and srv is not None:
+            label, label_at = fleet.admin_label(srv.host)
+            label_at = _ago(label_at, now) if label_at else ""
+            if label is not None:
+                label = label.replace("_", " ")
         if srv is not None:
             last_ok = srv.last_ok
             no_deployment = srv.state == HEALTHY and not dep.in_litellm
@@ -538,6 +550,8 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
                 row_class="",
                 show_add=ezt.boolean(admin and dep.self_hosted and not dep.in_litellm),
                 add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
+                label=label,
+                label_at=label_at,
             )
         )
     return rows
@@ -576,6 +590,47 @@ async def do_add_deployment():
         return _see_other("/fleet")
     await flash_success(f"Added {matches[0].name} at {matches[0].api_base}.")
     return _see_other("/fleet")
+
+
+def apply_admin_label(fleet, host: str, label: str) -> tuple[bool, str]:
+    """Parse and apply a host's admin label; the testable core of /do-set-admin-label.
+
+    ``label`` is a member of ``ADMIN_LABELS``, or ``""`` to clear; any other
+    non-empty value is rejected rather than silently treated as a clear (a
+    garbled form must not wipe a vouch). Returns ``(ok, message)``.
+    """
+    host = (host or "").strip()
+    label = (label or "").strip()
+    if not host:
+        return False, "No host to label."
+    if label and label not in ADMIN_LABELS:
+        return False, f"Unknown admin label: {label!r}."
+    fleet.set_admin_label(host, label or None)
+    if not label:
+        return True, f"Cleared the label for {host}."
+    return True, f"Marked {host} as {label.replace('_', ' ')}."
+
+
+@APP.post("/do-set-admin-label")
+@asfquart.auth.require
+async def do_set_admin_label():
+    """Site admin sets, changes, or clears a host's admin label.
+
+    The label is an in-memory, host-scoped annotation (see
+    ``Fleet.set_admin_label`` and fleet-state.md section 5.2); it is never
+    read by the lifecycle and is lost on a control-plane restart.
+    """
+    ident = await current_identity(APP.cfg)
+    if not ident.is_site_admin:
+        await flash_danger("Only site admins can set an admin label.")
+        return _see_other("/models")
+    form = await quart.request.form
+    ok, message = apply_admin_label(APP.fleet, form.get("host"), form.get("label"))
+    if ok:
+        await flash_success(message)
+    else:
+        await flash_danger(message)
+    return _see_other("/models")
 
 
 def _money(amount: float) -> str:
