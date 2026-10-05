@@ -279,6 +279,29 @@ def _replica_summary(model_name: str, fleet, *, now: float) -> str:
     return " / ".join(parts)
 
 
+_LABEL_OPTIONS = [
+    edict(value="", text="— no label —"),
+    edict(value="approved", text="Approved"),
+    edict(value="reboot_requested", text="Reboot requested"),
+]
+
+
+def _label_fields(fleet, host: str, *, now: float) -> dict:
+    """The label display fields for a strip row. Unknown boxes carry the
+    set/clear control; everything else labels nothing."""
+    if not host:
+        return {"host": "", "label": "", "label_value": "", "label_at": "", "label_options": []}
+    label_value, label_at = fleet.admin_label(host)
+    label_value = label_value or ""
+    return {
+        "host": host,
+        "label": label_value.replace("_", " "),
+        "label_value": label_value,
+        "label_at": _ago(label_at, now) if label_at else "",
+        "label_options": _LABEL_OPTIONS,
+    }
+
+
 def attention_items(fleet, *, now: float) -> list:
     """The admin strip: only actionable items, in the order they were listed
     in the design (unknown boxes, Stalled, Unhealthy, true skew)."""
@@ -293,6 +316,7 @@ def attention_items(fleet, *, now: float) -> list:
                 kind="unknown",
                 what=f"Fleet key presented from {host} (not in fleet.hosts)",
                 detail=f"seen {_ago(rec['last_seen'], now)} · {int(rec['count'])} requests",
+                **_label_fields(fleet, host, now=now),
             )
         )
     cfg = fleet.cfg.fleet
@@ -304,10 +328,12 @@ def attention_items(fleet, *, now: float) -> list:
                     kind=view.lifecycle,
                     what=f"{dep.name} is {view.lifecycle.replace('_', ' ')}",
                     detail=dep.model_name,
+                    **_label_fields(fleet, "", now=now),
                 )
             )
         for badge in dep.skew:
-            items.append(edict(kind="skew", what=SKEW_PHRASE.get(badge, badge), detail=dep.name))
+            phrase = SKEW_PHRASE.get(badge, badge)
+            items.append(edict(kind="skew", what=phrase, detail=dep.name, **_label_fields(fleet, "", now=now)))
     for extra in fleet.extra_litellm:
         for badge in extra.skew:
             items.append(
@@ -315,6 +341,7 @@ def attention_items(fleet, *, now: float) -> list:
                     kind="skew",
                     what=SKEW_PHRASE.get(badge, badge),
                     detail=f"{extra.host}:{extra.port} {extra.model_name}",
+                    **_label_fields(fleet, "", now=now),
                 )
             )
     return items
@@ -360,6 +387,8 @@ def model_catalog_rows(fleet, catalog: list, *, now: float | None = None, admin:
             row.replica_summary = _replica_summary(row.model_name, fleet, now=stamp)
         rows.append(row)
     rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
+    for i, row in enumerate(rows):
+        row.index = i
     return rows
 
 
@@ -411,7 +440,7 @@ def unknown_fetch_rows(fleet, *, now: float) -> list:
         reverse=True,
     )
     for host, rec in unknown:
-        label, label_at = fleet.admin_label(host)
+        label_value, label_at = fleet.admin_label(host)
         rows.append(
             edict(
                 host=host,
@@ -441,8 +470,10 @@ def unknown_fetch_rows(fleet, *, now: float) -> list:
                 row_class="table-warning",
                 show_add=ezt.boolean(False),
                 add_enabled=ezt.boolean(False),
-                label=label.replace("_", " ") if label else "",
+                label=label_value.replace("_", " ") if label_value else "",
+                label_value=label_value or "",
                 label_at=_ago(label_at, now) if label_at else "",
+                label_options=_LABEL_OPTIONS,
             )
         )
     return rows
@@ -456,12 +487,12 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
         fetched = fleet.config_fetch_at.get(srv.host) if srv else None
         # The admin label is a host-scoped annotation; unknown-fetch rows
         # above already carry the host and are labeled separately.
-        label, label_at = ("", "")
+        label_value, label_at = ("", "")
         if admin and srv is not None:
-            label, label_at = fleet.admin_label(srv.host)
+            label_value, label_at = fleet.admin_label(srv.host)
+            label_value = label_value or ""
             label_at = _ago(label_at, now) if label_at else ""
-            if label is not None:
-                label = label.replace("_", " ")
+        label = label_value.replace("_", " ")
         if srv is not None:
             last_ok = srv.last_ok
             no_deployment = srv.state == HEALTHY and not dep.in_litellm
@@ -551,7 +582,9 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
                 show_add=ezt.boolean(admin and dep.self_hosted and not dep.in_litellm),
                 add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
                 label=label,
+                label_value=label_value,
                 label_at=label_at,
+                label_options=_LABEL_OPTIONS,
             )
         )
     return rows

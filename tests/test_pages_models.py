@@ -300,10 +300,49 @@ def test_apply_admin_label_sets_clears_and_rejects():
     assert fleet.admin_label("10.0.0.1")[0] is None
 
 
-def _render(rows, attention=None) -> str:
+def test_admin_drill_down_renders_deployments_and_label_controls():
+    pages = _app()
+    healthy = _server("gemma")
+    down = _server("gemma", host="10.0.0.2", port=8002, ok=False)
+    fleet = _fleet(healthy, down)
+    # A vouch on the healthy box, so the label select pre-selects Approved.
+    fleet.set_admin_label("10.0.0.1", "approved", now=NOW - 20)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)
+    out = _render(rows, admin=True)
+
+    # The per-model deployment table is present, with one row per replica.
+    assert "Replicas per model" in out
+    assert 'data-bs-target="#modelDeploy0"' in out
+    assert out.count('<tr class="') == 2
+
+    # The label select carries every option and pre-selects the current one.
+    assert 'value="approved" selected' in out
+    assert 'value="reboot_requested"' in out
+    assert 'value=""' in out
+    assert 'name="label"' in out
+    assert 'name="host" value="10.0.0.1"' in out
+    assert "/do-set-admin-label" in out
+    # The replica summary lands in the accordion header.
+    assert "1 healthy / 1 unhealthy" in out
+
+
+def test_attention_strip_renders_the_label_form_for_unknown_boxes():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": NOW - 100, "last_seen": NOW - 5, "count": 3}
+    fleet.set_admin_label("192.0.2.7", "approved", now=NOW - 5)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)
+    out = _render(rows, attention=pages.attention_items(fleet, now=NOW), admin=True)
+    # The unknown-box item carries the set/clear form, pre-selected on its vouch.
+    assert 'name="host" value="192.0.2.7"' in out
+    assert 'value="approved" selected' in out
+    assert "/do-set-admin-label" in out
+
+
+def _render(rows, attention=None, *, admin=False) -> str:
     data = edict(
         title="Models",
-        is_site_admin=ezt.boolean(False),
+        is_site_admin=ezt.boolean(admin),
         reveal_supply=False,
         uid="u@example.apache.org",
         name="N",

@@ -18,6 +18,22 @@
         [if-any attention.detail]
         <span class="text-muted">— [attention.detail]</span>
         [end]
+        [if-any attention.host]
+        <form method="post" action="/do-set-admin-label" class="d-inline ms-2">
+          <input type="hidden" name="host" value="[attention.host]">
+          <select name="label" class="form-select form-select-sm d-inline-block"
+                  style="width: auto; display: inline-block;"
+                  aria-label="Label for [attention.host]">
+            [for attention.label_options]
+            <option value="[attention.label_options.value]"[is attention.label_options.value attention.label_value] selected[end]>[attention.label_options.text]</option>
+            [end]
+          </select>
+          [if-any attention.label_at]
+          <span class="text-muted small ms-1">([attention.label_at])</span>
+          [end]
+          <button type="submit" class="btn btn-sm btn-outline-secondary ms-1">Set</button>
+        </form>
+        [end]
       </li>
       [end]
     </ul>
@@ -104,6 +120,128 @@
   </div>
   [else]
   <p class="text-muted">No models in the inventory.</p>
+  [end]
+
+  [if-any is_site_admin]
+  <h2 class="h5 mt-4">Deployments</h2>
+  <p class="text-muted small">
+    Replicas per model. A label notes a host (for example: approved before it
+    is in <code>fleet.hosts</code>).
+  </p>
+  [for models]
+  <div class="accordion accordion-flush mb-3" id="model[models.index]">
+    <div class="accordion-item">
+      <h3 class="accordion-header" id="modelHeading[models.index]">
+        <button class="accordion-button collapsed" type="button"
+                data-bs-toggle="collapse" data-bs-target="#modelDeploy[models.index]"
+                aria-expanded="false" aria-controls="modelDeploy[models.index]">
+          <strong>[models.display_name]</strong>
+          <span class="font-monospace text-muted small ms-1">[models.model_name]</span>
+          <span class="badge text-bg-secondary ms-2">[models.rollup_label]</span>
+          <span class="text-muted small ms-2">[models.replica_summary]</span>
+        </button>
+      </h3>
+      <div id="modelDeploy[models.index]" class="accordion-collapse collapse"
+           aria-labelledby="modelHeading[models.index]">
+        <div class="accordion-body p-2">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Listen</th>
+                <th>Public</th>
+                <th>State</th>
+                <th>Context</th>
+                <th>KV cache</th>
+                <th>Last ok</th>
+                <th>LiteLLM health</th>
+                <th>Config request</th>
+                <th>Skew</th>
+                <th>Label</th>
+              </tr>
+            </thead>
+            <tbody>
+              [for models.deployments]
+              <tr class="[models.deployments.row_class]">
+                <td>
+                  [models.deployments.name]
+                  [if-any models.deployments.unknown][else]
+                  [if-any models.deployments.self_hosted][else]
+                  <span class="badge text-bg-secondary ms-1">external</span>
+                  [end]
+                  [end]
+                </td>
+                <td class="font-monospace small">[models.deployments.listen]</td>
+                <td class="font-monospace small">[models.deployments.public]</td>
+                <td>
+                  [if-any models.deployments.unknown]
+                  [models.deployments.state]
+                  [else]
+                  [if-any models.deployments.serving]
+                  <span class="badge text-bg-success">[models.deployments.state]</span>
+                  [end]
+                  [if-any models.deployments.no_deployment]
+                  <span class="badge text-bg-warning text-dark">[models.deployments.state]</span>
+                  [end]
+                  [if-any models.deployments.loading]
+                  <span class="badge text-bg-secondary">[models.deployments.state]</span>
+                  [end]
+                  [if-any models.deployments.awaiting]
+                  <span class="badge text-bg-info text-dark">[models.deployments.state]</span>
+                  [end]
+                  [if-any models.deployments.unhealthy]
+                  <span class="badge text-bg-danger">[models.deployments.state]</span>
+                  [end]
+                  [if-any models.deployments.pending]
+                  <span class="badge text-bg-light text-dark">[models.deployments.state]</span>
+                  [end]
+                  [end]
+                  [if-any models.deployments.detail]
+                  <div class="text-muted small">[models.deployments.detail]</div>
+                  [end]
+                </td>
+                <td class="small font-monospace">[models.deployments.context]</td>
+                <td class="small font-monospace">
+                  [if-any models.deployments.oversized]
+                  <span class="badge text-bg-danger" title="Context window exceeds the measured KV cache. vLLM will hang on a request that needs the space rather than refuse it.">[models.deployments.kv_cache]</span>
+                  [else]
+                  [models.deployments.kv_cache]
+                  [end]
+                </td>
+                <td class="small">[models.deployments.last_ok]</td>
+                <td class="small">[models.deployments.litellm_health]
+                  <span class="text-muted">[models.deployments.litellm_health_ago]</span>
+                </td>
+                <td class="small">[models.deployments.config_ago]</td>
+                <td class="small">[models.deployments.skew]</td>
+                <td class="text-nowrap">
+                  [if-any models.deployments.host]
+                  <form method="post" action="/do-set-admin-label" class="d-inline">
+                    <input type="hidden" name="host" value="[models.deployments.host]">
+                    <select name="label" class="form-select form-select-sm"
+                            aria-label="Label for [models.deployments.host]">
+                      [for models.deployments.label_options]
+                      <option value="[models.deployments.label_options.value]"[is models.deployments.label_options.value models.deployments.label_value] selected[end]>[models.deployments.label_options.text]</option>
+                      [end]
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-outline-secondary mt-1">Set</button>
+                  </form>
+                  [if-any models.deployments.label_at]
+                  <div class="text-muted small">[models.deployments.label_at]</div>
+                  [end]
+                  [end]
+                </td>
+              </tr>
+              [end]
+            </tbody>
+          </table>
+        </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  [end]
   [end]
 </div>
 
