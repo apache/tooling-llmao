@@ -1,0 +1,69 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <p class="small mb-2"><a href="/admin">&larr; Admin</a></p>
+  <h1 class="h3 mb-3">Requests</h1>
+
+  [if-any requests]
+  <p class="text-muted small">
+    Capacity and key requests in one list, oldest first. Both are someone
+    asking permission; both need a reason when the answer is not yes.
+  </p>
+
+  [for requests]
+  <div class="card mb-3">
+    <div class="card-body py-3">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div>
+          <span class="fw-semibold">[requests.requester]</span>
+          <span class="badge text-bg-secondary ms-1">[requests.what]</span>
+          [if-any requests.project]
+          <span class="text-muted small ms-1">[requests.project]</span>
+          [end]
+          <div class="small text-muted">asked [requests.created_at]</div>
+        </div>
+        <div class="text-end">
+          <div class="fw-semibold font-monospace">[requests.wanted_h]</div>
+          [if-any requests.tier]
+          <div class="small text-muted">[requests.tier] tier</div>
+          [end]
+        </div>
+      </div>
+
+      [if-any requests.reason]
+      <p class="small mt-2 mb-0 fst-italic">&ldquo;[requests.reason]&rdquo;</p>
+      [end]
+
+      <form method="post" action="/do-decide-request" class="mt-3">
+        <input type="hidden" name="request_id" value="[requests.id]">
+        <div class="row g-2 align-items-center">
+          [if-any requests.kind]
+          <div class="col-auto">
+            <input class="form-control form-control-sm" type="text"
+                   name="granted_token_cap" placeholder="adjust"
+                   aria-label="Adjusted allocation" style="width:9rem">
+          </div>
+          [end]
+          <div class="col">
+            <input class="form-control form-control-sm" type="text"
+                   name="reason" placeholder="Reason (required to adjust or deny)"
+                   aria-label="Reason">
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-success btn-sm" type="submit"
+                    name="decision" value="approve">Approve</button>
+            <button class="btn btn-outline-danger btn-sm" type="submit"
+                    name="decision" value="deny">Deny</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  [end]
+  [else]
+  <p class="text-muted">Nothing waiting.</p>
+  [end]
+
+</div>
+[include "footer.ezt"]

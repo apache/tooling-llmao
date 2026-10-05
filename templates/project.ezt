@@ -24,13 +24,42 @@
         </span>
       </div>
       [if-any cap_h]
-      <div class="progress mb-3" style="height:8px" role="progressbar"
+      <div class="progress mb-2" style="height:8px" role="progressbar"
            aria-valuenow="[tokens_pct]" aria-valuemin="0" aria-valuemax="100"
            aria-label="Project capacity used">
         <div class="progress-bar" style="width:[tokens_pct]%"></div>
       </div>
       [else]
-      <p class="small text-muted mb-3">No weekly allocation set.</p>
+      <p class="small text-muted mb-2">No weekly allocation set.</p>
+      [end]
+
+      [if-any is_pmc]
+      [if-any pending_request]
+      <p class="small text-muted mb-3">
+        Requested [pending_request.wanted_h] &mdash; waiting on ASF
+        infrastructure.
+      </p>
+      [else]
+      <form method="post" action="/do-request-capacity" class="row g-2 mb-3">
+        <input type="hidden" name="project" value="[project]">
+        <input type="hidden" name="after_path" value="/projects/[project]">
+        <div class="col-auto">
+          <input class="form-control form-control-sm" type="text"
+                 name="token_cap" placeholder="e.g. 40000000"
+                 aria-label="Requested weekly tokens" style="width:11rem">
+        </div>
+        <div class="col">
+          <input class="form-control form-control-sm" type="text"
+                 name="reason" placeholder="What the extra capacity is for"
+                 aria-label="Reason">
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-outline-primary btn-sm" type="submit">
+            Request more
+          </button>
+        </div>
+      </form>
+      [end]
       [end]
 
       <div class="d-flex justify-content-between align-items-baseline mb-1">

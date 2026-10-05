@@ -29,8 +29,10 @@ import functools
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import requests as _requests
 from .litellm_client import (
     GRANTOR_FREE_TIER,
+    TIER_SERVICE,
     Backend,
     BackendUnavailableError,
     CreatedKey,
@@ -241,6 +243,114 @@ class Seam:
     @require_member
     async def team_status(self, identity: Identity, project: str) -> TeamInfo | None:
         return await self._backend.team_info(project)
+
+    # ---- requests -------------------------------------------------------
+
+    @require_member
+    async def request_capacity(self, identity: Identity, project: str, *, token_cap: int, reason: str):
+        """A PMC asks for a larger weekly allocation.
+
+        Member-gated, not admin-gated: asking is not a privilege. Granting
+        is, and that lives on the other side.
+        """
+        if token_cap <= 0:
+            raise AuthzError("Requested allocation must be a positive number of tokens.")
+        if not (reason or "").strip():
+            # The approver's first question is why. Asking for it here saves
+            # a round trip and makes the queue readable.
+            raise AuthzError("Say what the extra capacity is for.")
+        req = _requests.Request.new(
+            kind=_requests.KIND_CAPACITY,
+            requester=identity.uid,
+            project=project,
+            reason=reason,
+            wanted={"token_cap": int(token_cap)},
+        )
+        return await self._backend.add_request(req)
+
+    async def request_key(
+        self,
+        identity: Identity,
+        *,
+        purpose: str,
+        tier: str,
+        reason: str,
+        project: str | None = None,
+    ):
+        """Someone asks for a key outside a project, or for automation.
+
+        No project gate: a projectless key belongs to nobody but the asker.
+        A key FOR a project still goes through the admin queue, because the
+        thing being approved is an allowance on shared capacity.
+        """
+        purpose = (purpose or "").strip()
+        if not purpose:
+            raise AuthzError("A key needs a purpose so it can be told from your others.")
+        if not (reason or "").strip():
+            raise AuthzError("Say what the key is for.")
+        if project and project not in (identity.committees or []):
+            raise AuthzError(f"You are not on the {project} PMC.")
+        req = _requests.Request.new(
+            kind=_requests.KIND_KEY,
+            requester=identity.uid,
+            project=project,
+            reason=reason,
+            wanted={"purpose": purpose, "tier": tier or TIER_SERVICE},
+        )
+        return await self._backend.add_request(req)
+
+    @require_member
+    async def project_requests(self, identity: Identity, project: str) -> list:
+        """Requests against one project, newest first."""
+        reqs = await self._backend.list_requests(project)
+        return sorted(reqs, key=lambda r: r.created_at or "", reverse=True)
+
+    async def my_requests(self, identity: Identity) -> list:
+        """This person's own requests, newest first.
+
+        Shown where they asked, so an answer finds them without an email.
+        """
+        mine = [r for r in await self._backend.list_requests() if r.requester == identity.uid]
+        return sorted(mine, key=lambda r: r.created_at or "", reverse=True)
+
+    async def pending_requests(self, identity: Identity) -> list:
+        """Everything awaiting a decision, oldest first.
+
+        Oldest first because the queue is a to-do list: the request that has
+        been waiting three days is the one someone is wondering about.
+        """
+        if not identity.is_site_admin:
+            raise AuthzError("The request queue is limited to site admins.")
+        pending = [r for r in await self._backend.list_requests() if r.state == _requests.STATE_PENDING]
+        return sorted(pending, key=lambda r: r.created_at or "")
+
+    async def decide_request(
+        self,
+        identity: Identity,
+        request_id: str,
+        *,
+        approve: bool,
+        reason: str = "",
+        granted: dict | None = None,
+    ):
+        """Approve, adjust or deny. Capacity approvals apply immediately.
+
+        A capacity bump takes effect on approval rather than waiting for the
+        PMC to do anything -- there is nothing for them to exercise, and a
+        grant that needs a second step is a grant that sits unapplied.
+        """
+        req = await self._backend.find_request(request_id)
+        if req is None:
+            raise AuthzError("No such request.")
+        req.decide(
+            state=_requests.STATE_APPROVED if approve else _requests.STATE_DENIED,
+            by=identity.uid,
+            reason=reason,
+            granted=granted,
+        )
+        if approve and req.kind == _requests.KIND_CAPACITY:
+            await self._backend.update_team_entitlement(req.project, token_cap=int(req.granted.get("token_cap") or 0))
+        return await self._backend.save_request(req)
 
     @require_member
     async def project_usage(self, identity: Identity, project: str) -> list[dict]:

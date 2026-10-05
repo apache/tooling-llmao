@@ -111,6 +111,66 @@
   <p class="text-muted">No personal keys yet. <a href="/keys/new">Create one</a>.</p>
   [end]
 
+  [if-any my_requests]
+  <h2 class="h5 mt-4 mb-2">My requests</h2>
+  <ul class="list-group mb-3">
+    [for my_requests]
+    <li class="list-group-item d-flex justify-content-between align-items-start">
+      <div>
+        <span class="font-monospace">[my_requests.wanted_h]</span>
+        [if-any my_requests.project]
+        <span class="text-muted small">&middot; [my_requests.project]</span>
+        [end]
+        [if-any my_requests.decision_reason]
+        <div class="small text-muted">[my_requests.decision_reason]</div>
+        [end]
+      </div>
+      <div class="text-end">
+        [if-any my_requests.is_pending]
+        <span class="badge text-bg-secondary">waiting</span>
+        [end]
+        [if-any my_requests.is_denied]
+        <span class="badge text-bg-danger">denied</span>
+        [end]
+        [if-any my_requests.is_approved]
+        <span class="badge text-bg-success">approved</span>
+        [end]
+      </div>
+    </li>
+    [end]
+  </ul>
+  [end]
+
+  <h2 class="h5 mt-4 mb-2">Request a key</h2>
+  <p class="text-muted small">
+    For work outside a project, or automation that needs its own identity.
+    If approved you create the key here &mdash; the secret is shown once, to
+    you, and never passes through anyone else.
+  </p>
+  <form method="post" action="/do-request-key" class="row g-2 mb-4">
+    <input type="hidden" name="after_path" value="/keys">
+    <div class="col-auto">
+      <input class="form-control form-control-sm" type="text" name="purpose"
+             placeholder="Purpose" aria-label="Purpose" style="width:11rem">
+    </div>
+    <div class="col-auto">
+      <select class="form-select form-select-sm" name="tier" aria-label="Tier"
+              style="width:9rem">
+        <option value="service">service</option>
+        <option value="free_tier">free tier</option>
+      </select>
+    </div>
+    <div class="col">
+      <input class="form-control form-control-sm" type="text" name="reason"
+             placeholder="What it is for" aria-label="Reason">
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-outline-primary btn-sm" type="submit">
+        Send request
+      </button>
+    </div>
+  </form>
+
   [if-any projects]
   <h2 class="h5 mt-4 mb-2">My draw by project</h2>
   <div class="table-responsive">

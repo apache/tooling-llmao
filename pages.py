@@ -720,6 +720,15 @@ async def project_overview(result, project: str):
     result.budget_h = f"${budget:,.0f}" if budget else None
     result.spend_pct = min(100, int(spend / budget * 100)) if budget else 0
 
+    # An outstanding ask replaces the form: a second request while the first
+    # is unanswered is noise for the admin and confusion for the PMC.
+    try:
+        mine = await APP.seam.project_requests(ident, project)
+    except (AuthzError, BackendUnavailableError):
+        mine = []
+    pending = [r for r in mine if r.state == "pending" and r.kind == "capacity"]
+    result.pending_request = _request_rows(pending)[0] if pending else None
+
     result.members = [
         edict(
             {
@@ -803,6 +812,13 @@ async def keys_list(result):
         result.approvals = [edict(a) for a in await APP.seam.my_key_approvals(ident)]
     except (BackendUnavailableError, AttributeError):
         result.approvals = []
+
+    # Answers appear where the asking happened, so nobody has to find an
+    # email to learn they were turned down.
+    try:
+        result.my_requests = _request_rows(await APP.seam.my_requests(ident))
+    except BackendUnavailableError:
+        result.my_requests = []
     return result
 
 
@@ -897,6 +913,132 @@ async def admin_index(result):
     # None renders the badge away; the real count arrives with the request queue.
     result.pending_count = None
     return result
+
+
+def _request_rows(reqs) -> list:
+    """Template rows for a request list.
+
+    `wanted_h` and `granted_h` are rendered here because what a request is
+    asking for depends on its kind, and ezt has no way to branch on that.
+    """
+    out = []
+    for r in reqs:
+        if r.kind == "capacity":
+            wanted = _tokens_h(r.wanted.get("token_cap") or 0)
+            granted = _tokens_h(r.granted.get("token_cap") or 0) if r.granted else ""
+            what = "capacity"
+        else:
+            wanted = r.wanted.get("purpose") or "?"
+            granted = r.granted.get("purpose") or "" if r.granted else ""
+            what = "key"
+        exp = r.expires_at()
+        out.append(
+            edict(
+                {
+                    "id": r.id,
+                    "kind": r.kind,
+                    "what": what,
+                    "requester": r.requester,
+                    "project": r.project or "",
+                    "reason": r.reason,
+                    "wanted_h": wanted,
+                    "granted_h": granted,
+                    "tier": r.wanted.get("tier") or "",
+                    "state": r.state,
+                    "is_pending": ezt.boolean(r.state == "pending"),
+                    "is_approved": ezt.boolean(r.state == "approved"),
+                    "is_denied": ezt.boolean(r.state == "denied"),
+                    "actionable": ezt.boolean(r.is_actionable()),
+                    "decision_reason": r.decision_reason,
+                    "decided_by": r.decided_by,
+                    # The question a requester actually has: how long have I
+                    # got to act on this.
+                    "expires_h": _when_h(exp.date()) if exp else "",
+                    "created_at": (r.created_at or "")[:10],
+                }
+            )
+        )
+    return out
+
+
+@APP.get("/admin/requests")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "requests.ezt")
+@page(title="Requests")
+async def admin_requests(result):
+    """Everything awaiting a decision, oldest first."""
+    ident = await current_identity(APP.cfg)
+    result.requests = _request_rows(await APP.seam.pending_requests(ident))
+    return result
+
+
+@APP.post("/do-request-capacity")
+@asfquart.auth.require
+async def do_request_capacity():
+    form = await quart.request.form
+    project = (form.get("project") or "").strip()
+    try:
+        cap = int((form.get("token_cap") or "0").replace(",", "").strip() or 0)
+    except ValueError:
+        cap = 0
+    try:
+        ident = await current_identity(APP.cfg)
+        await APP.seam.request_capacity(ident, project, token_cap=cap, reason=form.get("reason") or "")
+        await flash_success("Request sent. You will see the answer on this page.")
+    except (AuthzError, BackendUnavailableError, ValueError) as e:
+        await flash_danger(str(e))
+    return _see_other(_safe_after_path(form.get("after_path"), f"/projects/{project}"))
+
+
+@APP.post("/do-request-key")
+@asfquart.auth.require
+async def do_request_key():
+    form = await quart.request.form
+    try:
+        ident = await current_identity(APP.cfg)
+        await APP.seam.request_key(
+            ident,
+            purpose=form.get("purpose") or "",
+            tier=form.get("tier") or "",
+            reason=form.get("reason") or "",
+            project=(form.get("project") or "").strip() or None,
+        )
+        await flash_success("Request sent. If approved you will create the key here.")
+    except (AuthzError, BackendUnavailableError, ValueError) as e:
+        await flash_danger(str(e))
+    return _see_other(_safe_after_path(form.get("after_path"), "/keys"))
+
+
+@APP.post("/do-decide-request")
+@asfquart.auth.require
+async def do_decide_request():
+    """Approve, adjust or deny.
+
+    An adjusted capacity figure arrives in the same form as the decision, so
+    approving as-asked and approving-but-smaller are one action rather than
+    two screens.
+    """
+    form = await quart.request.form
+    granted = None
+    raw = (form.get("granted_token_cap") or "").replace(",", "").strip()
+    if raw:
+        try:
+            granted = {"token_cap": int(raw)}
+        except ValueError:
+            granted = None
+    try:
+        ident = await current_identity(APP.cfg)
+        await APP.seam.decide_request(
+            ident,
+            (form.get("request_id") or "").strip(),
+            approve=(form.get("decision") == "approve"),
+            reason=form.get("reason") or "",
+            granted=granted,
+        )
+        await flash_success("Decision recorded.")
+    except (AuthzError, BackendUnavailableError, ValueError) as e:
+        await flash_danger(str(e))
+    return _see_other("/admin/requests")
 
 
 @APP.get("/keys/other")
