@@ -183,6 +183,24 @@ class CreatedKey:
 
 class Backend(Protocol):
     async def team_info(self, project: str) -> TeamInfo | None: ...
+    async def update_team_entitlement(
+        self,
+        project: str,
+        *,
+        max_budget_usd: float | None = None,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+    ) -> TeamInfo: ...
+    async def update_key_entitlement(
+        self,
+        token_id: str,
+        *,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        max_budget_usd: float | None = None,
+    ) -> None: ...
     async def ensure_team(self, project: str) -> TeamInfo: ...
     async def list_keys(
         self,
@@ -395,6 +413,91 @@ class LiteLLMBackend:
             },
             team_id=str(team_id),
         )
+
+    async def update_team_entitlement(
+        self,
+        project: str,
+        *,
+        max_budget_usd: float | None = None,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+    ) -> TeamInfo:
+        """Adjust what a project may spend and how fast it may draw.
+
+        Site-admin operation: a project's allocation is a claim on shared
+        capacity, so it is not something a PMC can raise for itself.
+
+        Only the named fields are sent. Passing None leaves LiteLLM's current
+        value alone rather than clearing it, which matters because a partial
+        update that silently zeroed the others would uncap the project.
+
+        max_budget_usd binds only on commercial models. Self-hosted spend
+        accrues at a derived price and will never reach a ceiling, so the rate
+        limits are what actually constrain a project's draw on the fleet.
+        """
+        team_id = await self.ensure_team_id(project)
+        payload: dict[str, Any] = {"team_id": team_id}
+        if max_budget_usd is not None:
+            payload["max_budget"] = float(max_budget_usd)
+        for field, val in (
+            ("rpm_limit", rpm_limit),
+            ("tpm_limit", tpm_limit),
+            ("max_parallel_requests", max_parallel_requests),
+        ):
+            if val is not None:
+                payload[field] = int(val)
+        if len(payload) == 1:
+            raise BackendUnavailableError("update_team_entitlement: nothing to change")
+
+        resp = await self._request("POST", "team/update", json=payload)
+        self._raise_http(resp)
+        _LOGGER.info("team/update %s %s", project, sorted(payload))
+        live = await self.team_info(project)
+        if live is None:
+            raise BackendUnavailableError(f"team {project} vanished after update")
+        return live
+
+    async def update_key_entitlement(
+        self,
+        token_id: str,
+        *,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        max_budget_usd: float | None = None,
+    ) -> None:
+        """Adjust one key's ceiling, within its team's allocation.
+
+        PMC operation: distributing a project's share among its members, and
+        capping a service key so a retry loop cannot take the whole project
+        with it.
+
+        LiteLLM does not enforce that the sum of a team's key limits stays
+        under the team's own. It cannot -- limits are per-minute and a team
+        limit is also per-minute, so N keys at the team rate each is legal and
+        merely means they contend. Treat key limits as fairness between
+        members, and the team limit as the real ceiling.
+        """
+        token_id = (token_id or "").strip()
+        if not token_id:
+            raise BackendUnavailableError("update_key_entitlement requires token_id")
+        payload: dict[str, Any] = {"key": token_id}
+        if max_budget_usd is not None:
+            payload["max_budget"] = float(max_budget_usd)
+        for field, val in (
+            ("rpm_limit", rpm_limit),
+            ("tpm_limit", tpm_limit),
+            ("max_parallel_requests", max_parallel_requests),
+        ):
+            if val is not None:
+                payload[field] = int(val)
+        if len(payload) == 1:
+            raise BackendUnavailableError("update_key_entitlement: nothing to change")
+
+        resp = await self._request("POST", "key/update", json=payload)
+        self._raise_http(resp)
+        _LOGGER.info("key/update %s %s", token_id[:12], sorted(payload))
 
     async def team_info(self, project: str) -> TeamInfo | None:
         """Live team spend/budget. Cache holds ids only; spend is never cached.
