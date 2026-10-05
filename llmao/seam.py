@@ -32,6 +32,7 @@ from typing import Any
 from .litellm_client import (
     GRANTOR_FREE_TIER,
     Backend,
+    BackendUnavailableError,
     CreatedKey,
     KeyInfo,
     TeamInfo,
