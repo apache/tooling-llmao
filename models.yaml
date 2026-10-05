@@ -40,6 +40,15 @@ models:
     # instance at registration.
     litellm_params:
       model: hosted_vllm/gemma4-26b
+    # Derived from measured throughput, not a quote. Input and output are
+    # separate because prefill and decode cost the hardware very differently.
+    #   A100 80GB @ $1.19/hr; 8,591 tok/s prefill, 512 tok/s aggregate decode
+    # Assumes the box decoding flat out; at 25% utilisation the real cost is
+    # 4x this. A unit of fair share, not a marginal cost -- the boxes are
+    # rented whether or not anyone asks.
+    pricing:
+      input_cost_per_token: 3.85e-08
+      output_cost_per_token: 6.456e-07
     model_info:
       vllm:
         model: google/gemma-4-26B-A4B-it
@@ -109,6 +118,15 @@ models:
       # overrides -- verified: a caller sending xhigh still gets xhigh, and
       # a caller sending high is shielded instead of broken.
       reasoning_effort: medium
+    # Derived from measured throughput, not a quote. Input and output are
+    # separate because prefill and decode cost the hardware very differently.
+    #   RTX PRO 6000 @ $2.09/hr; 11,200 tok/s prefill, 920 tok/s aggregate decode
+    # Assumes the box decoding flat out; at 25% utilisation the real cost is
+    # 4x this. A unit of fair share, not a marginal cost -- the boxes are
+    # rented whether or not anyone asks.
+    pricing:
+      input_cost_per_token: 5.18e-08
+      output_cost_per_token: 6.31e-07
     model_info:
       vllm:
         model: Qwen/Qwen3.8-27B-FP8
@@ -195,6 +213,15 @@ models:
       # still gets reasoning. Verified.
       chat_template_kwargs:
         enable_thinking: false
+    # Derived from measured throughput, not a quote. Input and output are
+    # separate because prefill and decode cost the hardware very differently.
+    #   RTX 4090 @ $0.74/hr; 8,851 tok/s prefill, 324 tok/s aggregate decode
+    # Assumes the box decoding flat out; at 25% utilisation the real cost is
+    # 4x this. A unit of fair share, not a marginal cost -- the boxes are
+    # rented whether or not anyone asks.
+    pricing:
+      input_cost_per_token: 2.32e-08
+      output_cost_per_token: 6.344e-07
     model_info:
       vllm:
         model: Qwen/Qwen3-8B-FP8
