@@ -33,8 +33,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
+import datetime as _dt
+import time
+
 import httpx
 
+from llmao.token_window import RollingAllowance
 from llmao.fleet import ExtraLiteLLM, snapshot_for_status
 from llmao.model_status import (
     HEALTHY,
@@ -231,6 +235,8 @@ class Backend(Protocol):
     ) -> CreatedKey: ...
     async def delete_key(self, token_id: str) -> None: ...
     async def usage(self, project: str | None) -> list[dict]: ...
+    async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance: ...
+    def invalidate_allowance(self, user: str | None = None) -> None: ...
     async def aclose(self) -> None: ...
 
 
@@ -293,6 +299,10 @@ class LiteLLMBackend:
         self._cfg = cfg
         self.fleet = fleet
         self._team_ids: dict[str, str] = {}  # project → team_id
+        # user → (monotonic stamp, daily token buckets). Allowances are
+        # derived from the spend log on read; this keeps a page refresh from
+        # costing a scan.
+        self._allowance_cache: dict[str, tuple[float, dict[str, int]]] = {}
         base = cfg.litellm.base_url.rstrip("/") + "/"
         timeout_s = int(cfg.litellm.request_timeout_s)
         self._client = httpx.AsyncClient(
@@ -509,6 +519,10 @@ class LiteLLMBackend:
         )
         self._raise_http(resp)
         _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
+        # The cap is re-read on every check, but cached buckets are not --
+        # without this an admin lowering a cap sees a stale remaining figure
+        # for up to a minute and concludes the control did not work.
+        self.invalidate_allowance()
         return await self.tier_entitlement(tier)
 
     async def update_team_entitlement(
@@ -731,6 +745,110 @@ class LiteLLMBackend:
     async def usage(self, project: str | None) -> list[dict]:
         # Spend APIs not wired yet.
         return []
+
+    # Allowance reads are cached: a committer refreshing a page should not
+    # cost a spend-log scan each time. Short enough that a long job's draw
+    # shows up while it is still running.
+    _ALLOWANCE_TTL_S = 60
+
+    async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
+        """A principal's rolling allowance, derived from the spend log.
+
+        NOT stored. The buckets are computed from LiteLLM's own spend rows on
+        read, which has two properties worth the query cost:
+
+        The allowance cannot drift from actual usage, because it IS actual
+        usage. A stored counter can disagree with the log after a crash, a
+        double-count or a replay, and the disagreement is invisible until
+        somebody audits it.
+
+        And there is nothing to migrate when this is replaced. The design
+        this is standing in for -- defer a free-tier call when projects need
+        the box -- needs no allowance at all, so a stored one would be a
+        table to drop and a UI to unwind. Derived, it just stops being
+        called.
+
+        The cost is a query per principal per TTL. On a pilot-sized spend log
+        that is cheap; at scale it wants either LiteLLM's daily aggregate
+        table or a materialised counter, and the shape here does not change
+        if that happens.
+        """
+        user = (user or "").strip()
+        if not user:
+            raise BackendUnavailableError("allowance requires a user")
+
+        limits = await self.tier_entitlement(tier)
+        cap = int(limits.get("token_cap") or 0)
+        window = int(limits.get("token_window_days") or 7)
+        if cap <= 0:
+            # No cap configured for this tier: an allowance with no ceiling
+            # is not meaningful, so say so rather than returning one that
+            # silently never exhausts.
+            raise BackendUnavailableError(
+                f"tier {tier} has no token_cap; nothing to meter against"
+            )
+
+        cached = self._allowance_cache.get(user)
+        if cached is not None:
+            at, rows = cached
+            if (time.monotonic() - at) < self._ALLOWANCE_TTL_S:
+                return RollingAllowance(cap=cap, window_days=window,
+                                        buckets=dict(rows))
+
+        buckets = await self._spend_buckets(user, window)
+        self._allowance_cache[user] = (time.monotonic(), dict(buckets))
+        return RollingAllowance(cap=cap, window_days=window, buckets=buckets)
+
+    async def _spend_buckets(self, user: str, window_days: int) -> dict[str, int]:
+        """Daily token totals for one user over the window.
+
+        Counts TOTAL tokens -- prompt plus completion -- because the
+        allowance is a share of the fleet and both halves consume it. Prefill
+        is cheaper per token than decode, which is why the DOLLAR figures are
+        weighted and this one is not: an allowance is a quota, not a bill.
+        """
+        start = (_dt.datetime.now(_dt.UTC).date()
+                 - _dt.timedelta(days=window_days - 1))
+        resp = await self._request(
+            "GET", "spend/logs",
+            params={"user_id": user, "start_date": start.isoformat()},
+        )
+        self._raise_http(resp)
+        rows = resp.json()
+        if isinstance(rows, dict):
+            rows = rows.get("data") or rows.get("logs") or []
+        if not isinstance(rows, list):
+            return {}
+
+        buckets: dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            stamp = row.get("startTime") or row.get("start_time")
+            if not stamp:
+                continue
+            day = str(stamp)[:10]
+            total = row.get("total_tokens")
+            if total is None:
+                total = (row.get("prompt_tokens") or 0) + (row.get("completion_tokens") or 0)
+            try:
+                buckets[day] = buckets.get(day, 0) + int(total)
+            except (TypeError, ValueError):
+                continue
+        return buckets
+
+    def invalidate_allowance(self, user: str | None = None) -> None:
+        """Drop cached allowance rows.
+
+        Called after a tier change, since the cap is re-read on every check
+        but the cached buckets are not. Without this an admin lowering a cap
+        sees the old remaining figure for up to a minute, which looks like
+        the control not working.
+        """
+        if user is None:
+            self._allowance_cache.clear()
+        else:
+            self._allowance_cache.pop(user, None)
 
     def deployment_body(self, dep) -> dict:
         """POST /model/new payload from models.yaml + this deployment's api_base."""

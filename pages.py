@@ -720,6 +720,72 @@ async def keys_list(result):
     return result
 
 
+def _tokens_h(n: int) -> str:
+    """Human token count. 340k reads faster than 340,000 and this is a glance."""
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 1_000:
+        return f"{n // 1_000}k"
+    return str(n)
+
+
+def _when_h(day) -> str:
+    """'tomorrow' / 'Tuesday' / a date, whichever is most useful.
+
+    'Your tokens return 2026-09-23' is technically complete and makes the
+    reader do arithmetic. The point of showing a return date at all is to turn
+    a dead end into a plan.
+    """
+    import datetime as dt
+    today = dt.datetime.now(dt.UTC).date()
+    delta = (day - today).days
+    if delta <= 0:
+        return "today"
+    if delta == 1:
+        return "tomorrow"
+    if delta < 7:
+        return f"on {day.strftime('%A')}"
+    return f"on {day.isoformat()}"
+
+
+@APP.get("/usage")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "usage.ezt")
+@page(title="My usage")
+async def usage_mine(result):
+    """What this committer has drawn, and when more becomes available.
+
+    The free-tier figure is a capacity share and the project figures include
+    real money, so the template keeps them visually apart. Adding them would
+    produce a number that means nothing.
+    """
+    ident = await current_identity(APP.cfg)
+    allowance = await APP.seam.my_allowance(ident)
+
+    result.cap_h = _tokens_h(allowance.cap)
+    result.used_h = _tokens_h(allowance.used())
+    result.remaining_h = _tokens_h(allowance.remaining())
+    result.window_days = allowance.window_days
+    result.pct = min(100, int(allowance.used() / allowance.cap * 100)) if allowance.cap else 0
+    result.exhausted = ezt.boolean(allowance.exhausted())
+    # Warn before the wall rather than at it: discovering the limit by
+    # hitting it mid-job is the experience worth avoiding.
+    result.nearly = ezt.boolean(result.pct >= 80)
+
+    returns = allowance.returns()
+    if returns:
+        day, amount = returns[0]
+        result.next_return = _when_h(day)
+        result.next_return_amount_h = _tokens_h(amount)
+    else:
+        result.next_return = None
+        result.next_return_amount_h = None
+
+    result.projects = await APP.seam.my_project_usage(ident)
+    return result
+
+
 @APP.get("/keys/other")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "keys_other.ezt")

@@ -234,6 +234,50 @@ class Seam:
     async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
         return await self._backend.list_keys(user=identity.uid, size=100)
 
+    async def my_allowance(self, identity: Identity):
+        """This committer's rolling free-tier allowance.
+
+        No authz decision: a principal always sees their own draw. Project
+        figures go through the normal membership checks below.
+        """
+        return await self._backend.allowance(identity.uid)
+
+    async def my_project_usage(self, identity: Identity) -> list[dict]:
+        """Per-project draw for the projects this committer belongs to.
+
+        Tokens and dollars are kept as separate fields deliberately. Tokens on
+        self-hosted models are a share of capacity the Foundation has already
+        paid for; dollars on commercial models are money that did not exist a
+        second ago. Summing them would produce a figure with no meaning, and a
+        single column invites exactly that.
+        """
+        out = []
+        for project in sorted(identity.committees):
+            try:
+                rows = await self._backend.usage(project)
+            except BackendUnavailableError:
+                continue
+            tokens = 0
+            spend = 0.0
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("user") not in (None, identity.uid):
+                    continue
+                tokens += int(row.get("total_tokens") or 0)
+                # Only commercial rows carry real money. Self-hosted spend is
+                # priced from measured throughput for reporting, and adding it
+                # here would put capacity into a column labelled dollars.
+                if row.get("cost_basis") != "derived_capacity":
+                    spend += float(row.get("total_cost_usd") or 0.0)
+            out.append({
+                "name": project,
+                "tokens_h": f"{tokens / 1_000_000:.1f}M" if tokens >= 1_000_000
+                            else (f"{tokens // 1_000}k" if tokens >= 1000 else str(tokens)),
+                "spend_h": f"${spend:,.2f}",
+            })
+        return out
+
     @require_admin
     async def list_automation_keys(self, identity: Identity, project: str) -> list[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
