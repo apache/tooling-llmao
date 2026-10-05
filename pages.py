@@ -909,9 +909,14 @@ async def admin_index(result):
     """
     if not result.is_site_admin:
         raise AuthzError("Admin is limited to site admins.")
-    # ezt's [if-any] tests truthiness but still requires the name to exist.
-    # None renders the badge away; the real count arrives with the request queue.
-    result.pending_count = None
+    # ezt's [if-any] tests truthiness but still requires the name to exist,
+    # so an empty queue is None rather than 0 -- a badge reading "0" is worse
+    # than no badge.
+    try:
+        pending = await APP.seam.pending_requests(await current_identity(APP.cfg))
+    except (AuthzError, BackendUnavailableError):
+        pending = []
+    result.pending_count = len(pending) or None
     return result
 
 
@@ -948,6 +953,7 @@ def _request_rows(reqs) -> list:
                     "is_pending": ezt.boolean(r.state == "pending"),
                     "is_approved": ezt.boolean(r.state == "approved"),
                     "is_denied": ezt.boolean(r.state == "denied"),
+                    "is_capacity": ezt.boolean(r.kind == "capacity"),
                     "actionable": ezt.boolean(r.is_actionable()),
                     "decision_reason": r.decision_reason,
                     "decided_by": r.decided_by,

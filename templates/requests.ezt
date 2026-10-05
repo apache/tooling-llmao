@@ -38,7 +38,7 @@
       <form method="post" action="/do-decide-request" class="mt-3">
         <input type="hidden" name="request_id" value="[requests.id]">
         <div class="row g-2 align-items-center">
-          [if-any requests.kind]
+          [if-any requests.is_capacity]
           <div class="col-auto">
             <input class="form-control form-control-sm" type="text"
                    name="granted_token_cap" placeholder="adjust"
