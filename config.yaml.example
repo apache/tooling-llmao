@@ -32,6 +32,56 @@ budgets:
   default_team_budget_usd: 100
   duration: 30d
 
+# Entitlements: what a key may do, as distinct from what it may spend.
+#
+# A budget is a dollar ceiling and only binds where dollars are real --
+# commercial providers. Self-hosted models have no marginal cost, so their
+# spend accrues at a derived price for reporting and never exhausts anything.
+# Rate limits are therefore the ONLY control on self-hosted capacity, and a
+# key minted without them can saturate the fleet with nothing to stop it.
+#
+# Every value here is applied at key creation. LiteLLM has no usable default:
+# absent means unlimited.
+entitlements:
+  # Applies to every key unless a tier below overrides it.
+  default:
+    # Requests and tokens per minute. tpm is the one that bites on a
+    # self-hosted box -- a single 40k-token audit call is most of a minute's
+    # budget at 60k.
+    rpm_limit: 60
+    tpm_limit: 60000
+    # Concurrent in-flight requests. The binding constraint at peak: the
+    # weakest box in the fleet admits about four before queueing, so a single
+    # key holding eight is already more than its share.
+    max_parallel_requests: 4
+
+  # Personal keys, no project. Self-hosted models only -- commercial access
+  # needs an owner who can be asked about the bill, and a PMC is that owner.
+  free_tier:
+    rpm_limit: 30
+    tpm_limit: 30000
+    max_parallel_requests: 2
+    # Rolling window rather than a calendar reset. A Monday reset punishes
+    # whoever exhausts their share on Monday morning and barely touches
+    # whoever does it on Sunday night, and lets anyone take two allowances in
+    # twelve hours by straddling midnight. A rolling window has no boundary
+    # to sit either side of.
+    token_budget: 1000000
+    token_budget_window: 7d
+
+  # Project keys draw on the project's allocation. PMC distributes.
+  project:
+    rpm_limit: 120
+    tpm_limit: 120000
+    max_parallel_requests: 8
+
+  # Service keys for pipelines. Higher throughput, and the tier most likely
+  # to retry in a loop -- which is exactly why it still has a ceiling.
+  service:
+    rpm_limit: 240
+    tpm_limit: 300000
+    max_parallel_requests: 8
+
 # uids that may view any project's activity (plus asfquart isRoot)
 site_admins: []
 

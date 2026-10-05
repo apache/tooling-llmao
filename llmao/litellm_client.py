@@ -60,6 +60,42 @@ class BackendUnavailableError(Exception):
 # Who authorized the project's dollar ceiling. First cfg default → Free Tier.
 GRANTOR_FREE_TIER = "Free Tier"
 
+# Key tiers. The name is stored in key metadata so a later audit can tell what
+# a key was minted as, and so /key/update can re-apply the right ceiling.
+TIER_FREE = "free_tier"
+TIER_PROJECT = "project"
+TIER_SERVICE = "service"
+
+# LiteLLM fields these map to. Named here so the mapping is in one place
+# rather than spread across call sites.
+_LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "max_parallel_requests")
+
+
+def resolve_entitlement(cfg: Any, tier: str) -> dict[str, Any]:
+    """Limits for a tier, falling back to entitlements.default.
+
+    Returns only the fields that are set, so a tier can raise one ceiling
+    without having to restate the others.
+
+    Absent configuration yields an empty dict and therefore an unlimited key.
+    That is LiteLLM's behaviour, not a choice -- which is why config.yaml
+    ships with values and why this is worth asserting in tests.
+    """
+    ents = getattr(cfg, "entitlements", None)
+    if ents is None:
+        return {}
+    base = getattr(ents, "default", None)
+    tier_cfg = getattr(ents, tier, None)
+    out: dict[str, Any] = {}
+    for src in (base, tier_cfg):
+        if src is None:
+            continue
+        for field in _LIMIT_FIELDS:
+            val = getattr(src, field, None)
+            if val is not None:
+                out[field] = val
+    return out
+
 
 @dataclass
 class TeamInfo:
@@ -162,6 +198,7 @@ class Backend(Protocol):
         purpose: str,
         user: str | None = None,
         metadata: dict | None = None,
+        tier: str = TIER_PROJECT,
     ) -> CreatedKey: ...
     async def delete_key(self, token_id: str) -> None: ...
     async def usage(self, project: str | None) -> list[dict]: ...
@@ -428,6 +465,7 @@ class LiteLLMBackend:
         purpose: str,
         user: str | None = None,
         metadata: dict | None = None,
+        tier: str = TIER_PROJECT,
     ) -> CreatedKey:
         project = (project or "").strip()
         if not project:
@@ -439,9 +477,18 @@ class LiteLLMBackend:
         meta["project"] = project
         if purpose:
             meta["purpose"] = purpose
+        # Rate limits are the only control on self-hosted capacity: those
+        # models have no marginal cost, so their spend accrues at a derived
+        # price and no budget can ever be exhausted by them. A key minted
+        # without limits can saturate the fleet, and LiteLLM's default is
+        # unlimited.
+        meta.setdefault("tier", tier)
+        limits = resolve_entitlement(self._cfg, tier)
+
         payload: dict[str, Any] = {
             "team_id": team_id,
             "metadata": meta,
+            **limits,
             # key_alias is globally unique in LiteLLM — do not put purpose there.
         }
         if user:
