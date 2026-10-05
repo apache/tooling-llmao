@@ -1,6 +1,6 @@
 # Design: Unified Models Dashboard
 
-**Status:** Draft for review
+**Status:** Pass 1 (status logic) is shipped in `llmao/model_status.py`; this document is the design for Pass 2 (the page). Sections 7–9 describe the shipped state model; the admin view and actions remain the open work.
 **Scope:** Merge the "Models" and "Fleet" tabs into a single model-first page that serves both users and admins.
 
 ---
@@ -58,18 +58,18 @@ Qwen3 8B   qwen3-8b                          ● Degraded
 - **Concurrency** is shown to users as "up to N full-context requests" (KV cache tokens divided by context window, summed over healthy self-hosted deployments). This is an upper bound, so the label says "up to". A model with no live self-hosted capacity shows "—", not 0. Commercial deployments show no concurrency figure.
 - **Privacy** is a plain statement (section 6), not a hosting jargon term.
 - License, hosting and other long-form content live in Details.
-- Provisioning, stalled and retired deployments are **never** shown to non-admins.
+- Awaiting, Loading and Stalled deployments are **never** shown to non-admins.
 
 ## 5. Admin view
 
 Same page, with three additions. A role-based view with an optional "preview as user" toggle is proposed.
 
 1. **Needs-attention strip** at the top, pulling out only actionable items:
-   - Unknown boxes awaiting approval
-   - Stalled deployments (loading or reboot timed out)
+   - Unknown boxes presenting the fleet key
+   - Stalled deployments
    - Unhealthy deployments
    - True skew (section 8)
-2. **Replica summary** per model, e.g. "1 healthy / 3 provisioning / 1 unhealthy".
+2. **Replica summary** per model, e.g. "1 healthy / 3 loading / 1 unhealthy" (computed states; admin labels, section 7.1, are annotations and never part of the count).
 3. **Expandable Deployments table** per model (replaces the Fleet tab).
 
 **Deployment row fields**
@@ -78,13 +78,14 @@ Same page, with three additions. A role-based view with an optional "preview as 
 |---|---|---|
 | Type / provider | Vast.ai (RunPod later) | e.g. Anthropic, xAI |
 | Lifecycle state | yes (section 7) | Configured / Healthy / Unhealthy |
+| Admin label (annotation) | yes (section 7.1) | n/a |
 | Host, listen port, public port | yes | n/a |
 | Context window | yes | yes |
 | KV cache (raw tokens) | yes | n/a |
 | vLLM `/healthz` + age | yes | n/a |
 | LiteLLM `/health` + age | yes | yes |
 | Last lifecycle transition | "Loading since 12:04" | yes |
-| Actions | Approve, Reboot, Check LiteLLM now, Retire | Check LiteLLM now, Retire |
+| Actions | Set / clear an admin label (Approved, Reboot requested; section 7.1), Add route (vLLM Healthy), Remove route (vLLM Unhealthy or Stalled), Check LiteLLM now | Check LiteLLM now |
 
 Fields that don't apply are omitted for that type, so the table doesn't fill with "—" cells. The old highlighted-row convention (fleet key presented from a box not in `config.yaml`) becomes an explicit **Unknown** state badge.
 
@@ -111,30 +112,34 @@ The central change: replace several loosely related columns with one explicit st
 
 ### 7.1 Self-hosted (Vast.ai)
 
-A Vast.ai instance is created from a template, then asks our control plane (LLM.apache.org) which models to launch and on which private ports, authenticating with the shared `FLEET_KEY`. Today an admin adds the caller's IP and model/port config to `config.yaml`. The new flow is:
+A Vast.ai instance is created from a template, then asks our control plane (llm.apache.org) which models to launch and on which private ports, authenticating with the shared `FLEET_KEY`. Onboarding is still manual: an admin adds the caller's IP and model/port config to `fleet.hosts` and restarts the control plane, the box re-requests config and loads the model, and once vLLM answers `/healthz` the admin creates the LiteLLM route (the **Add** action). An automated "Approve writes membership" step is a deferred pass.
 
-1. Admin says "this IP is good; use these models" (**Approve**).
-2. The system immediately creates the LiteLLM deployments and records the approval as the source of intent. `config.yaml` is backfilled afterwards.
-3. The admin (or the system via the Vast.ai API) reboots the instance so it asks for config again and receives an answer.
-4. The box loads the model; vLLM starts answering `/healthz`.
+The states below are **computed**: `deployment_status` derives each from the probe, `in_litellm`, and `config_served_at`, and recomputes them after a control-plane restart.
 
 | State | Set by | Meaning |
 |---|---|---|
-| **Unknown** | observed | Fleet key presented from an unrecognized IP. |
-| **Approved** | admin | Approved; LiteLLM deployments created; config backfill pending or done. |
-| **Reboot requested** | system/admin | Reboot attempted via API; awaiting a config request. |
-| **Config served** | observed | The box fetched its config after approval. |
-| **Loading** | observed | Config served, vLLM not yet answering `/healthz`. |
+| **Unknown** | observed | Fleet key presented from an IP not in `config.yaml`; a LiteLLM route matching no deployment reads the same. |
+| **Awaiting** | computed | No config served since we started (`config_served_at` is None) and the box is not yet a known failure. The pre-state before the box fetches config. |
+| **Loading** | computed | Config served, inside `health_grace_s` of the answer, vLLM not yet answering `/healthz`. |
 | **Healthy** | observed | `/healthz` passing. |
-| **Unhealthy** | observed | Was healthy since last config answer, now failing. |
-| **Stalled** | timeout | Reboot or Loading exceeded its timeout (an alert, not a quiet "down"). |
-| **Retired** | admin | Instance destroyed or removed; hidden from default views. |
+| **Unhealthy** | observed | Was healthy since the last config answer, now failing `health_fail_threshold` or more probes. A box in LiteLLM whose first probe fails (serving before a restart, now down) reads Unhealthy from Awaiting. |
+| **Stalled** | timeout | Config served but `health_grace_s` outlasted with no passing probe (an alert, not a quiet "down"). |
+
+**Admin labels** are a separate, smaller thing: annotations the admin applies on top of the computed states, stored in process memory on `Fleet`, keyed by the normalized host IP. They are never a computed state and never change one — a box that is *Approved* is still, by lifecycle, *Awaiting* or *Loading*.
+
+| Label | Meaning |
+|---|---|
+| **Approved** | I vouched for this box; I intend to add it to `fleet.hosts`. |
+| **Reboot requested** | I started a reboot by hand; watching for it to re-request config. |
+
+Labels are lost on a control-plane restart; because they are annotations, losing one can never change a computed state. What losing each costs, and how it is recovered, is in `fleet-state.md` §5.2. One label per host: the two are phases of one onboarding.
 
 Notes:
 
+- **Retirement is not a state.** Retiring a box is manual teardown — remove it from `fleet.hosts` and delete its LiteLLM route. Once it is off the fleet it simply disappears; there is no in-memory record and nothing to lose on restart. Telling users their PAT points at a now-retired model is a later display concern (it needs a PAT→model mapping).
 - **Loading vs. Unhealthy** is the same observation (vLLM not answering), distinguished by whether the deployment has been healthy since its last config answer.
-- **Timeouts** apply to *Reboot requested* and *Loading*. Proposed default: ~20 minutes, configurable (big models load slowly). Value is open (O3).
-- **Reboot is observed, not assumed.** An earlier attempt at rebooting via the Vast.ai API had unclear results. The design therefore treats the API call as a request, and the UI reports only what is observed (a config request arriving, or a timeout).
+- **Stalled** fires when the `health_grace_s` window (currently 1800 s) passes without a passing probe; big models load slowly, so the value is a config variable. There is no separate timeout on *Reboot requested* — it is a label, and the recovery shows up in the lifecycle (config re-served → Loading → Healthy, or stays down → Stalled).
+- **Reboot is observed, not assumed.** An earlier attempt at rebooting via the Vast.ai API had unclear results; the label marks the intent and the lifecycle reports what is observed.
 - A restarted instance may come back with different mapped public ports, which is why ports are queried dynamically.
 
 ### 7.2 Commercial
@@ -174,10 +179,10 @@ The runner emits these five badges and nothing else (O4).
 
 ## 9. Roll-up: user-facing status
 
-Provisioning deployments must not make a working model look broken (today `qwen3-8b` has 1 serving and 4 others in various states).
+Box-level pre-states (Awaiting, Loading, Stalled) must not make a working model look broken (today `qwen3-8b` has 1 healthy and 4 others in various states).
 
-- **Counted:** Healthy and Unhealthy deployments.
-- **Not counted:** Unknown, Approved, Reboot requested, Config served, Loading, Stalled, Retired, and stale (Unknown-signal) deployments.
+- **Counted:** Healthy and Unhealthy deployments whose driving signal is fresh (the vLLM probe for a box, the LiteLLM health for a commercial endpoint).
+- **Not counted:** Awaiting, Loading, Stalled, and Unknown, and any deployment whose driving signal has gone stale (Unknown signal). Admin labels never affect the count.
 
 | Label | Rule |
 |---|---|
@@ -185,37 +190,35 @@ Provisioning deployments must not make a working model look broken (today `qwen3
 | **Degraded** | At least one Healthy and at least one Unhealthy. |
 | **Unavailable** | No Healthy deployments (including none counted). |
 
-Whether a stale commercial deployment (>12 h without a probe) counts as healthy, unhealthy or excluded needs a decision (O2). The text above assumes excluded. A planned-maintenance "drained" state is a possible later addition so maintenance isn't read as degradation.
+A planned-maintenance "drained" state is a possible later addition so maintenance isn't read as degradation.
 
 ## 10. Security considerations
 
-- **Approval is keyed to an IP.** Vast.ai recycles IPs between tenants, but a new tenant on a previously approved IP would not know the `FLEET_KEY` (a shared secret between the Vast.ai template and our server), and admins know the IPs of the boxes they expect. The residual risks are a leaked or compromised `FLEET_KEY`, and a stale approval outliving its instance. Proposed hardening, in order of value: expire an approval when the deployment is Retired (cheap, and keeps the approved-IP list accurate); optionally also bind approval to the Vast instance ID if the box can report it at bootstrap, so a known IP presenting a new instance ID returns to **Unknown**. See O1.
+- **Membership is the durable gate; the label is not.** The box's standing to fetch config comes from being in `fleet.hosts`, which is in `config.yaml` and survives a restart. The **Approved** label is an in-memory annotation on the host IP, cleared on restart, and it never controls anything — so a recycled IP cannot gain access from a lost or stale label. Vast.ai recycles IPs between tenants, but a new tenant on a previously onboarded IP would still not know the `FLEET_KEY` (a shared secret between the Vast.ai template and our server), and admins know the IPs of the boxes they expect. The residual risks are a leaked or compromised `FLEET_KEY`, and a stale `fleet.hosts` entry outliving its instance. See O1 for the deferred durable-approval and instance-ID-binding passes.
 - Rotating the `FLEET_KEY` should be a documented procedure, since it is shared by every box launched from the template.
-- Fleet-key bootstrap, Approve, Reboot, Retire and Check-now are admin-visible, audited actions (see event history, section 11).
+- Fleet-key bootstrap, setting/clearing an admin label, Add/Remove route, and Check-now are admin-visible, audited actions (see event history, section 11).
 - The public vLLM hop is TLS; listen ports are plain HTTP and must stay on the private side.
 
 ## 11. Additional behaviors
 
 - **Event history:** record every lifecycle transition with a timestamp; the row shows the latest ("Loading since 12:04"). Debugging a stalled box otherwise means guessing.
-- **Retire:** a destroyed instance needs an explicit action so dead rows don't accumulate in Stalled or Unhealthy and drown the attention strip.
+- **Retire:** retiring a box is manual teardown — remove it from `fleet.hosts` and delete its LiteLLM route (section 7.1). No state, no action button, nothing to hold in memory; once off the fleet the row disappears rather than accumulating in Stalled or Unhealthy.
 - **Context across replicas:** user-facing context is the minimum across healthy deployments. This will matter once boxes with different VRAM exist.
-- **Single source of intent:** the approval is the recorded intent; LiteLLM deployments and `config.yaml` are both derived from it, and a pending or failed `config.yaml` backfill is shown as a visible state, not as mystery skew.
+- **Single source of intent:** `fleet.hosts` in `config.yaml` is the recorded intent for what should run; `VllmServer` rows and LiteLLM deployments are both derived from it. A box present in `config.yaml` but absent from LiteLLM shows as the **Intended, not in LiteLLM** skew badge, so a missing route reads as a visible gap rather than mystery skew.
 
 ## 12. Implementation plan
 
-**Pass 1: status logic (no UI).** A pure, testable module computing, per deployment: lifecycle state, signal staleness, skew badges; and per model: roll-up label, privacy tier, context and concurrency. Tested against the current fleet as the first fixture (3 serving, 3 pending, 1 down, one Unknown/skewed row).
+**Pass 1: status logic (no UI).** Shipped in `llmao/model_status.py` as `deployment_status` (per deployment: computed lifecycle, vLLM/LiteLLM signal freshness, the five skew badges, `counted`, and the `reached` loading detail) and `model_status` (per model: roll-up label, privacy tier, context and concurrency). The admin labels (Approved, Reboot requested) are in-memory annotations on `Fleet`, orthogonal to this module. The first fixture (`test_model_status.py::test_fleet_fixture_rollup_is_degraded`) mirrors the current fleet: 3 Healthy (one skewed), 3 Loading, 1 Unhealthy, plus an Unknown fleet-key fetch, rolling up to Degraded.
 
-**Pass 2: template.** The combined Models page: user view, admin view with attention strip and Deployments drill-down, actions wired to the existing endpoints. The Fleet tab is removed.
-
-Open items for Pass 1 inputs: how deployment and state data is currently stored (`config.yaml` parsing, skew runner output, LiteLLM health data).
+**Pass 2: template.** The combined Models page: user view, admin view with attention strip and Deployments drill-down, and the admin-label set/clear wired to `Fleet.admin_label` / `Fleet.set_admin_label`. The Fleet tab is removed.
 
 ## 13. Open questions
 
 | # | Question | Current assumption |
 |---|---|---|
-| O1 | Beyond expiring approvals on Retire, also bind approval to the Vast instance ID? Is the ID available at bootstrap? | Expire on Retire; instance-ID binding is optional hardening. |
-| O2 | Do stale commercial deployments count as healthy, unhealthy, or excluded? | Excluded. |
-| O3 | Loading and Reboot timeout values? | ~20 minutes, configurable. |
+| O1 | ~~Bind an approval to the Vast instance ID?~~ | Resolved: Approve is an in-memory annotation on the host IP; a durable, restart-surviving approval is the deferred "Approve writes membership" pass. |
+| O2 | Do stale commercial deployments count as healthy, unhealthy, or excluded? | Resolved: a stale driving signal drops the deployment out of the roll-up (Unknown signal), Healthy or Unhealthy. |
+| O3 | ~~Loading and Reboot timeout values?~~ | Resolved: one timeout, `health_grace_s` (currently 1800 s), from config-served to Stalled; Reboot requested is a label with no timeout. |
 | O4 | What other skew types does the skew runner detect? | The five in section 8. The one the earlier draft omitted is vLLM down, LiteLLM up. |
 | O5 | How is a model with both private and external deployments labeled? | Least-private tier wins. |
 | O6 | ~~Does the public hop authenticate the caller?~~ | Resolved: every vLLM server has an API key, stored in LiteLLM and used when proxying. |
