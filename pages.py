@@ -34,7 +34,7 @@ from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.auth import current_identity
-from llmao.fleet import add_refusal
+from llmao.fleet import add_refusal, snapshot_for_status
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
 from llmao.model_status import (
     AVAILABLE,
@@ -48,9 +48,13 @@ from llmao.model_status import (
     STALLED,
     UNAVAILABLE,
     UNHEALTHY,
+    deployment_status,
 )
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
+
+# Replica summary order: the calm states first, the ones needing attention last.
+_REPLICA_ORDER = (HEALTHY, LOADING, AWAITING, "no deployment", "pending", UNHEALTHY, STALLED)
 
 APP = asfquart.APP
 
@@ -258,14 +262,32 @@ def _modality_chips(modality: str) -> list[edict]:
     return chips
 
 
-def model_catalog_rows(fleet, catalog: list, *, now: float | None = None) -> list:
+def _replica_summary(model_name: str, fleet, *, now: float) -> str:
+    """'1 healthy / 3 loading / 1 unhealthy' over the model's deployments."""
+    cfg = fleet.cfg.fleet
+    views = []
+    for dep in fleet.deployments:
+        if dep.model_name != model_name:
+            continue
+        views.append(deployment_status(snapshot_for_status(dep, cfg, now), cfg, now))
+    by_state: dict[str, int] = {}
+    for v in views:
+        by_state[v.lifecycle] = by_state.get(v.lifecycle, 0) + 1
+    order = {state: i for i, state in enumerate(_REPLICA_ORDER)}
+    parts = [f"{n} {state}" for state, n in sorted(by_state.items(), key=lambda kv: order.get(kv[0], len(order)))]
+    return " / ".join(parts)
+
+
+def model_catalog_rows(fleet, catalog: list, *, now: float | None = None, admin: bool = False) -> list:
     """One Models-page row per catalog entry, with the user-facing roll-up.
 
     Context and concurrency come from the roll-up (minimum context across
     healthy deployments; concurrency summed over healthy self-hosted ones),
-    so a catalog figure cannot overstate a degraded replica. Kept out of
-    models_page so a test can render models.ezt without a request.
+    so a catalog figure cannot overstate a degraded replica. For admins the
+    row also carries the model's deployment rows and a replica summary.
+    Kept out of models_page so a test can render models.ezt without a request.
     """
+    stamp = time.time() if now is None else now
     rows = []
     for m in catalog:
         row = edict(m)
@@ -289,6 +311,11 @@ def model_catalog_rows(fleet, catalog: list, *, now: float | None = None) -> lis
         row.private = ezt.boolean(privacy == PRIVATE)
         row.privacy = _PRIVACY_TEXT.get(privacy, "")
         row.chips = _modality_chips(m.get("modality") or "")
+        if admin:
+            row.deployments = [
+                r for r in deployment_rows(fleet, admin=True, now=stamp) if r.model_name == row.model_name
+            ]
+            row.replica_summary = _replica_summary(row.model_name, fleet, now=stamp)
         rows.append(row)
     rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
     return rows
@@ -300,9 +327,10 @@ def model_catalog_rows(fleet, catalog: list, *, now: float | None = None) -> lis
 @page(FileNotFoundError, ValueError, OSError, title="Models")
 async def models_page(result):
     """Gateway model inventory (public fields; supply path for site admins)."""
-    result.reveal_supply = bool(result.is_site_admin)
-    catalog = ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply)
-    result.models = model_catalog_rows(APP.fleet, catalog)
+    admin = bool(result.is_site_admin)
+    result.reveal_supply = admin
+    catalog = ux_models(cfg=APP.cfg, reveal_supply=admin)
+    result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
     return result
 
 
@@ -331,50 +359,52 @@ async def fleet_page(result):
     return result
 
 
-def fleet_rows(fleet, *, admin: bool, now: float) -> list:
-    """One table row per deployment (plus unknown fetches for admins).
-
-    Kept out of fleet_page so a test can build rows without a request and
-    render fleet.ezt against them.
-    """
+def unknown_fetch_rows(fleet, *, now: float) -> list:
+    """Admin rows for fleet-key fetches from IPs not in fleet.hosts."""
     rows = []
-    if admin:
-        unknown = sorted(
-            fleet.unknown_config_fetches.items(),
-            key=lambda item: item[1]["last_seen"],
-            reverse=True,
-        )
-        for host, rec in unknown:
-            rows.append(
-                edict(
-                    host=host,
-                    name="—",
-                    self_hosted=ezt.boolean(False),
-                    listen="—",
-                    public="—",
-                    state="Fleet key presented; this IP is not in config.yaml",
-                    detail="",
-                    last_ok="—",
-                    config_ago=f"{_ago(rec['last_seen'], now)} · {int(rec['count'])}",
-                    skew="",
-                    kv_cache="—",
-                    context="—",
-                    oversized=ezt.boolean(False),
-                    in_litellm=ezt.boolean(False),
-                    litellm_health="—",
-                    litellm_health_ago="",
-                    no_deployment=ezt.boolean(False),
-                    serving=ezt.boolean(False),
-                    loading=ezt.boolean(False),
-                    awaiting=ezt.boolean(False),
-                    unhealthy=ezt.boolean(False),
-                    pending=ezt.boolean(False),
-                    unknown=ezt.boolean(True),
-                    row_class="table-warning",
-                    show_add=ezt.boolean(False),
-                    add_enabled=ezt.boolean(False),
-                )
+    unknown = sorted(
+        fleet.unknown_config_fetches.items(),
+        key=lambda item: item[1]["last_seen"],
+        reverse=True,
+    )
+    for host, rec in unknown:
+        rows.append(
+            edict(
+                host=host,
+                name="—",
+                model_name="",
+                self_hosted=ezt.boolean(False),
+                listen="—",
+                public="—",
+                state="Fleet key presented; this IP is not in config.yaml",
+                detail="",
+                last_ok="—",
+                config_ago=f"{_ago(rec['last_seen'], now)} · {int(rec['count'])}",
+                skew="",
+                kv_cache="—",
+                context="—",
+                oversized=ezt.boolean(False),
+                in_litellm=ezt.boolean(False),
+                litellm_health="—",
+                litellm_health_ago="",
+                no_deployment=ezt.boolean(False),
+                serving=ezt.boolean(False),
+                loading=ezt.boolean(False),
+                awaiting=ezt.boolean(False),
+                unhealthy=ezt.boolean(False),
+                pending=ezt.boolean(False),
+                unknown=ezt.boolean(True),
+                row_class="table-warning",
+                show_add=ezt.boolean(False),
+                add_enabled=ezt.boolean(False),
             )
+        )
+    return rows
+
+
+def deployment_rows(fleet, *, admin: bool, now: float) -> list:
+    """One table row per intended deployment, admin fields gated on ``admin``."""
+    rows = []
     for dep in fleet.deployments:
         srv = dep.vllm
         fetched = fleet.config_fetch_at.get(srv.host) if srv else None
@@ -437,6 +467,7 @@ def fleet_rows(fleet, *, admin: bool, now: float) -> list:
             edict(
                 host=host,
                 name=dep.name,
+                model_name=dep.model_name,
                 self_hosted=ezt.boolean(dep.self_hosted),
                 listen=listen,
                 public=public,
@@ -467,6 +498,13 @@ def fleet_rows(fleet, *, admin: bool, now: float) -> list:
                 add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
             )
         )
+    return rows
+
+
+def fleet_rows(fleet, *, admin: bool, now: float) -> list:
+    """The /fleet page's rows: unknown fetches (admin) above the deployments."""
+    rows = unknown_fetch_rows(fleet, now=now) if admin else []
+    rows.extend(deployment_rows(fleet, admin=admin, now=now))
     return rows
 
 

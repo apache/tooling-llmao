@@ -190,6 +190,41 @@ def test_models_template_renders_the_catalog_row():
     assert "Request a key" in out
 
 
+def test_admin_rows_carry_their_models_deployments_and_summary():
+    pages = _app()
+    healthy = _server("gemma")
+    down = _server("gemma", host="10.0.0.2", port=8002, ok=False)
+    # A fresh box that has fetched config but not been probed: Loading.
+    loading = VllmServer(
+        model_name="qwen",
+        name="qwen",
+        host="10.0.0.3",
+        listen_port=8003,
+        hf_model="org/model",
+        api_key="sk-x",
+        args=[],
+        public_port=8003,
+    )
+    loading.max_model_len = 8192
+    loading.config_served_at = NOW - 10
+    fleet = _fleet(healthy, down, loading)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("qwen")], now=NOW, admin=True)
+    by_name = {r.model_name: r for r in rows}
+    assert len(by_name["gemma"].deployments) == 2
+    assert len(by_name["qwen"].deployments) == 1
+    assert by_name["gemma"].replica_summary == "1 healthy / 1 unhealthy"
+    assert by_name["qwen"].replica_summary == "1 loading"
+    # The rows are the fleet rows: same shape fleet.ezt renders.
+    assert pages.fleet_rows(fleet, admin=True, now=NOW)[0].model_name
+
+
+def test_non_admin_rows_have_no_admin_fields():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=False)
+    assert not rows[0].keys() & {"deployments", "replica_summary"}
+
+
 def _render(rows) -> str:
     data = edict(
         title="Models",
