@@ -679,11 +679,57 @@ async def projects_list(result):
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "project.ezt")
 @page()
-async def project_stub(result, project: str):
-    """Member-gated stub until P0.3 overview."""
+async def project_overview(result, project: str):
+    """What a project is drawing, and who is drawing it.
+
+    Two meters because they are two different things. The commercial bar
+    fills toward a limit that blocks; the capacity bar toward one that slows.
+    Giving them the same visual language would imply the same consequence.
+
+    Service keys get their own row rather than being folded into whoever
+    created them. Otherwise the member figures sum to less than the project
+    total and the page looks broken -- and the pipeline is often the largest
+    consumer, which is exactly what a PMC wants to see.
+    """
+    ident = await current_identity(APP.cfg)
+    status = await APP.seam.team_status(ident, project)
     result.title = project
     result.project = project
-    await APP.seam.team_status(await current_identity(APP.cfg), project)
+    result.is_pmc = ezt.boolean(project in (ident.committees or []))
+
+    cap = getattr(status, "token_cap", 0) or 0
+    budget = status.max_budget or 0
+
+    try:
+        rows = await APP.seam.project_usage(ident, project)
+    except BackendUnavailableError:
+        rows = []
+
+    tokens = sum(r["tokens"] for r in rows)
+    spend = sum(r["spend"] for r in rows)
+
+    result.tokens_h = _tokens_h(tokens)
+    result.cap_h = _tokens_h(cap) if cap else None
+    result.tokens_pct = min(100, int(tokens / cap * 100)) if cap else 0
+    # A capacity estimate at the fleet rate. Shown beside the token count
+    # rather than instead of it: the tokens are what constrains the project,
+    # the dollars are what makes it comparable with commercial work.
+    result.capacity_h = f"${tokens / 1_000_000 * CAPACITY_USD_PER_MTOK:,.2f}"
+
+    result.spend_h = f"${spend:,.2f}"
+    result.budget_h = f"${budget:,.0f}" if budget else None
+    result.spend_pct = min(100, int(spend / budget * 100)) if budget else 0
+
+    result.members = [
+        edict({
+            "name": r["name"],
+            "is_service": ezt.boolean(r["is_service"]),
+            "tokens_h": _tokens_h(r["tokens"]),
+            "spend_h": f"${r['spend']:,.2f}",
+            "keys": r["keys"],
+        })
+        for r in rows
+    ]
     return result
 
 

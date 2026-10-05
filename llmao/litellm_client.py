@@ -30,7 +30,7 @@ import asyncio
 import datetime as _dt
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -120,6 +120,19 @@ class TeamInfo:
     grantor: str = GRANTOR_FREE_TIER
     # Optional legacy field; product PATs are not stored here.
     key: str = ""
+    # Weekly token allocation, in metadata rather than a LiteLLM field --
+    # LiteLLM meters dollars and this is capacity. Zero means unset, which
+    # renders as "no cap" rather than as a cap of nothing.
+    token_cap: int = 0
+    token_window_days: int = 7
+    # The team's raw metadata dict.
+    #
+    # Needed because several things are stored there -- grantor, the token
+    # allocation, the reserved team's tier overrides -- and a caller updating
+    # one must merge rather than replace, or it silently drops the others.
+    # Until this existed, `getattr(info, "metadata", None) or {}` returned {}
+    # at every call site and the tier overrides were written but never read.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def resolve_grantor(raw: Any, metadata: Any = None) -> str:
@@ -201,6 +214,7 @@ class Backend(Protocol):
         project: str,
         *,
         max_budget_usd: float | None = None,
+        token_cap: int | None = None,
         rpm_limit: int | None = None,
         tpm_limit: int | None = None,
         max_parallel_requests: int | None = None,
@@ -381,6 +395,9 @@ class LiteLLMBackend:
             float(d.get("spend") or 0),
             budget_duration=resolve_budget_duration(raw_dur, self._cfg),
             grantor=resolve_grantor(d.get("grantor"), meta),
+            token_cap=int(meta.get("token_cap") or 0),
+            token_window_days=int(meta.get("token_window_days") or 7),
+            metadata=meta,
         )
 
     async def warm(self) -> None:
@@ -412,7 +429,20 @@ class LiteLLMBackend:
                 "team_alias": project,
                 "max_budget": budget_usd,
                 "budget_duration": duration,
-                "metadata": {"grantor": GRANTOR_FREE_TIER},
+                "metadata": {
+                    "grantor": GRANTOR_FREE_TIER,
+                    # A project starts with an allocation so the page has
+                    # something to show and "Request more" has something to
+                    # request against. Deliberately generous for the pilot:
+                    # a cap that binds generates support requests and teaches
+                    # us nothing about real usage, while one that rarely
+                    # binds measures what people actually draw.
+                    "token_cap": int(
+                        getattr(self._cfg.budgets, "default_team_token_cap", 0)
+                        or 0
+                    ),
+                    "token_window_days": 7,
+                },
             },
         )
         if resp.status_code >= 400:
@@ -465,7 +495,7 @@ class LiteLLMBackend:
             return effective
         if info is None:
             return effective
-        stored = (getattr(info, "metadata", None) or {}).get(tier)
+        stored = (info.metadata or {}).get(tier)
         if isinstance(stored, dict):
             effective.update({k: v for k, v in stored.items() if v is not None})
         return effective
@@ -515,7 +545,7 @@ class LiteLLMBackend:
                 raise BackendUnavailableError(f"{field} must not be negative")
 
         team = await self.ensure_team(self._TIER_STORE_TEAM)
-        meta = dict(getattr(team, "metadata", None) or {})
+        meta = dict(team.metadata or {})
         meta[tier] = {**(meta.get(tier) or {}), **changes}
 
         resp = await self._request(
@@ -536,6 +566,7 @@ class LiteLLMBackend:
         project: str,
         *,
         max_budget_usd: float | None = None,
+        token_cap: int | None = None,
         rpm_limit: int | None = None,
         tpm_limit: int | None = None,
         max_parallel_requests: int | None = None,
@@ -557,6 +588,14 @@ class LiteLLMBackend:
         payload: dict[str, Any] = {"team_id": team_id}
         if max_budget_usd is not None:
             payload["max_budget"] = float(max_budget_usd)
+        if token_cap is not None:
+            # Capacity lives in metadata, not a LiteLLM field: LiteLLM meters
+            # dollars, and merging rather than replacing keeps grantor and
+            # anything else already there.
+            existing = await self.team_info(project)
+            meta = dict(existing.metadata or {}) if existing else {}
+            meta["token_cap"] = int(token_cap)
+            payload["metadata"] = meta
         for field, val in (
             ("rpm_limit", rpm_limit),
             ("tpm_limit", tpm_limit),

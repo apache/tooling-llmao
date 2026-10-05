@@ -31,6 +31,17 @@ litellm:
 budgets:
   default_team_budget_usd: 100
   duration: 30d
+  # Weekly token allocation a project starts with. Capacity, not money --
+  # self-hosted tokens cost the fleet the same whether drawn or idle, so this
+  # is a share of throughput rather than a spending limit.
+  #
+  # Deliberately generous for the pilot. A cap that binds generates support
+  # requests and teaches us nothing; one that rarely binds measures what
+  # people actually draw, which is the input to whatever replaces it.
+  #
+  # The fleet serves roughly 9.1 billion tokens a month at a 50% planning
+  # utilisation, so twenty projects at 20M/week is about 7% of capacity.
+  default_team_token_cap: 20000000
 
 # Entitlements: what a key may do, as distinct from what it may spend.
 #

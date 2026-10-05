@@ -242,6 +242,48 @@ class Seam:
     async def team_status(self, identity: Identity, project: str) -> TeamInfo | None:
         return await self._backend.team_info(project)
 
+    @require_member
+    async def project_usage(self, identity: Identity, project: str) -> list[dict]:
+        """Per-principal draw for one project, service keys separated out.
+
+        Member-gated: a project's internal breakdown is not public, and the
+        decorator is the same one every other project read uses.
+
+        A service key becomes its own row rather than being folded into
+        whoever created it. Two reasons: the member figures must sum to the
+        project total or the page reads as broken, and a pipeline is often
+        the largest single consumer -- which is the thing a PMC most needs to
+        see and the thing hiding it inside a person's row would obscure.
+        """
+        rows = await self._backend.usage(project)
+        keys = await self._backend.list_keys(project=project, size=200)
+        # token_id -> (display name, is_service). A key with no user is
+        # automation; one with a user belongs to that person.
+        owner: dict[str, tuple[str, bool]] = {}
+        key_count: dict[str, int] = {}
+        for k in keys:
+            is_service = not k.user or k.is_automation
+            name = (k.purpose or k.token_id[:8]) if is_service else k.user
+            owner[k.token_id] = (name, is_service)
+            key_count[name] = key_count.get(name, 0) + 1
+
+        acc: dict[str, dict] = {}
+        for r in rows:
+            token = r.get("token_id")
+            name, is_service = owner.get(token, (r.get("user") or "unknown", False))
+            e = acc.setdefault(name, {
+                "name": name, "is_service": is_service,
+                "tokens": 0, "spend": 0.0, "keys": key_count.get(name, 0),
+            })
+            e["tokens"] += int(r.get("total_tokens") or 0)
+            # Only commercial rows carry real money. A capacity estimate in a
+            # column headed dollars is how the two get added together later.
+            if r.get("cost_basis") != "derived_capacity":
+                e["spend"] += float(r.get("total_cost_usd") or 0.0)
+
+        # Largest first: the row a PMC is looking for is the one at the top.
+        return sorted(acc.values(), key=lambda e: -e["tokens"])
+
     async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
         return await self._backend.list_keys(user=identity.uid, size=100)
 
