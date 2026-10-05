@@ -92,10 +92,10 @@ def resolve_entitlement(cfg: Any, tier: str) -> dict[str, Any]:
     for src in (base, tier_cfg):
         if src is None:
             continue
-        for field in _LIMIT_FIELDS:
-            val = getattr(src, field, None)
+        for name in _LIMIT_FIELDS:
+            val = getattr(src, name, None)
             if val is not None:
-                out[field] = val
+                out[name] = val
     return out
 
 
@@ -402,8 +402,68 @@ class LiteLLMBackend:
 
     async def warm(self) -> None:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
-        await self._team_list_rows()
+        rows = await self._team_list_rows()
+        await self._backfill_token_caps(rows)
         await self.ensure_commercial()
+
+    async def _backfill_token_caps(self, rows: list[dict[str, Any]]) -> None:
+        """Give every team without a token allocation the configured default.
+
+        Projects come from LDAP. Nobody sets a project up, so there is no
+        moment at which someone could be asked for its allocation --
+        ensure_team writes the default when it first sees a new PMC, which
+        covers everything from now on but not the teams that already exist,
+        and not one created while an older build was running.
+
+        So this runs at every startup rather than being a one-off script: a
+        migration that only works if someone remembers to run it is one that
+        silently misses the project created last Tuesday.
+
+        Idempotent. The test is on the token_cap key being ABSENT rather than
+        on its value, so a project an admin deliberately capped at something
+        unusual -- including zero -- is left alone.
+
+        Failures are logged and swallowed: an unreachable team should not stop
+        the portal booting, and the next restart retries.
+        """
+        default = int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0)
+        if default <= 0:
+            return
+
+        patched = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            alias = row.get("team_alias")
+            team_id = row.get("team_id")
+            if not alias or not team_id:
+                continue
+            meta = row.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            if "token_cap" in meta:
+                continue
+
+            merged = {**meta, "token_cap": default, "token_window_days": 7}
+            try:
+                resp = await self._request(
+                    "POST",
+                    "team/update",
+                    json={"team_id": str(team_id), "metadata": merged},
+                )
+                self._raise_http(resp)
+            except BackendUnavailableError:
+                _LOGGER.warning("token cap backfill failed for %s", alias)
+                continue
+            patched.append(alias)
+
+        if patched:
+            _LOGGER.info(
+                "token cap %s applied to %d team(s) without one: %s",
+                f"{default:,}",
+                len(patched),
+                ", ".join(sorted(patched)),
+            )
 
     async def ensure_team_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
@@ -437,10 +497,7 @@ class LiteLLMBackend:
                     # a cap that binds generates support requests and teaches
                     # us nothing about real usage, while one that rarely
                     # binds measures what people actually draw.
-                    "token_cap": int(
-                        getattr(self._cfg.budgets, "default_team_token_cap", 0)
-                        or 0
-                    ),
+                    "token_cap": int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0),
                     "token_window_days": 7,
                 },
             },
@@ -484,10 +541,10 @@ class LiteLLMBackend:
         """
         effective = dict(resolve_entitlement(self._cfg, tier))
         tier_cfg = getattr(getattr(self._cfg, "entitlements", None), tier, None)
-        for field in ("token_cap", "token_window_days"):
-            val = getattr(tier_cfg, field, None)
+        for name in ("token_cap", "token_window_days"):
+            val = getattr(tier_cfg, name, None)
             if val is not None:
-                effective[field] = val
+                effective[name] = val
 
         try:
             info = await self.team_info(self._TIER_STORE_TEAM)
@@ -540,9 +597,9 @@ class LiteLLMBackend:
         }
         if not changes:
             raise BackendUnavailableError("set_tier_entitlement: nothing to change")
-        for field, val in changes.items():
+        for name, val in changes.items():
             if int(val) < 0:
-                raise BackendUnavailableError(f"{field} must not be negative")
+                raise BackendUnavailableError(f"{name} must not be negative")
 
         team = await self.ensure_team(self._TIER_STORE_TEAM)
         meta = dict(team.metadata or {})
@@ -596,13 +653,13 @@ class LiteLLMBackend:
             meta = dict(existing.metadata or {}) if existing else {}
             meta["token_cap"] = int(token_cap)
             payload["metadata"] = meta
-        for field, val in (
+        for name, val in (
             ("rpm_limit", rpm_limit),
             ("tpm_limit", tpm_limit),
             ("max_parallel_requests", max_parallel_requests),
         ):
             if val is not None:
-                payload[field] = int(val)
+                payload[name] = int(val)
         if len(payload) == 1:
             raise BackendUnavailableError("update_team_entitlement: nothing to change")
 
@@ -641,13 +698,13 @@ class LiteLLMBackend:
         payload: dict[str, Any] = {"key": token_id}
         if max_budget_usd is not None:
             payload["max_budget"] = float(max_budget_usd)
-        for field, val in (
+        for name, val in (
             ("rpm_limit", rpm_limit),
             ("tpm_limit", tpm_limit),
             ("max_parallel_requests", max_parallel_requests),
         ):
             if val is not None:
-                payload[field] = int(val)
+                payload[name] = int(val)
         if len(payload) == 1:
             raise BackendUnavailableError("update_key_entitlement: nothing to change")
 
@@ -1045,10 +1102,10 @@ class LiteLLMBackend:
         if dep.self_hosted:
             pricing = getattr(entry, "pricing", None)
             if pricing is not None:
-                for field in ("input_cost_per_token", "output_cost_per_token"):
-                    val = getattr(pricing, field, None)
+                for name in ("input_cost_per_token", "output_cost_per_token"):
+                    val = getattr(pricing, name, None)
                     if val is not None:
-                        info[field] = float(val)
+                        info[name] = float(val)
                 # Marks the row as capacity rather than money, so a report can
                 # keep the two apart instead of adding them together.
                 info["cost_basis"] = "derived_capacity"
