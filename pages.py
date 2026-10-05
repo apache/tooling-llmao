@@ -721,13 +721,15 @@ async def project_overview(result, project: str):
     result.spend_pct = min(100, int(spend / budget * 100)) if budget else 0
 
     result.members = [
-        edict({
-            "name": r["name"],
-            "is_service": ezt.boolean(r["is_service"]),
-            "tokens_h": _tokens_h(r["tokens"]),
-            "spend_h": f"${r['spend']:,.2f}",
-            "keys": r["keys"],
-        })
+        edict(
+            {
+                "name": r["name"],
+                "is_service": ezt.boolean(r["is_service"]),
+                "tokens_h": _tokens_h(r["tokens"]),
+                "spend_h": f"${r['spend']:,.2f}",
+                "keys": r["keys"],
+            }
+        )
         for r in rows
     ]
     return result

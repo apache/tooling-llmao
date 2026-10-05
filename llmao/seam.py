@@ -271,10 +271,16 @@ class Seam:
         for r in rows:
             token = r.get("token_id")
             name, is_service = owner.get(token, (r.get("user") or "unknown", False))
-            e = acc.setdefault(name, {
-                "name": name, "is_service": is_service,
-                "tokens": 0, "spend": 0.0, "keys": key_count.get(name, 0),
-            })
+            e = acc.setdefault(
+                name,
+                {
+                    "name": name,
+                    "is_service": is_service,
+                    "tokens": 0,
+                    "spend": 0.0,
+                    "keys": key_count.get(name, 0),
+                },
+            )
             e["tokens"] += int(r.get("total_tokens") or 0)
             # Only commercial rows carry real money. A capacity estimate in a
             # column headed dollars is how the two get added together later.
