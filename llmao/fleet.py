@@ -793,6 +793,22 @@ def add_refusal(dep) -> str | None:
     return None
 
 
+def remove_refusal(dep) -> str | None:
+    """Why the Fleet Remove button must not call delete_deployment.
+
+    None means the row is self-hosted, is already in LiteLLM, and vLLM is
+    Unhealthy or Stalled — the same gate the automatic sync_selfhost applies.
+    delete_deployment itself does not apply this gate.
+    """
+    if not dep.self_hosted or dep.vllm is None:
+        return "not a self-hosted deployment"
+    if not dep.in_litellm:
+        return "not in LiteLLM"
+    if dep.vllm.state not in (UNHEALTHY, STALLED):
+        return "vLLM is still healthy"
+    return None
+
+
 def parse_kv_cache_tokens(metrics_text: str) -> int | None:
     """KV cache size in tokens from vLLM's Prometheus output, or None.
 

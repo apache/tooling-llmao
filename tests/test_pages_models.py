@@ -30,7 +30,7 @@ import asfquart
 import ezt
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import Fleet, FleetDeployment, VllmServer
+from llmao.fleet import Fleet, FleetDeployment, VllmServer, remove_refusal
 from llmao.model_status import (
     AVAILABLE,
     DEGRADED,
@@ -337,6 +337,52 @@ def test_attention_strip_renders_the_label_form_for_unknown_boxes():
     assert 'name="host" value="192.0.2.7"' in out
     assert 'value="approved" selected' in out
     assert "/do-set-admin-label" in out
+
+
+def test_remove_refusal_gate():
+    # self-hosted, in LiteLLM, still healthy: too early to drop.
+    healthy = _fleet(_server("gemma"))
+    assert remove_refusal(healthy.deployments[0]) == "vLLM is still healthy"
+
+    # self-hosted, in LiteLLM, unhealthy: the drop is allowed.
+    down = _fleet(_server("gemma", ok=False))
+    assert remove_refusal(down.deployments[0]) is None
+
+    # self-hosted but not in LiteLLM: there is nothing to drop.
+    absent = _fleet(_server("gemma"))
+    absent.deployments[0].in_litellm = False
+    assert remove_refusal(absent.deployments[0]) == "not in LiteLLM"
+
+    # a commercial row is never manually removed.
+    commercial = _fleet(_server("gemma"))
+    commercial.deployments[0].self_hosted = False
+    assert remove_refusal(commercial.deployments[0]) == "not a self-hosted deployment"
+
+
+def test_drill_down_renders_add_and_remove_actions():
+    pages = _app()
+    a = _server("gemma", host="10.0.0.1")  # healthy, in LiteLLM -> disabled Remove
+    b = _server("gemma", host="10.0.0.2")  # healthy, not in LiteLLM -> enabled Add
+    c = _server("gemma", host="10.0.0.3", ok=False)  # unhealthy, in LiteLLM -> enabled Remove
+    d = _server("gemma", host="10.0.0.4", ok=False)  # unhealthy, not in LiteLLM -> disabled Add
+    fleet = _fleet(a, b, c, d)
+    for dep in fleet.deployments:  # _fleet defaults every box into LiteLLM
+        if dep.vllm.host in ("10.0.0.2", "10.0.0.4"):
+            dep.in_litellm = False
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)
+    out = _render(rows, admin=True)
+
+    # Exactly one enabled Add (the healthy box not yet in LiteLLM) posts the row.
+    assert out.count("/do-add-deployment") == 1
+    assert 'name="host" value="10.0.0.2"' in out
+    # The other not-in-LiteLLM box is unhealthy, so its Add is a disabled button.
+    assert "vLLM is not serving yet" in out
+
+    # Exactly one enabled Remove (the unhealthy box still in LiteLLM) posts the row.
+    assert out.count("/do-remove-deployment") == 1
+    assert 'name="host" value="10.0.0.3"' in out
+    # The healthy in-LiteLLM box offers a disabled Remove.
+    assert "Remove only when vLLM is unhealthy or stalled" in out
 
 
 def _render(rows, attention=None, *, admin=False) -> str:

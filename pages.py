@@ -34,7 +34,7 @@ from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.auth import current_identity
-from llmao.fleet import add_refusal, snapshot_for_status
+from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
 from llmao.model_status import (
     ADMIN_LABELS,
@@ -581,6 +581,8 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
                 row_class="",
                 show_add=ezt.boolean(admin and dep.self_hosted and not dep.in_litellm),
                 add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
+                show_remove=ezt.boolean(admin and dep.self_hosted and dep.in_litellm),
+                remove_enabled=ezt.boolean(admin and remove_refusal(dep) is None),
                 label=label,
                 label_value=label_value,
                 label_at=label_at,
@@ -622,6 +624,34 @@ async def do_add_deployment():
         await flash_danger(str(e))
         return _see_other("/fleet")
     await flash_success(f"Added {matches[0].name} at {matches[0].api_base}.")
+    return _see_other("/fleet")
+
+
+@APP.post("/do-remove-deployment")
+@asfquart.auth.require
+async def do_remove_deployment():
+    """Site admin drops one self-hosted LiteLLM route. remove_refusal is the gate."""
+    ident = await current_identity(APP.cfg)
+    if not ident.is_site_admin:
+        await flash_danger("Only site admins can remove a fleet deployment.")
+        return _see_other("/fleet")
+    form = await quart.request.form
+    name = (form.get("name") or "").strip()
+    host = (form.get("host") or "").strip()
+    matches = [d for d in APP.fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
+    if len(matches) != 1:
+        await flash_danger(f"No deployment {name} on {host}.")
+        return _see_other("/fleet")
+    reason = remove_refusal(matches[0])
+    if reason:
+        await flash_danger(reason)
+        return _see_other("/fleet")
+    try:
+        await APP.backend.delete_deployment(matches[0])
+    except BackendUnavailableError as e:
+        await flash_danger(str(e))
+        return _see_other("/fleet")
+    await flash_success(f"Removed the route for {matches[0].name} at {matches[0].api_base}.")
     return _see_other("/fleet")
 
 

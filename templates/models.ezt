@@ -159,6 +159,7 @@
                 <th>Config request</th>
                 <th>Skew</th>
                 <th>Label</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -229,6 +230,30 @@
                   </form>
                   [if-any models.deployments.label_at]
                   <div class="text-muted small">[models.deployments.label_at]</div>
+                  [end]
+                  [end]
+                </td>
+                <td class="text-nowrap">
+                  [if-any models.deployments.show_add]
+                  [if-any models.deployments.add_enabled]
+                  <form method="post" action="/do-add-deployment" class="d-inline">
+                    <input type="hidden" name="name" value="[models.deployments.name]">
+                    <input type="hidden" name="host" value="[models.deployments.host]">
+                    <button type="submit" class="btn btn-sm btn-primary">Add</button>
+                  </form>
+                  [else]
+                  <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="vLLM is not serving yet">Add</button>
+                  [end]
+                  [end]
+                  [if-any models.deployments.show_remove]
+                  [if-any models.deployments.remove_enabled]
+                  <form method="post" action="/do-remove-deployment" class="d-inline">
+                    <input type="hidden" name="name" value="[models.deployments.name]">
+                    <input type="hidden" name="host" value="[models.deployments.host]">
+                    <button type="submit" class="btn btn-sm btn-outline-danger ms-1">Remove</button>
+                  </form>
+                  [else]
+                  <button type="button" class="btn btn-sm btn-outline-secondary ms-1" disabled title="Remove only when vLLM is unhealthy or stalled">Remove</button>
                   [end]
                   [end]
                 </td>
