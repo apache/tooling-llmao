@@ -183,6 +183,17 @@ class CreatedKey:
 
 class Backend(Protocol):
     async def team_info(self, project: str) -> TeamInfo | None: ...
+    async def set_tier_entitlement(
+        self,
+        tier: str,
+        *,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        token_cap: int | None = None,
+        token_window_days: int | None = None,
+    ) -> dict[str, Any]: ...
+    async def tier_entitlement(self, tier: str) -> dict[str, Any]: ...
     async def update_team_entitlement(
         self,
         project: str,
@@ -413,6 +424,92 @@ class LiteLLMBackend:
             },
             team_id=str(team_id),
         )
+
+    # Runtime tier overrides live on a reserved LiteLLM team rather than in
+    # llmao's own state: llmao has no database, and the only thing worse than
+    # a missing override is one that disagrees between two instances.
+    _TIER_STORE_TEAM = "llmao-entitlement-defaults"
+
+    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
+        """A tier's effective limits: config, with any admin override on top.
+
+        Config is the floor and the fallback. An override that has never been
+        set leaves config showing through, so a fresh deployment has working
+        limits before anyone opens an admin page.
+        """
+        effective = dict(resolve_entitlement(self._cfg, tier))
+        tier_cfg = getattr(getattr(self._cfg, "entitlements", None), tier, None)
+        for field in ("token_cap", "token_window_days"):
+            val = getattr(tier_cfg, field, None)
+            if val is not None:
+                effective[field] = val
+
+        try:
+            info = await self.team_info(self._TIER_STORE_TEAM)
+        except BackendUnavailableError:
+            return effective
+        if info is None:
+            return effective
+        stored = (getattr(info, "metadata", None) or {}).get(tier)
+        if isinstance(stored, dict):
+            effective.update({k: v for k, v in stored.items() if v is not None})
+        return effective
+
+    async def set_tier_entitlement(
+        self,
+        tier: str,
+        *,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        token_cap: int | None = None,
+        token_window_days: int | None = None,
+    ) -> dict[str, Any]:
+        """Change a tier's ceilings for everyone on it. RAI admin only.
+
+        The lever for "the free tier is too generous" or "nobody can get
+        anything done": one change, every key on that tier, no redeploy.
+
+        ONE ASYMMETRY WORTH SURFACING IN THE UI. The token cap is re-read on
+        every check, so a change takes effect immediately. rpm, tpm and
+        max_parallel_requests live on the LiteLLM key object and existing keys
+        keep what they were minted with -- an admin who lowers rpm and sees no
+        change would reasonably conclude the control is broken. A sweep
+        calling update_key_entitlement across a tier would fix that and is not
+        built yet.
+        """
+        tier = (tier or "").strip()
+        if not tier:
+            raise BackendUnavailableError("set_tier_entitlement requires a tier")
+
+        changes = {
+            k: v
+            for k, v in (
+                ("rpm_limit", rpm_limit),
+                ("tpm_limit", tpm_limit),
+                ("max_parallel_requests", max_parallel_requests),
+                ("token_cap", token_cap),
+                ("token_window_days", token_window_days),
+            )
+            if v is not None
+        }
+        if not changes:
+            raise BackendUnavailableError("set_tier_entitlement: nothing to change")
+        for field, val in changes.items():
+            if int(val) < 0:
+                raise BackendUnavailableError(f"{field} must not be negative")
+
+        team = await self.ensure_team(self._TIER_STORE_TEAM)
+        meta = dict(getattr(team, "metadata", None) or {})
+        meta[tier] = {**(meta.get(tier) or {}), **changes}
+
+        resp = await self._request(
+            "POST", "team/update",
+            json={"team_id": team.team_id, "metadata": meta},
+        )
+        self._raise_http(resp)
+        _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
+        return await self.tier_entitlement(tier)
 
     async def update_team_entitlement(
         self,

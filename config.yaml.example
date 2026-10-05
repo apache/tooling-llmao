@@ -61,19 +61,30 @@ entitlements:
     rpm_limit: 30
     tpm_limit: 30000
     max_parallel_requests: 2
-    # Rolling window rather than a calendar reset. A Monday reset punishes
-    # whoever exhausts their share on Monday morning and barely touches
-    # whoever does it on Sunday night, and lets anyone take two allowances in
-    # twelve hours by straddling midnight. A rolling window has no boundary
-    # to sit either side of.
-    token_budget: 1000000
-    token_budget_window: 7d
+    # Rolling allowance, kept as daily buckets: sum the last N days, drop the
+    # rest. No calendar reset, so there is no boundary to straddle and no
+    # instant where everyone's counter drops at once.
+    #
+    # Not a daily entitlement. One allowance, and the daily shape is emergent
+    # -- a committer can spend the week's share in an hour and then wait,
+    # which is how people actually work.
+    #
+    # These are the two values an RAI admin is most likely to move. They can
+    # be changed at runtime from the admin page; config is the starting value
+    # and the fallback when nothing is stored.
+    token_cap: 1000000
+    token_window_days: 7
 
   # Project keys draw on the project's allocation. PMC distributes.
   project:
     rpm_limit: 120
     tpm_limit: 120000
     max_parallel_requests: 8
+
+  # Overrides an RAI admin has set at runtime live in LiteLLM team metadata
+  # for project tiers, and in llmao's own store for the free tier -- not here.
+  # config.yaml is the default and the fallback, so a fresh deployment has
+  # working limits before anyone touches the admin page.
 
   # Service keys for pipelines. Higher throughput, and the tier most likely
   # to retry in a loop -- which is exactly why it still has a ceiling.
