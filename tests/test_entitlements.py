@@ -39,8 +39,11 @@ def _cfg(**over):
         "entitlements": {
             "default": {"rpm_limit": 60, "tpm_limit": 60000, "max_parallel_requests": 4},
             "free_tier": {
-                "rpm_limit": 30, "tpm_limit": 30000, "max_parallel_requests": 2,
-                "token_cap": 1000000, "token_window_days": 7,
+                "rpm_limit": 30,
+                "tpm_limit": 30000,
+                "max_parallel_requests": 2,
+                "token_cap": 1000000,
+                "token_window_days": 7,
             },
             "project": {"rpm_limit": 120, "tpm_limit": 120000, "max_parallel_requests": 8},
             "service": {"rpm_limit": 240, "tpm_limit": 300000, "max_parallel_requests": 8},
@@ -53,6 +56,7 @@ def _cfg(**over):
 # ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "tier,expected",
@@ -75,15 +79,17 @@ def test_tier_inherits_what_it_does_not_name():
     cfg = _cfg()
     cfg.entitlements.sparse = edict({"rpm_limit": 999})
     assert resolve_entitlement(cfg, "sparse") == {
-        "rpm_limit": 999,          # named
-        "tpm_limit": 60000,        # inherited
+        "rpm_limit": 999,  # named
+        "tpm_limit": 60000,  # inherited
         "max_parallel_requests": 4,
     }
 
 
 def test_unknown_tier_falls_back_to_default():
     assert resolve_entitlement(_cfg(), "no-such-tier") == {
-        "rpm_limit": 60, "tpm_limit": 60000, "max_parallel_requests": 4,
+        "rpm_limit": 60,
+        "tpm_limit": 60000,
+        "max_parallel_requests": 4,
     }
 
 
@@ -201,7 +207,7 @@ def test_spend_records_an_overshoot_rather_than_refusing():
     a = RollingAllowance(cap=1000)
     a.spend(5000, DAY0)
     assert a.used(DAY0) == 5000
-    assert a.remaining(DAY0) == 0        # clamped, never negative
+    assert a.remaining(DAY0) == 0  # clamped, never negative
     assert a.exhausted(DAY0)
 
 

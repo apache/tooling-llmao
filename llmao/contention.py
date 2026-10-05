@@ -144,8 +144,7 @@ class ContentionSampler:
             root = base.rstrip("/")
             if root.endswith("/v1"):
                 root = root[: -len("/v1")]
-            out.append((getattr(dep, "model_name", getattr(dep, "name", "?")),
-                        f"{root}/metrics"))
+            out.append((getattr(dep, "model_name", getattr(dep, "name", "?")), f"{root}/metrics"))
         return out
 
     async def sample_once(self, client: httpx.AsyncClient) -> list[Sample]:
@@ -157,8 +156,7 @@ class ContentionSampler:
             except Exception as e:
                 if box not in self._down:
                     self._down.add(box)
-                    _LOGGER.warning("contention: %s unreachable (%s)", box,
-                                    type(e).__name__)
+                    _LOGGER.warning("contention: %s unreachable (%s)", box, type(e).__name__)
                 continue
             self._down.discard(box)
             samples.append(parse_metrics(box, resp.text))

@@ -27,18 +27,15 @@ LiteLLM opaque team_id is internal to LiteLLMBackend only.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
-import datetime as _dt
-import time
-
 import httpx
 
-from llmao.token_window import RollingAllowance
 from llmao.fleet import ExtraLiteLLM, snapshot_for_status
 from llmao.model_status import (
     HEALTHY,
@@ -49,6 +46,7 @@ from llmao.model_status import (
     DeploymentSnapshot,
     deployment_status,
 )
+from llmao.token_window import RollingAllowance
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -521,7 +519,8 @@ class LiteLLMBackend:
         meta[tier] = {**(meta.get(tier) or {}), **changes}
 
         resp = await self._request(
-            "POST", "team/update",
+            "POST",
+            "team/update",
             json={"team_id": team.team_id, "metadata": meta},
         )
         self._raise_http(resp)
@@ -803,7 +802,9 @@ class LiteLLMBackend:
 
         start = _dt.datetime.now(_dt.UTC).date() - _dt.timedelta(days=6)
         resp = await self._request(
-            "GET", "spend/logs", params={"start_date": start.isoformat()},
+            "GET",
+            "spend/logs",
+            params={"start_date": start.isoformat()},
         )
         self._raise_http(resp)
         raw = resp.json()
@@ -898,16 +899,13 @@ class LiteLLMBackend:
             # No cap configured for this tier: an allowance with no ceiling
             # is not meaningful, so say so rather than returning one that
             # silently never exhausts.
-            raise BackendUnavailableError(
-                f"tier {tier} has no token_cap; nothing to meter against"
-            )
+            raise BackendUnavailableError(f"tier {tier} has no token_cap; nothing to meter against")
 
         cached = self._allowance_cache.get(user)
         if cached is not None:
             at, rows = cached
             if (time.monotonic() - at) < self._ALLOWANCE_TTL_S:
-                return RollingAllowance(cap=cap, window_days=window,
-                                        buckets=dict(rows))
+                return RollingAllowance(cap=cap, window_days=window, buckets=dict(rows))
 
         buckets = await self._spend_buckets(user, window)
         self._allowance_cache[user] = (time.monotonic(), dict(buckets))
@@ -921,10 +919,10 @@ class LiteLLMBackend:
         is cheaper per token than decode, which is why the DOLLAR figures are
         weighted and this one is not: an allowance is a quota, not a bill.
         """
-        start = (_dt.datetime.now(_dt.UTC).date()
-                 - _dt.timedelta(days=window_days - 1))
+        start = _dt.datetime.now(_dt.UTC).date() - _dt.timedelta(days=window_days - 1)
         resp = await self._request(
-            "GET", "spend/logs",
+            "GET",
+            "spend/logs",
             params={"user_id": user, "start_date": start.isoformat()},
         )
         self._raise_http(resp)

@@ -24,12 +24,7 @@ numbers look plausible, and nobody can tell a dropped row from a quiet week.
 import asyncio
 import types
 
-import pytest
-from easydict import EasyDict as edict  # noqa: N813
-
 from llmao.litellm_client import LiteLLMBackend
-
-pytestmark = pytest.mark.unit
 
 
 def _backend(raw_rows):
@@ -45,7 +40,9 @@ def _backend(raw_rows):
 
     async def fake_request(method, path, **kw):
         return types.SimpleNamespace(
-            status_code=200, content=b"x", json=lambda: raw_rows,
+            status_code=200,
+            content=b"x",
+            json=lambda: raw_rows,
         )
 
     b._request = fake_request
@@ -59,22 +56,58 @@ def _run(coro):
 
 LOG = [
     # one person, one model, two calls -- must fold to a single row
-    {"user": "akm", "model": "gemma4-26b", "api_key": "tok1", "spend": 0.0,
-     "total_tokens": 100, "metadata": {"project": "tooling"}},
-    {"user": "akm", "model": "gemma4-26b", "api_key": "tok1", "spend": 0.0,
-     "total_tokens": 50, "metadata": {"project": "tooling"}},
+    {
+        "user": "akm",
+        "model": "gemma4-26b",
+        "api_key": "tok1",
+        "spend": 0.0,
+        "total_tokens": 100,
+        "metadata": {"project": "tooling"},
+    },
+    {
+        "user": "akm",
+        "model": "gemma4-26b",
+        "api_key": "tok1",
+        "spend": 0.0,
+        "total_tokens": 50,
+        "metadata": {"project": "tooling"},
+    },
     # same person, different key -- must NOT fold together
-    {"user": "akm", "model": "gemma4-26b", "api_key": "tok2", "spend": 0.0,
-     "total_tokens": 7, "metadata": {"project": "tooling"}},
+    {
+        "user": "akm",
+        "model": "gemma4-26b",
+        "api_key": "tok2",
+        "spend": 0.0,
+        "total_tokens": 7,
+        "metadata": {"project": "tooling"},
+    },
     # different project
-    {"user": "akm", "model": "gemma4-26b", "api_key": "tok3", "spend": 0.0,
-     "total_tokens": 300, "metadata": {"project": "mahout"}},
+    {
+        "user": "akm",
+        "model": "gemma4-26b",
+        "api_key": "tok3",
+        "spend": 0.0,
+        "total_tokens": 300,
+        "metadata": {"project": "mahout"},
+    },
     # someone else
-    {"user": "gstein", "model": "gemma4-26b", "api_key": "tok4", "spend": 0.0,
-     "total_tokens": 900, "metadata": {"project": "tooling"}},
+    {
+        "user": "gstein",
+        "model": "gemma4-26b",
+        "api_key": "tok4",
+        "spend": 0.0,
+        "total_tokens": 900,
+        "metadata": {"project": "tooling"},
+    },
     # a commercial row: real money, no cost_basis tag
-    {"user": "akm", "model": "claude-opus-5", "api_key": "tok1", "spend": 1.25,
-     "total_tokens": 40, "metadata": {"project": "tooling"}},
+    {
+        "user": "akm",
+        "model": "claude-opus-5",
+        "api_key": "tok1",
+        "spend": 1.25,
+        "total_tokens": 40,
+        "metadata": {"project": "tooling"},
+    },
 ]
 
 
@@ -90,11 +123,21 @@ def test_rows_fold_by_user_project_model_and_key():
 
 def test_prompt_and_completion_are_summed_when_total_is_absent():
     """LiteLLM does not always send total_tokens."""
-    rows = _run(_backend([
-        {"user": "akm", "model": "gemma4-26b", "api_key": "t", "spend": 0.0,
-         "prompt_tokens": 40000, "completion_tokens": 11000,
-         "metadata": {"project": "tooling"}},
-    ])._spend_rows())
+    rows = _run(
+        _backend(
+            [
+                {
+                    "user": "akm",
+                    "model": "gemma4-26b",
+                    "api_key": "t",
+                    "spend": 0.0,
+                    "prompt_tokens": 40000,
+                    "completion_tokens": 11000,
+                    "metadata": {"project": "tooling"},
+                },
+            ]
+        )._spend_rows()
+    )
     assert rows[0]["total_tokens"] == 51000
 
 
@@ -129,8 +172,7 @@ def test_cost_basis_distinguishes_capacity_from_money():
     commercial = [r for r in rows if r["model"] == "claude-opus-5"]
     assert all(r["cost_basis"] == "derived_capacity" for r in selfhosted)
     assert all(r["cost_basis"] is None for r in commercial)
-    real_money = sum(r["total_cost_usd"] for r in rows
-                     if r["cost_basis"] != "derived_capacity")
+    real_money = sum(r["total_cost_usd"] for r in rows if r["cost_basis"] != "derived_capacity")
     assert real_money == 1.25
 
 
@@ -140,10 +182,13 @@ def test_a_row_llmao_did_not_issue_is_kept():
     Dropping it would make the project figures add up while the fleet total
     quietly disagreed, which is the harder bug to find.
     """
-    rows = _run(_backend([
-        {"model": "gemma4-26b", "api_key": "stray", "spend": 0.0,
-         "total_tokens": 500},
-    ])._spend_rows())
+    rows = _run(
+        _backend(
+            [
+                {"model": "gemma4-26b", "api_key": "stray", "spend": 0.0, "total_tokens": 500},
+            ]
+        )._spend_rows()
+    )
     assert len(rows) == 1
     assert rows[0]["total_tokens"] == 500
     assert rows[0]["project"] is None
@@ -170,11 +215,19 @@ def test_second_read_is_cached():
 
 def test_malformed_rows_do_not_abort_the_fold():
     """One bad row must not cost the whole page."""
-    rows = _run(_backend([
-        {"user": "akm", "model": "m", "api_key": "t", "total_tokens": "not a number",
-         "metadata": {"project": "p"}},
-        {"user": "akm", "model": "m2", "api_key": "t2", "total_tokens": 10,
-         "metadata": {"project": "p"}},
-        "a string where a dict should be",
-    ])._spend_rows())
+    rows = _run(
+        _backend(
+            [
+                {
+                    "user": "akm",
+                    "model": "m",
+                    "api_key": "t",
+                    "total_tokens": "not a number",
+                    "metadata": {"project": "p"},
+                },
+                {"user": "akm", "model": "m2", "api_key": "t2", "total_tokens": 10, "metadata": {"project": "p"}},
+                "a string where a dict should be",
+            ]
+        )._spend_rows()
+    )
     assert any(r["total_tokens"] == 10 for r in rows)

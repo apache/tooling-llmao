@@ -319,13 +319,15 @@ class Seam:
             except BackendUnavailableError:
                 pass
 
-            out.append({
-                "name": project,
-                "tokens_h": _tokens_short(tokens),
-                "cap_h": _tokens_short(cap) if cap else "—",
-                "spend_h": f"${spend:,.2f}",
-                "budget_h": f"${budget:,.0f}" if budget else "—",
-            })
+            out.append(
+                {
+                    "name": project,
+                    "tokens_h": _tokens_short(tokens),
+                    "cap_h": _tokens_short(cap) if cap else "—",
+                    "spend_h": f"${spend:,.2f}",
+                    "budget_h": f"${budget:,.0f}" if budget else "—",
+                }
+            )
         return out
 
     @require_admin

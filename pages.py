@@ -207,8 +207,7 @@ async def basic_info(title: str = "llmao") -> edict:
     return basic
 
 
-def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys",
-              used_by_token: dict[str, int] | None = None) -> list:
+def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: dict[str, int] | None = None) -> list:
     """Template rows for a key table.
 
     `used_by_token` carries this week's draw per key. Absent, the column shows
@@ -231,11 +230,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys",
                     "created_by": k.created_by or "—",
                     "spend": f"${k.spend:.6f}",
                     "max_budget": budget_s,
-                    "used_h": (
-                        _tokens_h(used_by_token[k.token_id])
-                        if k.token_id in used_by_token
-                        else "—"
-                    ),
+                    "used_h": (_tokens_h(used_by_token[k.token_id]) if k.token_id in used_by_token else "—"),
                     "last_used": k.last_used or "—",
                     "created_at": k.created_at or "—",
                     "blocked": k.blocked,
@@ -738,12 +733,11 @@ async def keys_list(result):
     ident = await current_identity(APP.cfg)
     keys = await APP.seam.list_my_keys(ident)
     result.keys = _key_rows(
-        keys, after_path="/keys",
+        keys,
+        after_path="/keys",
         used_by_token=await APP.seam.my_key_usage(ident),
     )
-    result.has_project_keys = ezt.boolean(
-        any(getattr(k, "project", None) for k in keys)
-    )
+    result.has_project_keys = ezt.boolean(any(getattr(k, "project", None) for k in keys))
 
     # A page that fails because the allowance could not be read is worse than
     # one that renders without it: the keys are what the person came for.
@@ -820,6 +814,7 @@ def _when_h(day) -> str:
     a dead end into a plan.
     """
     import datetime as dt
+
     today = dt.datetime.now(dt.UTC).date()
     delta = (day - today).days
     if delta <= 0:
@@ -836,8 +831,6 @@ def _when_h(day) -> str:
 async def usage_moved():
     """Folded into My Keys. Redirect rather than 404 a bookmark."""
     return quart.redirect("/keys")
-
-
 
 
 @APP.get("/admin")

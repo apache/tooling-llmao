@@ -75,11 +75,7 @@ class RollingAllowance:
 
     def _live(self, now: _dt.datetime | None = None) -> dict[str, int]:
         first = _today(now) - _dt.timedelta(days=self.window_days - 1)
-        return {
-            day: n
-            for day, n in self.buckets.items()
-            if _dt.date.fromisoformat(day) >= first
-        }
+        return {day: n for day, n in self.buckets.items() if _dt.date.fromisoformat(day) >= first}
 
     def used(self, now: _dt.datetime | None = None) -> int:
         return sum(self._live(now).values())
@@ -118,17 +114,14 @@ class RollingAllowance:
         return sorted(out)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"cap": self.cap, "window_days": self.window_days,
-                "buckets": dict(self.buckets)}
+        return {"cap": self.cap, "window_days": self.window_days, "buckets": dict(self.buckets)}
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any] | None, *, cap: int,
-                  window_days: int = 7) -> RollingAllowance:
+    def from_dict(cls, raw: dict[str, Any] | None, *, cap: int, window_days: int = 7) -> RollingAllowance:
         """Rehydrate, taking cap and window from CONFIG rather than storage.
 
         A stored cap would go stale the moment an admin changed the tier, and
         would quietly keep granting the old allowance.
         """
         raw = raw or {}
-        return cls(cap=cap, window_days=window_days,
-                   buckets=dict(raw.get("buckets") or {}))
+        return cls(cap=cap, window_days=window_days, buckets=dict(raw.get("buckets") or {}))
