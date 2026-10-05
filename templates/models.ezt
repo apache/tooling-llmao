@@ -8,6 +8,22 @@
     the <code>model</code> parameter. License and hosting are in Details.
   </p>
 
+  [if-any attention]
+  <div class="alert alert-warning py-2 small">
+    <strong>Needs attention</strong>
+    <ul class="mb-0 mt-1 ps-3">
+      [for attention]
+      <li>
+        [attention.what]
+        [if-any attention.detail]
+        <span class="text-muted">— [attention.detail]</span>
+        [end]
+      </li>
+      [end]
+    </ul>
+  </div>
+  [end]
+
   [if-any models]
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle">

@@ -31,7 +31,12 @@ import ezt
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment, VllmServer
-from llmao.model_status import AVAILABLE, DEGRADED, UNAVAILABLE
+from llmao.model_status import (
+    AVAILABLE,
+    DEGRADED,
+    SKEW_VLLM_UP_LITELLM_DOWN,
+    UNAVAILABLE,
+)
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 NOW = 10_000.0
@@ -177,6 +182,30 @@ def test_commercial_is_external_and_has_no_concurrency():
     assert [c.label for c in rows[0].chips] == ["Text"]
 
 
+def test_attention_items_lists_only_actionable_items():
+    pages = _app()
+    healthy = _server("gemma")  # not actionable on its own
+    down = _server("qwen", host="10.0.0.2", port=8002, ok=False)
+    fleet = _fleet(healthy, down)
+    next(d for d in fleet.deployments if d.vllm is down).skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
+    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": NOW - 100, "last_seen": NOW - 5, "count": 3}
+
+    kinds = [i.kind for i in pages.attention_items(fleet, now=NOW)]
+    # Only the actionable kinds appear; the healthy box does not.
+    assert "unknown" in kinds
+    assert "unhealthy" in kinds
+    assert "skew" in kinds
+    assert "healthy" not in kinds
+
+    items = pages.attention_items(fleet, now=NOW)
+    unknown = next(i for i in items if i.kind == "unknown")
+    assert "192.0.2.7" in unknown.what
+    # The strip renders in the template.
+    out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)[0]], attention=items)
+    assert "Needs attention" in out
+    assert "192.0.2.7" in out
+
+
 def test_models_template_renders_the_catalog_row():
     pages = _app()
     fleet = _fleet(_server("gemma"))
@@ -225,7 +254,7 @@ def test_non_admin_rows_have_no_admin_fields():
     assert not rows[0].keys() & {"deployments", "replica_summary"}
 
 
-def _render(rows) -> str:
+def _render(rows, attention=None) -> str:
     data = edict(
         title="Models",
         is_site_admin=ezt.boolean(False),
@@ -240,6 +269,7 @@ def _render(rows) -> str:
         repo="https://github.com/apache/tooling-llmao",
         commit="deadbeef",
         models=rows,
+        attention=attention or [],
     )
     t = ezt.Template(str(THIS_DIR / "templates" / "models.ezt"))
     buf = io.StringIO()

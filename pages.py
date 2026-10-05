@@ -278,6 +278,47 @@ def _replica_summary(model_name: str, fleet, *, now: float) -> str:
     return " / ".join(parts)
 
 
+def attention_items(fleet, *, now: float) -> list:
+    """The admin strip: only actionable items, in the order they were listed
+    in the design (unknown boxes, Stalled, Unhealthy, true skew)."""
+    items: list[edict] = []
+    for host, rec in sorted(
+        fleet.unknown_config_fetches.items(),
+        key=lambda item: item[1]["last_seen"],
+        reverse=True,
+    ):
+        items.append(
+            edict(
+                kind="unknown",
+                what=f"Fleet key presented from {host} (not in fleet.hosts)",
+                detail=f"seen {_ago(rec['last_seen'], now)} · {int(rec['count'])} requests",
+            )
+        )
+    cfg = fleet.cfg.fleet
+    for dep in fleet.deployments:
+        view = deployment_status(snapshot_for_status(dep, cfg, now), cfg, now)
+        if view.lifecycle in (STALLED, UNHEALTHY):
+            items.append(
+                edict(
+                    kind=view.lifecycle,
+                    what=f"{dep.name} is {view.lifecycle.replace('_', ' ')}",
+                    detail=dep.model_name,
+                )
+            )
+        for badge in dep.skew:
+            items.append(edict(kind="skew", what=SKEW_PHRASE.get(badge, badge), detail=dep.name))
+    for extra in fleet.extra_litellm:
+        for badge in extra.skew:
+            items.append(
+                edict(
+                    kind="skew",
+                    what=SKEW_PHRASE.get(badge, badge),
+                    detail=f"{extra.host}:{extra.port} {extra.model_name}",
+                )
+            )
+    return items
+
+
 def model_catalog_rows(fleet, catalog: list, *, now: float | None = None, admin: bool = False) -> list:
     """One Models-page row per catalog entry, with the user-facing roll-up.
 
@@ -331,6 +372,7 @@ async def models_page(result):
     result.reveal_supply = admin
     catalog = ux_models(cfg=APP.cfg, reveal_supply=admin)
     result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
+    result.attention = attention_items(APP.fleet, now=time.time()) if admin else []
     return result
 
 
