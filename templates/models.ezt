@@ -5,8 +5,7 @@
   <h1 class="h3 mb-3">Models</h1>
   <p class="text-muted small">
     Models you can call with a personal key. Use the <strong>ID</strong> as
-    the <code>model</code> parameter. Context, license, and hosting are in
-    Details.
+    the <code>model</code> parameter. License and hosting are in Details.
   </p>
 
   [if-any models]
@@ -14,9 +13,8 @@
     <table class="table table-sm table-hover align-middle">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>ID</th>
-          <th>Available</th>
+          <th>Model</th>
+          <th>Status</th>
           <th></th>
         </tr>
       </thead>
@@ -24,20 +22,36 @@
         [for models]
         <tr[if-any models.unavailable] class="table-secondary text-muted"[end]>
           <td>
-            [models.display_name]
-            [if-any models.modality]
-            <span class="badge text-bg-secondary ms-1">[models.modality]</span>
+            <div>
+              [models.display_name]
+              <span class="font-monospace text-muted small ms-1">[models.model_name]</span>
+            </div>
+            <div class="small text-muted mt-1">
+              [for models.chips]
+              <span class="badge text-bg-secondary" title="[models.chips.title]">[models.chips.label]</span>
+              [end]
+              [if-any models.supports_thinking]
+              <span class="badge text-bg-info" title="Reasons before answering">Thinking</span>
+              [end]
+              <span class="ms-1">[models.context_window] context</span>
+              <span class="ms-1">[models.license]</span>
+            </div>
+            [if-any models.privacy]
+            <div class="small mt-1">[models.privacy]</div>
             [end]
-            [if-any models.supports_thinking]
-            <span class="badge text-bg-info ms-1">thinking</span>
+            [if-any models.concurrency]
+            <div class="small text-muted">[models.concurrency]</div>
             [end]
           </td>
-          <td class="font-monospace small">[models.model_name]</td>
           <td>
             [if-any models.available]
-            <span class="badge text-bg-success">Yes</span>
+            [if-any models.degraded]
+            <span class="badge text-bg-warning">[models.rollup_label]</span>
             [else]
-            <span class="badge text-bg-secondary">No</span>
+            <span class="badge text-bg-success">[models.rollup_label]</span>
+            [end]
+            [else]
+            <span class="badge text-bg-secondary">[models.rollup_label]</span>
             [end]
           </td>
           <td class="text-end text-nowrap">

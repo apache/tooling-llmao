@@ -36,7 +36,19 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal
 from llmao.litellm_client import BackendUnavailableError, KeyInfo
-from llmao.model_status import AWAITING, HEALTHY, LOADING, SKEW_PHRASE, STALLED, UNHEALTHY
+from llmao.model_status import (
+    AVAILABLE,
+    AWAITING,
+    DEGRADED,
+    EXTERNAL,
+    HEALTHY,
+    LOADING,
+    PRIVATE,
+    SKEW_PHRASE,
+    STALLED,
+    UNAVAILABLE,
+    UNHEALTHY,
+)
 from llmao.models import model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
@@ -223,6 +235,65 @@ async def home_page(result):
     return result
 
 
+_ROLLUP_LABEL = {
+    AVAILABLE: "Available",
+    DEGRADED: "Degraded",
+    UNAVAILABLE: "Unavailable",
+}
+
+_PRIVACY_TEXT = {
+    PRIVATE: "Prompts stay on infrastructure we control.",
+    EXTERNAL: "Prompts are sent to an external provider.",
+}
+
+
+def _modality_chips(modality: str) -> list[edict]:
+    """Labeled capability chips. models.yaml stores 'text' or 'text+vision'."""
+    chips = []
+    parts = {p.strip().lower() for p in (modality or "").replace("+", " ").split() if p.strip()}
+    if "text" in parts:
+        chips.append(edict(label="Text", title="Accepts text"))
+    if "vision" in parts:
+        chips.append(edict(label="Vision", title="Accepts images"))
+    return chips
+
+
+def model_catalog_rows(fleet, catalog: list, *, now: float | None = None) -> list:
+    """One Models-page row per catalog entry, with the user-facing roll-up.
+
+    Context and concurrency come from the roll-up (minimum context across
+    healthy deployments; concurrency summed over healthy self-hosted ones),
+    so a catalog figure cannot overstate a degraded replica. Kept out of
+    models_page so a test can render models.ezt without a request.
+    """
+    rows = []
+    for m in catalog:
+        row = edict(m)
+        status = fleet.model_rollup(row.model_name, now=now)
+        rollup = status.rollup
+        self_hosted = bool(m.get("self_hosted"))
+        in_service = model_available_for(None, m) and model_in_service(rollup)
+        if self_hosted:
+            in_service = in_service and fleet.model_in_litellm(row.model_name)
+        row.rollup = rollup
+        row.rollup_label = _ROLLUP_LABEL.get(rollup, rollup)
+        row.available = ezt.boolean(in_service)
+        row.degraded = ezt.boolean(rollup == DEGRADED and in_service)
+        row.unavailable = ezt.boolean(not in_service)
+        row.context_window = f"{status.context_window:,}" if status.context_window else "—"
+        if status.concurrency:
+            row.concurrency = f"Handles up to {status.concurrency} full-context requests at once"
+        else:
+            row.concurrency = ""
+        privacy = status.privacy
+        row.private = ezt.boolean(privacy == PRIVATE)
+        row.privacy = _PRIVACY_TEXT.get(privacy, "")
+        row.chips = _modality_chips(m.get("modality") or "")
+        rows.append(row)
+    rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
+    return rows
+
+
 @APP.get("/models")
 @asfquart.auth.require
 @APP.use_template(TEMPLATES / "models.ezt")
@@ -230,20 +301,8 @@ async def home_page(result):
 async def models_page(result):
     """Gateway model inventory (public fields; supply path for site admins)."""
     result.reveal_supply = bool(result.is_site_admin)
-    fleet = APP.fleet
-    rows = []
-    for m in ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply):
-        row = edict(m)
-        row.health = fleet.model_rollup(row.model_name).rollup
-        self_hosted = bool(m.get("self_hosted"))
-        avail = model_available_for(None, m) and model_in_service(row.health)
-        if self_hosted:
-            avail = avail and fleet.model_in_litellm(row.model_name)
-        row.available = ezt.boolean(avail)
-        row.unavailable = ezt.boolean(not avail)
-        rows.append(row)
-    rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
-    result.models = rows
+    catalog = ux_models(cfg=APP.cfg, reveal_supply=result.reveal_supply)
+    result.models = model_catalog_rows(APP.fleet, catalog)
     return result
 
 
