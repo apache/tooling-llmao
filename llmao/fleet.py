@@ -674,11 +674,13 @@ class Fleet:
         host = normalize_peer_ip(host)
         label = self.admin_labels.get(host)
         at = self.admin_label_at.get(host) if label is not None else None
-        return edict({
-            "label": label or "",
-            "display": (label or "").replace("_", " "),
-            "at": _ago(at),
-        })
+        return edict(
+            {
+                "label": label or "",
+                "display": (label or "").replace("_", " "),
+                "at": _ago(at),
+            }
+        )
 
     def config_fetch_display(self, host: str) -> str:
         """Human-readable age of the last config fetch for a host, "—" if never."""

@@ -188,7 +188,11 @@ def test_attention_items_lists_only_actionable_items():
     down = _server("qwen", host="10.0.0.2", port=8002, ok=False)
     fleet = _fleet(healthy, down)
     next(d for d in fleet.deployments if d.vllm is down).skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
-    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": time.time() - 100, "last_seen": time.time() - 5, "count": 3}
+    fleet.unknown_config_fetches["192.0.2.7"] = {
+        "first_seen": time.time() - 100,
+        "last_seen": time.time() - 5,
+        "count": 3,
+    }
 
     kinds = [i.kind for i in pages.attention_items(fleet)]
     # Only the actionable kinds appear; the healthy box does not.
@@ -319,7 +323,11 @@ def test_admin_drill_down_renders_deployments_and_label_controls():
 def test_attention_strip_renders_the_label_form_for_unknown_boxes():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": time.time() - 100, "last_seen": time.time() - 5, "count": 3}
+    fleet.unknown_config_fetches["192.0.2.7"] = {
+        "first_seen": time.time() - 100,
+        "last_seen": time.time() - 5,
+        "count": 3,
+    }
     fleet.set_admin_label("192.0.2.7", "approved", now=time.time() - 5)
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, attention=pages.attention_items(fleet), admin=True)

@@ -401,9 +401,7 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         row.privacy = _PRIVACY_TEXT.get(privacy, "")
         row.chips = _modality_chips(m.get("modality") or "")
         if admin:
-            row.deployments = [
-                r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name
-            ]
+            row.deployments = [r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name]
             row.replica_summary = _replica_summary(row.model_name, fleet)
         rows.append(row)
     rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
