@@ -68,6 +68,7 @@ def create_app():
     from llmao.auth import make_token_handler
 
     # Fail-fast: models.yaml is required (same presumption as config.yaml).
+    from llmao.contention import ContentionSampler
     from llmao.fleet import Fleet, validate_fleet
     from llmao.litellm_client import LiteLLMBackend
 
@@ -84,6 +85,26 @@ def create_app():
     app.fleet = fleet
     app.add_runner(fleet.run_lifecycle, name="fleet-lifecycle")
     app.add_runner(backend.run_skew, name="litellm-skew")
+
+    # Sample queue depth on each box.
+    #
+    # The spend log records what RAN; it cannot record what waited. Queue
+    # depth is only visible while it is happening, so it has to be sampled or
+    # it is gone.
+    #
+    # That matters because the question the pilot exists to answer is whether
+    # free-tier and project work ever actually contend for a GPU. If nothing
+    # ever waits, the allowances are rationing a resource that is not scarce,
+    # and the honest conclusion is to stop rationing rather than to tune the
+    # numbers.
+    #
+    # Cheap: one HTTP GET per box per interval, one log line each.
+    interval = int(getattr(app.cfg, "contention_interval_s", 0) or 15)
+    if interval > 0:
+        app.add_runner(
+            ContentionSampler(fleet, interval_s=interval).run,
+            name="contention-sampler",
+        )
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
     app.seam = seam

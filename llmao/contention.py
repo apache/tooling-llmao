@@ -177,5 +177,7 @@ class ContentionSampler:
                 await asyncio.sleep(self._interval)
 
     def start(self) -> asyncio.Task:
+        """Standalone use. Under the app, pass `run` to add_runner instead --
+        it owns the task and cancels it on shutdown, which this does not."""
         self._task = asyncio.create_task(self.run(), name="contention-sampler")
         return self._task

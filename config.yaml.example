@@ -105,6 +105,18 @@ entitlements:
     max_parallel_requests: 8
 
 # uids that may view any project's activity (plus asfquart isRoot)
+# How often to sample each box's queue depth, in seconds. 0 turns it off.
+#
+# The spend log records what RAN and cannot record what WAITED -- queue depth
+# only exists while it is happening. Without this, the question of whether
+# free-tier and project work ever actually contend for a GPU is unanswerable
+# after the fact.
+#
+# One HTTP GET per self-hosted box per interval, one JSON line per box on the
+# llmao.contention logger. At three boxes and fifteen seconds that is about
+# 17,000 lines a day; jq answers every question we currently have of it.
+contention_interval_s: 15
+
 site_admins: []
 
 
