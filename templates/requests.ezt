@@ -41,13 +41,14 @@
           [if-any requests.is_capacity]
           <div class="col-auto">
             <input class="form-control form-control-sm" type="text"
-                   name="granted_token_cap" placeholder="adjust"
-                   aria-label="Adjusted allocation" style="width:9rem">
+                   name="granted_token_cap" placeholder="approve this instead"
+                   aria-label="Approve a different allocation" style="width:12rem">
           </div>
           [end]
           <div class="col">
             <input class="form-control form-control-sm" type="text"
-                   name="reason" placeholder="Reason (required to adjust or deny)"
+                   name="reason"
+                   placeholder="Why &mdash; required if you change the number or deny"
                    aria-label="Reason">
           </div>
           <div class="col-auto">

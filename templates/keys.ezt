@@ -119,7 +119,7 @@
       <div>
         [if-any my_requests.granted_h]
         <span class="font-monospace">[my_requests.granted_h]</span>
-        [if-any my_requests.is_approved]
+        [if-any my_requests.was_adjusted]
         <span class="small text-muted">&middot; asked [my_requests.wanted_h]</span>
         [end]
         [else]

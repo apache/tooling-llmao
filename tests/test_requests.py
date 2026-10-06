@@ -295,3 +295,27 @@ def test_granted_carries_everything_asked_for_plus_what_was_added():
     r = _key()
     r.decide(state=STATE_APPROVED, by="admin", granted={"token_cap": 500_000})
     assert set(r.granted) == {"purpose", "tier", "token_cap"}
+
+
+def test_an_approved_as_asked_request_has_granted_equal_to_wanted():
+    """So the UI can tell "approved as asked" from "approved, but".
+
+    A row reading "30M, asked 30M" is noise on every unmodified approval;
+    one reading "30M, asked 40M" is the thing the requester needs to see.
+    """
+    r = _capacity()
+    r.decide(state=STATE_APPROVED, by="admin")
+    assert r.granted == r.wanted
+
+
+def test_an_adjusted_request_differs_from_what_was_asked():
+    r = _capacity()
+    r.decide(
+        state=STATE_APPROVED,
+        by="admin",
+        granted={"token_cap": 30_000_000},
+        reason="fleet is heavily committed",
+    )
+    assert r.granted != r.wanted
+    assert r.granted["token_cap"] == 30_000_000
+    assert r.wanted["token_cap"] == 40_000_000

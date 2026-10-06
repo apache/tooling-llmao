@@ -970,6 +970,9 @@ def _request_rows(reqs) -> list:
                     "is_denied": ezt.boolean(r.state == "denied"),
                     "is_capacity": ezt.boolean(r.kind == "capacity"),
                     "actionable": ezt.boolean(r.is_actionable()),
+                    # Only worth showing the ask when it differs. "30M, asked
+                    # 30M" is noise on every approved-as-requested row.
+                    "was_adjusted": ezt.boolean(bool(r.granted) and r.granted != r.wanted),
                     "decision_reason": r.decision_reason,
                     "decided_by": r.decided_by,
                     # The question a requester actually has: how long have I

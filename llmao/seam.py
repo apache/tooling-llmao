@@ -26,6 +26,7 @@ The seam speaks **project** only; mapping to LiteLLM team_id is the backend's jo
 from __future__ import annotations
 
 import functools
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +42,28 @@ from .litellm_client import (
     KeyInfo,
     TeamInfo,
 )
+
+
+def _log_revocation(identity: Identity, key: KeyInfo, basis: str) -> None:
+    """Record who killed a key, and on what authority.
+
+    A key that stops working generates a question, and the answer is usually
+    "someone revoked it" -- which takes an investigation to establish and one
+    log line to answer. Service keys can be revoked by any PMC member, so the
+    person asking is often not the person who did it.
+    """
+    _LOGGER.info(
+        "key revoked: token=%s purpose=%r project=%s owner=%s by=%s (%s)",
+        (key.token_id or "")[:12],
+        key.purpose or "",
+        key.project or "-",
+        key.user or "-",
+        identity.uid,
+        basis,
+    )
+
+
+_LOGGER = logging.getLogger("llmao")
 
 
 class AuthzError(Exception):
@@ -614,14 +637,21 @@ class Seam:
             raise AuthzError("key not found or not visible")
         if match.user == identity.uid:
             await self._backend.delete_key(token_id)
+            _log_revocation(identity, match, "own key")
             return
         if match.is_automation:
             project = match.project
             if identity.is_site_admin:
                 await self._backend.delete_key(token_id)
+                _log_revocation(identity, match, "site admin")
                 return
+            # Any PMC member, not only whoever created it. A service key
+            # belongs to the project, and a credential the project owns and
+            # cannot stop -- because the creator is away at 2am -- is the
+            # failure mode worth avoiding.
             if project and identity.admin_of(project):
                 await self._backend.delete_key(token_id)
+                _log_revocation(identity, match, f"PMC member of {project}")
                 return
         raise AuthzError("not allowed to revoke this key")
 
