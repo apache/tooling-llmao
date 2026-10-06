@@ -131,7 +131,7 @@ async def vllm_config():
         claimed_host=request.headers.get(HOST_HEADER),
     )
     try:
-        payload = config_for_host(host, cfg=APP.cfg)
+        payload = config_for_host(host, cfg=APP.cfg, approved=APP.fleet.approved_models.get(host))
     except UnknownHostError:
         APP.fleet.note_unknown_config_fetch(host)
         raise HttpError(404, f"unknown fleet host: {host}") from None

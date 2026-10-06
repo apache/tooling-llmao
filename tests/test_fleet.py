@@ -84,6 +84,52 @@ def test_unknown_host():
         config_for_host("10.0.0.9", models=models, cfg=cfg)
 
 
+def _approvable(cfg, models):
+    fleet = Fleet(cfg=cfg, servers=[], models={m.model_name: m for m in models})
+    return fleet
+
+
+def test_approved_unknown_host_is_served():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
+    assert fleet.admin_label("198.51.100.8").label == "approved"
+    payload = config_for_host(
+        "198.51.100.8",
+        models=models,
+        cfg=cfg,
+        approved=fleet.approved_models["198.51.100.8"],
+    )
+    assert [s["name"] for s in payload["servers"]] == ["qwen3-8b", "gemma4-26b"]
+    assert [s["port"] for s in payload["servers"]] == [8001, 8002]
+    assert payload["servers"][0]["model"] == "Qwen/Qwen3-8B-FP8"
+
+
+def test_approve_rejects_bad_selections():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.models["claude"] = edict(model_name="claude", model_info=edict(self_hosted=False))
+    for names in ([], ["nope"], ["claude"]):
+        with pytest.raises(ValueError):
+            fleet.approve_models("198.51.100.8", names)
+    assert fleet.approved_models == {}
+    assert fleet.admin_labels == {}
+    with pytest.raises(ValueError, match="already in fleet"):
+        fleet.approve_models("127.0.0.1", ["gemma4-26b"])
+
+
+def test_approval_drops_when_the_host_joins_config():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b"])
+    cfg.fleet.hosts["198.51.100.8"] = [["qwen3-8b", 8001]]
+    fleet.note_unknown_config_fetch("203.0.113.9", now=40)
+    assert "198.51.100.8" not in fleet.approved_models
+
+
 def test_optional_name_two_copies():
     cfg = _cfg(
         {

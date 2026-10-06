@@ -33,6 +33,11 @@
           [end]
           <button type="submit" class="btn btn-sm btn-outline-secondary ms-1">Set</button>
         </form>
+        [if-any attention.approve]
+        <button type="button" class="btn btn-sm btn-outline-primary ms-1"
+                data-bs-toggle="modal" data-bs-target="#approveBoxModal"
+                data-host="[attention.host]" data-models="[attention.approved]">Approve</button>
+        [end]
         [end]
       </li>
       [end]
@@ -317,4 +322,42 @@
     </div>
   </div>
 </div>
+[if-any is_site_admin]
+<div class="modal fade" id="approveBoxModal" tabindex="-1" aria-labelledby="approveBoxModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <form class="modal-content" method="post" action="/do-approve-box">
+      <div class="modal-header">
+        <h2 class="modal-title fs-5" id="approveBoxModalLabel">Approve box</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">Choose the models this box loads the next time it asks for its config.</p>
+        <input type="hidden" name="host" id="approve-host" value="">
+        [for approve_choices]
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="model" value="[approve_choices.model_name]" id="approve-[approve_choices.model_name]">
+          <label class="form-check-label" for="approve-[approve_choices.model_name]">[approve_choices.display_name]</label>
+        </div>
+        [end]
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Approve</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+document.getElementById("approveBoxModal").addEventListener("show.bs.modal", function (ev) {
+  var btn = ev.relatedTarget;
+  var host = btn.getAttribute("data-host") || "";
+  var picked = (btn.getAttribute("data-models") || "").split(",");
+  document.getElementById("approve-host").value = host;
+  document.getElementById("approveBoxModalLabel").textContent = "Approve " + host;
+  document.querySelectorAll("#approveBoxModal input[name=model]").forEach(function (cb) {
+    cb.checked = picked.indexOf(cb.value) !== -1;
+  });
+});
+</script>
+[end]
 [include "footer.ezt"]

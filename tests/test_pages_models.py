@@ -327,6 +327,16 @@ def test_attention_strip_renders_the_label_form_for_unknown_boxes():
     assert 'name="host" value="192.0.2.7"' in out
     assert 'value="approved" selected' in out
     assert "/do-set-admin-label" in out
+    assert 'data-bs-target="#approveBoxModal"' in out
+    out = _render(
+        rows,
+        attention=pages.attention_items(fleet),
+        admin=True,
+        approve_choices=[edict(model_name="gemma", display_name="Gemma")],
+    )
+    assert 'action="/do-approve-box"' in out
+    assert 'value="gemma"' in out
+    assert ">Gemma<" in out
 
 
 def test_remove_refusal_gate():
@@ -375,7 +385,7 @@ def test_drill_down_renders_add_and_remove_actions():
     assert "Remove only when vLLM is unhealthy or stalled" in out
 
 
-def _render(rows, attention=None, *, admin=False) -> str:
+def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
     data = edict(
         title="Models",
         is_site_admin=ezt.boolean(admin),
@@ -391,6 +401,7 @@ def _render(rows, attention=None, *, admin=False) -> str:
         commit="deadbeef",
         models=rows,
         attention=attention or [],
+        approve_choices=approve_choices or [],
     )
     t = ezt.Template(str(THIS_DIR / "templates" / "models.ezt"))
     buf = io.StringIO()

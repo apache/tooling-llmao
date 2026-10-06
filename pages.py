@@ -50,7 +50,7 @@ from llmao.model_status import (
     UNHEALTHY,
     deployment_status,
 )
-from llmao.models import model_available_for, model_in_service, ux_models
+from llmao.models import load_models, model_available_for, model_in_service, ux_models
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.
@@ -322,6 +322,8 @@ def attention_items(fleet) -> list:
                 kind="unknown",
                 what=f"Fleet key presented from {host} (not in fleet.hosts)",
                 detail=fleet.unknown_fetch_detail(host),
+                approve=ezt.boolean(True),
+                approved=",".join(fleet.approved_models.get(host, [])),
                 **_label_fields(fleet, host),
             )
         )
@@ -334,12 +336,23 @@ def attention_items(fleet) -> list:
                     kind=view.lifecycle,
                     what=f"{dep.name} is {view.lifecycle.replace('_', ' ')}",
                     detail=dep.model_name,
+                    approve=ezt.boolean(False),
+                    approved="",
                     **_label_fields(fleet, ""),
                 )
             )
         for badge in dep.skew:
             phrase = SKEW_PHRASE.get(badge, badge)
-            items.append(edict(kind="skew", what=phrase, detail=dep.name, **_label_fields(fleet, "")))
+            items.append(
+                edict(
+                    kind="skew",
+                    what=phrase,
+                    detail=dep.name,
+                    approve=ezt.boolean(False),
+                    approved="",
+                    **_label_fields(fleet, ""),
+                )
+            )
     for extra in fleet.extra_litellm:
         for badge in extra.skew:
             items.append(
@@ -347,6 +360,8 @@ def attention_items(fleet) -> list:
                     kind="skew",
                     what=SKEW_PHRASE.get(badge, badge),
                     detail=f"{extra.host}:{extra.port} {extra.model_name}",
+                    approve=ezt.boolean(False),
+                    approved="",
                     **_label_fields(fleet, ""),
                 )
             )
@@ -408,7 +423,21 @@ async def models_page(result):
     catalog = ux_models(cfg=APP.cfg, reveal_supply=admin)
     result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
     result.attention = attention_items(APP.fleet) if admin else []
+    result.approve_choices = _approve_choices(APP.cfg) if admin else []
     return result
+
+
+def _approve_choices(cfg) -> list:
+    """Self-hosted models an unknown box can be told to load."""
+    choices = []
+    for model in load_models(cfg=cfg):
+        info = model.model_info
+        if not info.self_hosted:
+            continue
+        choices.append(
+            edict(model_name=str(model.model_name), display_name=str(info.get("display_name") or model.model_name))
+        )
+    return choices
 
 
 def deployment_rows(fleet, *, admin: bool) -> list:
@@ -597,6 +626,35 @@ def apply_admin_label(fleet, host: str, label: str) -> tuple[bool, str]:
     if not label:
         return True, f"Cleared the label for {host}."
     return True, f"Marked {host} as {label.replace('_', ' ')}."
+
+
+def apply_box_approval(fleet, host: str, names: list[str]) -> tuple[bool, str]:
+    """Remember the models for an unknown box. The testable core of /do-approve-box."""
+    host = (host or "").strip()
+    if not host:
+        return False, "No host to approve."
+    try:
+        fleet.approve_models(host, names)
+    except ValueError as e:
+        return False, str(e)
+    return True, f"Approved {host} to load {', '.join(fleet.approved_models[host])}."
+
+
+@APP.post("/do-approve-box")
+@asfquart.auth.require
+async def do_approve_box():
+    """Site admin picks the models an unknown box loads on its next config fetch."""
+    ident = await current_identity(APP.cfg)
+    if not ident.is_site_admin:
+        await flash_danger("Only site admins can approve a fleet box.")
+        return _see_other("/models")
+    form = await quart.request.form
+    ok, message = apply_box_approval(APP.fleet, form.get("host"), form.getlist("model"))
+    if ok:
+        await flash_success(message)
+    else:
+        await flash_danger(message)
+    return _see_other("/models")
 
 
 @APP.post("/do-set-admin-label")

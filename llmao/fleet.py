@@ -40,6 +40,7 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.model_status import (
     ADMIN_LABELS,
+    APPROVED,
     AWAITING,
     HEALTHY,
     STALLED,
@@ -225,15 +226,26 @@ def config_for_host(
     *,
     models: list | None = None,
     cfg: Any = None,
+    approved: list[str] | None = None,
 ) -> dict[str, Any]:
-    """JSON for one host IP. Requires validate_fleet() already ran on cfg."""
+    """JSON for one host IP. Requires validate_fleet() already ran on cfg.
+
+    A host absent from fleet.hosts is served from ``approved``: one server
+    per model, listen ports 8001 upward, named after the model. That list
+    is the in-memory approval; config.yaml is not consulted and not written.
+    """
     host = normalize_peer_ip(host)
-    if not host or host not in cfg.fleet.hosts:
+    known = bool(host) and host in cfg.fleet.hosts
+    if not host or (not known and not approved):
         raise UnknownHostError(host)
     models = models if models is not None else load_models(cfg=cfg)
     by_name = {model.model_name: model for model in models}
+    if known:
+        rows = list(cfg.fleet.hosts[host])
+    else:
+        rows = [[name, 8001 + i] for i, name in enumerate(approved)]
     servers = []
-    for i, raw in enumerate(cfg.fleet.hosts[host]):
+    for i, raw in enumerate(rows):
         # The box is told its listen port; the public port is ours, not its
         # business -- it binds inside the container.
         model_name, port, name, _ = parse_host_row(raw, host, i)
@@ -556,6 +568,9 @@ class Fleet:
         # computed lifecycle -- the page reads them for display. See admin_label.
         self.admin_labels: dict[str, str] = {}
         self.admin_label_at: dict[str, float] = {}
+        # Models an unknown box was told to load. Process memory only, same
+        # lifetime as the unknown-fetch record. config.yaml is not written.
+        self.approved_models: dict[str, list[str]] = {}
         # LiteLLM routes that match no deployment. Rebuilt each config skew pass.
         # Identity is host, port, and model name. api_base is not a primary key:
         # one host serves several ports, and one host:port can report more than one model.
@@ -647,7 +662,36 @@ class Fleet:
         rec = self.unknown_config_fetches.get(host)
         if rec is None:
             return ""
-        return f"seen {_ago(rec['last_seen'])} · {int(rec['count'])} requests"
+        line = f"seen {_ago(rec['last_seen'])} · {int(rec['count'])} requests"
+        names = self.approved_models.get(normalize_peer_ip(host))
+        if names:
+            line += " · " + ", ".join(names)
+        return line
+
+    def approve_models(self, host: str, names: list[str]) -> None:
+        """Remember which models an unknown box should load, and mark it approved.
+
+        Replaces any previous list. Raises, changing nothing, when the host is
+        already in fleet.hosts, the selection is empty, or a name is unknown or
+        not self-hosted. Lost on restart.
+        """
+        host = normalize_peer_ip(host)
+        members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
+        if host in members:
+            raise ValueError(f"{host} is already in fleet.hosts")
+        chosen = [str(n).strip() for n in names if str(n).strip()]
+        if not chosen:
+            raise ValueError("Select at least one model")
+        by_name = self.models or {m.model_name: m for m in load_models(cfg=self.cfg)}
+        for name in chosen:
+            model = by_name.get(name)
+            if model is None:
+                raise ValueError(f"Unknown model: {name}")
+            info = model.model_info
+            if not (info.get("self_hosted") if hasattr(info, "get") else False):
+                raise ValueError(f"{name} is not self-hosted")
+        self.approved_models[host] = chosen
+        self.set_admin_label(host, APPROVED)
 
     def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
         """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.
@@ -661,6 +705,10 @@ class Fleet:
         for known in list(self.unknown_config_fetches):
             if known in members:
                 del self.unknown_config_fetches[known]
+                self.approved_models.pop(known, None)
+        for known in list(self.approved_models):
+            if known in members:
+                self.approved_models.pop(known, None)
         if host in members:
             return
         rec = self.unknown_config_fetches.get(host)
@@ -677,6 +725,7 @@ class Fleet:
             )
             for ip in oldest[:extra]:
                 del self.unknown_config_fetches[ip]
+                self.approved_models.pop(ip, None)
 
     def apply_port_map(self, mapping: Any) -> None:
         """Set public_port from Vast IP → listen → HostPort. Leave unset if missing.
