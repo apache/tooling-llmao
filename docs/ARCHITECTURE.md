@@ -149,7 +149,7 @@ flowchart LR
   PAGES -->|admin ops| ADMIN
   JSON -->|admin ops| ADMIN
   BOX -->|fleet key| FLEET
-  FLEET -->|{host, servers}| BOX
+  FLEET -->|"host, servers"| BOX
   RUNNERS -->|probe + skew| FLEET
   RUNNERS -->|after_probe: model/new or model/delete| ADMIN
   TOOL -->|PAT| ROUTER
