@@ -1172,7 +1172,33 @@ class LiteLLMBackend:
             raise BackendUnavailableError(f"{dep.name}: no api_base for /model/new")
         params["api_base"] = dep.api_base
         if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
-            params["api_key"] = dep.vllm.api_key
+            # MIGRATION: prefer the shared key for the ROUTE while one is set.
+            #
+            # Every current box was launched with the shared key as a
+            # container argument, and a container does not pick up changed
+            # args on restart -- it has to be rebuilt. So the derived key is
+            # one the box rejects, verified against a live box: derived 401,
+            # shared 200.
+            #
+            # That is not fixable by hand. A rejected route 401s, LiteLLM
+            # cools the deployment down, llmao's health skew reads that as the
+            # backend being down and deletes the route, the next probe finds
+            # the box answering /healthz and re-adds it with the same bad key.
+            # The system argues with itself every few minutes.
+            #
+            # config_for_host deliberately does NOT do this. The payload a box
+            # fetches from GET /vllm/config has to carry the key it should
+            # ADOPT -- hand it the shared key there and the handshake can
+            # never move anything off the shared key, which is the whole point
+            # of the salt.
+            #
+            # Remove this once every box serves a derived key. Boxes first,
+            # then this.
+            shared = str(getattr(self._cfg.fleet, "selfhost_api_key", "") or "").strip()
+            if shared and not shared.startswith("CHANGE_ME"):
+                params["api_key"] = shared
+            else:
+                params["api_key"] = dep.vllm.api_key
         info: dict[str, Any] = {
             "self_hosted": dep.self_hosted,
             "asf_api_base": _norm_base(dep.api_base),

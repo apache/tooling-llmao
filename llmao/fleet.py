@@ -206,25 +206,6 @@ def _vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
     # and a future edit could HMAC an empty salt and ship a public bearer.
     from llmao.vllm_api_key import derive_vllm_api_key
 
-    # MIGRATION: prefer the shared key while one is configured.
-    #
-    # The derived per-box key is the intended scheme and the boxes will get
-    # there. They are not there yet. Every current box was launched with the
-    # shared key as a CONTAINER ARGUMENT, and a container does not pick up
-    # changed args on restart -- it has to be rebuilt. GET /vllm/config exists
-    # to hand a box its derived key, and /fleet has shown "has not requested
-    # its config -- never" for every host since the attribute was added, so
-    # that handshake has never run.
-    #
-    # Until it does, deriving a key produces one the box rejects. Verified
-    # against a live box: derived -> 401, shared -> 200.
-    #
-    # Remove this branch and fleet.selfhost_api_key once every box serves a
-    # derived key. The ordering matters: boxes first, then this.
-    shared = str(getattr(cfg.fleet, "selfhost_api_key", "") or "").strip()
-    if shared and not shared.startswith("CHANGE_ME"):
-        return shared
-
     return derive_vllm_api_key(cfg.fleet.vllm_api_salt, host, listen_port)
 
 
