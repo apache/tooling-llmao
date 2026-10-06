@@ -993,6 +993,73 @@ async def admin_requests(result):
     return result
 
 
+@APP.get("/admin/tiers")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "tiers.ezt")
+@page(title="Tiers")
+async def admin_tiers(result):
+    """Allowances and rate limits per tier."""
+    ident = await current_identity(APP.cfg)
+    result.tiers = [
+        edict(
+            {
+                "tier": t["tier"],
+                "label": t["tier"].replace("_", " "),
+                "rpm_limit": t.get("rpm_limit") or "",
+                "tpm_limit": t.get("tpm_limit") or "",
+                "max_parallel_requests": t.get("max_parallel_requests") or "",
+                # Only the free tier meters tokens. A project key draws on the
+                # project's allocation and a service key on its own, so a cap
+                # here would be a third ceiling nobody asked for.
+                "has_cap": ezt.boolean(t.get("token_cap") is not None),
+                "token_cap": t.get("token_cap") or "",
+                "token_window_days": t.get("token_window_days") or "",
+            }
+        )
+        for t in await APP.seam.tiers(ident)
+    ]
+    return result
+
+
+@APP.post("/do-set-tier")
+@asfquart.auth.require
+async def do_set_tier():
+    """Change one tier.
+
+    Empty fields are left alone rather than cleared: a form that blanked
+    everything it did not mention would uncap a tier by omission, which is
+    the opposite of what this page is for.
+    """
+    form = await quart.request.form
+
+    def _int(name):
+        raw = (form.get(name) or "").replace(",", "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    try:
+        ident = await current_identity(APP.cfg)
+        await APP.seam.set_tier(
+            ident,
+            (form.get("tier") or "").strip(),
+            rpm_limit=_int("rpm_limit"),
+            tpm_limit=_int("tpm_limit"),
+            max_parallel_requests=_int("max_parallel_requests"),
+            token_cap=_int("token_cap"),
+            token_window_days=_int("token_window_days"),
+        )
+        await flash_success(
+            "Tier updated. The token cap applies immediately; rate limits apply to keys issued from now on."
+        )
+    except (AuthzError, BackendUnavailableError, ValueError) as e:
+        await flash_danger(str(e))
+    return _see_other("/admin/tiers")
+
+
 @APP.post("/do-request-capacity")
 @asfquart.auth.require
 async def do_request_capacity():

@@ -32,6 +32,8 @@ from typing import Any
 from . import requests as _requests
 from .litellm_client import (
     GRANTOR_FREE_TIER,
+    TIER_FREE,
+    TIER_PROJECT,
     TIER_SERVICE,
     Backend,
     BackendUnavailableError,
@@ -304,6 +306,28 @@ class Seam:
         """Requests against one project, newest first."""
         reqs = await self._backend.list_requests(project)
         return sorted(reqs, key=lambda r: r.created_at or "", reverse=True)
+
+    async def tiers(self, identity: Identity) -> list[dict]:
+        """Every tier's effective limits: config, with any override applied."""
+        if not identity.is_site_admin:
+            raise AuthzError("Tiers are limited to site admins.")
+        out = []
+        for tier in (TIER_FREE, TIER_PROJECT, TIER_SERVICE):
+            out.append({"tier": tier, **(await self._backend.tier_entitlement(tier))})
+        return out
+
+    async def set_tier(self, identity: Identity, tier: str, **limits) -> dict:
+        """Change a tier's ceilings for everyone on it.
+
+        The lever for "the free tier is too generous" or "nobody can get
+        anything done" -- one change, every key on that tier, no redeploy.
+        """
+        if not identity.is_site_admin:
+            raise AuthzError("Changing tiers is limited to site admins.")
+        named = {k: v for k, v in limits.items() if v is not None}
+        if not named:
+            raise AuthzError("Nothing to change.")
+        return await self._backend.set_tier_entitlement(tier, **named)
 
     async def my_requests(self, identity: Identity) -> list:
         """This person's own requests, newest first.

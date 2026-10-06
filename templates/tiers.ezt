@@ -1,0 +1,75 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+
+  <p class="small mb-2"><a href="/admin">&larr; Admin</a></p>
+  <h1 class="h3 mb-3">Tiers</h1>
+  <p class="text-muted small">
+    Applies to every key on the tier. Set conservatively, measure, revise.
+    Blank fields are left as they are.
+  </p>
+
+  [for tiers]
+  <div class="card mb-3">
+    <div class="card-body py-3">
+      <form method="post" action="/do-set-tier">
+        <input type="hidden" name="tier" value="[tiers.tier]">
+        <div class="row g-2 align-items-end">
+          <div class="col-auto">
+            <div class="fw-semibold">[tiers.label]</div>
+          </div>
+          <div class="col-auto">
+            <label class="form-label small text-muted mb-0"
+                   for="rpm-[tiers.tier]">requests/min</label>
+            <input class="form-control form-control-sm" id="rpm-[tiers.tier]"
+                   type="text" name="rpm_limit" value="[tiers.rpm_limit]"
+                   style="width:7rem">
+          </div>
+          <div class="col-auto">
+            <label class="form-label small text-muted mb-0"
+                   for="tpm-[tiers.tier]">tokens/min</label>
+            <input class="form-control form-control-sm" id="tpm-[tiers.tier]"
+                   type="text" name="tpm_limit" value="[tiers.tpm_limit]"
+                   style="width:8rem">
+          </div>
+          <div class="col-auto">
+            <label class="form-label small text-muted mb-0"
+                   for="par-[tiers.tier]">concurrent</label>
+            <input class="form-control form-control-sm" id="par-[tiers.tier]"
+                   type="text" name="max_parallel_requests"
+                   value="[tiers.max_parallel_requests]" style="width:6rem">
+          </div>
+          [if-any tiers.has_cap]
+          <div class="col-auto">
+            <label class="form-label small text-muted mb-0"
+                   for="cap-[tiers.tier]">tokens/window</label>
+            <input class="form-control form-control-sm" id="cap-[tiers.tier]"
+                   type="text" name="token_cap" value="[tiers.token_cap]"
+                   style="width:9rem">
+          </div>
+          <div class="col-auto">
+            <label class="form-label small text-muted mb-0"
+                   for="win-[tiers.tier]">window days</label>
+            <input class="form-control form-control-sm" id="win-[tiers.tier]"
+                   type="text" name="token_window_days"
+                   value="[tiers.token_window_days]" style="width:6rem">
+          </div>
+          [end]
+          <div class="col-auto">
+            <button class="btn btn-primary btn-sm" type="submit">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  [end]
+
+  <p class="text-muted small">
+    <strong>The token cap applies immediately.</strong> Rate limits apply to
+    keys issued from now on &mdash; existing keys keep what they were minted
+    with, because those live on the LiteLLM key object and are not re-read.
+    Re-issuing a key is the only way to change its rate limits today.
+  </p>
+
+</div>
+[include "footer.ezt"]
