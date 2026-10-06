@@ -38,10 +38,10 @@
         Every key with no human at the keyboard, and when it was last used.
       </div>
     </a>
-    <a class="list-group-item list-group-item-action" href="/fleet">
-      <div class="fw-semibold">Fleet</div>
+    <a class="list-group-item list-group-item-action" href="/models">
+      <div class="fw-semibold">Models</div>
       <div class="small text-muted">
-        Hosts, serving state, and what has been committed against capacity.
+        Routes, hosts and serving state, with add and remove.
       </div>
     </a>
   </div>
