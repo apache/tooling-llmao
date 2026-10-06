@@ -418,16 +418,67 @@ class Seam:
             return {}
 
     async def my_key_approvals(self, identity: Identity) -> list[dict]:
-        """Approved key requests this person can still act on.
+        """Approved key requests this person can still exercise.
 
-        Shown on My Keys as a row that is not yet a key. The approval records
-        what may be created; the secret is revealed once, at creation, to the
-        requester -- so it never passes through anyone else.
+        Expired and consumed approvals are filtered here rather than in the
+        template, so the page cannot offer a button that would fail.
         """
-        try:
-            return await self._backend.key_approvals(identity.uid)
-        except (AttributeError, BackendUnavailableError):
-            return []
+        return [
+            {
+                "id": r.id,
+                "purpose": r.granted.get("purpose") or r.wanted.get("purpose") or "",
+                "tier": r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
+                "project": r.project or "",
+                "token_cap": int(r.granted.get("token_cap") or 0),
+                "expires_at": r.expires_at(),
+            }
+            for r in await self._backend.list_requests()
+            if r.requester == identity.uid and r.is_actionable()
+        ]
+
+    async def create_approved_key(self, identity: Identity, request_id: str) -> CreatedKey:
+        """Exercise an approval: create the key, consume the approval.
+
+        An admin approved the RIGHT to create a key with fixed parameters.
+        The requester creates it and sees the secret once, so it never passes
+        through the admin -- there is no moment where a credential sits in a
+        message somewhere.
+
+        Four things are checked rather than trusted to the UI, because this
+        takes a request id from a form post: the approval belongs to the
+        caller, it is approved, it has not been used, and it has not lapsed.
+
+        The key is created with the APPROVED parameters, never with anything
+        the form carries. A form that could name its own tier would make the
+        approval decorative.
+        """
+        req = await self._backend.find_request(request_id)
+        if req is None or req.requester != identity.uid:
+            # Same message either way: whether a request exists is not
+            # something a stranger should be able to probe for.
+            raise AuthzError("No such approval.")
+        if not req.is_actionable():
+            if req.consumed_at:
+                raise AuthzError("That approval has already been used.")
+            if req.is_expired():
+                raise AuthzError("That approval has expired. Please request again.")
+            raise AuthzError("That request has not been approved.")
+
+        granted = {**req.wanted, **req.granted}
+        created = await self._backend.create_key(
+            project=req.project or self._backend._TIER_STORE_TEAM,
+            purpose=granted.get("purpose") or "",
+            user=identity.uid,
+            tier=granted.get("tier") or TIER_SERVICE,
+            token_cap=int(granted.get("token_cap") or 0) or None,
+        )
+
+        # Consumed AFTER the key exists. The other order burns the approval
+        # on a failed creation and leaves the person with nothing and no way
+        # to retry.
+        req.consume()
+        await self._backend.save_request(req)
+        return created
 
     async def my_allowance(self, identity: Identity):
         """This committer's rolling free-tier allowance.

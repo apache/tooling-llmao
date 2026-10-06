@@ -809,7 +809,22 @@ async def keys_list(result):
         result.projects = []
 
     try:
-        result.approvals = [edict(a) for a in await APP.seam.my_key_approvals(ident)]
+        result.approvals = [
+            edict(
+                {
+                    "id": a["id"],
+                    "purpose": a["purpose"],
+                    "tier": a["tier"],
+                    "project": a["project"],
+                    # What this key will be allowed to do, said plainly. The
+                    # person about to create it has one question -- is this
+                    # what I asked for -- and the parameters are the answer.
+                    "limits_h": (f"{_tokens_h(a['token_cap'])} tokens/week" if a["token_cap"] else "tier defaults"),
+                    "expires_h": (_when_h(a["expires_at"].date()) if a.get("expires_at") else ""),
+                }
+            )
+            for a in await APP.seam.my_key_approvals(ident)
+        ]
     except (BackendUnavailableError, AttributeError):
         result.approvals = []
 
@@ -1103,6 +1118,35 @@ async def do_create_key():
         kind_label="Personal",
         keys_back="/keys",
         keys_create_another="/keys/new",
+    )
+    return _see_other("/keys")
+
+
+@APP.post("/do-create-approved-key")
+@asfquart.auth.require
+async def do_create_approved_key():
+    """Exercise an approval.
+
+    The admin approved the RIGHT to create this key, not the key itself. It
+    is created here, by the person who asked, and the secret is revealed to
+    them once -- so it never sits in a message anywhere.
+
+    The form carries only the approval id. Every parameter comes from the
+    approval, because a form that could name its own tier would make the
+    approval decorative.
+    """
+    form = await quart.request.form
+    try:
+        ident = await current_identity(APP.cfg)
+        created = await APP.seam.create_approved_key(ident, (form.get("approval_id") or "").strip())
+    except (AuthzError, BackendUnavailableError, ValueError) as e:
+        await flash_danger(str(e))
+        return _see_other("/keys")
+    await _flash_key_created(
+        created,
+        kind_label="Approved",
+        keys_back="/keys",
+        keys_create_another="/keys",
     )
     return _see_other("/keys")
 

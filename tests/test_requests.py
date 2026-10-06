@@ -268,3 +268,30 @@ def test_prune_caps_decided_history():
 def test_prune_never_drops_a_pending_request():
     reqs = [_capacity() for _ in range(80)]
     assert len(prune(reqs, keep_decided=5)) == 80
+
+
+def test_setting_an_allowance_on_a_key_is_not_an_adjustment():
+    """Adding a field the requester never named is completing the request.
+
+    A projectless service key has nothing to draw on, so an admin sets its
+    allowance at approval -- the requester has no business naming it. Making
+    that need a justification would train everyone to type "ok" in the box,
+    which costs the reason field its meaning on decisions that do need one.
+    """
+    r = _key()
+    r.decide(state=STATE_APPROVED, by="admin", granted={"token_cap": 2_000_000})
+    assert r.state == STATE_APPROVED
+    assert r.granted["token_cap"] == 2_000_000
+    assert r.granted["purpose"] == "scrutineer-ci"
+
+
+def test_changing_a_value_the_requester_named_is_an_adjustment():
+    r = _key()
+    with pytest.raises(ValueError):
+        r.decide(state=STATE_APPROVED, by="admin", granted={"tier": "free_tier"})
+
+
+def test_granted_carries_everything_asked_for_plus_what_was_added():
+    r = _key()
+    r.decide(state=STATE_APPROVED, by="admin", granted={"token_cap": 500_000})
+    assert set(r.granted) == {"purpose", "tier", "token_cap"}

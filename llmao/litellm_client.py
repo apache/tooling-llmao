@@ -245,6 +245,7 @@ class Backend(Protocol):
         user: str | None = None,
         metadata: dict | None = None,
         tier: str = TIER_PROJECT,
+        token_cap: int | None = None,
     ) -> CreatedKey: ...
     async def delete_key(self, token_id: str) -> None: ...
     async def usage(self, project: str | None) -> list[dict]: ...
@@ -851,6 +852,7 @@ class LiteLLMBackend:
         user: str | None = None,
         metadata: dict | None = None,
         tier: str = TIER_PROJECT,
+        token_cap: int | None = None,
     ) -> CreatedKey:
         project = (project or "").strip()
         if not project:
@@ -868,6 +870,13 @@ class LiteLLMBackend:
         # without limits can saturate the fleet, and LiteLLM's default is
         # unlimited.
         meta.setdefault("tier", tier)
+        if token_cap is not None:
+            # A per-key allowance, set by an admin when approving. Only a
+            # projectless service key really needs one: a project key draws
+            # on the project's share and a personal key on the person's, but
+            # a key belonging to neither has nothing to draw on, and
+            # unattended automation would consume a week in an afternoon.
+            meta["token_cap"] = int(token_cap)
         limits = resolve_entitlement(self._cfg, tier)
 
         payload: dict[str, Any] = {

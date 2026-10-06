@@ -175,14 +175,23 @@ class Request:
             raise ValueError(f"cannot decide into {state}")
         # Adjusting or denying without saying why is how a requester learns
         # to pad the next ask.
-        changed = granted is not None and granted != self.wanted
-        if (state == STATE_DENIED or changed) and not (reason or "").strip():
+        #
+        # Only a CHANGED value counts as an adjustment. An admin adding a
+        # field the requester never named -- the allowance on a projectless
+        # service key, which they have no business setting for themselves --
+        # is completing the request, not altering it. Demanding a
+        # justification for that would train everyone to type "ok" in the
+        # box, which costs the reason field its meaning on the decisions that
+        # do need one.
+        merged = {**self.wanted, **(granted or {})}
+        adjusted = any(merged[k] != v for k, v in self.wanted.items() if k in merged)
+        if (state == STATE_DENIED or adjusted) and not (reason or "").strip():
             raise ValueError("denying or adjusting a request requires a reason")
         self.state = state
         self.decided_by = by
         self.decided_at = _now()
         self.decision_reason = (reason or "").strip()
-        self.granted = dict(granted if granted is not None else self.wanted)
+        self.granted = merged
 
     def consume(self) -> None:
         if not self.is_actionable():
