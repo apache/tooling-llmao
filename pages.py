@@ -169,7 +169,7 @@ async def basic_info(title: str = "llmao") -> edict:
     if client_session is not None and getattr(client_session, "uid", None):
         basic.uid = client_session.uid
         basic.name = getattr(client_session, "fullname", None) or client_session.uid
-        projects = list(
+        projects = sorted(
             dict.fromkeys(
                 list(getattr(client_session, "committees", None) or [])
                 + list(getattr(client_session, "projects", None) or [])
@@ -177,9 +177,9 @@ async def basic_info(title: str = "llmao") -> edict:
         )
         basic.projects = [edict({"name": p}) for p in projects]
         basic.projects_label = ", ".join(projects) if projects else None
-        committees = list(getattr(client_session, "committees", None) or [])
+        committees = sorted(getattr(client_session, "committees", None) or [])
         basic.committees = committees
-        site_admins = list(APP.cfg.site_admins or [])
+        site_admins = sorted(APP.cfg.site_admins or [])
         is_site_admin = client_session.uid in site_admins or bool(getattr(client_session, "isRoot", False))
         basic.is_site_admin = ezt.boolean(is_site_admin)
         # Other Keys nav + automation mint (provisional: PMC or site admin).
