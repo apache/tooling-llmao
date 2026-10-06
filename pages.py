@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import functools
 import pathlib
-import time
 from urllib.parse import urlsplit
 
 import asfquart
@@ -271,14 +270,14 @@ def _modality_chips(modality: str) -> list[edict]:
     return chips
 
 
-def _replica_summary(model_name: str, fleet, *, now: float) -> str:
+def _replica_summary(model_name: str, fleet) -> str:
     """'1 healthy / 3 loading / 1 unhealthy' over the model's deployments."""
     cfg = fleet.cfg.fleet
     views = []
     for dep in fleet.deployments:
         if dep.model_name != model_name:
             continue
-        views.append(deployment_status(snapshot_for_status(dep, cfg, now), cfg, now))
+        views.append(deployment_status(snapshot_for_status(dep, cfg), cfg))
     by_state: dict[str, int] = {}
     for v in views:
         by_state[v.lifecycle] = by_state.get(v.lifecycle, 0) + 1
@@ -294,27 +293,26 @@ _LABEL_OPTIONS = [
 ]
 
 
-def _label_fields(fleet, host: str, *, now: float) -> dict:
+def _label_fields(fleet, host: str) -> dict:
     """The label display fields for a strip row. Unknown boxes carry the
     set/clear control; everything else labels nothing."""
     if not host:
         return {"host": "", "label": "", "label_value": "", "label_at": "", "label_options": []}
-    label_value, label_at = fleet.admin_label(host)
-    label_value = label_value or ""
+    label_info = fleet.admin_label(host)
     return {
         "host": host,
-        "label": label_value.replace("_", " "),
-        "label_value": label_value,
-        "label_at": _ago(label_at, now) if label_at else "",
+        "label": label_info.display,
+        "label_value": label_info.label,
+        "label_at": label_info.at,
         "label_options": _LABEL_OPTIONS,
     }
 
 
-def attention_items(fleet, *, now: float) -> list:
+def attention_items(fleet) -> list:
     """The admin strip: only actionable items, in the order they were listed
     in the design (unknown boxes, Stalled, Unhealthy, true skew)."""
     items: list[edict] = []
-    for host, rec in sorted(
+    for host, _rec in sorted(
         fleet.unknown_config_fetches.items(),
         key=lambda item: item[1]["last_seen"],
         reverse=True,
@@ -323,25 +321,25 @@ def attention_items(fleet, *, now: float) -> list:
             edict(
                 kind="unknown",
                 what=f"Fleet key presented from {host} (not in fleet.hosts)",
-                detail=f"seen {_ago(rec['last_seen'], now)} · {int(rec['count'])} requests",
-                **_label_fields(fleet, host, now=now),
+                detail=fleet.unknown_fetch_detail(host),
+                **_label_fields(fleet, host),
             )
         )
     cfg = fleet.cfg.fleet
     for dep in fleet.deployments:
-        view = deployment_status(snapshot_for_status(dep, cfg, now), cfg, now)
+        view = deployment_status(snapshot_for_status(dep, cfg), cfg)
         if view.lifecycle in (STALLED, UNHEALTHY):
             items.append(
                 edict(
                     kind=view.lifecycle,
                     what=f"{dep.name} is {view.lifecycle.replace('_', ' ')}",
                     detail=dep.model_name,
-                    **_label_fields(fleet, "", now=now),
+                    **_label_fields(fleet, ""),
                 )
             )
         for badge in dep.skew:
             phrase = SKEW_PHRASE.get(badge, badge)
-            items.append(edict(kind="skew", what=phrase, detail=dep.name, **_label_fields(fleet, "", now=now)))
+            items.append(edict(kind="skew", what=phrase, detail=dep.name, **_label_fields(fleet, "")))
     for extra in fleet.extra_litellm:
         for badge in extra.skew:
             items.append(
@@ -349,13 +347,13 @@ def attention_items(fleet, *, now: float) -> list:
                     kind="skew",
                     what=SKEW_PHRASE.get(badge, badge),
                     detail=f"{extra.host}:{extra.port} {extra.model_name}",
-                    **_label_fields(fleet, "", now=now),
+                    **_label_fields(fleet, ""),
                 )
             )
     return items
 
 
-def model_catalog_rows(fleet, catalog: list, *, now: float | None = None, admin: bool = False) -> list:
+def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
     """One Models-page row per catalog entry, with the user-facing roll-up.
 
     Context and concurrency come from the roll-up (minimum context across
@@ -364,11 +362,10 @@ def model_catalog_rows(fleet, catalog: list, *, now: float | None = None, admin:
     row also carries the model's deployment rows and a replica summary.
     Kept out of models_page so a test can render models.ezt without a request.
     """
-    stamp = time.time() if now is None else now
     rows = []
     for m in catalog:
         row = edict(m)
-        status = fleet.model_rollup(row.model_name, now=now)
+        status = fleet.model_rollup(row.model_name)
         rollup = status.rollup
         self_hosted = bool(m.get("self_hosted"))
         in_service = model_available_for(None, m) and model_in_service(rollup)
@@ -390,9 +387,9 @@ def model_catalog_rows(fleet, catalog: list, *, now: float | None = None, admin:
         row.chips = _modality_chips(m.get("modality") or "")
         if admin:
             row.deployments = [
-                r for r in deployment_rows(fleet, admin=True, now=stamp) if r.model_name == row.model_name
+                r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name
             ]
-            row.replica_summary = _replica_summary(row.model_name, fleet, now=stamp)
+            row.replica_summary = _replica_summary(row.model_name, fleet)
         rows.append(row)
     rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
     for i, row in enumerate(rows):
@@ -410,37 +407,28 @@ async def models_page(result):
     result.reveal_supply = admin
     catalog = ux_models(cfg=APP.cfg, reveal_supply=admin)
     result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
-    result.attention = attention_items(APP.fleet, now=time.time()) if admin else []
+    result.attention = attention_items(APP.fleet) if admin else []
     return result
 
 
-def _ago(ts, now: float) -> str:
-    if ts is None:
-        return "never"
-    sec = max(0, int(now - ts))
-    if sec < 60:
-        return f"{sec}s"
-    if sec < 3600:
-        return f"{sec // 60}m"
-    return f"{sec // 3600}h"
-
-
-def deployment_rows(fleet, *, admin: bool, now: float) -> list:
+def deployment_rows(fleet, *, admin: bool) -> list:
     """One table row per intended deployment, admin fields gated on ``admin``."""
     rows = []
     for dep in fleet.deployments:
         srv = dep.vllm
-        fetched = fleet.config_fetch_at.get(srv.host) if srv else None
         # The admin label is a host-scoped annotation; unknown-fetch rows
         # above already carry the host and are labeled separately.
-        label_value, label_at = ("", "")
         if admin and srv is not None:
-            label_value, label_at = fleet.admin_label(srv.host)
-            label_value = label_value or ""
-            label_at = _ago(label_at, now) if label_at else ""
-        label = label_value.replace("_", " ")
+            label_info = fleet.admin_label(srv.host)
+            label = label_info.display
+            label_value = label_info.label
+            label_at = label_info.at
+        else:
+            label = ""
+            label_value = ""
+            label_at = ""
         if srv is not None:
-            last_ok = srv.last_ok
+            last_ok = srv.last_ok_display
             no_deployment = srv.state == HEALTHY and not dep.in_litellm
             serving = srv.state == HEALTHY and dep.in_litellm
             loading = srv.state == LOADING
@@ -461,7 +449,7 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
                 f"{srv.host}:{srv.public_port}" if admin and srv.public_port is not None else ("—" if admin else "")
             )
             host = srv.host if admin else ""
-            config_ago = _ago(fetched, now) if admin else ""
+            config_ago = fleet.config_fetch_display(srv.host) if admin else ""
             # Measured KV cache against the served context window. A
             # max_model_len above the cache makes vLLM hang on a request that
             # needs the space rather than refuse at startup, so it reads as a
@@ -471,7 +459,7 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
             context = f"{served_len:,}" if served_len else "—"
             oversized = srv.oversized
         else:
-            last_ok = dep.litellm_health_at
+            last_ok = dep.litellm_health_display
             no_deployment = not dep.in_litellm
             serving = dep.in_litellm and dep.litellm_healthy is True
             loading = False
@@ -504,7 +492,7 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
                 public=public,
                 state=state,
                 detail=detail,
-                last_ok=_ago(last_ok, now),
+                last_ok=last_ok,
                 config_ago=config_ago,
                 skew="; ".join(SKEW_PHRASE.get(n, n) for n in dep.skew) if admin and dep.skew else "",
                 kv_cache=kv_cache,
@@ -514,9 +502,7 @@ def deployment_rows(fleet, *, admin: bool, now: float) -> list:
                 litellm_health=(
                     "healthy" if dep.litellm_healthy is True else ("unhealthy" if dep.litellm_healthy is False else "—")
                 ),
-                litellm_health_ago=(
-                    _ago(dep.litellm_health_at, now) if admin and dep.litellm_health_at else ("—" if admin else "")
-                ),
+                litellm_health_ago=(dep.litellm_health_display if admin else ""),
                 no_deployment=ezt.boolean(no_deployment),
                 serving=ezt.boolean(serving),
                 loading=ezt.boolean(loading),

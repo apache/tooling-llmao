@@ -68,6 +68,17 @@ class UnknownHostError(KeyError):
     """No fleet.hosts entry for this client IP."""
 
 
+def _ago(ts: float | None) -> str:
+    if ts is None:
+        return "never"
+    sec = max(0, int(time.time() - ts))
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m"
+    return f"{sec // 3600}h"
+
+
 def normalize_peer_ip(addr: str | None) -> str:
     ip = (addr or "").strip()
     if ip.startswith("::ffff:"):
@@ -336,6 +347,16 @@ class VllmServer:
         )
 
     @property
+    def last_ok_display(self) -> str:
+        """Human-readable 'last_ok' timestamp."""
+        return _ago(self.last_ok)
+
+    @property
+    def config_served_display(self) -> str:
+        """Human-readable 'config_served_at' timestamp."""
+        return _ago(self.config_served_at)
+
+    @property
     def root_url(self) -> str | None:
         if self.public_port is None:
             return None
@@ -489,6 +510,13 @@ class FleetDeployment:
             return self.vllm.api_base
         return self._api_base
 
+    @property
+    def litellm_health_display(self) -> str:
+        """Human-readable 'litellm_health_at'; a dash when unknown."""
+        if self.litellm_health_at is None:
+            return "—"
+        return _ago(self.litellm_health_at)
+
 
 @dataclass(frozen=True)
 class ExtraLiteLLM:
@@ -564,7 +592,7 @@ class Fleet:
         moves them from awaiting contact into the Loading window (the next
         probe, or immediately for any probe running now, re-derives the state).
         """
-        stamp = now if now is not None else time.time()
+        stamp = now or time.time()
         self.config_fetch_at[host] = stamp
         for srv in self.servers:
             if srv.host == host:
@@ -587,15 +615,39 @@ class Fleet:
             self.admin_labels.pop(host, None)
             self.admin_label_at.pop(host, None)
             return
-        stamp = now if now is not None else time.time()
+        stamp = now or time.time()
         self.admin_labels[host] = label
         self.admin_label_at[host] = stamp
 
-    def admin_label(self, host: str) -> tuple[str | None, float | None]:
-        """The host's current admin label and when it was set, else (None, None)."""
+    def admin_label(self, host: str) -> edict:
+        """The host's admin label, ready for display.
+
+        ``label`` is the stored value ("" when unset), ``display`` is the
+        underscored value with spaces, ``at`` is the age of the label
+        ("never" when unset). No post-processing at the call site.
+        """
         host = normalize_peer_ip(host)
         label = self.admin_labels.get(host)
-        return label, self.admin_label_at.get(host) if label is not None else None
+        at = self.admin_label_at.get(host) if label is not None else None
+        return edict({
+            "label": label or "",
+            "display": (label or "").replace("_", " "),
+            "at": _ago(at),
+        })
+
+    def config_fetch_display(self, host: str) -> str:
+        """Human-readable age of the last config fetch for a host, "—" if never."""
+        at = self.config_fetch_at.get(host)
+        if at is None:
+            return "—"
+        return _ago(at)
+
+    def unknown_fetch_detail(self, host: str) -> str:
+        """The attention-strip line for one unknown box: 'seen 5s · 3 requests'."""
+        rec = self.unknown_config_fetches.get(host)
+        if rec is None:
+            return ""
+        return f"seen {_ago(rec['last_seen'])} · {int(rec['count'])} requests"
 
     def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
         """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.
@@ -604,7 +656,7 @@ class Fleet:
         50, dropping the oldest last-seen. A member IP is removed and not recorded.
         """
         host = normalize_peer_ip(host)
-        stamp = time.time() if now is None else now
+        stamp = now or time.time()
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
         for known in list(self.unknown_config_fetches):
             if known in members:
@@ -649,9 +701,9 @@ class Fleet:
                 _LOGGER.info("vast: %s@%s listen %s public %s", srv.name, srv.host, srv.listen_port, public)
                 srv.public_port = public
 
-    def model_rollup(self, model_name: str, now: float | None = None):
+    def model_rollup(self, model_name: str, *, now: float | None = None):
         """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
-        stamp = time.time() if now is None else now
+        stamp = now or time.time()
         cfg = self.cfg.fleet
         views = [deployment_status(snapshot_for_status(dep, cfg, stamp), cfg, stamp) for dep in self.deployments]
         catalog = True
@@ -676,7 +728,7 @@ class Fleet:
         timeout = float(self.cfg.fleet.health_timeout_s)
         grace = float(self.cfg.fleet.health_grace_s)
         threshold = int(self.cfg.fleet.health_fail_threshold)
-        stamp = now if now is not None else time.time()
+        stamp = now or time.time()
         own = client is None
         if own:
             client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
@@ -738,7 +790,7 @@ class Fleet:
             await asyncio.sleep(interval)
 
 
-def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
+def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> DeploymentSnapshot:
     """The last stored probe observation for this deployment.
 
     record_probe keeps the counters (last_probe_ok, fails, last_ok,
@@ -748,6 +800,7 @@ def snapshot_for_status(dep, cfg: edict, now: float) -> DeploymentSnapshot:
     window reads Stalled without waiting for the next probe. cfg.fleet is the
     validated interval block.
     """
+    now = now or time.time()
     litellm_at = now if dep.litellm_healthy is not None else None
     mismatch = bool(dep.config_mismatch)
     srv = dep.vllm

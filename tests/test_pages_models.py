@@ -25,6 +25,7 @@ template.
 
 import io
 import pathlib
+import time
 
 import asfquart
 import ezt
@@ -39,7 +40,6 @@ from llmao.model_status import (
 )
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
-NOW = 10_000.0
 
 
 def _app():
@@ -66,15 +66,15 @@ def _server(name: str, *, host: str = "10.0.0.1", port: int = 8001, ok: bool = T
     srv.max_model_len = 40960
     srv.observed_max_model_len = 40960
     srv.kv_cache_tokens = 40960 * 4
-    srv.config_served_at = NOW - 100
+    srv.config_served_at = time.time() - 100
     # One success is Healthy. Three failures after that success is Unhealthy;
     # in_litellm must be set first or a failure with no config history is Awaiting.
     if ok:
-        srv.record_probe(True, now=NOW - 50, grace_s=1800, fail_threshold=3)
+        srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
     else:
-        srv.record_probe(True, now=NOW - 50, grace_s=1800, fail_threshold=3, in_litellm=True)
+        srv.record_probe(True, now=time.time() - 1, grace_s=1800, fail_threshold=3, in_litellm=True)
         for _ in range(3):
-            srv.record_probe(False, now=NOW, grace_s=1800, fail_threshold=3, err="refused", in_litellm=True)
+            srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused", in_litellm=True)
     return srv
 
 
@@ -94,7 +94,7 @@ def _fleet(*servers) -> Fleet:
         dep = FleetDeployment.from_vllm(srv)
         dep.in_litellm = True
         dep.litellm_healthy = True
-        dep.litellm_health_at = NOW
+        dep.litellm_health_at = time.time()
         deployments.append(dep)
     return Fleet(cfg=cfg, servers=list(servers), deployments=deployments)
 
@@ -124,7 +124,7 @@ def test_catalog_shows_rollup_not_the_yaml_context():
     healthy = _server("gemma")
     down = _server("gemma", host="10.0.0.2", port=8002, ok=False)
     fleet = _fleet(healthy, down)
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")])
     assert len(rows) == 1
     row = rows[0]
     assert row.rollup == DEGRADED
@@ -143,7 +143,7 @@ def test_catalog_shows_rollup_not_the_yaml_context():
 def test_unavailable_self_hosted_has_no_concurrency():
     pages = _app()
     fleet = _fleet()
-    rows = pages.model_catalog_rows(fleet, [_catalog("missing")], now=NOW)
+    rows = pages.model_catalog_rows(fleet, [_catalog("missing")])
     assert rows[0].rollup == UNAVAILABLE
     assert rows[0].unavailable
     assert not rows[0].available
@@ -162,7 +162,7 @@ def test_commercial_is_external_and_has_no_concurrency():
     )
     dep.in_litellm = True
     dep.litellm_healthy = True
-    dep.litellm_health_at = NOW
+    dep.litellm_health_at = time.time()
     cfg = edict(
         {
             "fleet": {
@@ -174,7 +174,7 @@ def test_commercial_is_external_and_has_no_concurrency():
         }
     )
     fleet = Fleet(cfg=cfg, servers=[], deployments=[dep])
-    rows = pages.model_catalog_rows(fleet, [_catalog("claude", self_hosted=False, modality="text")], now=NOW)
+    rows = pages.model_catalog_rows(fleet, [_catalog("claude", self_hosted=False, modality="text")])
     assert rows[0].rollup == AVAILABLE
     assert not rows[0].private
     assert "external provider" in rows[0].privacy
@@ -188,20 +188,20 @@ def test_attention_items_lists_only_actionable_items():
     down = _server("qwen", host="10.0.0.2", port=8002, ok=False)
     fleet = _fleet(healthy, down)
     next(d for d in fleet.deployments if d.vllm is down).skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
-    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": NOW - 100, "last_seen": NOW - 5, "count": 3}
+    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": time.time() - 100, "last_seen": time.time() - 5, "count": 3}
 
-    kinds = [i.kind for i in pages.attention_items(fleet, now=NOW)]
+    kinds = [i.kind for i in pages.attention_items(fleet)]
     # Only the actionable kinds appear; the healthy box does not.
     assert "unknown" in kinds
     assert "unhealthy" in kinds
     assert "skew" in kinds
     assert "healthy" not in kinds
 
-    items = pages.attention_items(fleet, now=NOW)
+    items = pages.attention_items(fleet)
     unknown = next(i for i in items if i.kind == "unknown")
     assert "192.0.2.7" in unknown.what
     # The strip renders in the template.
-    out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)[0]], attention=items)
+    out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)[0]], attention=items)
     assert "Needs attention" in out
     assert "192.0.2.7" in out
 
@@ -209,7 +209,7 @@ def test_attention_items_lists_only_actionable_items():
 def test_models_template_renders_the_catalog_row():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")])
     out = _render(rows)
     assert "Available" in out
     assert "40,960 context" in out
@@ -235,34 +235,34 @@ def test_admin_rows_carry_their_models_deployments_and_summary():
         public_port=8003,
     )
     loading.max_model_len = 8192
-    loading.config_served_at = NOW - 10
+    loading.config_served_at = time.time() - 10
     fleet = _fleet(healthy, down, loading)
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("qwen")], now=NOW, admin=True)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("qwen")], admin=True)
     by_name = {r.model_name: r for r in rows}
     assert len(by_name["gemma"].deployments) == 2
     assert len(by_name["qwen"].deployments) == 1
     assert by_name["gemma"].replica_summary == "1 healthy / 1 unhealthy"
     assert by_name["qwen"].replica_summary == "1 loading"
     # The rows are the deployment rows: same shape the drill-down renders.
-    assert pages.deployment_rows(fleet, admin=True, now=NOW)[0].model_name
+    assert pages.deployment_rows(fleet, admin=True)[0].model_name
 
 
 def test_non_admin_rows_have_no_admin_fields():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=False)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=False)
     assert not rows[0].keys() & {"deployments", "replica_summary"}
 
 
 def test_admin_rows_carry_the_host_label():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    fleet.set_admin_label("10.0.0.1", "approved", now=NOW - 20)
-    rows = pages.deployment_rows(fleet, admin=True, now=NOW)
+    fleet.set_admin_label("10.0.0.1", "approved", now=time.time() - 20)
+    rows = pages.deployment_rows(fleet, admin=True)
     assert rows[0].label == "approved"
     assert rows[0].label_at == "20s"
     # Non-admin rows never expose the label.
-    for r in pages.deployment_rows(fleet, admin=False, now=NOW):
+    for r in pages.deployment_rows(fleet, admin=False):
         assert r.label == ""
         assert r.label_at == ""
 
@@ -273,12 +273,12 @@ def test_apply_admin_label_sets_clears_and_rejects():
 
     ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "approved")
     assert ok and "approved" in msg
-    assert fleet.admin_label("10.0.0.1")[0] == "approved"
+    assert fleet.admin_label("10.0.0.1").label == "approved"
 
     # A garbled value is rejected, and must not wipe the existing vouch.
     ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "bogus")
     assert not ok and "Unknown admin label" in msg
-    assert fleet.admin_label("10.0.0.1")[0] == "approved"
+    assert fleet.admin_label("10.0.0.1").label == "approved"
 
     # Empty host is rejected.
     ok, msg = pages.apply_admin_label(fleet, "", "approved")
@@ -287,7 +287,7 @@ def test_apply_admin_label_sets_clears_and_rejects():
     # An empty label clears.
     ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "")
     assert ok and "Cleared" in msg
-    assert fleet.admin_label("10.0.0.1")[0] is None
+    assert fleet.admin_label("10.0.0.1").label == ""
 
 
 def test_admin_drill_down_renders_deployments_and_label_controls():
@@ -296,8 +296,8 @@ def test_admin_drill_down_renders_deployments_and_label_controls():
     down = _server("gemma", host="10.0.0.2", port=8002, ok=False)
     fleet = _fleet(healthy, down)
     # A vouch on the healthy box, so the label select pre-selects Approved.
-    fleet.set_admin_label("10.0.0.1", "approved", now=NOW - 20)
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)
+    fleet.set_admin_label("10.0.0.1", "approved", now=time.time() - 20)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
 
     # The per-model deployment table is present, with one row per replica.
@@ -319,10 +319,10 @@ def test_admin_drill_down_renders_deployments_and_label_controls():
 def test_attention_strip_renders_the_label_form_for_unknown_boxes():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": NOW - 100, "last_seen": NOW - 5, "count": 3}
-    fleet.set_admin_label("192.0.2.7", "approved", now=NOW - 5)
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)
-    out = _render(rows, attention=pages.attention_items(fleet, now=NOW), admin=True)
+    fleet.unknown_config_fetches["192.0.2.7"] = {"first_seen": time.time() - 100, "last_seen": time.time() - 5, "count": 3}
+    fleet.set_admin_label("192.0.2.7", "approved", now=time.time() - 5)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
+    out = _render(rows, attention=pages.attention_items(fleet), admin=True)
     # The unknown-box item carries the set/clear form, pre-selected on its vouch.
     assert 'name="host" value="192.0.2.7"' in out
     assert 'value="approved" selected' in out
@@ -359,7 +359,7 @@ def test_drill_down_renders_add_and_remove_actions():
     for dep in fleet.deployments:  # _fleet defaults every box into LiteLLM
         if dep.vllm.host in ("10.0.0.2", "10.0.0.4"):
             dep.in_litellm = False
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], now=NOW, admin=True)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
 
     # Exactly one enabled Add (the healthy box not yet in LiteLLM) posts the row.

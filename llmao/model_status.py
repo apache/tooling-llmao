@@ -42,6 +42,7 @@ signal is stale. Stale is Unknown, not Down.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 # Lifecycle. One per deployment, or Unknown for a fleet-key fetch from an IP
@@ -197,7 +198,8 @@ def commercial_lifecycle(snap: DeploymentSnapshot) -> str:
     return CONFIGURED
 
 
-def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float) -> DeploymentStatus:
+def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None = None) -> DeploymentStatus:
+    now = now or time.time()
     if snap.litellm_only:
         lifecycle = UNKNOWN
     elif snap.self_hosted:

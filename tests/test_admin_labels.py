@@ -23,6 +23,8 @@ and -- the core safety property -- that a label never changes the computed
 lifecycle.
 """
 
+import time
+
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
@@ -61,46 +63,57 @@ def _fleet(**server_kwargs):
 def test_fresh_fleet_has_no_labels():
     # The loss-on-restart contract: a new process starts with no admin labels.
     fleet = _fleet()
-    assert fleet.admin_label(HOST) == (None, None)
+    assert fleet.admin_label(HOST) == edict(label="", display="", at="never")
     assert fleet.admin_labels == {}
     assert fleet.admin_label_at == {}
 
 
 def test_set_and_read_round_trips():
     fleet = _fleet()
-    fleet.set_admin_label(HOST, APPROVED, now=100.0)
-    assert fleet.admin_label(HOST) == (APPROVED, 100.0)
+    fleet.set_admin_label(HOST, APPROVED)
+    # A fresh stamp reads as "0s"; the stored stamp is the default time.time().
+    assert fleet.admin_label(HOST) == edict(label=APPROVED, display="approved", at="0s")
+    assert abs(fleet.admin_label_at[HOST] - time.time()) < 2
+
+
+def test_display_at_ages_the_label():
+    fleet = _fleet()
+    fleet.set_admin_label(HOST, APPROVED)
+    fleet.admin_label_at[HOST] = time.time() - 20
+    assert fleet.admin_label(HOST).at == "20s"
 
 
 def test_keys_on_the_normalized_host():
     # Same host presented as an IPv4-mapped IPv6 address is the same label.
     fleet = _fleet()
-    fleet.set_admin_label("::ffff:10.0.0.1", APPROVED, now=100.0)
-    assert fleet.admin_label(HOST) == (APPROVED, 100.0)
+    fleet.set_admin_label("::ffff:10.0.0.1", APPROVED)
+    assert fleet.admin_label(HOST).label == APPROVED
 
 
 def test_clear_drops_both_stores():
     fleet = _fleet()
-    fleet.set_admin_label(HOST, APPROVED, now=100.0)
-    fleet.set_admin_label(HOST, None, now=200.0)
-    assert fleet.admin_label(HOST) == (None, None)
+    fleet.set_admin_label(HOST, APPROVED)
+    fleet.set_admin_label(HOST, None)
+    assert fleet.admin_label(HOST) == edict(label="", display="", at="never")
     assert fleet.admin_labels == {}
     assert fleet.admin_label_at == {}
 
 
 def test_change_updates_timestamp():
     fleet = _fleet()
-    fleet.set_admin_label(HOST, APPROVED, now=100.0)
-    fleet.set_admin_label(HOST, REBOOT_REQUESTED, now=500.0)
-    assert fleet.admin_label(HOST) == (REBOOT_REQUESTED, 500.0)
+    fleet.set_admin_label(HOST, APPROVED, now=time.time() - 100)
+    first = fleet.admin_label_at[HOST]
+    fleet.set_admin_label(HOST, REBOOT_REQUESTED)
+    assert fleet.admin_label(HOST).label == REBOOT_REQUESTED
+    assert fleet.admin_label_at[HOST] > first
 
 
 def test_unknown_label_raises():
     fleet = _fleet()
     with pytest.raises(ValueError, match="Unknown admin label"):
-        fleet.set_admin_label(HOST, "retired", now=100.0)
+        fleet.set_admin_label(HOST, "retired")
     # Nothing was recorded.
-    assert fleet.admin_label(HOST) == (None, None)
+    assert fleet.admin_label(HOST) == edict(label="", display="", at="never")
     assert "retired" not in ADMIN_LABELS
 
 
