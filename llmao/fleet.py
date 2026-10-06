@@ -603,16 +603,46 @@ class Fleet:
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
         """Record that we handed this box its config.
 
-        Stamps ``config_served_at`` on every server for the host, which is what
+        An approved host that is not in fleet.hosts becomes a server and a
+        deployment here, the first time. Stamping ``config_served_at`` is what
         moves them from awaiting contact into the Loading window (the next
         probe, or immediately for any probe running now, re-derives the state).
         """
         stamp = now or time.time()
         self.config_fetch_at[host] = stamp
+        self._materialize_approved(host)
         for srv in self.servers:
             if srv.host == host:
                 srv.config_served_at = stamp
         self.unknown_config_fetches.pop(normalize_peer_ip(host), None)
+
+    def _models_by_name(self) -> dict[str, Any]:
+        if self.models:
+            return self.models
+        return {m.model_name: m for m in load_models(cfg=self.cfg)}
+
+    def _materialize_approved(self, host: str) -> None:
+        """Servers and deployments for an approved IP that config.yaml does not list.
+
+        One server per approved model, ports 8001 upward, same as the config
+        JSON. A second call, or a host that already has servers, does nothing.
+        """
+        host = normalize_peer_ip(host)
+        names = self.approved_models.get(host)
+        if not names or any(s.host == host for s in self.servers):
+            return
+        members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
+        if host in members:
+            return
+        by_name = self._models_by_name()
+        for i, name in enumerate(names):
+            self._add_server(host, by_name[name], 8001 + i, name)
+
+    def _add_server(self, host: str, model: Any, port: int, name: str) -> VllmServer:
+        srv = VllmServer.from_row(host, str(model.model_name), port, name, model, self.cfg)
+        self.servers.append(srv)
+        self.deployments.append(FleetDeployment.from_vllm(srv))
+        return srv
 
     def set_admin_label(self, host: str, label: str | None, *, now: float | None = None) -> None:
         """Set, change, or clear a host's current admin label.
@@ -820,6 +850,97 @@ class Fleet:
             return
         mapping = await fetch_port_map(self.cfg.fleet.vast.api_key, client=client)
         self.apply_port_map(mapping)
+        await self.adopt_vast_instances(mapping, client)
+
+    async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:
+        """Probe Vast instances that are not in fleet.hosts.
+
+        Connection refused leaves the IP unknown. A 503 with an approval
+        materializes the servers as Loading. A 200 with no approval left in
+        memory (a restart) reads /v1/models and materializes the matching
+        model as Healthy, so sync_selfhost can create the Deployment.
+        """
+        stamp = now or time.time()
+        grace = float(self.cfg.fleet.health_grace_s)
+        threshold = int(self.cfg.fleet.health_fail_threshold)
+        members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
+        for raw_ip, by_listen in mapping.items():
+            ip = normalize_peer_ip(str(raw_ip))
+            if not ip or ip in members or any(s.host == ip for s in self.servers):
+                continue
+            probes = []
+            for listen_s, public in by_listen.items():
+                ok, reached, err = await _get_health(client, f"http://{ip}:{int(public)}/health")
+                probes.append((int(listen_s), int(public), ok, reached, err))
+            if not any(reached for _, _, _, reached, _ in probes):
+                continue
+            if self.approved_models.get(ip):
+                self._materialize_approved(ip)
+                self._stamp_public_ports(ip, by_listen)
+                for srv in self.servers:
+                    if srv.host != ip:
+                        continue
+                    hit = next((p for p in probes if p[0] == srv.listen_port), None)
+                    if hit is None:
+                        continue
+                    _, _, ok, reached, err = hit
+                    srv.config_served_at = srv.config_served_at or stamp
+                    srv.record_probe(
+                        ok,
+                        now=stamp,
+                        grace_s=grace,
+                        fail_threshold=threshold,
+                        err=err,
+                        reached=reached,
+                    )
+                continue
+            for listen, public, ok, _reached, _err in probes:
+                if not ok:
+                    continue
+                model = await self._model_for_live_port(client, ip, listen, public)
+                if model is None:
+                    continue
+                srv = self._add_server(ip, model, listen, str(model.model_name))
+                srv.public_port = public
+                srv.config_served_at = stamp
+                srv.record_probe(True, now=stamp, grace_s=grace, fail_threshold=threshold, reached=True)
+
+    def _stamp_public_ports(self, host: str, by_listen: Any) -> None:
+        for srv in self.servers:
+            if srv.host != host or srv.public_port_pinned:
+                continue
+            public = by_listen.get(str(srv.listen_port))
+            if public is not None:
+                srv.public_port = int(public)
+
+    async def _model_for_live_port(self, client: httpx.AsyncClient, host: str, listen: int, public: int) -> Any | None:
+        """The models.yaml row whose HF id is what this port is serving, else None."""
+        key = _vllm_api_key(self.cfg, host, listen)
+        try:
+            resp = await client.get(
+                f"http://{host}:{public}/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+        except httpx.HTTPError:
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            rows = resp.json().get("data") or []
+        except ValueError:
+            return None
+        hf_id = ""
+        for row in rows:
+            if isinstance(row, dict) and row.get("id"):
+                hf_id = str(row["id"])
+                break
+        if not hf_id:
+            return None
+        for model in self._models_by_name().values():
+            vllm = getattr(model.model_info, "vllm", None)
+            if vllm is not None and str(getattr(vllm, "model", "")) == hf_id:
+                return model
+        return None
 
     async def run_lifecycle(self) -> None:
         interval = float(self.cfg.fleet.health_interval_s)

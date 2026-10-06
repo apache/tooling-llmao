@@ -17,8 +17,10 @@
 
 """config_for_host: JSON for a client IP from fleet.hosts + models.yaml."""
 
+import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 from easydict import EasyDict as edict  # noqa: N813
@@ -31,9 +33,11 @@ from llmao.fleet import (
     config_for_host,
     normalize_peer_ip,
     parse_host_row,
+    snapshot_for_status,
     validate_fleet,
 )
 from llmao.litellm_client import _norm_base
+from llmao.model_status import LOADING, deployment_status
 from llmao.models import load_models
 from llmao.vllm_api_key import derive_vllm_api_key
 
@@ -118,6 +122,100 @@ def test_approve_rejects_bad_selections():
     assert fleet.admin_labels == {}
     with pytest.raises(ValueError, match="already in fleet"):
         fleet.approve_models("127.0.0.1", ["gemma4-26b"])
+
+
+def test_config_fetch_materializes_an_approved_host():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
+    fleet.note_config_fetch("198.51.100.8", now=50.0)
+    fleet.note_config_fetch("198.51.100.8", now=60.0)
+    assert [s.name for s in fleet.servers] == ["qwen3-8b", "gemma4-26b"]
+    assert [s.listen_port for s in fleet.servers] == [8001, 8002]
+    assert len(fleet.deployments) == 2
+    assert all(not d.in_litellm for d in fleet.deployments)
+    assert all(s.config_served_at == 60.0 for s in fleet.servers)
+    view = deployment_status(snapshot_for_status(fleet.deployments[0], cfg, 60.0), cfg.fleet, 60.0)
+    assert view.lifecycle == LOADING
+    # A host config.yaml already names is not built from an approval.
+    fleet.approved_models["127.0.0.1"] = ["qwen3-8b"]
+    fleet.note_config_fetch("127.0.0.1", now=70.0)
+    assert [s.host for s in fleet.servers] == ["198.51.100.8", "198.51.100.8"]
+
+
+def test_probe_moves_the_materialized_server_to_healthy():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b"])
+    fleet.note_config_fetch("198.51.100.8", now=50.0)
+    srv = fleet.servers[0]
+    srv.public_port = 18001
+    srv.record_probe(True, now=55.0, grace_s=1800, fail_threshold=3, reached=True)
+    assert srv.state == "healthy"
+    assert fleet.deployments[0].api_base == "http://198.51.100.8:18001/v1"
+
+
+def _client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def test_vast_refused_port_stays_unknown():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    async def run():
+        async with _client(handler) as client:
+            await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
+
+    asyncio.run(run())
+    assert fleet.servers == []
+
+
+def test_vast_503_with_approval_is_loading():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    async def run():
+        async with _client(handler) as client:
+            await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
+
+    asyncio.run(run())
+    assert len(fleet.servers) == 1
+    assert fleet.servers[0].public_port == 18001
+    assert fleet.servers[0].state == LOADING
+    assert not fleet.deployments[0].in_litellm
+
+
+def test_vast_200_rebuilds_without_an_approval():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "Qwen/Qwen3-8B-FP8"}]})
+        return httpx.Response(200)
+
+    async def run():
+        async with _client(handler) as client:
+            await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
+
+    asyncio.run(run())
+    assert [s.model_name for s in fleet.servers] == ["qwen3-8b"]
+    assert fleet.servers[0].state == "healthy"
+    assert fleet.deployments[0].api_base == "http://198.51.100.8:18001/v1"
 
 
 def test_approval_drops_when_the_host_joins_config():
