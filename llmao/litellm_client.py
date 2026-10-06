@@ -321,6 +321,8 @@ class LiteLLMBackend:
         self._allowance_cache: dict[str, tuple[float, dict[str, int]]] = {}
         # (monotonic stamp, folded spend rows) for the current week.
         self._spend_cache: tuple[float, list[dict]] | None = None
+        # (monotonic stamp, team/list rows).
+        self._team_rows_cache: tuple[float, list[dict[str, Any]]] | None = None
         # model_name -> cost_basis, filled when routes are registered, so a
         # spend row can be told from an invoice without a second lookup.
         self._cost_basis: dict[str, str] = {}
@@ -374,7 +376,26 @@ class LiteLLMBackend:
                 self._team_ids[str(alias)] = str(tid)
         return rows
 
-    async def _team_list_rows(self) -> list[dict[str, Any]]:
+    # Requests live in team metadata, so listing them reads every team. My
+    # Keys does that twice per load -- once for pending approvals, once for
+    # the person's own asks -- on top of two spend-log scans and a team_info
+    # per project.
+    #
+    # Sixty seconds: long enough that a page load is one scan rather than
+    # several, short enough that an approval appears while the admin who
+    # granted it is still looking at the page.
+    _TEAM_TTL_S = 60
+
+    async def _team_list_rows(self, *, fresh: bool = False) -> list[dict[str, Any]]:
+        if not fresh and self._team_rows_cache is not None:
+            at, rows = self._team_rows_cache
+            if (time.monotonic() - at) < self._TEAM_TTL_S:
+                return rows
+        rows = await self._team_list_rows_uncached()
+        self._team_rows_cache = (time.monotonic(), rows)
+        return rows
+
+    async def _team_list_rows_uncached(self) -> list[dict[str, Any]]:
         resp = await self._request("GET", "team/list")
         self._raise_http(resp)
         body = resp.json()
@@ -404,7 +425,7 @@ class LiteLLMBackend:
 
     async def warm(self) -> None:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
-        rows = await self._team_list_rows()
+        rows = await self._team_list_rows(fresh=True)
         await self._backfill_token_caps(rows)
         await self.ensure_commercial()
 
@@ -570,6 +591,10 @@ class LiteLLMBackend:
             json={"team_id": team_id, "metadata": meta},
         )
         self._raise_http(resp)
+        # The listing carries metadata, so a request just written would not
+        # appear until the TTL expired -- which reads as the form having
+        # silently failed.
+        self._team_rows_cache = None
         return req
 
     # Same operation; named for what the caller means.
@@ -681,6 +706,7 @@ class LiteLLMBackend:
             json={"team_id": team.team_id, "metadata": meta},
         )
         self._raise_http(resp)
+        self._team_rows_cache = None
         _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
         # The cap is re-read on every check, but cached buckets are not --
         # without this an admin lowering a cap sees a stale remaining figure

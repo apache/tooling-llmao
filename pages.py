@@ -808,6 +808,13 @@ async def keys_list(result):
     except BackendUnavailableError:
         result.projects = []
 
+    # One read, two views. my_key_approvals and my_requests both list every
+    # request; asking twice doubled the most expensive thing on the page.
+    try:
+        mine = await APP.seam.my_requests(ident)
+    except BackendUnavailableError:
+        mine = []
+
     try:
         result.approvals = [
             edict(
@@ -823,17 +830,14 @@ async def keys_list(result):
                     "expires_h": (_when_h(a["expires_at"].date()) if a.get("expires_at") else ""),
                 }
             )
-            for a in await APP.seam.my_key_approvals(ident)
+            for a in APP.seam.actionable_key_approvals(mine)
         ]
     except (BackendUnavailableError, AttributeError):
         result.approvals = []
 
     # Answers appear where the asking happened, so nobody has to find an
     # email to learn they were turned down.
-    try:
-        result.my_requests = _request_rows(await APP.seam.my_requests(ident))
-    except BackendUnavailableError:
-        result.my_requests = []
+    result.my_requests = _request_rows(mine)
     return result
 
 

@@ -464,6 +464,27 @@ class Seam:
             # key is idle; we only know we could not ask.
             return {}
 
+    @staticmethod
+    def actionable_key_approvals(requests: list) -> list[dict]:
+        """Approvals from an already-fetched list.
+
+        Same filter as my_key_approvals, without the read. My Keys needs both
+        this and the person's own requests, and listing requests reads every
+        team -- so the page fetches once and derives both.
+        """
+        return [
+            {
+                "id": r.id,
+                "purpose": r.granted.get("purpose") or r.wanted.get("purpose") or "",
+                "tier": r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
+                "project": r.project or "",
+                "token_cap": int(r.granted.get("token_cap") or 0),
+                "expires_at": r.expires_at(),
+            }
+            for r in requests
+            if r.is_actionable()
+        ]
+
     async def my_key_approvals(self, identity: Identity) -> list[dict]:
         """Approved key requests this person can still exercise.
 
