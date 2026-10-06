@@ -166,34 +166,34 @@ Registering immediately to avoid pending state is still a bad default
 ### 2.4 Config fetch before membership
 
 A new box presents the fleet key and calls `GET /vllm/config` before its IP
-is in `fleet.hosts`. Today that is a 404 and the Fleet tab does not show it.
+is in `fleet.hosts`. Today that is a 404 and the `/models` attention strip
+surfaces it.
 vLLM cannot be serving the assignment yet: the box has no model, listen port,
 or bearer until YAML names them and a later fetch succeeds.
 
 Record the request in process memory (host, first seen, last seen, count;
 cap 50 newest). Still 404. Do not write `config.yaml`. Do not call LiteLLM.
 The list dies on process restart. `config.yaml` itself is read at process
-start (the dev reloader watches the file; production needs a restart). The
-Fleet tab does not edit hosts, ports, or models.
+start (the dev reloader watches the file; production needs a restart).
+`/models` does not edit hosts, ports, or models.
 
-The only new row is an IP that is not in `config.yaml`. Once the operator
+The only new entry is an IP that is not in `config.yaml`. Once the operator
 adds `fleet.hosts.<ip>: [[model_name, listen_port]]` and restarts llmao, that
 IP is an ordinary deployment row. vLLM not up is already the State cell
 (Loading, Unhealthy, or Stalled). In LiteLLM or not is already the
 no-deployment badge. Those stay separate. There is no combined "member, vLLM
 not up" state.
 
-Site-admin only for the new row, the highlight, the skew sentences, and Add.
+Site-admin only for the strip entry, the skew sentences, and Add.
 
-**Not in `config.yaml`.** The IP is a row in the Fleet table, Bootstrap
-`table-warning`, not a second table. A fleet key from an IP outside
-`config.yaml` is a box being set up, or a caller that should not have the
-key. The highlight does not decide which. State cell: `Fleet key presented;
-this IP is not in config.yaml`. Config-request column: last-seen age and
-count (`2m · 14`). Other columns are `—`. No Add button. No Skew cell.
-Caption under the heading: `A highlighted row presented the fleet key and is
-not in config.yaml. That is a box being set up, or a caller that should not
-have the key.`
+**Not in `config.yaml`.** The IP is an entry in the admin attention strip at
+the top of `/models`, Bootstrap `alert-warning`, not a table row. A fleet key
+from an IP outside `config.yaml` is a box being set up, or a caller that
+should not have the key. The strip does not decide which. Each entry reads
+`Fleet key presented from {host} (not in fleet.hosts)` with its detail as
+`seen {age} · {count} requests` (e.g. `seen 2m · 14 requests`), and carries
+the label set/clear form. There is no Add button and no skew cell for an
+unknown box.
 
 **In `config.yaml`.** The next fetch returns the assignment. Add is an
 Actions control on that existing self-hosted row. It is disabled until vLLM
@@ -226,10 +226,10 @@ not a mismatch. The mismatch flag stays on the deployment across the health pass
 A LiteLLM `model/info` route whose `api_base` matches no deployment is
 `in LiteLLM, not in config`. It is stored on `Fleet.extra_litellm` as host,
 port, and model name (one host can serve several ports; one host:port can
-report more than one model name). It is not a Fleet table row. The log lists
+report more than one model name). It is not a `/models` drill-down row. The log lists
 those triples.
 
-Not in this design: editing `config.yaml` from the tab, picking a model for
+Not in this design: editing `config.yaml` from the page, picking a model for
 an unknown IP, persisting the request list, a partial 404 body, auto-restart
 of the GPU box, a retire button, registering before vLLM is up, alerting or
 blocking a highlighted IP.

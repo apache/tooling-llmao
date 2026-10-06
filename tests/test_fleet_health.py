@@ -576,8 +576,8 @@ def test_probe_all_scrapes_from_root_not_api_base():
 
     Catches the regression one layer up from fetch_observed: if probe_all
     ever passes the /v1-suffixed base, both scrape requests 404 on every
-    transition, the KV column on /fleet goes empty, and oversized stays
-    unknown without any other test failing.
+    transition, the KV column on the /models drill-down goes empty, and
+    oversized stays unknown without any other test failing.
     """
     s = _server()
     calls = []

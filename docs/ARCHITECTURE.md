@@ -66,9 +66,9 @@ JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
 (`fleet-lifecycle`, `litellm-skew`). After probes, `Fleet.after_probe`
 POSTs `/model/new` / `/model/delete`. `Fleet.models` is the YAML recipe.
 `FleetDeployment` is one intended LiteLLM backend. `VllmServer` states:
-Loading, Healthy, Unhealthy, Stalled. `/fleet` shows the Healthy badge only
-when the server is Healthy **and** LiteLLM has a deployment. Host:port and LiteLLM UI
-are site-admin. JSON handlers use `@api` in `api.py`. Do not wrap Quart
+Loading, Healthy, Unhealthy, Stalled. The `/models` admin drill-down shows the
+Healthy badge only when the server is Healthy **and** LiteLLM has a deployment;
+host:port is site-admin. JSON handlers use `@api` in `api.py`. Do not wrap Quart
 `asgi_app` with Werkzeug ProxyFix.
 
 **GPU boxes are not this process.** Vast: custom template,
@@ -115,3 +115,89 @@ client tool → LiteLLM + PAT → budget / capacity → model
 ```
 
 See `../README.md` for quickstart and API surface.
+
+## Components
+
+Two request paths cross this process. The **HTML/UX** path (browser) goes through
+asfquart and talks to the LiteLLM **admin** surface. The **config** path is the
+fleet control plane: GPU boxes call `GET /vllm/config` to be told what to load.
+The **inference** path (client tools) does **not** touch this process at all.
+
+```mermaid
+flowchart LR
+  subgraph browser [browser]
+    UI[Models / Keys / Projects]
+  end
+  subgraph proc [llmao / asfquart]
+    AUTH[OAuth + session<br/>@require + seam.authorize]
+    PAGES[HTML pages: pages.py]
+    JSON[JSON API: api.py]
+    FLEET[Fleet control plane<br/>GET /vllm/config]
+    RUNNERS[runners: fleet-lifecycle,<br/>litellm-skew]
+  end
+  subgraph litellm [LiteLLM proxy]
+    ADMIN[admin API<br/>teams / budgets / PATs / model/*]
+    ROUTER[Router: budget + capacity]
+  end
+  BOX[GPU boxes / vLLM]
+  TOOL[client tool]
+  MODEL[model]
+
+  UI --> AUTH
+  AUTH --> PAGES
+  AUTH --> JSON
+  PAGES -->|admin ops| ADMIN
+  JSON -->|admin ops| ADMIN
+  BOX -->|fleet key| FLEET
+  FLEET -->|{host, servers}| BOX
+  RUNNERS -->|probe + skew| FLEET
+  RUNNERS -->|after_probe: model/new or model/delete| ADMIN
+  TOOL -->|PAT| ROUTER
+  ROUTER --> MODEL
+```
+
+## Class relationships
+
+`Fleet` is built at startup and holds the fleet state the runners and pages read.
+`LiteLLMBackend` takes the same `Fleet` and is the only thing that writes to
+LiteLLM. The lifecycle/skew logic in `model_status.py` is a set of **pure
+functions**: it takes a `DeploymentSnapshot` (frozen out of a deployment + its
+server) and returns a status object, with no shared mutable state.
+
+```mermaid
+classDiagram
+  class Fleet {
+    +servers
+    +deployments
+    +models
+    +unknown_config_fetches
+    +extra_litellm
+  }
+  class FleetDeployment {
+    +vllm
+    +in_litellm
+    +api_base
+    +self_hosted
+    +model_name
+    +skew
+  }
+  class VllmServer {
+    +host
+    +listen_port
+    +state
+  }
+  class LiteLLMBackend {
+    +fleet
+  }
+  class DeploymentSnapshot
+  class DeploymentStatus
+  class ModelStatus
+
+  Fleet "1" *-- "0..n" FleetDeployment : deployments
+  FleetDeployment "1" o-- "0..1" VllmServer : vllm
+  Fleet "1" -- "1" LiteLLMBackend : held by
+  DeploymentSnapshot ..> FleetDeployment : built from
+  DeploymentSnapshot ..> VllmServer : built from
+  DeploymentSnapshot ..> DeploymentStatus : deployment_status()
+  FleetDeployment ..> ModelStatus : model_rollup()
+```
