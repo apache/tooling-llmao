@@ -53,6 +53,16 @@ def test_port_map_from_body():
     assert mapping["203.0.113.10"]["8001"] == 41234
 
 
+def test_second_row_for_the_same_ip_keeps_both_ports():
+    other = {
+        "public_ipaddr": "203.0.113.10",
+        "ports": {"8002/tcp": [{"HostIp": "0.0.0.0", "HostPort": "41235"}]},
+    }
+    mapping = port_map_from_body({"instances": [INSTANCE, other], "total_instances": 2})
+    assert mapping["203.0.113.10"]["8001"] == 41234
+    assert mapping["203.0.113.10"]["8002"] == 41235
+
+
 def test_skip_no_ip_or_ports():
     mapping = port_map_from_body(
         {

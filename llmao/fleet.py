@@ -121,6 +121,31 @@ def client_ip(
     return normalize_peer_ip(remote_addr)
 
 
+# Vast publishes these three container ports for vLLM, in order. A box does
+# not get a fourth. RunPod stops at three as well; its public ports are pinned
+# on the host row, not taken from this tuple.
+VLLM_LISTEN_PORTS = (8001, 8002, 8003)
+
+# Boxes already up on other ports. Delete a pair when that box is replaced.
+# Not a template for new hosts. These use the shared selfhost_api_key; every
+# other server uses the key derived from the salt.
+LEGACY_SERVERS = {
+    ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
+    ("103.196.86.105", 8004),  # qwen3.8-27b, public port pinned at 15602
+}
+
+
+def _listen_port_allowed(host: str, port: int) -> bool:
+    return port in VLLM_LISTEN_PORTS or (normalize_peer_ip(host), port) in LEGACY_SERVERS
+
+
+def _require_listen_port(host: str, port: int) -> None:
+    if _listen_port_allowed(host, port):
+        return
+    allowed = ", ".join(str(p) for p in VLLM_LISTEN_PORTS)
+    raise ValueError(f"{host}: listen port {port} is not one of {allowed}")
+
+
 def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int | None]:
     """[model, port] | [model, port, name] | [model, port, name, public_port]
 
@@ -131,7 +156,7 @@ def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int 
 
     Use null for `name` to reach the fourth slot without renaming a server:
 
-        - [qwen3.8-27b, 8004, null, 16643]
+        - [qwen3.8-27b, 8002, null, 16643]
     """
     if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3, 4):
         raise ValueError(
@@ -192,10 +217,14 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             raise ValueError("fleet.hosts has an empty IP key")
         if not isinstance(rows, (list, tuple)):
             raise ValueError(f"fleet.hosts.{host} must be a list of [model, port] rows")
+        if len(rows) > len(VLLM_LISTEN_PORTS):
+            raise ValueError(f"fleet.hosts.{host}: at most {len(VLLM_LISTEN_PORTS)} servers")
         seen_names: set[str] = set()
         seen_ports: set[int] = set()
+        legacy = False
         for i, raw in enumerate(rows):
             model_name, port, label, _ = parse_host_row(raw, host, i)
+            _require_listen_port(host, port)
             if model_name not in known:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
             if not by_name[model_name].model_info.self_hosted:
@@ -206,6 +235,12 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
                 raise ValueError(f"fleet.hosts.{host}: duplicate port {port}")
             seen_names.add(label)
             seen_ports.add(port)
+            if (normalize_peer_ip(host), port) in LEGACY_SERVERS:
+                legacy = True
+        if legacy:
+            shared = str(getattr(cfg.fleet, "selfhost_api_key", "") or "").strip()
+            if not shared or shared.startswith("CHANGE_ME"):
+                raise ValueError(f"config.yaml: fleet.selfhost_api_key is required while {host} is still a legacy box")
 
 
 def _vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
@@ -243,7 +278,9 @@ def config_for_host(
     if known:
         rows = list(cfg.fleet.hosts[host])
     else:
-        rows = [[name, 8001 + i] for i, name in enumerate(approved)]
+        if len(approved) > len(VLLM_LISTEN_PORTS):
+            raise ValueError(f"{host}: at most {len(VLLM_LISTEN_PORTS)} servers")
+        rows = [[name, VLLM_LISTEN_PORTS[i]] for i, name in enumerate(approved)]
     servers = []
     for i, raw in enumerate(rows):
         # The box is told its listen port; the public port is ours, not its
@@ -584,8 +621,13 @@ class Fleet:
         servers = []
         for host, rows in cfg.fleet.hosts.items():
             host = str(host).strip()
+            seen_ports: set[int] = set()
             for i, raw in enumerate(rows):
                 model_name, port, name, public = parse_host_row(raw, host, i)
+                _require_listen_port(host, port)
+                if port in seen_ports:
+                    raise ValueError(f"fleet.hosts.{host}: duplicate port {port}")
+                seen_ports.add(port)
                 srv = VllmServer.from_row(host, model_name, port, name, by_name[model_name], cfg)
                 if public is not None:
                     # Pinned in config: no provider lookup can override it.
@@ -624,19 +666,23 @@ class Fleet:
     def _materialize_approved(self, host: str) -> None:
         """Servers and deployments for an approved IP that config.yaml does not list.
 
-        One server per approved model, ports 8001 upward, same as the config
-        JSON. A second call, or a host that already has servers, does nothing.
+        One server per approved model, on VLLM_LISTEN_PORTS in order. A port this
+        host already has is left alone, so a later approval can add the next one.
         """
         host = normalize_peer_ip(host)
         names = self.approved_models.get(host)
-        if not names or any(s.host == host for s in self.servers):
+        if not names:
             return
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
         if host in members:
             return
         by_name = self._models_by_name()
+        have = {s.listen_port for s in self.servers if s.host == host}
         for i, name in enumerate(names):
-            self._add_server(host, by_name[name], 8001 + i, name)
+            port = VLLM_LISTEN_PORTS[i]
+            if port in have:
+                continue
+            self._add_server(host, by_name[name], port, name)
 
     def _add_server(self, host: str, model: Any, port: int, name: str) -> VllmServer:
         srv = VllmServer.from_row(host, str(model.model_name), port, name, model, self.cfg)
@@ -714,6 +760,8 @@ class Fleet:
         chosen = [str(n).strip() for n in names if str(n).strip()]
         if not chosen:
             raise ValueError("Select at least one model")
+        if len(chosen) > len(VLLM_LISTEN_PORTS):
+            raise ValueError(f"{host}: at most {len(VLLM_LISTEN_PORTS)} servers")
         by_name = self.models or {m.model_name: m for m in load_models(cfg=self.cfg)}
         for name in chosen:
             model = by_name.get(name)
@@ -767,7 +815,7 @@ class Fleet:
         all.
         """
         for srv in self.servers:
-            if srv.public_port_pinned:
+            if srv.public_port_pinned or not _listen_port_allowed(srv.host, srv.listen_port):
                 continue
             by_listen = mapping.get(srv.host) if mapping is not None else None
             if not by_listen:
@@ -868,12 +916,19 @@ class Fleet:
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
         for raw_ip, by_listen in mapping.items():
             ip = normalize_peer_ip(str(raw_ip))
-            if not ip or ip in members or any(s.host == ip for s in self.servers):
+            if not ip or ip in members:
                 continue
+            # Identity is host + listen port. A sibling port is still new when
+            # this host already has the other one. SSH and the rest of the
+            # Vast map are not vLLM and answer 401.
+            known = {(s.host, s.listen_port) for s in self.servers}
             probes = []
             for listen_s, public in by_listen.items():
+                listen = int(listen_s)
+                if listen not in VLLM_LISTEN_PORTS or (ip, listen) in known:
+                    continue
                 ok, reached, err = await _get_health(client, f"http://{ip}:{int(public)}/health")
-                probes.append((int(listen_s), int(public), ok, reached, err))
+                probes.append((listen, int(public), ok, reached, err))
             if not any(reached for _, _, _, reached, _ in probes):
                 continue
             if self.approved_models.get(ip):
@@ -910,6 +965,8 @@ class Fleet:
     def _stamp_public_ports(self, host: str, by_listen: Any) -> None:
         for srv in self.servers:
             if srv.host != host or srv.public_port_pinned:
+                continue
+            if not _listen_port_allowed(srv.host, srv.listen_port):
                 continue
             public = by_listen.get(str(srv.listen_port))
             if public is not None:

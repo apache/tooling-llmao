@@ -134,8 +134,8 @@ fleet:
   # salt plus host and listen port. A missing attribute fails fleet build.
   # Changing it invalidates every box bearer. See docs/fleet-state.md §2.3.
   vllm_api_salt: CHANGE_ME_VLLM_API_SALT
-  # Legacy shared bearer. The fleet path does not read this. Left so existing
-  # configs still parse until Puppet drops llmao::selfhost_api_key.
+  # Shared bearer for LEGACY_SERVERS only. validate_fleet requires a real
+  # value when one of those hosts is configured. Drop it with the last pair.
   selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
   # Seconds between vLLM GET /health probes (unauthenticated; private path only).
   health_interval_s: 45

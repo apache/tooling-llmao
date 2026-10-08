@@ -218,6 +218,48 @@ def test_vast_200_rebuilds_without_an_approval():
     assert fleet.deployments[0].api_base == "http://198.51.100.8:18001/v1"
 
 
+def test_probe_hits_both_vllm_ports_and_skips_the_rest():
+    cfg = _cfg(
+        {
+            "198.51.100.8": [
+                ["qwen3-8b", 8001, "a"],
+                ["qwen3-8b", 8002, "b"],
+            ]
+        }
+    )
+    cfg.fleet.vast = edict(api_key="vast-test")
+    models = load_models(EXAMPLE)
+    validate_fleet(cfg, models=models)
+    fleet = Fleet.from_cfg(cfg, models=models)
+    fleet.apply_port_map({"198.51.100.8": {"8001": 18001, "8002": 18002, "22": 19022}})
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200)
+
+    async def run():
+        async with _client(handler) as client:
+            await fleet.probe_all(client=client, now=10.0)
+
+    asyncio.run(run())
+    assert "http://198.51.100.8:18001/health" in seen
+    assert "http://198.51.100.8:18002/health" in seen
+    assert not any(":19022/" in url for url in seen)
+
+
+def test_approved_host_gains_the_sibling_port():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
+    fleet.note_config_fetch("198.51.100.8", now=50.0)
+    fleet.servers = [s for s in fleet.servers if s.listen_port == 8001]
+    fleet.deployments = [d for d in fleet.deployments if d.vllm.listen_port == 8001]
+    fleet._materialize_approved("198.51.100.8")
+    assert sorted(s.listen_port for s in fleet.servers) == [8001, 8002]
+
+
 def test_approval_drops_when_the_host_joins_config():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
@@ -232,8 +274,8 @@ def test_optional_name_two_copies():
     cfg = _cfg(
         {
             "10.0.0.1": [
-                ["qwen3-8b", 8003],
-                ["qwen3-8b", 8004, "qwen3-8b-b"],
+                ["qwen3-8b", 8001],
+                ["qwen3-8b", 8002, "qwen3-8b-b"],
             ]
         }
     )
@@ -241,19 +283,83 @@ def test_optional_name_two_copies():
     validate_fleet(cfg, models=models)
     payload = config_for_host("10.0.0.1", models=models, cfg=cfg)
     assert [s["name"] for s in payload["servers"]] == ["qwen3-8b", "qwen3-8b-b"]
-    assert [s["port"] for s in payload["servers"]] == [8003, 8004]
+    assert [s["port"] for s in payload["servers"]] == [8001, 8002]
 
 
 def test_duplicate_name():
     cfg = _cfg(
         {
             "10.0.0.1": [
-                ["qwen3-8b", 8003],
-                ["qwen3-8b", 8004],
+                ["qwen3-8b", 8001],
+                ["qwen3-8b", 8002],
             ]
         }
     )
     with pytest.raises(ValueError, match="duplicate name"):
+        validate_fleet(cfg, models=load_models(EXAMPLE))
+
+
+def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
+    models = load_models(EXAMPLE)
+    hosts = {
+        "80.188.223.202": [["gemma4-26b", 10100]],
+        "103.196.86.105": [["qwen3.8-27b", 8004, "qwen3.8-27b", 15602]],
+    }
+    missing = _cfg(hosts)
+    with pytest.raises(ValueError, match="selfhost_api_key"):
+        validate_fleet(missing, models=models)
+    cfg = _cfg(hosts)
+    cfg.fleet.selfhost_api_key = "sk-shared"
+    cfg.fleet.vast = edict(api_key="vast-test")
+    validate_fleet(cfg, models=models)
+    fleet = Fleet.from_cfg(cfg, models=models)
+    fleet.apply_port_map({"80.188.223.202": {"10100": 40000, "22": 19022}})
+    by_host = {s.host: s for s in fleet.servers}
+    assert by_host["80.188.223.202"].public_port == 40000
+    assert by_host["103.196.86.105"].public_port == 15602
+    with pytest.raises(ValueError, match="not one of"):
+        validate_fleet(_cfg({"10.0.0.1": [["qwen3-8b", 8004]]}), models=models)
+
+
+def test_working_api_key_follows_the_legacy_set():
+    from llmao.litellm_client import LiteLLMBackend
+
+    cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
+    cfg.fleet.selfhost_api_key = "sk-shared"
+    cfg.litellm = edict(base_url="http://127.0.0.1:4000", master_key="sk-m", request_timeout_s=5)
+    models = load_models(EXAMPLE)
+    validate_fleet(cfg, models=models)
+    fleet = Fleet.from_cfg(cfg, models=models)
+    backend = LiteLLMBackend(cfg, fleet)
+    legacy = fleet.deployments[0]
+    other = edict(self_hosted=True, vllm=edict(host="10.0.0.1", listen_port=8001, api_key="sk-derived"))
+
+    async def run():
+        assert await backend._working_api_key(legacy) == "sk-shared"
+        assert await backend._working_api_key(other) == "sk-derived"
+        await backend._client.aclose()
+
+    asyncio.run(run())
+
+
+def test_listen_port_outside_the_set_fails():
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8004]]})
+    with pytest.raises(ValueError, match="not one of 8001, 8002, 8003"):
+        validate_fleet(cfg, models=load_models(EXAMPLE))
+
+
+def test_fourth_server_fails():
+    cfg = _cfg(
+        {
+            "10.0.0.1": [
+                ["qwen3-8b", 8001, "a"],
+                ["qwen3-8b", 8002, "b"],
+                ["gemma4-26b", 8003, "c"],
+                ["qwen3-8b", 8001, "d"],
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="at most 3"):
         validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
@@ -271,7 +377,7 @@ def test_duplicate_port():
 
 
 def test_unknown_model():
-    cfg = _cfg({"10.0.0.1": [["nope", 9]]})
+    cfg = _cfg({"10.0.0.1": [["nope", 8001]]})
     with pytest.raises(ValueError, match="unknown model"):
         validate_fleet(cfg, models=load_models(EXAMPLE))
 

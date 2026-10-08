@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 import httpx
 
 from llmao import requests as _requests
-from llmao.fleet import ExtraLiteLLM, snapshot_for_status
+from llmao.fleet import LEGACY_SERVERS, ExtraLiteLLM, normalize_peer_ip, snapshot_for_status
 from llmao.model_status import (
     HEALTHY,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
@@ -1256,74 +1256,20 @@ class LiteLLMBackend:
         return None
 
     async def _working_api_key(self, dep) -> str | None:
-        """Which key this box actually accepts. Ask it rather than assume.
+        """The bearer to register for this server.
 
-        The fleet is mid-migration and split across two schemes. Boxes brought
-        up before the salt existed were launched with the shared
-        selfhost_api_key as a container argument, and a container does not
-        pick up changed args on restart. Boxes brought up since are launched
-        with a key derived from the salt.
-
-        No single setting is right for both, and getting it wrong is not a
-        quiet failure: a rejected route 401s, LiteLLM cools the deployment
-        down, llmao reads that as the backend being down and deletes the
-        route, and the next probe re-adds it with the same bad key. The
-        system argues with itself every few minutes.
-
-        So try the derived key first and fall back to the shared one. Derived
-        first because that is where the fleet is going -- as boxes are
-        rebuilt the probe follows them automatically, and when none of them
-        need the fallback it can be deleted along with
-        fleet.selfhost_api_key.
-
-        /v1/models is the cheapest endpoint that actually checks the bearer.
-        /healthz does not, which is why none of this was visible to the health
-        logic.
-
-        Returns None if neither works -- the caller registers with the
-        deployment's own key and the route shows unhealthy, which is the
-        honest outcome for a box nothing can authenticate to.
+        LEGACY_SERVERS were launched with the shared selfhost_api_key.
+        validate_fleet already required that key when one of those hosts is
+        configured, so this just returns it. Every other box uses the key
+        derived from the salt. No probe: trying the wrong one 401s and the
+        next pass deletes the route.
         """
-        if not dep.self_hosted or dep.vllm is None or not dep.api_base:
+        if not dep.self_hosted or dep.vllm is None:
             return None
-
-        candidates = []
-        if dep.vllm.api_key:
-            candidates.append(("derived", dep.vllm.api_key))
-        shared = str(getattr(self._cfg.fleet, "selfhost_api_key", "") or "").strip()
-        if shared and not shared.startswith("CHANGE_ME"):
-            candidates.append(("shared", shared))
-
-        base = _norm_base(dep.api_base)
-        for label, key in candidates:
-            try:
-                # Not self._client: that one is bound to LiteLLM and carries
-                # the master key in a default header, which would be sent to
-                # a GPU box.
-                async with httpx.AsyncClient(timeout=5.0) as probe:
-                    resp = await probe.get(
-                        f"{base}/models",
-                        headers={"Authorization": f"Bearer {key}"},
-                    )
-            except Exception:
-                # Unreachable is not the same as unauthorised. Say nothing and
-                # let the health logic decide whether the box is up.
-                return None
-            if resp.status_code == 200:
-                if label == "shared":
-                    _LOGGER.info(
-                        "%s@%s still on the shared key; rebuild it to use the derived one",
-                        dep.name,
-                        dep.api_base,
-                    )
-                return key
-
-        _LOGGER.warning(
-            "%s@%s accepts neither the derived nor the shared key",
-            dep.name,
-            dep.api_base,
-        )
-        return None
+        srv = dep.vllm
+        if (normalize_peer_ip(srv.host), int(srv.listen_port)) in LEGACY_SERVERS:
+            return str(self._cfg.fleet.selfhost_api_key).strip()
+        return srv.api_key or None
 
     async def add_deployment(self, dep) -> None:
         """POST /model/new for this deployment. No serving check.

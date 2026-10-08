@@ -89,7 +89,11 @@ def port_map_from_body(body: Any) -> edict:
         ports = ports_from_instance(inst)
         if not ports:
             continue
-        mapping[ip] = ports
+        # One IP can show up twice. Keep every listen port; do not replace.
+        if ip in mapping:
+            mapping[ip].update(ports)
+        else:
+            mapping[ip] = ports
     return mapping
 
 
