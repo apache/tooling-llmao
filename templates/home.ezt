@@ -4,11 +4,16 @@
         [include "flashes.ezt"]
     </div>
 
-    <h1 class="h3 mb-3">llmao</h1>
+    <h1 class="h3 mb-3">Apache LLMAO</h1>
     <p class="llmao-lede text-muted">
-        Gateway for ASF access to LiteLLM: project teams, budgets, and
-        virtual keys (PATs). This service does <strong>not</strong>
-        host a chat client — point tools at the LiteLLM proxy with a project PAT.
+        The ASF's gateway to AI models. Sign in with your ASF account,
+        create a personal access token (PAT), and use Foundation-sanctioned
+        models from any OpenAI&nbsp;API-compatible tool, with your
+        usage attributed to you.
+    </p>
+    <p class="text-muted">
+        This service does <strong>not</strong> host a chat client. Point your
+        tool at the LiteLLM proxy and use your PAT as the key.
     </p>
 
     [if-any uid]
