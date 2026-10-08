@@ -1271,13 +1271,26 @@ class LiteLLMBackend:
             return str(self._cfg.fleet.selfhost_api_key).strip()
         return srv.api_key or None
 
+    async def _deployment_present(self, dep) -> bool:
+        if not dep.self_hosted or dep.vllm is None:
+            return False
+        for _norm, host, port, model_name in _routes_from_model_info(await self._model_info_rows()):
+            if dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name):
+                return True
+        return False
+
     async def add_deployment(self, dep) -> None:
         """POST /model/new for this deployment. No serving check.
 
         Callers decide the gate. sync_selfhost waits until vLLM is SERVING.
         POST /do-add-deployment uses add_refusal for the same gate, then calls
-        this. A 400 or 409 means LiteLLM already has the row.
+        this. A deployment already present for this server, on the listen port
+        or the public port, is not posted again. A 400 or 409 means the same thing.
         """
+        if await self._deployment_present(dep):
+            dep.in_litellm = True
+            _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
+            return
         body = self.deployment_body(dep, api_key=await self._working_api_key(dep))
         resp = await self._request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
@@ -1355,7 +1368,11 @@ class LiteLLMBackend:
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
             names = by_base.get(base, []) if base else []
-            dep.in_litellm = bool(names)
+            present = any(
+                dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name)
+                for _norm, host, port, model_name in routes
+            )
+            dep.in_litellm = bool(names) or present
             dep.config_mismatch = any(name != dep.model_name for name in names)
             self._store_skew(dep, now)
         extra: list[ExtraLiteLLM] = []

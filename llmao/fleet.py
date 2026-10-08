@@ -423,6 +423,18 @@ class VllmServer:
             return None
         return f"{self.root_url}/v1"
 
+    def same_deployment(self, host: str, port: int | None, model_name: str) -> bool:
+        """True when this LiteLLM deployment is this server.
+
+        The row's port may be the public port or the listen port. Those are
+        one process. A mismatch is not a second deployment.
+        """
+        if port is None or model_name != self.model_name:
+            return False
+        if normalize_peer_ip(host) != normalize_peer_ip(self.host):
+            return False
+        return port == self.public_port or port == self.listen_port
+
     @property
     def oversized(self) -> bool:
         """Serving length exceeds the measured KV cache.
