@@ -1162,8 +1162,12 @@ class LiteLLMBackend:
         else:
             self._allowance_cache.pop(user, None)
 
-    def deployment_body(self, dep) -> dict:
-        """POST /model/new payload from models.yaml + this deployment's api_base."""
+    def deployment_body(self, dep, *, api_key: str | None = None) -> dict:
+        """POST /model/new payload from models.yaml + this deployment's api_base.
+
+        `api_key` overrides the deployment's own. Callers that can probe the
+        box pass what it actually accepts; see _working_api_key.
+        """
         entry = self.fleet.models.get(dep.model_name)
         if entry is None:
             raise BackendUnavailableError(f"models.yaml missing {dep.model_name}; cannot POST /model/new")
@@ -1172,33 +1176,8 @@ class LiteLLMBackend:
             raise BackendUnavailableError(f"{dep.name}: no api_base for /model/new")
         params["api_base"] = dep.api_base
         if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
-            # MIGRATION: prefer the shared key for the ROUTE while one is set.
-            #
-            # Every current box was launched with the shared key as a
-            # container argument, and a container does not pick up changed
-            # args on restart -- it has to be rebuilt. So the derived key is
-            # one the box rejects, verified against a live box: derived 401,
-            # shared 200.
-            #
-            # That is not fixable by hand. A rejected route 401s, LiteLLM
-            # cools the deployment down, llmao's health skew reads that as the
-            # backend being down and deletes the route, the next probe finds
-            # the box answering /healthz and re-adds it with the same bad key.
-            # The system argues with itself every few minutes.
-            #
-            # config_for_host deliberately does NOT do this. The payload a box
-            # fetches from GET /vllm/config has to carry the key it should
-            # ADOPT -- hand it the shared key there and the handshake can
-            # never move anything off the shared key, which is the whole point
-            # of the salt.
-            #
-            # Remove this once every box serves a derived key. Boxes first,
-            # then this.
-            shared = str(getattr(self._cfg.fleet, "selfhost_api_key", "") or "").strip()
-            if shared and not shared.startswith("CHANGE_ME"):
-                params["api_key"] = shared
-            else:
-                params["api_key"] = dep.vllm.api_key
+            params["api_key"] = api_key or dep.vllm.api_key
+
         info: dict[str, Any] = {
             "self_hosted": dep.self_hosted,
             "asf_api_base": _norm_base(dep.api_base),
@@ -1276,6 +1255,76 @@ class LiteLLMBackend:
             return str(info.get("id") or row.get("model_id") or "") or None
         return None
 
+    async def _working_api_key(self, dep) -> str | None:
+        """Which key this box actually accepts. Ask it rather than assume.
+
+        The fleet is mid-migration and split across two schemes. Boxes brought
+        up before the salt existed were launched with the shared
+        selfhost_api_key as a container argument, and a container does not
+        pick up changed args on restart. Boxes brought up since are launched
+        with a key derived from the salt.
+
+        No single setting is right for both, and getting it wrong is not a
+        quiet failure: a rejected route 401s, LiteLLM cools the deployment
+        down, llmao reads that as the backend being down and deletes the
+        route, and the next probe re-adds it with the same bad key. The
+        system argues with itself every few minutes.
+
+        So try the derived key first and fall back to the shared one. Derived
+        first because that is where the fleet is going -- as boxes are
+        rebuilt the probe follows them automatically, and when none of them
+        need the fallback it can be deleted along with
+        fleet.selfhost_api_key.
+
+        /v1/models is the cheapest endpoint that actually checks the bearer.
+        /healthz does not, which is why none of this was visible to the health
+        logic.
+
+        Returns None if neither works -- the caller registers with the
+        deployment's own key and the route shows unhealthy, which is the
+        honest outcome for a box nothing can authenticate to.
+        """
+        if not dep.self_hosted or dep.vllm is None or not dep.api_base:
+            return None
+
+        candidates = []
+        if dep.vllm.api_key:
+            candidates.append(("derived", dep.vllm.api_key))
+        shared = str(getattr(self._cfg.fleet, "selfhost_api_key", "") or "").strip()
+        if shared and not shared.startswith("CHANGE_ME"):
+            candidates.append(("shared", shared))
+
+        base = _norm_base(dep.api_base)
+        for label, key in candidates:
+            try:
+                # Not self._client: that one is bound to LiteLLM and carries
+                # the master key in a default header, which would be sent to
+                # a GPU box.
+                async with httpx.AsyncClient(timeout=5.0) as probe:
+                    resp = await probe.get(
+                        f"{base}/models",
+                        headers={"Authorization": f"Bearer {key}"},
+                    )
+            except Exception:
+                # Unreachable is not the same as unauthorised. Say nothing and
+                # let the health logic decide whether the box is up.
+                return None
+            if resp.status_code == 200:
+                if label == "shared":
+                    _LOGGER.info(
+                        "%s@%s still on the shared key; rebuild it to use the derived one",
+                        dep.name,
+                        dep.api_base,
+                    )
+                return key
+
+        _LOGGER.warning(
+            "%s@%s accepts neither the derived nor the shared key",
+            dep.name,
+            dep.api_base,
+        )
+        return None
+
     async def add_deployment(self, dep) -> None:
         """POST /model/new for this deployment. No serving check.
 
@@ -1283,7 +1332,7 @@ class LiteLLMBackend:
         POST /do-add-deployment uses add_refusal for the same gate, then calls
         this. A 400 or 409 means LiteLLM already has the row.
         """
-        body = self.deployment_body(dep)
+        body = self.deployment_body(dep, api_key=await self._working_api_key(dep))
         resp = await self._request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
             dep.in_litellm = True
