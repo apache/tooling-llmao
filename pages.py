@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import pathlib
+import re
 import time
 from urllib.parse import urlsplit
 
@@ -28,8 +29,10 @@ import asfquart
 import asfquart.auth
 import asfquart.session
 import asfquart.utils
+import cmarkgfm
 import ezt
 import quart
+from cmarkgfm.cmark import Options
 from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
 
@@ -250,6 +253,64 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
 @APP.use_template(TEMPLATES / "home.ezt")
 @page(title="Home")
 async def home_page(result):
+    return result
+
+
+_HELP_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+_HELP_HEADING = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
+HELP_DIR = THIS_DIR / "docs" / "help"
+
+
+def _help_title(text: str, slug: str) -> str:
+    match = _HELP_HEADING.search(text)
+    if match:
+        return match.group(1)
+    return slug
+
+
+def help_article(slug: str, directory: pathlib.Path | None = None):
+    """One help article, or None when the slug is not a file in the directory.
+
+    Raw HTML in the markdown is left intact. The files are committed here.
+    """
+    if not _HELP_SLUG.fullmatch(slug):
+        return None
+    root = directory or HELP_DIR
+    path = root / f"{slug}.md"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    return edict(
+        slug=slug,
+        title=_help_title(text, slug),
+        html=cmarkgfm.github_flavored_markdown_to_html(text, options=Options.CMARK_OPT_UNSAFE),
+    )
+
+
+def help_articles(directory: pathlib.Path | None = None) -> list:
+    """Every article except the index, by title."""
+    root = directory or HELP_DIR
+    found = []
+    for path in root.glob("*.md"):
+        if path.name == "index.md":
+            continue
+        text = path.read_text(encoding="utf-8")
+        found.append(edict(slug=path.stem, title=_help_title(text, path.stem)))
+    found.sort(key=lambda item: item.title.lower())
+    return found
+
+
+@APP.get("/help")
+@APP.get("/help/<slug>")
+@APP.use_template(TEMPLATES / "help.ezt")
+@page(title="Help")
+async def help_page(result, slug: str = "index"):
+    doc = help_article(slug)
+    if doc is None:
+        quart.abort(404)
+    result.title = doc.title
+    result.body = doc.html
+    result.articles = help_articles()
     return result
 
 

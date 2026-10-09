@@ -12,8 +12,8 @@
         usage attributed to you.
     </p>
     <p class="text-muted">
-        This service does <strong>not</strong> host a chat client. Point your
-        tool at the LiteLLM proxy and use your PAT as the key.
+        Point your tool at <span class="font-monospace">https://llm.apache.org</span>
+        and use your PAT as the key. The endpoint follows the OpenAI API specification.
     </p>
 
     [if-any uid]
@@ -34,11 +34,5 @@
         <a class="btn btn-primary" href="/auth?login=/">Sign in with ASF</a>
     </p>
     [end]
-
-    <p class="text-muted small mb-0">
-        API: <code>/v1/projects/&lt;project&gt;/budget</code>,
-        <code>/v1/projects/&lt;project&gt;/usage</code>,
-        <code>/healthz</code>
-    </p>
 </div>
 [include "footer.ezt"]

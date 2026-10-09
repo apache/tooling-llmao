@@ -1,0 +1,19 @@
+[include "header.ezt"]
+<div class="container py-4">
+  <div class="mt-2">[include "flashes.ezt"]</div>
+  <div class="row">
+    <div class="col-lg-8">
+      [body]
+    </div>
+    <div class="col-lg-4">
+      <h2 class="h6">Help</h2>
+      <ul class="list-unstyled small">
+        <li><a href="/help">Overview</a></li>
+        [for articles]
+        <li><a href="/help/[articles.slug]">[articles.title]</a></li>
+        [end]
+      </ul>
+    </div>
+  </div>
+</div>
+[include "footer.ezt"]

@@ -12,6 +12,7 @@ dependencies = [
     "PyYAML>=6.0.1",  # model_list.yaml / config loading
     "easydict>=1.13",  # APP.cfg dotted access / tests
     "dunamai>=1.26.0",
+    "cmarkgfm>=2024.11.20",
 ]
 
 [dependency-groups]
