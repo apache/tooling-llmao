@@ -358,6 +358,7 @@ def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
     hosts = {
         "80.188.223.202": [["gemma4-26b", 10100]],
         "103.196.86.105": [["qwen3.8-27b", 8004, "qwen3.8-27b", 15602]],
+        "213.173.110.78": [["qwen3-8b", 8003]],
     }
     missing = _cfg(hosts)
     with pytest.raises(ValueError, match="selfhost_api_key"):
@@ -387,9 +388,11 @@ def test_working_api_key_follows_the_legacy_set():
     backend = LiteLLMBackend(cfg, fleet)
     legacy = fleet.deployments[0]
     other = edict(self_hosted=True, vllm=edict(host="10.0.0.1", listen_port=8001, api_key="sk-derived"))
+    in_range = edict(self_hosted=True, vllm=edict(host="213.173.110.78", listen_port=8003, api_key="sk-derived"))
 
     async def run():
         assert await backend._working_api_key(legacy) == "sk-shared"
+        assert await backend._working_api_key(in_range) == "sk-shared"
         assert await backend._working_api_key(other) == "sk-derived"
         await backend._client.aclose()
 

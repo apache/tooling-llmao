@@ -132,6 +132,8 @@ VLLM_LISTEN_PORTS = (8001, 8002, 8003)
 LEGACY_SERVERS = {
     ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
     ("103.196.86.105", 8004),  # qwen3.8-27b, public port pinned at 15602
+    # 8003 is a normal listen port. This box still runs the shared key.
+    ("213.173.110.78", 8003),
 }
 
 
