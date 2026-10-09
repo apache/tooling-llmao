@@ -474,6 +474,8 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             detail = ""
             if srv.state == AWAITING:
                 detail = "has not requested its config"
+                if srv.probe_display:
+                    detail = srv.probe_display
             elif loading and srv.reached is not None:
                 detail = "vLLM up, model loading" if srv.reached else "vLLM not listening yet"
             listen = f"{srv.host}:{srv.listen_port}" if admin else ""

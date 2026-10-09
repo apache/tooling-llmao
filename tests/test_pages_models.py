@@ -258,6 +258,38 @@ def test_non_admin_rows_have_no_admin_fields():
     assert not rows[0].keys() & {"deployments", "replica_summary"}
 
 
+def test_awaiting_row_shows_the_last_probe():
+    pages = _app()
+
+    def fresh(host: str, port: int) -> VllmServer:
+        return VllmServer(
+            model_name="qwen",
+            name="qwen",
+            host=host,
+            listen_port=port,
+            hf_model="org/model",
+            api_key="sk-x",
+            args=[],
+            public_port=port,
+        )
+
+    refused = fresh("10.0.0.4", 8001)
+    refused.record_probe(
+        False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="no connection", reached=False
+    )
+    loading = fresh("10.0.0.5", 8001)
+    loading.record_probe(False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="HTTP 503", reached=True)
+    quiet = fresh("10.0.0.6", 8001)
+    fleet = _fleet(refused, loading, quiet)
+    rows = {r.listen: r for r in pages.deployment_rows(fleet, admin=True)}
+    assert rows["10.0.0.4:8001"].last_ok == "never"
+    assert rows["10.0.0.4:8001"].detail.startswith("probed ")
+    assert rows["10.0.0.4:8001"].detail.endswith(", no connection")
+    assert rows["10.0.0.5:8001"].detail.endswith(", HTTP 503")
+    assert rows["10.0.0.6:8001"].detail == "has not requested its config"
+    assert rows["10.0.0.6:8001"].last_ok == "never"
+
+
 def test_admin_rows_carry_the_host_label():
     pages = _app()
     fleet = _fleet(_server("gemma"))

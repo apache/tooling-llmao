@@ -403,6 +403,20 @@ class VllmServer:
         return _ago(self.last_ok)
 
     @property
+    def probe_display(self) -> str:
+        """Last probe attempt, including a failure. Empty when never probed."""
+        if self.vllm_probed_at is None:
+            return ""
+        age = _ago(self.vllm_probed_at)
+        if self.last_probe_ok:
+            return f"probed {age}"
+        if self.reached is False:
+            return f"probed {age}, no connection"
+        if self.last_error:
+            return f"probed {age}, {self.last_error}"
+        return f"probed {age}"
+
+    @property
     def config_served_display(self) -> str:
         """Human-readable 'config_served_at' timestamp."""
         return _ago(self.config_served_at)
@@ -1238,8 +1252,12 @@ async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, 
     """
     try:
         resp = await client.get(url)
+    except httpx.TimeoutException as e:
+        _LOGGER.warning("health %s: %s", url, e)
+        return False, False, "timeout"
     except httpx.HTTPError as e:
-        return False, False, str(e)
+        _LOGGER.warning("health %s: %s", url, e)
+        return False, False, "no connection"
     if resp.status_code == 200:
         return True, True, None
     return False, True, f"HTTP {resp.status_code}"
