@@ -74,7 +74,7 @@
               <span class="ms-1">[models.license]</span>
             </div>
             [if-any models.privacy]
-            <div class="small mt-1">[models.privacy]</div>
+            <div class="small mt-1"><strong>[models.privacy_lead].</strong> [models.privacy_rest]</div>
             [end]
             [if-any models.concurrency]
             <div class="small text-muted">[models.concurrency]</div>

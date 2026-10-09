@@ -136,7 +136,8 @@ def test_catalog_shows_rollup_not_the_yaml_context():
     # The unhealthy replica is not added. One healthy box, four slots.
     assert row.concurrency == "Handles up to 4 full-context requests at once"
     assert row.private
-    assert "infrastructure we control" in row.privacy
+    assert row.privacy_lead == "Private"
+    assert "infrastructure the ASF controls" in row.privacy
     assert [c.label for c in row.chips] == ["Text", "Vision"]
 
 
@@ -177,7 +178,8 @@ def test_commercial_is_external_and_has_no_concurrency():
     rows = pages.model_catalog_rows(fleet, [_catalog("claude", self_hosted=False, modality="text")])
     assert rows[0].rollup == AVAILABLE
     assert not rows[0].private
-    assert "external provider" in rows[0].privacy
+    assert rows[0].privacy_lead == "External"
+    assert "third-party provider" in rows[0].privacy
     assert rows[0].concurrency == ""
     assert [c.label for c in rows[0].chips] == ["Text"]
 
@@ -217,7 +219,8 @@ def test_models_template_renders_the_catalog_row():
     out = _render(rows)
     assert "Available" in out
     assert "40,960 context" in out
-    assert "Prompts stay on infrastructure we control." in out
+    assert "infrastructure the ASF controls" in out
+    assert "<strong>Private.</strong>" in out
     assert "Handles up to 4 full-context requests at once" in out
     assert 'title="Accepts images"' in out
     assert "Request a key" in out

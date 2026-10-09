@@ -27,6 +27,7 @@ from llmao.model_status import (
     EXTERNAL,
     HEALTHY,
     LOADING,
+    MIXED,
     PRIVATE,
     SKEW_CONFIG_MISMATCH,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
@@ -241,7 +242,7 @@ def test_stale_vllm_is_excluded():
     assert summary.privacy == PRIVATE
 
 
-def test_commercial_configured_is_not_counted_and_mixed_is_external():
+def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
     commercial = deployment_status(
         DeploymentSnapshot(model_name=MODEL, self_hosted=False, context_window=200_000),
         CFG,
@@ -265,7 +266,15 @@ def test_commercial_configured_is_not_counted_and_mixed_is_external():
         NOW,
     )
     summary = model_status(MODEL, [healthy_box, up_commercial], catalog_self_hosted=True)
-    assert summary.privacy == EXTERNAL
+    assert summary.privacy == MIXED
+    # The external row is configured even while LiteLLM does not have it.
+    down_commercial = deployment_status(
+        DeploymentSnapshot(model_name=MODEL, self_hosted=False, context_window=200_000),
+        CFG,
+        NOW,
+    )
+    assert model_status(MODEL, [healthy_box, down_commercial], catalog_self_hosted=True).privacy == MIXED
+    assert model_status(MODEL, [up_commercial], catalog_self_hosted=False).privacy == EXTERNAL
     assert summary.rollup == AVAILABLE
     # Minimum across healthy deployments. The commercial window is the smaller one.
     assert summary.context_window == 8000
@@ -284,7 +293,9 @@ def test_extra_route_and_mismatch_are_badges_only():
     assert extra.skew == (SKEW_IN_LITELLM_NOT_IN_CONFIG, SKEW_CONFIG_MISMATCH)
     summary = model_status(MODEL, [extra], catalog_self_hosted=False)
     assert summary.rollup == UNAVAILABLE
-    assert summary.privacy == EXTERNAL
+    assert summary.privacy == MIXED
+    hosted = deployment_status(_self(), CFG, NOW)
+    assert model_status(MODEL, [hosted, extra], catalog_self_hosted=True).privacy == MIXED
 
 
 def test_vllm_down_litellm_up():

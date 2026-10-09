@@ -69,6 +69,7 @@ UNAVAILABLE = "unavailable"
 
 PRIVATE = "private"
 EXTERNAL = "external"
+MIXED = "mixed"
 
 SIGNAL_UP = "up"
 SIGNAL_DOWN = "down"
@@ -137,6 +138,9 @@ class DeploymentStatus:
     # vLLM answered the last probe (e.g. a 503 while loading) as opposed to no
     # connection. Display-only loading detail; None until the first probe.
     reached: bool | None = None
+    # LiteLLM has this route and config.yaml does not. It may be one of our
+    # boxes. Any such row forces model privacy to MIXED.
+    litellm_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -242,7 +246,28 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
         kv_cache_tokens=snap.kv_cache_tokens,
         counted=counted,
         reached=snap.reached,
+        litellm_only=snap.litellm_only,
     )
+
+
+def _privacy(rows: list[DeploymentStatus], *, catalog_self_hosted: bool) -> str:
+    """Where requests for this model can be handled.
+
+    Every configured row counts, including one that is down and therefore not
+    in the roll-up. A LiteLLM-only route might be one of our boxes or a third
+    party; until we can tell, the model is MIXED.
+    """
+    if any(v.litellm_only for v in rows):
+        return MIXED
+    if not rows:
+        return PRIVATE if catalog_self_hosted else EXTERNAL
+    hosted = any(v.self_hosted for v in rows)
+    external = any(not v.self_hosted for v in rows)
+    if hosted and external:
+        return MIXED
+    if hosted:
+        return PRIVATE
+    return EXTERNAL
 
 
 def unknown_fetch_status() -> str:
@@ -267,12 +292,7 @@ def model_status(
     else:
         rollup = AVAILABLE
 
-    if not counted:
-        privacy = PRIVATE if catalog_self_hosted else EXTERNAL
-    elif any(not v.self_hosted for v in counted):
-        privacy = EXTERNAL
-    else:
-        privacy = PRIVATE
+    privacy = _privacy(rows, catalog_self_hosted=catalog_self_hosted)
 
     contexts = [v.context_window for v in healthy if v.context_window is not None]
     context = min(contexts) if contexts else None

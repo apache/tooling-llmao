@@ -44,6 +44,7 @@ from llmao.model_status import (
     EXTERNAL,
     HEALTHY,
     LOADING,
+    MIXED,
     PRIVATE,
     SKEW_PHRASE,
     STALLED,
@@ -259,8 +260,20 @@ _ROLLUP_LABEL = {
 }
 
 _PRIVACY_TEXT = {
-    PRIVATE: "Prompts stay on infrastructure we control.",
-    EXTERNAL: "Prompts are sent to an external provider.",
+    PRIVATE: (
+        "Private",
+        "We run every deployment on infrastructure the ASF controls. "
+        "Prompts stay inside that infrastructure.",
+    ),
+    EXTERNAL: (
+        "External",
+        "Every request is sent to a third-party provider.",
+    ),
+    MIXED: (
+        "MIXED",
+        "Requests may be handled on our infrastructure or sent to a third party, "
+        "and the user cannot choose which.",
+    ),
 }
 
 
@@ -403,7 +416,10 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
             row.concurrency = ""
         privacy = status.privacy
         row.private = ezt.boolean(privacy == PRIVATE)
-        row.privacy = _PRIVACY_TEXT.get(privacy, "")
+        lead, rest = _PRIVACY_TEXT.get(privacy, ("", ""))
+        row.privacy_lead = lead
+        row.privacy_rest = rest
+        row.privacy = f"{lead}. {rest}" if lead else ""
         row.chips = _modality_chips(m.get("modality") or "")
         if admin:
             row.deployments = [r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name]
