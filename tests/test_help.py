@@ -42,7 +42,7 @@ def test_help_template_uses_the_page_frame(tmp_path):
     data = edict(
         title=doc.title,
         body=doc.html,
-        articles=[edict(slug="faq", title="FAQ")],
+        guides=[edict(slug="pi", title="Pi")],
         flashes=[],
         uid=None,
         name=None,

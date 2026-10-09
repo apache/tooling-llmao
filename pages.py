@@ -310,7 +310,7 @@ async def help_page(result, slug: str = "index"):
         quart.abort(404)
     result.title = doc.title
     result.body = doc.html
-    result.articles = help_articles()
+    result.guides = [item for item in help_articles() if item.slug != "faq"]
     return result
 
 
