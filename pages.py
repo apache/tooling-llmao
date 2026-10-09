@@ -334,8 +334,7 @@ _ROLLUP_LABEL = {
 _PRIVACY_TEXT = {
     PRIVATE: (
         "Private",
-        "We run every deployment on infrastructure the ASF controls. "
-        "Prompts stay inside that infrastructure.",
+        "We run every deployment on infrastructure the ASF controls. Prompts stay inside that infrastructure.",
     ),
     EXTERNAL: (
         "External",
@@ -343,8 +342,7 @@ _PRIVACY_TEXT = {
     ),
     MIXED: (
         "MIXED",
-        "Requests may be handled on our infrastructure or sent to a third party, "
-        "and the user cannot choose which.",
+        "Requests may be handled on our infrastructure or sent to a third party, and the user cannot choose which.",
     ),
 }
 
