@@ -37,7 +37,7 @@ from llmao.fleet import (
     validate_fleet,
 )
 from llmao.litellm_client import _norm_base
-from llmao.model_status import LOADING, deployment_status
+from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models
 from llmao.vllm_api_key import derive_vllm_api_key
 
@@ -246,6 +246,60 @@ def test_probe_hits_both_vllm_ports_and_skips_the_rest():
     assert "http://198.51.100.8:18001/health" in seen
     assert "http://198.51.100.8:18002/health" in seen
     assert not any(":19022/" in url for url in seen)
+    assert [s.state for s in fleet.servers] == [HEALTHY, HEALTHY]
+    assert all(s.config_served_at is None for s in fleet.servers)
+
+
+def test_missing_hostport_stays_awaiting_while_sibling_is_healthy():
+    cfg = _cfg(
+        {
+            "198.51.100.8": [
+                ["qwen3-8b", 8001, "a"],
+                ["qwen3-8b", 8002, "b"],
+            ]
+        }
+    )
+    cfg.fleet.vast = edict(api_key="vast-test")
+    models = load_models(EXAMPLE)
+    validate_fleet(cfg, models=models)
+    fleet = Fleet.from_cfg(cfg, models=models)
+    fleet.apply_port_map({"198.51.100.8": {"8001": 18001}})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    async def run():
+        async with _client(handler) as client:
+            await fleet.probe_all(client=client, now=10.0)
+
+    asyncio.run(run())
+    by_port = {s.listen_port: s for s in fleet.servers}
+    assert by_port[8001].state == HEALTHY
+    assert by_port[8002].state == AWAITING
+    assert by_port[8002].last_ok is None
+
+
+def test_approved_siblings_are_probed_without_another_fetch():
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    cfg.fleet.vast = edict(api_key="vast-test")
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
+    mapping = {"198.51.100.8": {"8001": 18001, "8002": 18002}}
+    fleet._materialize_approved_hosts()
+    fleet.apply_port_map(mapping)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    async def run():
+        async with _client(handler) as client:
+            await fleet.probe_all(client=client, now=10.0)
+
+    asyncio.run(run())
+    assert sorted(s.listen_port for s in fleet.servers) == [8001, 8002]
+    assert [s.state for s in fleet.servers] == [HEALTHY, HEALTHY]
+    assert all(s.config_served_at is None for s in fleet.servers)
 
 
 def test_approved_host_gains_the_sibling_port():

@@ -696,6 +696,16 @@ class Fleet:
                 continue
             self._add_server(host, by_name[name], port, name)
 
+    def _materialize_approved_hosts(self) -> None:
+        """Servers for every approved host, before the port map and the probe.
+
+        An approval used to create servers only on the next config fetch, or
+        after adopt saw a port answer. The other listen ports on that instance
+        were then absent from ``probe_all`` and stayed Awaiting.
+        """
+        for host in list(self.approved_models):
+            self._materialize_approved(host)
+
     def _add_server(self, host: str, model: Any, port: int, name: str) -> VllmServer:
         srv = VllmServer.from_row(host, str(model.model_name), port, name, model, self.cfg)
         self.servers.append(srv)
@@ -878,6 +888,14 @@ class Fleet:
             for srv in self.servers:
                 url = srv.health_url
                 if url is None:
+                    # No public port: nothing to probe. Leave the state alone.
+                    # apply_port_map already warned when the Vast row lacked it.
+                    _LOGGER.warning(
+                        "fleet: no health url for %s@%s listen %s",
+                        srv.name,
+                        srv.host,
+                        srv.listen_port,
+                    )
                     continue
                 was = srv.state
                 ok, reached, err = await _get_health(client, url)
@@ -911,6 +929,9 @@ class Fleet:
         if "vast" not in self.cfg.fleet:
             return
         mapping = await fetch_port_map(self.cfg.fleet.vast.api_key, client=client)
+        # Servers must exist before the map is applied, or a newly approved
+        # listen port never receives its HostPort and probe_all skips it.
+        self._materialize_approved_hosts()
         self.apply_port_map(mapping)
         await self.adopt_vast_instances(mapping, client)
 
@@ -1023,6 +1044,7 @@ class Fleet:
                         await self.refresh_public_ports(client)
                     except Exception:
                         _LOGGER.exception("vast port map failed")
+                    self._materialize_approved_hosts()
                     await self.probe_all(client=client)
                     if self.after_probe is not None:
                         await self.after_probe()
