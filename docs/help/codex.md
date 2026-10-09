@@ -1,6 +1,6 @@
 # Codex
 
-Codex uses the Responses API under `/v1`. Put this in `$CODEX_HOME/config.toml` (by default `~/.codex/config.toml`). `$LLMAO_KEY` is the personal access token from My Keys. The model id comes from the Models page. This example uses `qwen3.8-27b`.
+Codex uses the Responses API under `/v1`. Put this in `$CODEX_HOME/config.toml` (by default `~/.codex/config.toml`). `$LLMAO_KEY` is the personal access token from [My Keys](/keys). The model id comes from the [Models page](/models). This example uses `qwen3.8-27b`.
 
 ```toml
 model_provider = "llmao"

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import functools
+import io
 import pathlib
 import re
 import time
@@ -268,10 +269,13 @@ def _help_title(text: str, slug: str) -> str:
     return slug
 
 
-def help_article(slug: str, directory: pathlib.Path | None = None):
+def help_article(slug: str, directory: pathlib.Path | None = None, uid=None):
     """One help article, or None when the slug is not a file in the directory.
 
     Raw HTML in the markdown is left intact. The files are committed here.
+    A file that contains ``[if-any`` is EZT first. ``uid`` comes from
+    ``basic_info`` and is None when nobody is signed in. A literal ``[``
+    in that file is written ``[[]]``.
     """
     if not _HELP_SLUG.fullmatch(slug):
         return None
@@ -280,9 +284,16 @@ def help_article(slug: str, directory: pathlib.Path | None = None):
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8")
+    title = _help_title(text, slug)
+    if "[if-any " in text:
+        template = ezt.Template(compress_whitespace=0)
+        template.parse(text, base_format=ezt.FORMAT_RAW)
+        buf = io.StringIO()
+        template.generate(buf, edict(uid=uid))
+        text = buf.getvalue()
     return edict(
         slug=slug,
-        title=_help_title(text, slug),
+        title=title,
         html=cmarkgfm.github_flavored_markdown_to_html(text, options=Options.CMARK_OPT_UNSAFE),
     )
 
@@ -305,7 +316,7 @@ def help_articles(directory: pathlib.Path | None = None) -> list:
 @APP.use_template(TEMPLATES / "help.ezt")
 @page(title="Help")
 async def help_page(result, slug: str = "index"):
-    doc = help_article(slug)
+    doc = help_article(slug, uid=result.uid)
     if doc is None:
         quart.abort(404)
     result.title = doc.title

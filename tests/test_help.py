@@ -75,6 +75,13 @@ def test_index_links_each_tool_page():
     prose = "\n".join(path.read_text(encoding="utf-8") for path in help_dir.glob("*.md"))
     assert "LiteLLM" not in prose
     assert "Anthropic" not in prose
+    assert "/keys" in prose
+    assert "/models" in prose
+    signed_out = _pages().help_article("index")
+    signed_in = _pages().help_article("index", uid="gstein")
+    assert 'href="/auth?login=/"' in signed_out.html
+    assert "/auth?login=/" not in signed_in.html
+    assert 'href="/keys"' in signed_in.html
 
 
 def test_home_page_does_not_list_api_paths():

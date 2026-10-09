@@ -1,14 +1,19 @@
 # Help
 
-Apache LLMAO is the ASF's gateway to AI models. Sign in with your ASF account, create a personal access token, and use that token as the key in a tool that speaks the OpenAI API. Usage is attributed to you.
+Apache LLMAO is the ASF's gateway to AI models.
+[if-any uid]
+Create a personal access token on [[]My Keys](/keys), and use that token as the key in a tool that speaks the OpenAI API. Usage is attributed to you.
+[else]
+[[]Sign in](/auth?login=/) with your ASF account, create a personal access token, and use that token as the key in a tool that speaks the OpenAI API. Usage is attributed to you.
+[end]
 
 Point the tool at `https://llm.apache.org`. The endpoint follows the OpenAI API.
 
-* [FAQ](/help/faq)
-* [Claude Code](/help/claude-code)
-* [Codex](/help/codex)
-* [Grok Build](/help/grok-build)
-* [Pi](/help/pi)
+* [[]FAQ](/help/faq)
+* [[]Claude Code](/help/claude-code)
+* [[]Codex](/help/codex)
+* [[]Grok Build](/help/grok-build)
+* [[]Pi](/help/pi)
 
 ## More tools
 

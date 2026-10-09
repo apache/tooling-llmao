@@ -1,6 +1,6 @@
 # Grok Build
 
-Grok Build checks a model id against its own catalog, so the gateway's model is a `[model.<id>]` block on chat completions. Put this in `~/.grok/config.toml`. The model id comes from the Models page. This example uses `qwen3.8-27b`. The key is the personal access token from My Keys.
+Grok Build checks a model id against its own catalog, so the gateway's model is a `[model.<id>]` block on chat completions. Put this in `~/.grok/config.toml`. The model id comes from the [Models page](/models). This example uses `qwen3.8-27b`. The key is the personal access token from [My Keys](/keys).
 
 ```toml
 [model."qwen3.8-27b"]
