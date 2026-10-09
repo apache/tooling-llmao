@@ -64,6 +64,19 @@ def test_help_template_uses_the_page_frame(tmp_path):
     assert 'href="/help/faq"' in out
 
 
+def test_index_links_each_tool_page():
+    help_dir = THIS_DIR / "docs" / "help"
+    index = (help_dir / "index.md").read_text(encoding="utf-8")
+    for slug in ("claude-code", "codex", "grok-build", "pi"):
+        assert f"/help/{slug}" in index
+        assert (help_dir / f"{slug}.md").is_file()
+    faq = (help_dir / "faq.md").read_text(encoding="utf-8")
+    assert "/help/claude-code" in faq
+    prose = "\n".join(path.read_text(encoding="utf-8") for path in help_dir.glob("*.md"))
+    assert "LiteLLM" not in prose
+    assert "Anthropic" not in prose
+
+
 def test_home_page_does_not_list_api_paths():
     text = (THIS_DIR / "templates" / "home.ezt").read_text(encoding="utf-8")
     assert "/v1/projects" not in text
