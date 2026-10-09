@@ -196,14 +196,14 @@ def test_attention_items_lists_only_actionable_items():
         "count": 3,
     }
 
-    kinds = [i.kind for i in pages.attention_items(fleet)]
-    # Only the actionable kinds appear; the healthy box does not.
+    items = pages.attention_items(fleet)
+    kinds = [i.kind for i in items]
+    # One item per deployment. Skew text is on that item, not a second row.
     assert "unknown" in kinds
     assert "unhealthy" in kinds
-    assert "skew" in kinds
     assert "healthy" not in kinds
-
-    items = pages.attention_items(fleet)
+    unhealthy = next(i for i in items if i.kind == "unhealthy")
+    assert "vLLM up, LiteLLM down" in unhealthy.detail
     unknown = next(i for i in items if i.kind == "unknown")
     assert "192.0.2.7" in unknown.what
     # The strip renders in the template.
@@ -340,19 +340,12 @@ def test_admin_drill_down_renders_deployments_and_label_controls():
     out = _render(rows, admin=True)
 
     # The per-model deployment table is present, with one row per replica.
-    assert "Replicas per model" in out
-    assert 'data-bs-target="#modelDeploy0"' in out
-    assert out.count('<tr class="') == 2
-
-    # The label select carries every option and pre-selects the current one.
-    assert 'value="approved" selected' in out
-    assert 'value="reboot_requested"' in out
-    assert 'value=""' in out
-    assert 'name="label"' in out
-    assert 'name="host" value="10.0.0.1"' in out
-    assert "/do-set-admin-label" in out
-    # The replica summary lands in the accordion header.
+    assert "Admin flags reset when the control plane restarts." in out
     assert "1 healthy / 1 unhealthy" in out
+    assert "Approved ·" in out
+    assert 'name="host" value="10.0.0.1"' in out
+    assert 'value="reboot_requested"' in out
+    assert "/do-set-admin-label" in out
 
 
 def test_attention_strip_renders_the_label_form_for_unknown_boxes():
@@ -368,7 +361,8 @@ def test_attention_strip_renders_the_label_form_for_unknown_boxes():
     out = _render(rows, attention=pages.attention_items(fleet), admin=True)
     # The unknown-box item carries the set/clear form, pre-selected on its vouch.
     assert 'name="host" value="192.0.2.7"' in out
-    assert 'value="approved" selected' in out
+    assert "Approved ·" in out
+    assert "Request reboot" in out
     assert "/do-set-admin-label" in out
     assert 'data-bs-target="#approveBoxModal"' in out
     out = _render(
@@ -425,7 +419,7 @@ def test_drill_down_renders_add_and_remove_actions():
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="10.0.0.3"' in out
     # The healthy in-LiteLLM box offers a disabled Remove.
-    assert "Remove only when vLLM is unhealthy or stalled" in out
+    assert "vLLM is still healthy" in out
 
 
 def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:

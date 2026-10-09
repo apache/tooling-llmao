@@ -304,26 +304,126 @@ def _replica_summary(model_name: str, fleet) -> str:
     return " / ".join(parts)
 
 
-_LABEL_OPTIONS = [
-    edict(value="", text="— no label —"),
-    edict(value="approved", text="Approved"),
-    edict(value="reboot_requested", text="Reboot requested"),
-]
+def _flag_text(info) -> str:
+    """'Approved · 15h ago'. Empty when the host has no label."""
+    if not info.label:
+        return ""
+    title = info.display[:1].upper() + info.display[1:]
+    if info.at and info.at != "never":
+        return f"{title} · {info.at} ago"
+    return title
 
 
-def _label_fields(fleet, host: str) -> dict:
-    """The label display fields for a strip row. Unknown boxes carry the
-    set/clear control; everything else labels nothing."""
-    if not host:
-        return {"host": "", "label": "", "label_value": "", "label_at": "", "label_options": []}
-    label_info = fleet.admin_label(host)
-    return {
-        "host": host,
-        "label": label_info.display,
-        "label_value": label_info.label,
-        "label_at": label_info.at,
-        "label_options": _LABEL_OPTIONS,
-    }
+def _deployment_reason(dep) -> str:
+    """Plain reason for one deployment. The probe result wins over 'never asked'."""
+    srv = dep.vllm
+    if srv is None:
+        return ""
+    if srv.state == AWAITING:
+        if srv.probe_display:
+            return srv.probe_display
+        return "has not requested its config"
+    if srv.state == LOADING and srv.reached is not None:
+        if srv.reached:
+            return "vLLM up, model loading"
+        return "vLLM not listening yet"
+    return ""
+
+
+def _action(**kwargs):
+    kind = kwargs.get("kind", "")
+    kwargs["is_approve"] = ezt.boolean(kind == "approve")
+    kwargs["is_label"] = ezt.boolean(kind == "label")
+    kwargs["is_add"] = ezt.boolean(kind == "add")
+    kwargs["is_remove"] = ezt.boolean(kind == "remove")
+    return edict(**kwargs)
+
+
+def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, approved: str = "") -> list:
+    """Buttons shared by the attention strip and the deployment rows.
+
+    Add and Remove use the existing refusal gates. A disabled action carries
+    the reason as visible text. Approve is only for an unknown host.
+    """
+    actions = []
+    if approve and host:
+        actions.append(
+            _action(
+                kind="approve",
+                label="Approve",
+                host=host,
+                name="",
+                label_value="",
+                approved=approved,
+                post="",
+                enabled=ezt.boolean(True),
+                reason="",
+            )
+        )
+    target = host
+    if dep is not None and dep.vllm is not None:
+        target = dep.vllm.host
+    if target:
+        actions.append(
+            _action(
+                kind="label",
+                label="Request reboot",
+                host=target,
+                name="",
+                label_value="reboot_requested",
+                approved="",
+                post="/do-set-admin-label",
+                enabled=ezt.boolean(True),
+                reason="",
+            )
+        )
+        if fleet.admin_label(target).label:
+            actions.append(
+                _action(
+                    kind="label",
+                    label="Clear flag",
+                    host=target,
+                    name="",
+                    label_value="",
+                    approved="",
+                    post="/do-set-admin-label",
+                    enabled=ezt.boolean(True),
+                    reason="",
+                )
+            )
+    if dep is None:
+        return actions
+    if dep.self_hosted and not dep.in_litellm:
+        reason = add_refusal(dep) or ""
+        actions.append(
+            _action(
+                kind="add",
+                label="Add",
+                host=target,
+                name=dep.name,
+                label_value="",
+                approved="",
+                post="/do-add-deployment",
+                enabled=ezt.boolean(reason == ""),
+                reason=reason,
+            )
+        )
+    if dep.self_hosted and dep.in_litellm:
+        reason = remove_refusal(dep) or ""
+        actions.append(
+            _action(
+                kind="remove",
+                label="Remove",
+                host=target,
+                name=dep.name,
+                label_value="",
+                approved="",
+                post="/do-remove-deployment",
+                enabled=ezt.boolean(reason == ""),
+                reason=reason,
+            )
+        )
+    return actions
 
 
 def attention_items(fleet) -> list:
@@ -340,49 +440,45 @@ def attention_items(fleet) -> list:
                 kind="unknown",
                 what=f"Fleet key presented from {host} (not in fleet.hosts)",
                 detail=fleet.unknown_fetch_detail(host),
-                approve=ezt.boolean(True),
-                approved=",".join(fleet.approved_models.get(host, [])),
-                **_label_fields(fleet, host),
+                flag=_flag_text(fleet.admin_label(host)),
+                actions=admin_actions(
+                    fleet,
+                    host=host,
+                    approve=True,
+                    approved=",".join(fleet.approved_models.get(host, [])),
+                ),
             )
         )
     cfg = fleet.cfg.fleet
     for dep in fleet.deployments:
         view = deployment_status(snapshot_for_status(dep, cfg), cfg)
-        if view.lifecycle in (STALLED, UNHEALTHY):
-            items.append(
-                edict(
-                    kind=view.lifecycle,
-                    what=f"{dep.name} is {view.lifecycle.replace('_', ' ')}",
-                    detail=dep.model_name,
-                    approve=ezt.boolean(False),
-                    approved="",
-                    **_label_fields(fleet, ""),
-                )
+        phrases = [SKEW_PHRASE.get(n, n) for n in dep.skew]
+        if view.lifecycle not in (STALLED, UNHEALTHY) and not phrases:
+            continue
+        host = dep.vllm.host if dep.vllm is not None else ""
+        reason = _deployment_reason(dep)
+        if phrases:
+            reason = "; ".join(p for p in (reason, "; ".join(phrases)) if p)
+        items.append(
+            edict(
+                kind=view.lifecycle if view.lifecycle in (STALLED, UNHEALTHY) else "skew",
+                what=f"{host} · {dep.model_name} — {view.lifecycle.replace('_', ' ')}",
+                detail=reason,
+                flag=_flag_text(fleet.admin_label(host)) if host else "",
+                actions=admin_actions(fleet, dep),
             )
-        for badge in dep.skew:
-            phrase = SKEW_PHRASE.get(badge, badge)
-            items.append(
-                edict(
-                    kind="skew",
-                    what=phrase,
-                    detail=dep.name,
-                    approve=ezt.boolean(False),
-                    approved="",
-                    **_label_fields(fleet, ""),
-                )
-            )
+        )
     for extra in fleet.extra_litellm:
-        for badge in extra.skew:
-            items.append(
-                edict(
-                    kind="skew",
-                    what=SKEW_PHRASE.get(badge, badge),
-                    detail=f"{extra.host}:{extra.port} {extra.model_name}",
-                    approve=ezt.boolean(False),
-                    approved="",
-                    **_label_fields(fleet, ""),
-                )
+        phrases = [SKEW_PHRASE.get(n, n) for n in extra.skew]
+        items.append(
+            edict(
+                kind="skew",
+                what=f"{extra.host}:{extra.port} · {extra.model_name} — not in config",
+                detail="; ".join(phrases),
+                flag="",
+                actions=[],
             )
+        )
     return items
 
 
@@ -421,6 +517,9 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         row.privacy_rest = rest
         row.privacy = f"{lead}. {rest}" if lead else ""
         row.chips = _modality_chips(m.get("modality") or "")
+        own = [d for d in fleet.deployments if d.model_name == row.model_name and not getattr(d, "litellm_only", False)]
+        row.self_count = sum(1 for d in own if d.self_hosted)
+        row.external_count = sum(1 for d in own if not d.self_hosted)
         if admin:
             row.deployments = [r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name]
             row.replica_summary = _replica_summary(row.model_name, fleet)
@@ -487,13 +586,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             # Awaiting contact: the box has not fetched its config yet, so
             # there is nothing to load. Loading has a detail: vLLM is either
             # up with a 503 while the model loads, or not listening at all.
-            detail = ""
-            if srv.state == AWAITING:
-                detail = "has not requested its config"
-                if srv.probe_display:
-                    detail = srv.probe_display
-            elif loading and srv.reached is not None:
-                detail = "vLLM up, model loading" if srv.reached else "vLLM not listening yet"
+            detail = _deployment_reason(dep)
             listen = f"{srv.host}:{srv.listen_port}" if admin else ""
             public = (
                 f"{srv.host}:{srv.public_port}" if admin and srv.public_port is not None else ("—" if admin else "")
@@ -568,7 +661,8 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 label=label,
                 label_value=label_value,
                 label_at=label_at,
-                label_options=_LABEL_OPTIONS,
+                flag=_flag_text(fleet.admin_label(srv.host)) if admin and srv is not None else "",
+                actions=admin_actions(fleet, dep) if admin else [],
             )
         )
     return rows

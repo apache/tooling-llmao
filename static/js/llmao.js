@@ -29,6 +29,9 @@ document.addEventListener("DOMContentLoaded", function () {
       set("mdDisplayName", btn.getAttribute("data-display-name"));
       set("mdModelName", btn.getAttribute("data-model-name"));
       set("mdHosting", btn.getAttribute("data-hosting"));
+      var selfCount = btn.getAttribute("data-self-count") || "0";
+      var externalCount = btn.getAttribute("data-external-count") || "0";
+      set("mdMix", selfCount + " self-hosted, " + externalCount + " external");
       set("mdContext", btn.getAttribute("data-context"));
       set("mdLicense", btn.getAttribute("data-license"));
       set("mdModality", btn.getAttribute("data-modality"));
@@ -58,6 +61,14 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     });
   }
+
+  document.querySelectorAll(".js-copy-model").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy") || "";
+      if (!text || !navigator.clipboard) return;
+      navigator.clipboard.writeText(text);
+    });
+  });
 
   var copyBtn = document.querySelector(".js-copy-btn");
   if (copyBtn) {
