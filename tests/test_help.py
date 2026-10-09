@@ -52,11 +52,12 @@ def test_help_template_uses_the_page_frame(tmp_path):
         commit="abc",
         can_create_automation=ezt.boolean(False),
     )
-    template = ezt.Template(str(THIS_DIR / "templates" / "help.ezt"))
+    template = ezt.Template(str(THIS_DIR / "templates" / "help.ezt"), base_format=ezt.FORMAT_HTML)
     buf = io.StringIO()
     template.generate(buf, data)
     out = buf.getvalue()
-    assert "<h1>Overview</h1>" in out or "<h1>Overview</h1>" in doc.html
+    assert "<h1>Overview</h1>" in out
+    assert "&lt;h1&gt;" not in out
     assert "Body text" in out
     assert 'href="/help"' in out
     assert "Apache LLMAO" in out

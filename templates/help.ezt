@@ -2,10 +2,7 @@
 <div class="container py-4">
   <div class="mt-2">[include "flashes.ezt"]</div>
   <div class="row">
-    <div class="col-lg-8">
-      [body]
-    </div>
-    <div class="col-lg-4">
+    <nav class="col-lg-3 mb-4" aria-label="Help">
       <h2 class="h6">Help</h2>
       <ul class="list-unstyled small">
         <li><a href="/help">Overview</a></li>
@@ -13,6 +10,9 @@
         <li><a href="/help/[articles.slug]">[articles.title]</a></li>
         [end]
       </ul>
+    </nav>
+    <div class="col-lg-9">
+      [format "raw"][body][end]
     </div>
   </div>
 </div>
