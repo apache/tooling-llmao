@@ -6,10 +6,10 @@
       <h2 class="h6">FAQ</h2>
       <ul class="list-unstyled small">
         <li><a href="/help/faq">FAQ</a></li>
+        <li><a href="/help">Help Home</a></li>
       </ul>
       <h2 class="h6 mt-3">Help</h2>
       <ul class="list-unstyled small">
-        <li><a href="/help">Overview</a></li>
         [for guides]
         <li><a href="/help/[guides.slug]">[guides.title]</a></li>
         [end]
