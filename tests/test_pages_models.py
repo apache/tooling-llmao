@@ -34,9 +34,16 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.fleet import Fleet, FleetDeployment, VllmServer, remove_refusal
 from llmao.model_status import (
     AVAILABLE,
+    AWAITING,
+    CONFIGURED,
     DEGRADED,
+    HEALTHY,
+    LOADING,
     SKEW_VLLM_UP_LITELLM_DOWN,
+    STALLED,
     UNAVAILABLE,
+    UNHEALTHY,
+    UNKNOWN,
 )
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -134,7 +141,7 @@ def test_catalog_shows_rollup_not_the_yaml_context():
     # The catalog said 999,999. The roll-up reports the served window.
     assert row.context_window == "40,960"
     # The unhealthy replica is not added. One healthy box, four slots.
-    assert row.concurrency == "Handles up to 4 full-context requests at once"
+    assert row.concurrency == "4 long requests at once"
     assert row.private
     assert row.privacy_lead == "Private"
     assert "infrastructure the ASF controls" in row.privacy
@@ -221,7 +228,7 @@ def test_models_template_renders_the_catalog_row():
     assert "40,960 context" in out
     assert "infrastructure the ASF controls" in out
     assert "<strong>Private.</strong>" in out
-    assert "Handles up to 4 full-context requests at once" in out
+    assert "4 long requests at once" in out
     assert 'title="Accepts images"' in out
     assert "Request a key" in out
 
@@ -412,14 +419,122 @@ def test_drill_down_renders_add_and_remove_actions():
     # Exactly one enabled Add (the healthy box not yet in LiteLLM) posts the row.
     assert out.count("/do-add-deployment") == 1
     assert 'name="host" value="10.0.0.2"' in out
-    # The other not-in-LiteLLM box is unhealthy, so its Add is a disabled button.
-    assert "vLLM is not serving yet" in out
+    assert 'aria-label="Add 10.0.0.2:8001"' in out
 
-    # Exactly one enabled Remove (the unhealthy box still in LiteLLM) posts the row.
+    # Exactly one enabled Stop tracking (the unhealthy box still in LiteLLM) posts the row.
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="10.0.0.3"' in out
-    # The healthy in-LiteLLM box offers a disabled Remove.
-    assert "vLLM is still healthy" in out
+    assert "Stop tracking" in out
+    assert 'data-confirm="Stop tracking 10.0.0.3:8001?' in out
+
+    # Actions that do not apply are not rendered in the Deployments list.
+    assert "disabled" not in out
+    assert "vLLM is not serving yet" not in out
+    assert "vLLM is still healthy" not in out
+
+    # The attention strip keeps them, disabled, with the reason as text.
+    out = _render(rows, attention=pages.attention_items(fleet), admin=True)
+    assert "vLLM is not serving yet" in out
+
+
+def test_two_ports_on_one_host_are_two_deployments():
+    pages = _app()
+    up = _server("gemma", host="10.0.0.9", port=8001)
+    down = _server("qwen", host="10.0.0.9", port=8003, ok=False)
+    also_down = _server("gemma", host="10.0.0.9", port=8005, ok=False)
+    fleet = _fleet(up, down, also_down)
+
+    items = pages.attention_items(fleet)
+    assert [i.ident for i in items] == ["10.0.0.9:8003", "10.0.0.9:8005"]
+    assert items[0].what == "10.0.0.9:8003 · qwen — unhealthy"
+    assert items[0].anchor == "dep-10-0-0-9-8003"
+
+    rows = pages.deployment_rows(fleet, admin=True)
+    assert len({r.anchor for r in rows}) == 3
+    assert [bool(r.attention) for r in rows] == [False, True, True]
+
+    out = _render(
+        pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("qwen")], admin=True),
+        attention=items,
+        admin=True,
+    )
+    assert 'href="#dep-10-0-0-9-8003"' in out
+    assert 'id="dep-10-0-0-9-8003"' in out
+    assert 'id="dep-10-0-0-9-8001"' in out
+
+    # host + name alone still finds a deployment; the port tells two apart.
+    assert len(pages._match_deployments(fleet, "qwen", "10.0.0.9")) == 1
+    assert len(pages._match_deployments(fleet, "gemma", "10.0.0.9")) == 2
+    assert [d.vllm for d in pages._match_deployments(fleet, "gemma", "10.0.0.9", "8005")] == [also_down]
+
+
+def test_healthy_row_has_one_menu_entry_and_no_clutter():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    row = pages.deployment_rows(fleet, admin=True)[0]
+    assert row.primary == []
+    assert [a.label for a in row.menu] == ["Request reboot"]
+    assert row.badge_class == "text-bg-success"
+    # The diagnostics line leaves out anything it has no value for.
+    assert all(d.value and d.value != "—" for d in row.diags)
+    assert "Context" in [d.label for d in row.diags]
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
+    assert "disabled" not in out
+    assert "<table" not in out
+    assert "—" not in out.split('<div class="list-group dep-list')[1].split("modelDetailModal")[0]
+
+
+def test_awaiting_row_has_no_diagnostics_line():
+    pages = _app()
+    quiet = VllmServer(
+        model_name="qwen",
+        name="qwen",
+        host="10.0.0.6",
+        listen_port=8001,
+        hf_model="org/model",
+        api_key="sk-x",
+        args=[],
+        public_port=8001,
+    )
+    fleet = _fleet(quiet)
+    fleet.deployments[0].in_litellm = False
+    row = pages.deployment_rows(fleet, admin=True)[0]
+    assert row.state == AWAITING
+    assert row.diags == []
+    assert row.detail == "has not requested its config"
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("qwen")], admin=True), admin=True)
+    assert "dep-diag" not in out
+    assert "KV cache" not in out
+
+
+def test_every_state_has_a_badge_class():
+    pages = _app()
+    for state in (AWAITING, LOADING, HEALTHY, UNHEALTHY, STALLED, UNKNOWN, CONFIGURED, "pending", "no deployment"):
+        assert pages._badge_class(state).startswith("text-bg-")
+    # Serving but not routed is a warning, not a success.
+    assert pages._badge_class(HEALTHY, routed=False) == "text-bg-warning"
+
+
+def test_mixed_card_and_unavailable_card():
+    pages = _app()
+    box = _server("gemma")
+    fleet = _fleet(box)
+    commercial = FleetDeployment.from_commercial(
+        edict(
+            model_name="gemma",
+            model_info=edict(self_hosted=False),
+            litellm_params=edict(api_base="https://api.example"),
+        )
+    )
+    fleet.deployments.append(commercial)
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("missing")])
+    out = _render(rows)
+    assert "<strong>Mixed.</strong>" in out
+    assert "you can't choose which" in out
+    assert "model-privacy-mixed" in out
+    # The unavailable card keeps its button, disabled, and says why in text.
+    assert "disabled>Request a key</button>" in out
+    assert "Unavailable right now" in out
 
 
 def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:

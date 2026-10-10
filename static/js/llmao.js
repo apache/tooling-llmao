@@ -66,7 +66,49 @@ document.addEventListener("DOMContentLoaded", function () {
     btn.addEventListener("click", function () {
       var text = btn.getAttribute("data-copy") || "";
       if (!text || !navigator.clipboard) return;
-      navigator.clipboard.writeText(text);
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = "Copied";
+        setTimeout(function () {
+          btn.textContent = "Copy";
+        }, 1500);
+      });
+    });
+  });
+
+  var approveModal = document.getElementById("approveBoxModal");
+  if (approveModal) {
+    approveModal.addEventListener("show.bs.modal", function (event) {
+      var btn = event.relatedTarget;
+      if (!btn) return;
+      var host = btn.getAttribute("data-host") || "";
+      var picked = (btn.getAttribute("data-models") || "").split(",");
+      document.getElementById("approve-host").value = host;
+      document.getElementById("approveBoxModalLabel").textContent = "Approve " + host;
+      approveModal.querySelectorAll("input[name=model]").forEach(function (cb) {
+        cb.checked = picked.indexOf(cb.value) !== -1;
+      });
+    });
+  }
+
+  // An attention item links to its row in Deployments. Flash the row on arrival.
+  function flashDeployment(hash) {
+    if (!hash || hash.indexOf("#dep-") !== 0) return;
+    var row = document.getElementById(hash.slice(1));
+    if (!row) return;
+    row.classList.remove("dep-flash");
+    void row.offsetWidth;
+    row.classList.add("dep-flash");
+  }
+  document.querySelectorAll(".js-dep-link").forEach(function (link) {
+    link.addEventListener("click", function () {
+      flashDeployment(link.getAttribute("href"));
+    });
+  });
+  flashDeployment(window.location.hash);
+
+  document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (!window.confirm(form.getAttribute("data-confirm"))) event.preventDefault();
     });
   });
 

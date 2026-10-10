@@ -36,4 +36,4 @@ A stop on a round token count is the output budget. Raise it. A stop on a round 
 
 ## Who can see my prompts?
 
-The [[]Models page](/models) states that for each model. Private means every deployment runs on infrastructure the ASF controls. External means every request is sent to a third-party provider. MIXED means a request may take either path, and you cannot choose which.
+The [[]Models page](/models) states that for each model. Private means every deployment runs on infrastructure the ASF controls. External means every request is sent to a third-party provider. Mixed means a request may take either path, and you cannot choose which.

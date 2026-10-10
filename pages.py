@@ -44,6 +44,7 @@ from llmao.model_status import (
     ADMIN_LABELS,
     AVAILABLE,
     AWAITING,
+    CONFIGURED,
     DEGRADED,
     EXTERNAL,
     HEALTHY,
@@ -54,6 +55,7 @@ from llmao.model_status import (
     STALLED,
     UNAVAILABLE,
     UNHEALTHY,
+    UNKNOWN,
     deployment_status,
 )
 from llmao.models import load_models, model_available_for, model_in_service, ux_models
@@ -341,10 +343,65 @@ _PRIVACY_TEXT = {
         "Every request is sent to a third-party provider.",
     ),
     MIXED: (
-        "MIXED",
-        "Requests may be handled on our infrastructure or sent to a third party, and the user cannot choose which.",
+        "Mixed",
+        "Requests may be handled on our infrastructure or sent to a third party, and you can't choose which.",
     ),
 }
+
+
+# Icon beside the privacy statement. The sentence carries the meaning.
+_PRIVACY_ICON = {
+    PRIVATE: "bi-shield-lock",
+    EXTERNAL: "bi-box-arrow-up-right",
+    MIXED: "bi-shuffle",
+}
+
+# Badge per displayed state. "healthy" is split on whether LiteLLM routes to it.
+_BADGE_CLASS = {
+    HEALTHY: "text-bg-success",
+    LOADING: "text-bg-secondary",
+    AWAITING: "text-bg-info",
+    UNHEALTHY: "text-bg-danger",
+    STALLED: "text-bg-danger",
+    UNKNOWN: "text-bg-dark",
+    CONFIGURED: "text-bg-light border",
+    "pending": "text-bg-light border",
+    "no deployment": "text-bg-warning",
+}
+_BADGE_DEFAULT = "text-bg-light border"
+
+
+def _badge_class(state: str, *, routed: bool = True) -> str:
+    """Bootstrap badge classes for one deployment state. Never empty."""
+    if state == HEALTHY and not routed:
+        return "text-bg-warning"
+    return _BADGE_CLASS.get(state, _BADGE_DEFAULT)
+
+
+def _dep_ident(dep) -> str:
+    """host:port for a box (the listen port from fleet.hosts), else the endpoint."""
+    srv = dep.vllm
+    if srv is not None:
+        return f"{srv.host}:{srv.listen_port}"
+    return dep.api_base or dep.name
+
+
+def _dep_anchor(dep) -> str:
+    """DOM id of the deployment's row, e.g. dep-10-0-0-1-8001."""
+    return "dep-" + re.sub(r"[^A-Za-z0-9]+", "-", _dep_ident(dep)).strip("-")
+
+
+def _needs_attention(lifecycle: str, skew) -> bool:
+    """The attention strip and the row accent ask the same question."""
+    return lifecycle in (STALLED, UNHEALTHY) or bool(skew)
+
+
+def _match_deployments(fleet, name: str, host: str, port: str = "") -> list:
+    """Self-hosted deployments named ``name`` on ``host``; ``port`` narrows to one listen port."""
+    matches = [d for d in fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
+    if port:
+        matches = [d for d in matches if str(d.vllm.listen_port) == port]
+    return matches
 
 
 def _modality_chips(modality: str) -> list[edict]:
@@ -406,14 +463,18 @@ def _action(**kwargs):
     kwargs["is_label"] = ezt.boolean(kind == "label")
     kwargs["is_add"] = ezt.boolean(kind == "add")
     kwargs["is_remove"] = ezt.boolean(kind == "remove")
+    kwargs.setdefault("port", "")
+    kwargs.setdefault("confirm", "")
+    kwargs.setdefault("aria", f"{kwargs.get('label', '')} {kwargs.get('host', '')}".strip())
     return edict(**kwargs)
 
 
 def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, approved: str = "") -> list:
     """Buttons shared by the attention strip and the deployment rows.
 
-    Add and Remove use the existing refusal gates. A disabled action carries
-    the reason as visible text. Approve is only for an unknown host.
+    Add and Stop tracking use the existing refusal gates. A disabled action
+    carries the reason as visible text. Approve is only for an unknown host.
+    Labels are host-scoped; Add and Stop tracking act on one host:port.
     """
     actions = []
     if approve and host:
@@ -463,6 +524,8 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
             )
     if dep is None:
         return actions
+    ident = _dep_ident(dep)
+    port = str(dep.vllm.listen_port) if dep.vllm is not None else ""
     if dep.self_hosted and not dep.in_litellm:
         reason = add_refusal(dep) or ""
         actions.append(
@@ -471,6 +534,8 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
                 label="Add",
                 host=target,
                 name=dep.name,
+                port=port,
+                aria=f"Add {ident}",
                 label_value="",
                 approved="",
                 post="/do-add-deployment",
@@ -483,9 +548,12 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
         actions.append(
             _action(
                 kind="remove",
-                label="Remove",
+                label="Stop tracking",
                 host=target,
                 name=dep.name,
+                port=port,
+                aria=f"Stop tracking {ident}",
+                confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The instance keeps running.",
                 label_value="",
                 approved="",
                 post="/do-remove-deployment",
@@ -509,6 +577,9 @@ def attention_items(fleet) -> list:
             edict(
                 kind="unknown",
                 what=f"Fleet key presented from {host} (not in fleet.hosts)",
+                ident="",
+                anchor="",
+                rest="",
                 detail=fleet.unknown_fetch_detail(host),
                 flag=_flag_text(fleet.admin_label(host)),
                 actions=admin_actions(
@@ -523,16 +594,21 @@ def attention_items(fleet) -> list:
     for dep in fleet.deployments:
         view = deployment_status(snapshot_for_status(dep, cfg), cfg)
         phrases = [SKEW_PHRASE.get(n, n) for n in dep.skew]
-        if view.lifecycle not in (STALLED, UNHEALTHY) and not phrases:
+        if not _needs_attention(view.lifecycle, dep.skew):
             continue
         host = dep.vllm.host if dep.vllm is not None else ""
+        ident = _dep_ident(dep)
+        rest = f"{dep.model_name} — {view.lifecycle.replace('_', ' ')}"
         reason = _deployment_reason(dep)
         if phrases:
             reason = "; ".join(p for p in (reason, "; ".join(phrases)) if p)
         items.append(
             edict(
                 kind=view.lifecycle if view.lifecycle in (STALLED, UNHEALTHY) else "skew",
-                what=f"{host} · {dep.model_name} — {view.lifecycle.replace('_', ' ')}",
+                what=f"{ident} · {rest}",
+                ident=ident,
+                anchor=_dep_anchor(dep),
+                rest=rest,
                 detail=reason,
                 flag=_flag_text(fleet.admin_label(host)) if host else "",
                 actions=admin_actions(fleet, dep),
@@ -544,6 +620,9 @@ def attention_items(fleet) -> list:
             edict(
                 kind="skew",
                 what=f"{extra.host}:{extra.port} · {extra.model_name} — not in config",
+                ident="",
+                anchor="",
+                rest="",
                 detail="; ".join(phrases),
                 flag="",
                 actions=[],
@@ -577,7 +656,8 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         row.unavailable = ezt.boolean(not in_service)
         row.context_window = f"{status.context_window:,}" if status.context_window else "—"
         if status.concurrency:
-            row.concurrency = f"Handles up to {status.concurrency} full-context requests at once"
+            n = status.concurrency
+            row.concurrency = "1 long request at a time" if n == 1 else f"{n} long requests at once"
         else:
             row.concurrency = ""
         privacy = status.privacy
@@ -585,6 +665,8 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         lead, rest = _PRIVACY_TEXT.get(privacy, ("", ""))
         row.privacy_lead = lead
         row.privacy_rest = rest
+        row.privacy_key = privacy
+        row.privacy_icon = _PRIVACY_ICON.get(privacy, "")
         row.privacy = f"{lead}. {rest}" if lead else ""
         row.chips = _modality_chips(m.get("modality") or "")
         own = [d for d in fleet.deployments if d.model_name == row.model_name and not getattr(d, "litellm_only", False)]
@@ -629,8 +711,14 @@ def _approve_choices(cfg) -> list:
 
 
 def deployment_rows(fleet, *, admin: bool) -> list:
-    """One table row per intended deployment, admin fields gated on ``admin``."""
+    """One row per intended deployment, admin fields gated on ``admin``.
+
+    ``primary`` and ``menu`` are the actions the Deployments list shows: at
+    most one button, the rest behind the "⋯" menu, and nothing that does not
+    apply. ``diags`` is the second line, with empty fields left out.
+    """
     rows = []
+    cfg = fleet.cfg.fleet
     for dep in fleet.deployments:
         srv = dep.vllm
         # The admin label is a host-scoped annotation; unknown-fetch rows
@@ -695,6 +783,28 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             kv_cache = "—"
             context = "—"
             oversized = False
+        actions = admin_actions(fleet, dep) if admin else []
+        usable = [a for a in actions if a.enabled]
+        primary = [a for a in usable if a.is_add][:1]
+        menu = [a for a in usable if not a.is_add]
+        litellm_health = (
+            "healthy" if dep.litellm_healthy is True else ("unhealthy" if dep.litellm_healthy is False else "—")
+        )
+        litellm_health_ago = dep.litellm_health_display if admin else ""
+        skew_pills = [SKEW_PHRASE.get(n, n) for n in dep.skew] if admin else []
+        diags = []
+        if admin and state in (HEALTHY, UNHEALTHY):
+            fields = [
+                # The public address only when Vast maps it to another port.
+                ("Public", public if srv is not None and public != listen else ""),
+                ("Context", context),
+                ("KV cache", kv_cache),
+                ("vLLM last healthy", last_ok if srv is not None else ""),
+                ("LiteLLM health", f"{litellm_health} {litellm_health_ago}" if litellm_health != "—" else ""),
+                ("Config served", config_ago),
+            ]
+            diags = [edict(label=k, value=v) for k, v in fields if v and v != "—"]
+        lifecycle = deployment_status(snapshot_for_status(dep, cfg), cfg).lifecycle
         rows.append(
             edict(
                 host=host,
@@ -712,10 +822,8 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 context=context,
                 oversized=ezt.boolean(oversized),
                 in_litellm=ezt.boolean(dep.in_litellm),
-                litellm_health=(
-                    "healthy" if dep.litellm_healthy is True else ("unhealthy" if dep.litellm_healthy is False else "—")
-                ),
-                litellm_health_ago=(dep.litellm_health_display if admin else ""),
+                litellm_health=litellm_health,
+                litellm_health_ago=litellm_health_ago,
                 no_deployment=ezt.boolean(no_deployment),
                 serving=ezt.boolean(serving),
                 loading=ezt.boolean(loading),
@@ -732,7 +840,16 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 label_value=label_value,
                 label_at=label_at,
                 flag=_flag_text(fleet.admin_label(srv.host)) if admin and srv is not None else "",
-                actions=admin_actions(fleet, dep) if admin else [],
+                actions=actions,
+                primary=primary,
+                menu=menu,
+                ident=_dep_ident(dep) if admin else "",
+                anchor=_dep_anchor(dep) if admin else "",
+                external=ezt.boolean(not dep.self_hosted),
+                attention=ezt.boolean(admin and _needs_attention(lifecycle, dep.skew)),
+                badge_class=_badge_class(state, routed=dep.in_litellm or srv is None),
+                diags=diags,
+                skew_pills=skew_pills,
             )
         )
     return rows
@@ -749,9 +866,11 @@ async def do_add_deployment():
     form = await quart.request.form
     name = (form.get("name") or "").strip()
     host = (form.get("host") or "").strip()
-    matches = [d for d in APP.fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
+    # Optional: one host can run the same model on two ports.
+    port = (form.get("port") or "").strip()
+    matches = _match_deployments(APP.fleet, name, host, port)
     if len(matches) != 1:
-        await flash_danger(f"No deployment {name} on {host}.")
+        await flash_danger(f"No deployment {name} on {host}:{port}." if port else f"No deployment {name} on {host}.")
         return _see_other("/models")
     reason = add_refusal(matches[0])
     if reason:
@@ -762,7 +881,7 @@ async def do_add_deployment():
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
-    await flash_success(f"Added {matches[0].name} at {matches[0].api_base}.")
+    await flash_success(f"Added {matches[0].name} on {_dep_ident(matches[0])}.")
     return _see_other("/models")
 
 
@@ -777,9 +896,11 @@ async def do_remove_deployment():
     form = await quart.request.form
     name = (form.get("name") or "").strip()
     host = (form.get("host") or "").strip()
-    matches = [d for d in APP.fleet.deployments if d.name == name and d.vllm is not None and d.vllm.host == host]
+    # Optional: one host can run the same model on two ports.
+    port = (form.get("port") or "").strip()
+    matches = _match_deployments(APP.fleet, name, host, port)
     if len(matches) != 1:
-        await flash_danger(f"No deployment {name} on {host}.")
+        await flash_danger(f"No deployment {name} on {host}:{port}." if port else f"No deployment {name} on {host}.")
         return _see_other("/models")
     reason = remove_refusal(matches[0])
     if reason:
@@ -790,7 +911,7 @@ async def do_remove_deployment():
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
-    await flash_success(f"Removed the route for {matches[0].name} at {matches[0].api_base}.")
+    await flash_success(f"Stopped tracking {matches[0].name} on {_dep_ident(matches[0])}.")
     return _see_other("/models")
 
 

@@ -20,3 +20,84 @@ body {
 .navbar.llmao-navbar .nav-link:focus {
   color: #fff;
 }
+
+/* Models page. */
+.models-page .model-card-off {
+  opacity: 0.72;
+}
+.models-page .model-id {
+  font-size: 0.85rem;
+}
+/* Privacy is a full sentence in its own block. Color only reinforces it. */
+.models-page .model-privacy {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.75rem;
+  border-left: 0.25rem solid var(--bs-secondary);
+  border-radius: var(--bs-border-radius-sm);
+  background-color: var(--bs-tertiary-bg);
+}
+.models-page .model-privacy .bi {
+  font-size: 1.1rem;
+  line-height: 1.4;
+}
+.models-page .model-privacy-private {
+  border-left-color: var(--bs-success);
+}
+.models-page .model-privacy-external,
+.models-page .model-privacy-mixed {
+  border-left-color: var(--bs-warning);
+}
+
+/* Deployments: one list group, fixed columns so rows align across models. */
+.models-page .dep-model {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+  background-color: var(--bs-tertiary-bg);
+}
+.models-page .dep-grid {
+  display: grid;
+  grid-template-columns: 6.5rem 13rem minmax(0, 1fr) 11rem 7.5rem;
+  grid-template-areas: "state ident reason flag actions";
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+}
+.models-page .dep-state { grid-area: state; }
+.models-page .dep-ident { grid-area: ident; overflow-wrap: anywhere; }
+.models-page .dep-reason { grid-area: reason; }
+.models-page .dep-flag { grid-area: flag; }
+.models-page .dep-actions { grid-area: actions; text-align: right; white-space: nowrap; }
+.models-page .dep-diag {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+}
+/* The accent replaces the 1px border, so the columns still line up. */
+.models-page .dep-attention {
+  border-left: 0.25rem solid var(--bs-warning);
+  padding-left: calc(var(--bs-list-group-item-padding-x) - 0.25rem + 1px);
+}
+.models-page .dep-row {
+  scroll-margin-top: 4rem;
+}
+.models-page .dep-flash {
+  animation: dep-flash 2s ease-out;
+}
+@keyframes dep-flash {
+  from { background-color: var(--bs-warning-bg-subtle); }
+  to { background-color: transparent; }
+}
+@media (max-width: 767.98px) {
+  .models-page .dep-grid {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "state ident actions"
+      "reason reason reason"
+      "flag flag flag";
+  }
+  .models-page .dep-reason:empty,
+  .models-page .dep-flag:empty {
+    display: none;
+  }
+}

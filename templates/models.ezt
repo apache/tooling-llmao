@@ -1,11 +1,11 @@
 [include "header.ezt"]
-<div class="container py-4">
+<div class="container py-4 models-page">
   <div class="mt-2">[include "flashes.ezt"]</div>
 
   <h1 class="h3 mb-3">Models</h1>
   <p class="text-muted small">
     Models you can call with a personal key. Use the <strong>ID</strong> as
-    the <code>model</code> parameter. License and hosting are in Details.
+    the <code>model</code> parameter.
   </p>
 
   [if-any attention]
@@ -14,7 +14,12 @@
     <ul class="mb-0 mt-1 ps-3">
       [for attention]
       <li class="mb-2">
+        [if-any attention.anchor]
+        <a href="#[attention.anchor]" class="font-monospace js-dep-link">[attention.ident]</a>
+        · [attention.rest]
+        [else]
         [attention.what]
+        [end]
         [if-any attention.detail]
         <span class="text-muted">— [attention.detail]</span>
         [end]
@@ -26,24 +31,27 @@
           [if-any attention.actions.is_approve]
           <button type="button" class="btn btn-sm btn-outline-primary ms-1"
                   data-bs-toggle="modal" data-bs-target="#approveBoxModal"
+                  aria-label="[attention.actions.aria]"
                   data-host="[attention.actions.host]" data-models="[attention.actions.approved]">Approve</button>
           [else]
           [if-any attention.actions.enabled]
-          <form method="post" action="[attention.actions.post]" class="d-inline">
+          <form method="post" action="[attention.actions.post]" class="d-inline"[if-any attention.actions.confirm] data-confirm="[attention.actions.confirm]"[end]>
             <input type="hidden" name="host" value="[attention.actions.host]">
             [if-any attention.actions.is_label]
             <input type="hidden" name="label" value="[attention.actions.label_value]">
             [end]
-            [if-any attention.actions.is_add]
+            [if-any attention.actions.name]
             <input type="hidden" name="name" value="[attention.actions.name]">
             [end]
-            [if-any attention.actions.is_remove]
-            <input type="hidden" name="name" value="[attention.actions.name]">
+            [if-any attention.actions.port]
+            <input type="hidden" name="port" value="[attention.actions.port]">
             [end]
-            <button type="submit" class="btn btn-sm btn-outline-secondary ms-1">[attention.actions.label]</button>
+            <button type="submit" class="btn btn-sm btn-outline-secondary ms-1"
+                    aria-label="[attention.actions.aria]">[attention.actions.label]</button>
           </form>
           [else]
-          <button type="button" class="btn btn-sm btn-outline-secondary ms-1" disabled>[attention.actions.label]</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary ms-1"
+                  aria-label="[attention.actions.aria]" disabled>[attention.actions.label]</button>
           <span class="text-muted small">[attention.actions.reason]</span>
           [end]
           [end]
@@ -55,55 +63,51 @@
   </div>
   [end]
 
-  <style>
-    .model-card-off { opacity: 0.72; }
-    .model-id { font-size: 0.85rem; }
-  </style>
   [if-any models]
   <div class="row row-cols-1 row-cols-md-2 g-3">
         [for models]
         <div class="col">
-        <div class="card h-100[if-any models.unavailable] model-card-off[end]">
-          <div class="card-body">
-            <div class="d-flex align-items-baseline gap-2">
+        <div class="card h-100 model-card[if-any models.unavailable] model-card-off[end]">
+          <div class="card-body d-flex flex-column">
+            <div class="d-flex align-items-baseline flex-wrap gap-2">
               <h2 class="h5 mb-0">[models.display_name]</h2>
               <code class="model-id">[models.model_name]</code>
               <button type="button" class="btn btn-link btn-sm p-0 js-copy-model"
+                      aria-label="Copy the ID [models.model_name]"
                       data-copy="[models.model_name]">Copy</button>
             </div>
-            <div class="small text-muted mt-1">
+            [if-any models.privacy]
+            <div class="model-privacy model-privacy-[models.privacy_key] mt-2">
+              <i class="bi [models.privacy_icon]" aria-hidden="true"></i>
+              <div><strong>[models.privacy_lead].</strong> [models.privacy_rest]</div>
+            </div>
+            [end]
+            <div class="mt-2">
               [for models.chips]
               <span class="badge text-bg-secondary" title="[models.chips.title]">[models.chips.label]</span>
               [end]
               [if-any models.supports_thinking]
               <span class="badge text-bg-info" title="Reasons before answering">Thinking</span>
               [end]
-              <span class="ms-1">[models.context_window] context</span>
-              <span class="ms-1">[models.license]</span>
             </div>
-            [if-any models.privacy]
-            <div class="small mt-1"><strong>[models.privacy_lead].</strong> [models.privacy_rest]</div>
-            [end]
-            [if-any models.concurrency]
-            <div class="small text-muted">[models.concurrency]</div>
-            [end]
-            <div class="mt-2">
+            <div class="small text-muted mt-2">
+              [models.context_window] context · [models.license][if-any models.concurrency] · [models.concurrency][end]
+            </div>
+            <div class="mt-auto pt-3 d-flex align-items-center flex-wrap gap-2">
             [if-any models.available]
             [if-any models.degraded]
             <span class="badge text-bg-warning">[models.rollup_label]</span>
             [else]
             <span class="badge text-bg-success">[models.rollup_label]</span>
             [end]
+            <a class="btn btn-outline-primary btn-sm"
+               href="/keys/new?model=[models.model_name]">Request a key</a>
             [else]
             <span class="badge text-bg-secondary">[models.rollup_label]</span>
+            <button type="button" class="btn btn-outline-secondary btn-sm" disabled>Request a key</button>
+            <span class="small text-muted">Unavailable right now</span>
             [end]
-            </div>
-            <div class="mt-3">
-            [if-any models.available]
-            <a class="btn btn-outline-primary btn-sm me-1"
-               href="/keys/new?model=[models.model_name]">Request a key</a>
-            [end]
-            <button type="button" class="btn btn-link btn-sm p-0"
+            <button type="button" class="btn btn-link btn-sm p-0 ms-auto"
                     data-bs-toggle="modal" data-bs-target="#modelDetailModal"
                     data-model-name="[models.model_name]"
                     data-display-name="[models.display_name]"
@@ -136,104 +140,85 @@
   [if-any is_site_admin]
   <h2 class="h5 mt-4">Deployments</h2>
   <p class="text-muted small">
-    One row per box. Admin flags reset when the control plane restarts.
+    One row per host:port. Admin flags reset when the control plane restarts.
   </p>
-  [for models]
-  <h3 class="h6 mt-3">
-    [models.display_name]
-    <span class="font-monospace text-muted small ms-1">[models.model_name]</span>
-    <span class="badge text-bg-secondary ms-2">[models.rollup_label]</span>
-    <span class="text-muted small ms-2">[models.replica_summary]</span>
-  </h3>
-  <div class="table-responsive mb-3">
-    <table class="table table-sm align-middle mb-0">
-      <thead>
-        <tr>
-          <th>State</th>
-          <th>Host</th>
-          <th>Reason</th>
-          <th>Admin flag</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        [for models.deployments]
-        <tr class="[models.deployments.row_class]">
-          <td>
-            [if-any models.deployments.serving]
-            <span class="badge text-bg-success">[models.deployments.state]</span>
-            [end]
-            [if-any models.deployments.no_deployment]
-            <span class="badge text-bg-warning text-dark">[models.deployments.state]</span>
-            [end]
-            [if-any models.deployments.loading]
-            <span class="badge text-bg-secondary">[models.deployments.state]</span>
-            [end]
-            [if-any models.deployments.awaiting]
-            <span class="badge text-bg-info text-dark">[models.deployments.state]</span>
-            [end]
-            [if-any models.deployments.unhealthy]
-            <span class="badge text-bg-danger">[models.deployments.state]</span>
-            [end]
-            [if-any models.deployments.pending]
-            <span class="badge text-bg-light text-dark">[models.deployments.state]</span>
-            [end]
-          </td>
-          <td class="font-monospace small">[models.deployments.host]</td>
-          <td class="small">[models.deployments.detail]</td>
-          <td class="small">[models.deployments.flag]</td>
-          <td class="text-nowrap">
-            [for models.deployments.actions]
-            [if-any models.deployments.actions.is_approve]
-            <button type="button" class="btn btn-sm btn-outline-primary ms-1"
-                    data-bs-toggle="modal" data-bs-target="#approveBoxModal"
-                    data-host="[models.deployments.actions.host]"
-                    data-models="[models.deployments.actions.approved]">Approve</button>
-            [else]
-            [if-any models.deployments.actions.enabled]
-            <form method="post" action="[models.deployments.actions.post]" class="d-inline">
-              <input type="hidden" name="host" value="[models.deployments.actions.host]">
-              [if-any models.deployments.actions.is_label]
-              <input type="hidden" name="label" value="[models.deployments.actions.label_value]">
+  <div class="list-group dep-list mb-3">
+    [for models]
+    <div class="list-group-item dep-model">
+      <span class="fw-semibold">[models.display_name]</span>
+      <span class="font-monospace text-muted small ms-1">[models.model_name]</span>
+      <span class="badge text-bg-secondary ms-2">[models.rollup_label]</span>
+      <span class="text-muted small ms-2">[models.replica_summary]</span>
+    </div>
+    [for models.deployments]
+    <div class="list-group-item dep-row[if-any models.deployments.attention] dep-attention[end]" id="[models.deployments.anchor]">
+      <div class="dep-grid">
+        <div class="dep-state"><span class="badge [models.deployments.badge_class]">[models.deployments.state]</span></div>
+        <div class="dep-ident font-monospace small">
+          [models.deployments.ident]
+          [if-any models.deployments.external]<span class="text-muted">external</span>[end]
+        </div>
+        <div class="dep-reason small">[models.deployments.detail]</div>
+        <div class="dep-flag small text-muted">[models.deployments.flag]</div>
+        <div class="dep-actions">
+          [for models.deployments.primary]
+          <form method="post" action="[models.deployments.primary.post]" class="d-inline">
+            <input type="hidden" name="host" value="[models.deployments.primary.host]">
+            <input type="hidden" name="name" value="[models.deployments.primary.name]">
+            <input type="hidden" name="port" value="[models.deployments.primary.port]">
+            <button type="submit" class="btn btn-sm btn-outline-primary"
+                    aria-label="[models.deployments.primary.aria]">[models.deployments.primary.label]</button>
+          </form>
+          [end]
+          [if-any models.deployments.menu]
+          <div class="dropdown d-inline-block">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown"
+                    aria-expanded="false" aria-label="More actions for [models.deployments.ident]">⋯</button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              [for models.deployments.menu]
+              <li>
+                <form method="post" action="[models.deployments.menu.post]"[if-any models.deployments.menu.confirm] data-confirm="[models.deployments.menu.confirm]"[end]>
+                  <input type="hidden" name="host" value="[models.deployments.menu.host]">
+                  [if-any models.deployments.menu.is_label]
+                  <input type="hidden" name="label" value="[models.deployments.menu.label_value]">
+                  [end]
+                  [if-any models.deployments.menu.name]
+                  <input type="hidden" name="name" value="[models.deployments.menu.name]">
+                  [end]
+                  [if-any models.deployments.menu.port]
+                  <input type="hidden" name="port" value="[models.deployments.menu.port]">
+                  [end]
+                  <button type="submit" class="dropdown-item"
+                          aria-label="[models.deployments.menu.aria]">[models.deployments.menu.label]</button>
+                </form>
+              </li>
               [end]
-              [if-any models.deployments.actions.is_add]
-              <input type="hidden" name="name" value="[models.deployments.actions.name]">
-              [end]
-              [if-any models.deployments.actions.is_remove]
-              <input type="hidden" name="name" value="[models.deployments.actions.name]">
-              [end]
-              <button type="submit" class="btn btn-sm btn-outline-secondary ms-1">[models.deployments.actions.label]</button>
-            </form>
-            [else]
-            <button type="button" class="btn btn-sm btn-outline-secondary ms-1" disabled>[models.deployments.actions.label]</button>
-            <span class="text-muted small">[models.deployments.actions.reason]</span>
-            [end]
-            [end]
-            [end]
-          </td>
-        </tr>
-        <tr>
-          <td colspan="5" class="text-muted small border-0 pt-0">
-            Listen [models.deployments.listen]
-            · Public [models.deployments.public]
-            · Context [models.deployments.context]
-            · KV cache [models.deployments.kv_cache]
-            [if-any models.deployments.oversized]
-            <span class="text-danger">Context window exceeds the measured KV cache. vLLM will hang on a request that needs the space rather than refuse it.</span>
-            [end]
-            · vLLM last healthy [models.deployments.last_ok]
-            · LiteLLM health [models.deployments.litellm_health] [models.deployments.litellm_health_ago]
-            · Config served [models.deployments.config_ago]
-            [if-any models.deployments.skew]
-            · [models.deployments.skew]
-            [end]
-          </td>
-        </tr>
+            </ul>
+          </div>
+          [end]
+        </div>
+      </div>
+      [if-any models.deployments.oversized]
+      <div class="small text-danger mt-1">Context window exceeds the measured KV cache. vLLM will hang on a request that needs the space rather than refuse it.</div>
+      [end]
+      [if-any models.deployments.diags]
+      <div class="dep-diag small text-muted mt-1">
+        [for models.deployments.diags]
+        <span>[models.deployments.diags.label] [models.deployments.diags.value]</span>
         [end]
-      </tbody>
-    </table>
+      </div>
+      [end]
+      [if-any models.deployments.skew_pills]
+      <div class="mt-1">
+        [for models.deployments.skew_pills]
+        <span class="badge text-bg-warning">[models.deployments.skew_pills]</span>
+        [end]
+      </div>
+      [end]
+    </div>
+    [end]
+    [end]
   </div>
-  [end]
   [end]
 </div>
 
@@ -311,17 +296,5 @@
     </form>
   </div>
 </div>
-<script>
-document.getElementById("approveBoxModal").addEventListener("show.bs.modal", function (ev) {
-  var btn = ev.relatedTarget;
-  var host = btn.getAttribute("data-host") || "";
-  var picked = (btn.getAttribute("data-models") || "").split(",");
-  document.getElementById("approve-host").value = host;
-  document.getElementById("approveBoxModalLabel").textContent = "Approve " + host;
-  document.querySelectorAll("#approveBoxModal input[name=model]").forEach(function (cb) {
-    cb.checked = picked.indexOf(cb.value) !== -1;
-  });
-});
-</script>
 [end]
 [include "footer.ezt"]
