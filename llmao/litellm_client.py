@@ -29,6 +29,8 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import pathlib
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -72,6 +74,18 @@ TIER_SERVICE = "service"
 # LiteLLM fields these map to. Named here so the mapping is in one place
 # rather than spread across call sites.
 _LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "max_parallel_requests")
+
+# The dependency line is `litellm[proxy,extra-proxy]==1.102.2`. The extras are optional.
+_LITELLM_PIN = re.compile(r"""litellm(?:\[[^\]]+\])?==([^"'\s]+)""")
+
+
+def pinned_litellm_version() -> str:
+    """The litellm version pyproject.toml requires. The admin page compares the proxy to this."""
+    text = (pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    match = _LITELLM_PIN.search(text)
+    if match is None:
+        raise RuntimeError("pyproject.toml has no litellm pin")
+    return match.group(1)
 
 
 def resolve_entitlement(cfg: Any, tier: str) -> dict[str, Any]:
@@ -253,6 +267,7 @@ class Backend(Protocol):
     def invalidate_spend(self) -> None: ...
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance: ...
     def invalidate_allowance(self, user: str | None = None) -> None: ...
+    async def proxy_version(self) -> str | None: ...
     async def aclose(self) -> None: ...
 
 
@@ -339,6 +354,21 @@ class LiteLLMBackend:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    async def proxy_version(self) -> str | None:
+        """litellm_version from GET /health/readiness/details, or None when it cannot be read.
+
+        On 1.102.2 that field is only on the authenticated details route.
+        GET /health probes every model, so it is not used here.
+        """
+        try:
+            resp = await self._request("GET", "health/readiness/details")
+            self._raise_http(resp)
+            body = resp.json()
+        except BackendUnavailableError:
+            return None
+        version = body.get("litellm_version") if isinstance(body, dict) else None
+        return str(version) if version else None
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         try:

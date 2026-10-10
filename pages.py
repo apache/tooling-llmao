@@ -39,7 +39,7 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
-from llmao.litellm_client import BackendUnavailableError, KeyInfo
+from llmao.litellm_client import BackendUnavailableError, KeyInfo, pinned_litellm_version
 from llmao.model_status import (
     ADMIN_LABELS,
     AVAILABLE,
@@ -1152,8 +1152,8 @@ async def usage_moved():
 async def admin_index(result):
     """One door for everything a site admin does.
 
-    Four pages that only make sense together, and none of which a committer
-    should have to scroll past in the nav.
+    The pages that only make sense together, and none of which a committer
+    should have to scroll past in the nav. Models stays in the top nav.
     """
     if not result.is_site_admin:
         raise AuthzError("Admin is limited to site admins.")
@@ -1165,6 +1165,14 @@ async def admin_index(result):
     except (AuthzError, BackendUnavailableError):
         pending = []
     result.pending_count = len(pending) or None
+    try:
+        result.litellm_running = await APP.seam.proxy_version()
+    except BackendUnavailableError:
+        result.litellm_running = None
+    result.litellm_expected = pinned_litellm_version()
+    result.litellm_matches = ezt.boolean(
+        bool(result.litellm_running) and result.litellm_running == result.litellm_expected
+    )
     return result
 
 

@@ -233,6 +233,10 @@ class Seam:
             grantor=info.grantor,
         )
 
+    async def proxy_version(self) -> str | None:
+        """Running LiteLLM version from GET /health/readiness/details."""
+        return await self._backend.proxy_version()
+
     async def list_projects_for(self, identity: Identity) -> list[ProjectListRow]:
         """Projects from identity membership; ensures LiteLLM team (project budget)."""
         names = sorted(identity.all_projects())

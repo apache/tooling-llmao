@@ -33,6 +33,7 @@ from llmao.litellm_client import (
     KeyInfo,
     TeamInfo,
     _normalize_key_obj,
+    pinned_litellm_version,
     resolve_budget_duration,
     resolve_grantor,
 )
@@ -152,6 +153,9 @@ class MockBackend:
         if project is None:
             return list(rows)
         return [r for r in rows if r.get("project") == project]
+
+    async def proxy_version(self) -> str | None:
+        return pinned_litellm_version()
 
     async def aclose(self) -> None:
         return None

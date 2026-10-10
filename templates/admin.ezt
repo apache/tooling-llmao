@@ -38,12 +38,21 @@
         Every key with no human at the keyboard, and when it was last used.
       </div>
     </a>
-    <a class="list-group-item list-group-item-action" href="/models">
-      <div class="fw-semibold">Models</div>
-      <div class="small text-muted">
-        Routes, hosts and serving state, with add and remove.
-      </div>
-    </a>
+  </div>
+
+  <div class="card mt-4">
+    <div class="card-body py-2 small">
+      <div class="fw-semibold">LiteLLM</div>
+      [if-any litellm_running]
+      [if-any litellm_matches]
+      [litellm_running], matches the pin.
+      [else]
+      Running [litellm_running]. The pin is [litellm_expected].
+      [end]
+      [else]
+      Unavailable.
+      [end]
+    </div>
   </div>
 </div>
 [include "footer.ezt"]
