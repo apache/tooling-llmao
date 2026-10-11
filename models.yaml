@@ -278,3 +278,68 @@ models:
         clocks, so that is the card's real rate rather than a limit worth
         chasing. The advantage over the 27B is concurrency, not per-request
         speed.
+
+  # The same model as qwen3-8b, from the unquantized weights. For cards the
+  # FP8 build cannot load on.
+  #
+  # Qwen's FP8 checkpoints are block-quantized (weight_block_size [128, 128]),
+  # which vLLM runs through DeepGEMM, and DeepGEMM only knows SM90 (Hopper)
+  # and SM100 (datacenter Blackwell). On a GB10 (compute capability 12.1) the
+  # engine dies while loading with "Unknown SF transformation" and nothing
+  # more. BF16 never reaches that code.
+  #
+  # A separate model_name, so callers ask for it by this name and it does not
+  # pool with the qwen3-8b boxes.
+  - model_name: qwen3-8b-bf16
+    litellm_params:
+      model: hosted_vllm/qwen3-8b-bf16
+      # As for qwen3-8b: unusable with reasoning on by default.
+      chat_template_kwargs:
+        enable_thinking: false
+    # No pricing: nothing has been measured on the GB10, so usage prices at
+    # zero until it is.
+    model_info:
+      vllm:
+        model: Qwen/Qwen3-8B
+        source:
+          kind: hf
+        # Derived, not measured: 8.19B parameters at two bytes is 15.3 GiB.
+        # Rounded up so the fit check fails closed.
+        vram_gb: 17
+        # 15.3G of weights in the HF repo.
+        disk_gb: 20
+        # Architectural ceiling; see qwen3-8b.
+        max_model_len: 40960
+        args:
+          - --dtype
+          - bfloat16
+          # The weights are BF16 but the KV cache can still be FP8. This is a
+          # cast in the attention path, not DeepGEMM.
+          - --kv-cache-dtype
+          - fp8
+          - --enable-prefix-caching
+          - --enable-chunked-prefill
+          # Carried over from qwen3-8b, not tuned for this box.
+          - --max-num-batched-tokens
+          - "4096"
+          - --reasoning-parser
+          - qwen3
+          - --enable-auto-tool-choice
+          - --tool-call-parser
+          - hermes
+      display_name: "Qwen3 8B BF16 (self-hosted, fast)"
+      provider: self-host
+      context_window: 40960
+      license: Apache-2.0
+      openness: open-weight
+      weights_distribution: "Qwen/Qwen3-8B (HF, BF16) · vLLM"
+      training_data_provenance: "undisclosed (Alibaba)"
+      provenance_record: absent
+      self_hosted: true
+      modality: text
+      supports_thinking: true
+      thinks_by_default: true
+      notes: >-
+        Qwen3 8B from the unquantized weights, for hardware the FP8 build
+        does not load on. Same model and same behaviour as qwen3-8b; send
+        enable_thinking:false to keep it cheap. Not yet measured.
