@@ -140,7 +140,9 @@ models:
         # params (1.07 GiB/B at FP8). Rounded up so the check fails closed.
         # Cannot be read from nvidia-smi: vLLM allocates its utilisation
         # fraction of the card regardless of model size, because KV expands
-        # to fill it.
+        # to fill it. The box sets that fraction: this figure, plus a share
+        # of what the card has left once every co-resident server's weights
+        # are reserved (install_set.py, apportion).
         vram_gb: 30
         # 29G measured in /workspace/.hf_home; 35 leaves room for the torch
         # compile cache.

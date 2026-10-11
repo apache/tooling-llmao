@@ -41,6 +41,9 @@ from typing import Any
 CONFIG_PATH = "/vllm/config"
 CONF_DIR = Path(os.environ.get("SUPERVISOR_CONF_DIR", "/etc/supervisor/conf.d"))
 VLLM_BIN = os.environ.get("VLLM_BIN", "/usr/local/bin/vllm")
+# The share of the card the servers on a box divide between them. vLLM's own
+# default for one server, so a box with a single server is sized as before.
+GPU_USABLE_FRACTION = 0.9
 
 
 def require_env(name: str) -> str:
@@ -136,8 +139,8 @@ def servers_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [parse_server(s) for s in rows]
 
 
-def free_vram_gb() -> float | None:
-    """Free VRAM on GPU 0, or None if nvidia-smi is unavailable.
+def _gpu0_gb(field: str) -> float | None:
+    """One nvidia-smi memory field for GPU 0 in GB, or None if it is unavailable.
 
     Capacity is read from the card rather than declared in models.yaml: a
     hand-typed figure is wrong the first time a provider supplies a different
@@ -146,7 +149,7 @@ def free_vram_gb() -> float | None:
     try:
         out = (
             subprocess.run(
-                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                ["nvidia-smi", f"--query-gpu={field}", "--format=csv,noheader,nounits"],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -163,6 +166,16 @@ def free_vram_gb() -> float | None:
         return int(out[0].strip()) / 1024.0
     except ValueError:
         return None
+
+
+def free_vram_gb() -> float | None:
+    """Free VRAM on GPU 0, or None if nvidia-smi is unavailable."""
+    return _gpu0_gb("memory.free")
+
+
+def total_vram_gb() -> float | None:
+    """Total VRAM on GPU 0, or None if nvidia-smi is unavailable."""
+    return _gpu0_gb("memory.total")
 
 
 def free_disk_gb(path: str) -> float | None:
@@ -202,6 +215,44 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
         problems.append(f"disk: need {want_disk:.1f}GB under {data_dir}, {have_disk:.1f}GB free")
 
     return problems
+
+
+def apportion(specs: list[dict[str, Any]], total_gb: float | None) -> list[dict[str, Any]]:
+    """Divide the card between the servers on this box.
+
+    vLLM takes its --gpu-memory-utilization fraction of the whole card
+    whatever the model's size, because KV cache expands to fill it. Left at
+    the default, the first server claims the card and a second cannot start.
+
+    Each server gets its weights (``vram_gb``) plus a share of what is left,
+    proportional to ``max_model_len`` so servers end up with a similar number
+    of full-context slots. Without a ``max_model_len`` on every one of them
+    the split is equal. A fraction set in models.yaml is kept and deducted.
+
+    Fills in ``gpu_memory_utilization`` in place and returns the specs.
+    Changes nothing when the card or a server's ``vram_gb`` is unknown, or
+    when the weights alone do not fit -- vLLM's default then applies, and
+    check_fit is what reports a shortfall.
+    """
+    if not total_gb:
+        return specs
+    todo = [s for s in specs if s.get("gpu_memory_utilization") is None]
+    if not todo or any(not s.get("vram_gb") for s in todo):
+        return specs
+    pinned = sum(s["gpu_memory_utilization"] for s in specs if s.get("gpu_memory_utilization") is not None)
+    usable = total_gb * (GPU_USABLE_FRACTION - pinned)
+    leftover = usable - sum(s["vram_gb"] for s in todo)
+    if leftover <= 0:
+        return specs
+    if all(s.get("max_model_len") for s in todo):
+        weights = [float(s["max_model_len"]) for s in todo]
+    else:
+        weights = [1.0] * len(todo)
+    for spec, weight in zip(todo, weights, strict=True):
+        gb = spec["vram_gb"] + leftover * weight / sum(weights)
+        # Rounded down so the fractions never add up to more than the card.
+        spec["gpu_memory_utilization"] = int(gb / total_gb * 1000 + 1e-6) / 1000
+    return specs
 
 
 def build_argv(spec: dict[str, Any]) -> list[str]:
@@ -249,7 +300,7 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str, data_dir: s
     )
 
 
-def write_units(data: dict[str, Any], conf_dir: Path) -> list[Path]:
+def write_units(specs: list[dict[str, Any]], conf_dir: Path) -> list[Path]:
     data_dir = Path(require_env("DATA_DIRECTORY"))
     hf_home = data_dir / "hf-cache"
     log_dir = data_dir / "logs"
@@ -257,7 +308,7 @@ def write_units(data: dict[str, Any], conf_dir: Path) -> list[Path]:
     log_dir.mkdir(parents=True, exist_ok=True)
     conf_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for spec in servers_from_config(data):
+    for spec in specs:
         path = conf_dir / f"{program_name(spec['name'])}.conf"
         path.write_text(
             program_ini(
@@ -290,13 +341,19 @@ def main(argv: list[str] | None = None) -> int:
     # provisioning log is where this is read, so the message has to stand on
     # its own -- there is no reporting channel back to llmao yet.
     data_dir = os.environ.get("DATA_DIRECTORY", "/workspace")
-    problems = check_fit(servers_from_config(data), data_dir=data_dir)
+    specs = servers_from_config(data)
+    problems = check_fit(specs, data_dir=data_dir)
     if problems:
         for line in problems:
             print(f"install_set: will not fit -- {line}", file=sys.stderr)
         return 1
 
-    write_units(data, CONF_DIR)
+    total = total_vram_gb()
+    for spec in apportion(specs, total):
+        gmu = spec["gpu_memory_utilization"]
+        if total and gmu is not None:
+            print(f"install_set: {spec['name']} gets {gmu} of the card ({gmu * total:.1f}GB)", file=sys.stderr)
+    write_units(specs, CONF_DIR)
     if os.environ.get("INSTALL_SET_DRY_RUN", "").strip() in ("1", "true"):
         return 0
     supervisorctl_update()

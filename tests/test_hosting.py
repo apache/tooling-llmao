@@ -92,7 +92,7 @@ def test_empty_servers():
 def test_program_ini_and_write(tmp_path, monkeypatch):
     monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
     monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
-    written = inst.write_units(SAMPLE, tmp_path / "conf.d")
+    written = inst.write_units(inst.servers_from_config(SAMPLE), tmp_path / "conf.d")
     assert len(written) == 2
     text = written[0].read_text()
     assert "[program:vllm-model-a]" in text
@@ -248,3 +248,74 @@ def test_check_fit_reports_disk_shortfall(monkeypatch):
     problems = inst.check_fit([_spec(disk=55)], data_dir="/workspace")
     assert len(problems) == 1
     assert "disk" in problems[0]
+
+
+def _sized(name, vram=None, mml=None, gmu=None):
+    raw = {"name": name, "model": f"org/{name}", "port": 8000, "api_key": "sk-x"}
+    if vram is not None:
+        raw["vram_gb"] = vram
+    if mml is not None:
+        raw["max_model_len"] = mml
+    if gmu is not None:
+        raw["gpu_memory_utilization"] = gmu
+    return inst.parse_server(raw)
+
+
+def test_apportion_two_identical_servers_share_the_card():
+    """The case that prompted this: two qwen3 on one card."""
+    specs = inst.apportion([_sized("a", vram=9, mml=40960), _sized("b", vram=9, mml=40960)], 48.0)
+    assert [s["gpu_memory_utilization"] for s in specs] == [0.45, 0.45]
+
+
+def test_apportion_splits_the_leftover_by_context_window():
+    big = _sized("gemma", vram=49, mml=131072)
+    small = _sized("qwen", vram=9, mml=40960)
+    inst.apportion([big, small], 80.0)
+    kv_big = big["gpu_memory_utilization"] * 80 - 49
+    kv_small = small["gpu_memory_utilization"] * 80 - 9
+    assert kv_big / kv_small == pytest.approx(131072 / 40960, rel=0.05)
+    assert big["gpu_memory_utilization"] + small["gpu_memory_utilization"] <= inst.GPU_USABLE_FRACTION
+
+
+def test_apportion_splits_equally_without_a_context_window():
+    a = _sized("a", vram=10, mml=131072)
+    b = _sized("b", vram=10)
+    inst.apportion([a, b], 100.0)
+    assert a["gpu_memory_utilization"] == b["gpu_memory_utilization"] == 0.45
+
+
+def test_apportion_lone_server_gets_the_vllm_default():
+    spec = _sized("a", vram=9, mml=40960)
+    inst.apportion([spec], 48.0)
+    assert spec["gpu_memory_utilization"] == pytest.approx(0.9, abs=0.001)
+
+
+def test_apportion_keeps_and_deducts_an_explicit_fraction():
+    pinned = _sized("a", vram=9, gmu=0.5)
+    other = _sized("b", vram=9, mml=40960)
+    inst.apportion([pinned, other], 48.0)
+    assert pinned["gpu_memory_utilization"] == 0.5
+    assert other["gpu_memory_utilization"] == pytest.approx(0.4, abs=0.001)
+
+
+def test_apportion_leaves_unknowns_alone():
+    # No nvidia-smi.
+    spec = _sized("a", vram=9, mml=40960)
+    assert inst.apportion([spec], None)[0]["gpu_memory_utilization"] is None
+    # A server that declares no weights: nothing to reserve for it.
+    specs = inst.apportion([_sized("a", vram=9), _sized("b")], 48.0)
+    assert [s["gpu_memory_utilization"] for s in specs] == [None, None]
+    # The weights alone do not fit. check_fit reports that.
+    specs = inst.apportion([_sized("a", vram=30), _sized("b", vram=30)], 48.0)
+    assert [s["gpu_memory_utilization"] for s in specs] == [None, None]
+
+
+def test_units_for_two_servers_each_carry_their_share(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
+    a = _sized("qwen-a", vram=9, mml=40960)
+    b = _sized("qwen-b", vram=9, mml=40960)
+    b["port"] = 8001
+    written = inst.write_units(inst.apportion([a, b], 48.0), tmp_path / "conf.d")
+    assert len(written) == 2
+    for path in written:
+        assert "--gpu-memory-utilization 0.45" in path.read_text()
