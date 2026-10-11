@@ -242,6 +242,20 @@ def test_check_fit_silent_when_model_declares_nothing(monkeypatch):
     assert inst.check_fit([_spec()], data_dir="/workspace") == []
 
 
+def test_check_fit_counts_disk_once_per_model(monkeypatch):
+    """Two servers of one model share a single copy of the weights."""
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: None)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 60.0)
+    same = [_spec(name="a", disk=55), _spec(name="b", disk=55)]
+    assert inst.check_fit(same, data_dir="/workspace") == []
+
+    other = _spec(name="c", disk=55)
+    other["model"] = "another/model"
+    problems = inst.check_fit([same[0], other], data_dir="/workspace")
+    assert len(problems) == 1
+    assert "need 110.0GB" in problems[0]
+
+
 def test_check_fit_reports_disk_shortfall(monkeypatch):
     monkeypatch.setattr(inst, "free_vram_gb", lambda: 80.0)
     monkeypatch.setattr(inst, "free_disk_gb", lambda p: 20.0)

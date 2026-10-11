@@ -230,7 +230,13 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
             f"Weights alone -- KV cache comes out of what is left."
         )
 
-    want_disk = sum(s["disk_gb"] for s in specs if s.get("disk_gb"))
+    # Once per model, not per server: two servers of the same model share
+    # one copy of the weights under HF_HOME.
+    per_model: dict[str, float] = {}
+    for s in specs:
+        if s.get("disk_gb"):
+            per_model[s["model"]] = max(per_model.get(s["model"], 0.0), s["disk_gb"])
+    want_disk = sum(per_model.values())
     have_disk = free_disk_gb(data_dir)
     if want_disk and have_disk is not None and want_disk > have_disk:
         problems.append(f"disk: need {want_disk:.1f}GB under {data_dir}, {have_disk:.1f}GB free")
