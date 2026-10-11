@@ -41,9 +41,10 @@ from typing import Any
 CONFIG_PATH = "/vllm/config"
 CONF_DIR = Path(os.environ.get("SUPERVISOR_CONF_DIR", "/etc/supervisor/conf.d"))
 VLLM_BIN = os.environ.get("VLLM_BIN", "/usr/local/bin/vllm")
-# The share of the card the servers on a box divide between them. vLLM's own
-# default for one server, so a box with a single server is sized as before.
+# The share of the free GPU memory the servers on a box divide between them.
+# vLLM's own default for one server, applied to what is free.
 GPU_USABLE_FRACTION = 0.9
+MEMINFO = Path("/proc/meminfo")
 
 
 def require_env(name: str) -> str:
@@ -139,12 +140,32 @@ def servers_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
     return [parse_server(s) for s in rows]
 
 
-def _gpu0_gb(field: str) -> float | None:
+def _meminfo_gb(key: str) -> float | None:
+    """One /proc/meminfo line (reported in kB) in GB, or None if it is not there."""
+    try:
+        lines = MEMINFO.read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        name, _, rest = line.partition(":")
+        if name.strip() == key:
+            try:
+                return int(rest.split()[0]) / (1024.0**2)
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def _gpu0_gb(field: str, meminfo_key: str) -> float | None:
     """One nvidia-smi memory field for GPU 0 in GB, or None if it is unavailable.
 
     Capacity is read from the card rather than declared in models.yaml: a
     hand-typed figure is wrong the first time a provider supplies a different
     GPU than was ordered, and with rented instances that is a matter of when.
+
+    A unified-memory machine (GB10) has no VRAM of its own: nvidia-smi is
+    there and answers "[N/A]". The GPU draws on system memory, so that is
+    what ``meminfo_key`` reads. No nvidia-smi at all is still an unknown.
     """
     try:
         out = (
@@ -165,17 +186,17 @@ def _gpu0_gb(field: str) -> float | None:
     try:
         return int(out[0].strip()) / 1024.0
     except ValueError:
-        return None
+        return _meminfo_gb(meminfo_key)
 
 
 def free_vram_gb() -> float | None:
     """Free VRAM on GPU 0, or None if nvidia-smi is unavailable."""
-    return _gpu0_gb("memory.free")
+    return _gpu0_gb("memory.free", "MemAvailable")
 
 
 def total_vram_gb() -> float | None:
     """Total VRAM on GPU 0, or None if nvidia-smi is unavailable."""
-    return _gpu0_gb("memory.total")
+    return _gpu0_gb("memory.total", "MemTotal")
 
 
 def free_disk_gb(path: str) -> float | None:
@@ -217,7 +238,9 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
     return problems
 
 
-def apportion(specs: list[dict[str, Any]], total_gb: float | None) -> list[dict[str, Any]]:
+def apportion(
+    specs: list[dict[str, Any]], total_gb: float | None, free_gb: float | None = None
+) -> list[dict[str, Any]]:
     """Divide the card between the servers on this box.
 
     vLLM takes its --gpu-memory-utilization fraction of the whole card
@@ -228,6 +251,12 @@ def apportion(specs: list[dict[str, Any]], total_gb: float | None) -> list[dict[
     proportional to ``max_model_len`` so servers end up with a similar number
     of full-context slots. Without a ``max_model_len`` on every one of them
     the split is equal. A fraction set in models.yaml is kept and deducted.
+
+    The servers share GPU_USABLE_FRACTION of ``free_gb``, what is free right
+    now, not of the card's size. On a unified-memory machine the operating
+    system lives in the same memory, and MemAvailable already leaves it out.
+    vLLM's flag is a fraction of the total, so the result is still expressed
+    against ``total_gb``. Without ``free_gb`` the whole card counts as free.
 
     Fills in ``gpu_memory_utilization`` in place and returns the specs.
     Changes nothing when the card or a server's ``vram_gb`` is unknown, or
@@ -240,7 +269,7 @@ def apportion(specs: list[dict[str, Any]], total_gb: float | None) -> list[dict[
     if not todo or any(not s.get("vram_gb") for s in todo):
         return specs
     pinned = sum(s["gpu_memory_utilization"] for s in specs if s.get("gpu_memory_utilization") is not None)
-    usable = total_gb * (GPU_USABLE_FRACTION - pinned)
+    usable = (free_gb or total_gb) * GPU_USABLE_FRACTION - pinned * total_gb
     leftover = usable - sum(s["vram_gb"] for s in todo)
     if leftover <= 0:
         return specs
@@ -250,7 +279,7 @@ def apportion(specs: list[dict[str, Any]], total_gb: float | None) -> list[dict[
         weights = [1.0] * len(todo)
     for spec, weight in zip(todo, weights, strict=True):
         gb = spec["vram_gb"] + leftover * weight / sum(weights)
-        # Rounded down so the fractions never add up to more than the card.
+        # Rounded down so the fractions never add up to more than the budget.
         spec["gpu_memory_utilization"] = int(gb / total_gb * 1000 + 1e-6) / 1000
     return specs
 
@@ -349,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     total = total_vram_gb()
-    for spec in apportion(specs, total):
+    for spec in apportion(specs, total, free_vram_gb()):
         gmu = spec["gpu_memory_utilization"]
         if total and gmu is not None:
             print(f"install_set: {spec['name']} gets {gmu} of the card ({gmu * total:.1f}GB)", file=sys.stderr)

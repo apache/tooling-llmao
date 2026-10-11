@@ -319,3 +319,54 @@ def test_units_for_two_servers_each_carry_their_share(tmp_path, monkeypatch):
     assert len(written) == 2
     for path in written:
         assert "--gpu-memory-utilization 0.45" in path.read_text()
+
+
+def _smi(monkeypatch, stdout=None, *, missing=False):
+    def run(*_args, **_kwargs):
+        if missing:
+            raise FileNotFoundError("nvidia-smi")
+        return inst.subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(inst.subprocess, "run", run)
+
+
+def test_vram_comes_from_nvidia_smi_on_a_discrete_card(monkeypatch):
+    _smi(monkeypatch, "49140\n")
+    assert inst.total_vram_gb() == pytest.approx(49140 / 1024)
+
+
+def test_unified_memory_falls_back_to_meminfo(monkeypatch, tmp_path):
+    """GB10: nvidia-smi answers, but with "[N/A]" for memory."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       125444852 kB\nMemFree:         1000 kB\nMemAvailable:   104857600 kB\n")
+    monkeypatch.setattr(inst, "MEMINFO", meminfo)
+    _smi(monkeypatch, "[N/A]\n")
+    assert inst.total_vram_gb() == pytest.approx(125444852 / 1024**2)
+    assert inst.free_vram_gb() == pytest.approx(100.0)
+
+
+def test_no_nvidia_smi_is_still_unknown(monkeypatch, tmp_path):
+    """System RAM is not GPU memory on a box with no GPU tooling at all."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       125444852 kB\n")
+    monkeypatch.setattr(inst, "MEMINFO", meminfo)
+    _smi(monkeypatch, missing=True)
+    assert inst.total_vram_gb() is None
+    # And an unreadable meminfo after "[N/A]" is an unknown, not a crash.
+    monkeypatch.setattr(inst, "MEMINFO", tmp_path / "absent")
+    _smi(monkeypatch, "[N/A]\n")
+    assert inst.total_vram_gb() is None
+
+
+def test_apportion_budgets_from_free_memory_as_a_fraction_of_total():
+    """Unified memory: 128GB in the machine, 100GB of it available."""
+    a = _sized("a", vram=9, mml=40960)
+    b = _sized("b", vram=9, mml=40960)
+    inst.apportion([a, b], 128.0, 100.0)
+    # 0.9 of the 100GB available is 90GB, 45GB each, which is 0.351 of 128GB.
+    assert a["gpu_memory_utilization"] == b["gpu_memory_utilization"] == 0.351
+    # A pinned fraction is a fraction of the total, and comes out of the budget.
+    pinned = _sized("p", vram=9, gmu=0.25)
+    other = _sized("o", vram=9, mml=40960)
+    inst.apportion([pinned, other], 128.0, 100.0)
+    assert other["gpu_memory_utilization"] == pytest.approx((90 - 32) / 128, abs=0.001)
