@@ -41,7 +41,6 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
-from llmao.litellm_client import BackendUnavailableError, KeyInfo, pinned_litellm_version
 from llmao.model_status import (
     ADMIN_LABELS,
     AVAILABLE,
@@ -61,6 +60,7 @@ from llmao.model_status import (
     deployment_status,
 )
 from llmao.models import load_models, model_available_for, model_in_service, ux_models
+from llmao.proxy.client import BackendUnavailableError, KeyInfo, pinned_litellm_version
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.

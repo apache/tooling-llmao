@@ -70,10 +70,10 @@ def create_app():
     # Fail-fast: models.yaml is required (same presumption as config.yaml).
     from llmao.contention import ContentionSampler
     from llmao.fleet import Fleet, validate_fleet
-    from llmao.litellm_client import LiteLLMBackend
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
     from llmao.models import load_models
+    from llmao.proxy.client import LiteLLMBackend
     from llmao.seam import Seam
 
     definitions = load_models(cfg=app.cfg)

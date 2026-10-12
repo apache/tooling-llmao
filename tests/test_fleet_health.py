@@ -31,7 +31,6 @@ from llmao.fleet import (
     parse_kv_cache_tokens,
     parse_max_model_len,
 )
-from llmao.litellm_client import LiteLLMBackend
 from llmao.model_status import (
     AVAILABLE,
     AWAITING,
@@ -46,6 +45,7 @@ from llmao.model_status import (
     UNAVAILABLE,
     UNHEALTHY,
 )
+from llmao.proxy.client import LiteLLMBackend
 from tests.test_fleet import FLEET_KNOBS
 
 

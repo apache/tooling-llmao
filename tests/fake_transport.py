@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.litellm_client import BackendUnavailableError
+from llmao.proxy.client import BackendUnavailableError
 
 
 class FakeTransport:

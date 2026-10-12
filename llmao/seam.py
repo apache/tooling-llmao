@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import access_requests as _access
-from .litellm_client import (
+from .proxy.client import (
     GRANTOR_FREE_TIER,
     TIER_FREE,
     TIER_PROJECT,

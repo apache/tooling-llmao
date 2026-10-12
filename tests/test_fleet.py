@@ -36,9 +36,9 @@ from llmao.fleet import (
     snapshot_for_status,
     validate_fleet,
 )
-from llmao.litellm_client import _norm_base
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models
+from llmao.proxy.client import _norm_base
 from llmao.vllm_api_key import derive_vllm_api_key
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
@@ -377,7 +377,7 @@ def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
 
 
 def test_working_api_key_follows_the_legacy_set():
-    from llmao.litellm_client import LiteLLMBackend
+    from llmao.proxy.client import LiteLLMBackend
 
     cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
     cfg.fleet.selfhost_api_key = "sk-shared"

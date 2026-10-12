@@ -28,7 +28,7 @@ from easydict import EasyDict as edict  # noqa: N813
 from fake_transport import FakeTransport
 
 from llmao.fleet import Fleet, FleetDeployment
-from llmao.litellm_client import LiteLLMBackend
+from llmao.proxy.client import LiteLLMBackend
 
 NOON = dt.datetime(2026, 10, 12, 12, 0, tzinfo=dt.UTC)
 TODAY = "2026-10-12"

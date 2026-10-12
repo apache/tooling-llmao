@@ -22,8 +22,8 @@ import asyncio
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment
-from llmao.litellm_client import LiteLLMBackend
 from llmao.model_status import HEALTHY, UNHEALTHY
+from llmao.proxy.client import LiteLLMBackend
 from tests.test_fleet_health import _server
 
 

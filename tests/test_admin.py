@@ -25,7 +25,7 @@ import ezt
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.litellm_client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_version
+from llmao.proxy.client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_version
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 

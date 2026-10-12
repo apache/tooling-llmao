@@ -27,7 +27,7 @@ import time
 import uuid
 from typing import Any
 
-from llmao.litellm_client import (
+from llmao.proxy.client import (
     GRANTOR_FREE_TIER,
     CreatedKey,
     KeyInfo,

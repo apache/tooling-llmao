@@ -22,7 +22,7 @@ import asyncio
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.litellm_client import GRANTOR_FREE_TIER, BackendUnavailableError, resolve_budget_duration
+from llmao.proxy.client import GRANTOR_FREE_TIER, BackendUnavailableError, resolve_budget_duration
 from llmao.seam import (
     AuthzError,
     Identity,

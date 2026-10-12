@@ -28,7 +28,7 @@ import datetime as dt
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.litellm_client import TIER_FREE, TIER_PROJECT, TIER_SERVICE, resolve_entitlement
+from llmao.proxy.client import TIER_FREE, TIER_PROJECT, TIER_SERVICE, resolve_entitlement
 from llmao.token_window import RollingAllowance
 
 UTC = dt.UTC

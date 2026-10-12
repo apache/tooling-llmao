@@ -44,7 +44,7 @@ from llmao.access_requests import (
     loads,
     prune,
 )
-from llmao.litellm_client import LiteLLMBackend
+from llmao.proxy.client import LiteLLMBackend
 
 UTC = dt.UTC
 

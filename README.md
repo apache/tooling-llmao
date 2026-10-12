@@ -229,7 +229,7 @@ config.yaml.example      → config.yaml (gitignored; secrets)
 litellm.yaml.example     → litellm.yaml (do not include models.yaml; store_model_in_db)
 models.yaml              admin definitions (committed; no secrets)
 certs/                   mkcert PEMs + README
-llmao/                   seam, auth, models, litellm_client, fleet
+llmao/                   seam, auth, models, fleet, proxy/ (LiteLLM client)
 hosting/vast/            provision.sh + install_set.py
 hosting/runpod/          RunPod template notes (image not built yet)
 tests/                   offline seam, fleet, hosting installer

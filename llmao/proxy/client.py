@@ -83,7 +83,7 @@ _LITELLM_PIN = re.compile(r"""litellm(?:\[[^\]]+\])?==([^"'\s]+)""")
 
 def pinned_litellm_version() -> str:
     """The litellm version pyproject.toml requires. The admin page compares the proxy to this."""
-    text = (pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    text = (pathlib.Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
     match = _LITELLM_PIN.search(text)
     if match is None:
         raise RuntimeError("pyproject.toml has no litellm pin")
