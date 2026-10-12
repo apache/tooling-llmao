@@ -41,8 +41,11 @@
                 [end]
             </ul>
             <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+                <li class="nav-item">
+                    <a class="nav-link[is nav "help"] active[end]" href="/help"[is nav "help"] aria-current="page"[end]>Help</a>
+                </li>
                 <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" id="asfDropdown" role="button"
+                    <a class="nav-link dropdown-toggle llmao-nav-quiet" href="#" id="asfDropdown" role="button"
                        data-bs-toggle="dropdown" aria-expanded="false">
                         ASF
                     </a>
@@ -55,9 +58,6 @@
                         <li><a class="dropdown-item" href="https://www.apache.org/security/">Security</a></li>
                         <li><a class="dropdown-item" href="https://privacy.apache.org/policies/privacy-policy-public.html">Privacy</a></li>
                     </ul>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link[is nav "help"] active[end]" href="/help"[is nav "help"] aria-current="page"[end]>Help</a>
                 </li>
                 [if-any uid]
                 <li class="nav-item dropdown">

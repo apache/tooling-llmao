@@ -59,6 +59,15 @@ body {
 .navbar.llmao-navbar .nav-link:focus {
   color: #fff;
 }
+/* Foundation links that lead off-site: quieter than the app's own pages. */
+.navbar.llmao-navbar .nav-link.llmao-nav-quiet {
+  color: rgba(255, 255, 255, 0.55);
+}
+.navbar.llmao-navbar .nav-link.llmao-nav-quiet:hover,
+.navbar.llmao-navbar .nav-link.llmao-nav-quiet:focus,
+.navbar.llmao-navbar .nav-link.llmao-nav-quiet.show {
+  color: #fff;
+}
 /* The page you are on. */
 .navbar.llmao-navbar .nav-link.active {
   color: #fff;
