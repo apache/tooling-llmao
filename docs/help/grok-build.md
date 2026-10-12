@@ -13,9 +13,9 @@ context_window = 131072
 ```
 
 ```sh
-export GROK_XAI_API_BASE_URL=https://llm.apache.org/v1
-export XAI_API_KEY=<your personal access token>
 grok -m qwen3.8-27b
 ```
 
-A `~/.grok/auth.json` left by `grok login` outranks the key and sends calls elsewhere. Move that file aside. Only API-key inference reads `GROK_XAI_API_BASE_URL`.
+The block carries the address and the key, so no environment variables are needed.
+
+A `~/.grok/auth.json` left by `grok login` outranks the key and sends calls elsewhere. Move that file aside.
