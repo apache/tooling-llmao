@@ -21,24 +21,27 @@ The failures worth guarding are the quiet ones -- an approval that can be
 used twice, one that never lapses, or a denial with no explanation attached.
 """
 
+import asyncio
 import datetime as dt
+import json
+import types
 
 import pytest
 
-from llmao.requests import (
+from llmao import access_requests
+from llmao.access_requests import (
     APPROVAL_TTL_DAYS,
     KIND_CAPACITY,
     KIND_KEY,
-    METADATA_KEY,
     STATE_APPROVED,
     STATE_CONSUMED,
     STATE_DENIED,
     STATE_PENDING,
-    Request,
-    dump,
-    load,
+    AccessRequest,
+    dumps,
+    key_for,
+    loads,
     prune,
-    upsert,
 )
 
 UTC = dt.UTC
@@ -53,7 +56,7 @@ def _capacity(**kw):
         "wanted": {"token_cap": 40_000_000},
     }
     base.update(kw)
-    return Request.new(**base)
+    return AccessRequest.new(**base)
 
 
 def _key(**kw):
@@ -65,7 +68,7 @@ def _key(**kw):
         "wanted": {"purpose": "scrutineer-ci", "tier": "service"},
     }
     base.update(kw)
-    return Request.new(**base)
+    return AccessRequest.new(**base)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +101,7 @@ def test_a_key_request_does_not_need_one():
 
 def test_an_unknown_kind_is_refused():
     with pytest.raises(ValueError):
-        Request.new(kind="whatever", requester="akm", project="p", reason="", wanted={})
+        AccessRequest.new(kind="whatever", requester="akm", project="p", reason="", wanted={})
 
 
 # ---------------------------------------------------------------------------
@@ -204,45 +207,27 @@ def test_a_capacity_approval_does_not_expire():
 
 
 # ---------------------------------------------------------------------------
-# Storage on team metadata
+# Storage in LiteLLM's memory store
 # ---------------------------------------------------------------------------
 
 
-def test_round_trips_through_metadata():
+def test_round_trips_through_a_stored_value():
     r = _capacity()
     r.decide(state=STATE_APPROVED, by="admin")
-    meta = {"grantor": "Free Tier", METADATA_KEY: dump([r])}
-    back = load(meta)
-    assert len(back) == 1
-    assert back[0].to_dict() == r.to_dict()
+    back = loads(dumps(r))
+    assert back.to_dict() == r.to_dict()
 
 
-def test_load_ignores_anything_that_is_not_a_request():
-    """Metadata is shared. One malformed entry must not cost the queue."""
-    meta = {
-        METADATA_KEY: [
-            {"id": "x", "kind": KIND_KEY, "requester": "a"},
-            {"no": "id"},
-            "a string",
-            None,
-        ]
-    }
-    assert len(load(meta)) == 1
+def test_loads_ignores_anything_that_is_not_a_request():
+    """The store is shared. One malformed row must not cost the queue."""
+    assert loads(json.dumps({"id": "x", "kind": KIND_KEY, "requester": "a"})) is not None
+    for junk in (json.dumps({"no": "id"}), json.dumps("a string"), "not json at all", None):
+        assert loads(junk) is None
 
 
-def test_load_on_metadata_without_requests():
-    assert load({"grantor": "Free Tier"}) == []
-    assert load(None) == []
-
-
-def test_upsert_replaces_by_id():
-    r = _capacity()
-    stored = [r]
-    r2 = Request.from_dict(r.to_dict())
-    r2.decide(state=STATE_APPROVED, by="admin")
-    out = upsert(stored, r2)
-    assert len(out) == 1
-    assert out[0].state == STATE_APPROVED
+def test_every_request_key_shares_the_prefix_listing_asks_for():
+    assert key_for("abc") == "llmao:request:abc"
+    assert key_for("abc").startswith(access_requests.KEY_PREFIX)
 
 
 def test_prune_keeps_pending_and_drops_expired_approvals():
@@ -255,7 +240,7 @@ def test_prune_keeps_pending_and_drops_expired_approvals():
 
 
 def test_prune_caps_decided_history():
-    """Metadata is a blob on a row and every read of the team carries it."""
+    """Nothing else trims the store, and every listing carries all of it."""
     reqs = []
     for i in range(80):
         r = _capacity()
@@ -319,3 +304,136 @@ def test_an_adjusted_request_differs_from_what_was_asked():
     assert r.granted != r.wanted
     assert r.granted["token_cap"] == 30_000_000
     assert r.wanted["token_cap"] == 40_000_000
+
+
+# ---------------------------------------------------------------------------
+# The backend, against a memory store that behaves like LiteLLM's
+#
+# Requests and tier overrides used to live in team metadata. The point of
+# moving them is that reading them no longer touches a team at all, so these
+# fail on any call that is not to /v1/memory.
+# ---------------------------------------------------------------------------
+
+
+def _backend(*, down=False):
+    from llmao.litellm_client import BackendUnavailableError, LiteLLMBackend
+
+    b = object.__new__(LiteLLMBackend)
+    b._cfg = types.SimpleNamespace(
+        entitlements=types.SimpleNamespace(
+            default=types.SimpleNamespace(rpm_limit=60, tpm_limit=60000, max_parallel_requests=4),
+            free_tier=types.SimpleNamespace(token_cap=1_000_000, token_window_days=7),
+        )
+    )
+    b._daily_at = None
+    b.store = {}
+    b.calls = []
+
+    async def fake_request(method, path, params=None, json=None, **kw):
+        b.calls.append((method, path))
+        if down:
+            raise BackendUnavailableError("could not reach LiteLLM")
+        assert path == "v1/memory" or path.startswith("v1/memory/"), f"unexpected call: {method} {path}"
+        key = path.removeprefix("v1/memory").lstrip("/")
+
+        def reply(status, body):
+            return types.SimpleNamespace(status_code=status, content=b"x", json=lambda: body, text=str(body))
+
+        if method == "GET" and not key:
+            hits = [{"key": k, "value": v} for k, v in b.store.items() if k.startswith(params["key_prefix"])]
+            return reply(200, {"memories": hits, "total": len(hits)})
+        if method == "GET":
+            return reply(200, {"key": key, "value": b.store[key]}) if key in b.store else reply(404, {})
+        if method == "PUT":
+            b.store[key] = json["value"]
+            return reply(200, {"key": key, "value": json["value"]})
+        if method == "DELETE":
+            return reply(200, {"deleted": True}) if b.store.pop(key, None) is not None else reply(404, {})
+        raise AssertionError(f"unexpected call: {method} {path}")
+
+    def raise_http(resp):
+        if resp.status_code >= 400:
+            raise BackendUnavailableError(f"LiteLLM admin error {resp.status_code}")
+
+    b._request = fake_request
+    b._raise_http = raise_http
+    return b
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_a_stored_request_is_listed_and_found():
+    b = _backend()
+    r = _key()
+    _run(b.add_request(r))
+    assert list(b.store) == [f"llmao:request:{r.id}"]
+    assert [x.id for x in _run(b.list_requests())] == [r.id]
+    assert _run(b.find_request(r.id)).to_dict() == r.to_dict()
+    assert _run(b.find_request("no-such-id")) is None
+
+
+def test_listing_for_a_project_leaves_the_others_out():
+    b = _backend()
+    mine, theirs, nobodys = _capacity(project="tooling"), _capacity(project="mahout"), _key()
+    for r in (mine, theirs, nobodys):
+        _run(b.add_request(r))
+    assert [x.id for x in _run(b.list_requests("tooling"))] == [mine.id]
+    assert len(_run(b.list_requests())) == 3
+
+
+def test_a_decision_rewrites_one_row_and_no_other():
+    """In team metadata, answering one request rewrote all of them."""
+    b = _backend()
+    first, second = _capacity(), _capacity()
+    _run(b.add_request(first))
+    _run(b.add_request(second))
+    untouched = b.store[key_for(second.id)]
+
+    found = _run(b.find_request(first.id))
+    found.decide(state=STATE_APPROVED, by="admin")
+    _run(b.save_request(found))
+
+    assert _run(b.find_request(first.id)).state == STATE_APPROVED
+    assert b.store[key_for(second.id)] == untouched
+    assert len(b.store) == 2
+
+
+def test_a_lapsed_approval_is_deleted_on_the_next_write():
+    b = _backend()
+    stale = _key()
+    stale.decide(state=STATE_APPROVED, by="admin")
+    long_ago = dt.datetime.now(UTC) - dt.timedelta(days=APPROVAL_TTL_DAYS + 1)
+    stale.decided_at = long_ago.isoformat(timespec="seconds")
+    b.store[key_for(stale.id)] = dumps(stale)
+
+    fresh = _capacity()
+    _run(b.add_request(fresh))
+    assert list(b.store) == [key_for(fresh.id)]
+
+
+def test_tier_limits_are_config_until_an_admin_changes_them():
+    b = _backend()
+    assert _run(b.tier_entitlement("free_tier"))["token_cap"] == 1_000_000
+    got = _run(b.set_tier_entitlement("free_tier", token_cap=250_000))
+    assert got["token_cap"] == 250_000
+    assert got["token_window_days"] == 7, "what was not changed still comes from config"
+    assert list(b.store) == ["llmao:tiers"]
+
+
+def test_changing_one_tier_leaves_another_alone():
+    """Every tier shares the one row."""
+    b = _backend()
+    _run(b.set_tier_entitlement("free_tier", token_cap=250_000))
+    _run(b.set_tier_entitlement("service", rpm_limit=10))
+    _run(b.set_tier_entitlement("free_tier", token_window_days=3))
+    assert json.loads(b.store["llmao:tiers"]) == {
+        "free_tier": {"token_cap": 250_000, "token_window_days": 3},
+        "service": {"rpm_limit": 10},
+    }
+
+
+def test_tier_limits_fall_back_to_config_when_litellm_is_down():
+    """A page must still have limits to show during a proxy restart."""
+    assert _run(_backend(down=True).tier_entitlement("free_tier"))["token_cap"] == 1_000_000

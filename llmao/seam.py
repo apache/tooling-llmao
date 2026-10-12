@@ -30,7 +30,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import requests as _requests
+from . import access_requests as _access
 from .litellm_client import (
     GRANTOR_FREE_TIER,
     TIER_FREE,
@@ -288,8 +288,8 @@ class Seam:
             # The approver's first question is why. Asking for it here saves
             # a round trip and makes the queue readable.
             raise AuthzError("Say what the extra capacity is for.")
-        req = _requests.Request.new(
-            kind=_requests.KIND_CAPACITY,
+        req = _access.AccessRequest.new(
+            kind=_access.KIND_CAPACITY,
             requester=identity.uid,
             project=project,
             reason=reason,
@@ -319,8 +319,8 @@ class Seam:
             raise AuthzError("Say what the key is for.")
         if project and project not in (identity.committees or []):
             raise AuthzError(f"You are not on the {project} PMC.")
-        req = _requests.Request.new(
-            kind=_requests.KIND_KEY,
+        req = _access.AccessRequest.new(
+            kind=_access.KIND_KEY,
             requester=identity.uid,
             project=project,
             reason=reason,
@@ -372,7 +372,7 @@ class Seam:
         """
         if not identity.is_site_admin:
             raise AuthzError("The request queue is limited to site admins.")
-        pending = [r for r in await self._backend.list_requests() if r.state == _requests.STATE_PENDING]
+        pending = [r for r in await self._backend.list_requests() if r.state == _access.STATE_PENDING]
         return sorted(pending, key=lambda r: r.created_at or "")
 
     async def decide_request(
@@ -394,12 +394,12 @@ class Seam:
         if req is None:
             raise AuthzError("No such request.")
         req.decide(
-            state=_requests.STATE_APPROVED if approve else _requests.STATE_DENIED,
+            state=_access.STATE_APPROVED if approve else _access.STATE_DENIED,
             by=identity.uid,
             reason=reason,
             granted=granted,
         )
-        if approve and req.kind == _requests.KIND_CAPACITY:
+        if approve and req.kind == _access.KIND_CAPACITY:
             await self._backend.update_team_entitlement(req.project, token_cap=int(req.granted.get("token_cap") or 0))
         return await self._backend.save_request(req)
 
@@ -473,8 +473,8 @@ class Seam:
         """Approvals from an already-fetched list.
 
         Same filter as my_key_approvals, without the read. My Keys needs both
-        this and the person's own requests, and listing requests reads every
-        team -- so the page fetches once and derives both.
+        this and the person's own requests, so the page fetches once and
+        derives both.
         """
         return [
             {

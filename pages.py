@@ -1195,8 +1195,7 @@ async def keys_list(result):
     except BackendUnavailableError:
         result.projects = []
 
-    # One read, two views. my_key_approvals and my_requests both list every
-    # request; asking twice doubled the most expensive thing on the page.
+    # One read, two views: the approvals are a filter of the same list.
     try:
         mine = await APP.seam.my_requests(ident)
     except BackendUnavailableError:

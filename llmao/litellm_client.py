@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import json
 import logging
 import pathlib
 import re
@@ -39,7 +40,7 @@ from urllib.parse import urlparse
 import httpx
 from asfpy.stopwatch import Stopwatch
 
-from llmao import requests as _requests
+from llmao import access_requests as _access
 from llmao.fleet import LEGACY_SERVERS, ExtraLiteLLM, normalize_peer_ip, snapshot_for_status
 from llmao.model_status import (
     HEALTHY,
@@ -413,14 +414,10 @@ class LiteLLMBackend:
                 self._team_ids[str(alias)] = str(tid)
         return rows
 
-    # Requests live in team metadata, so listing them reads every team. My
-    # Keys does that twice per load -- once for pending approvals, once for
-    # the person's own asks -- on top of two spend-log scans and a team_info
-    # per project.
-    #
-    # Sixty seconds: long enough that a page load is one scan rather than
-    # several, short enough that an approval appears while the admin who
-    # granted it is still looking at the page.
+    # The listing is every team with its budget and metadata, and it is the
+    # slowest admin call left. Sixty seconds: long enough that a page load
+    # is one listing rather than several, short enough that a cap an admin
+    # has just changed shows while they are still looking at the page.
     _TEAM_TTL_S = 60
 
     async def _team_list_rows(self, *, fresh: bool = False) -> list[dict[str, Any]]:
@@ -465,6 +462,13 @@ class LiteLLMBackend:
         rows = await self._team_list_rows(fresh=True)
         await self._backfill_token_caps(rows)
         await self.ensure_commercial()
+        # Six of the week's seven days are history and are never asked for
+        # again, so reading them here means no visitor waits for them. Not
+        # worth refusing to start over: a cold cache is only slow.
+        try:
+            await self._daily_rows(self._SPEND_DAYS)
+        except BackendUnavailableError as e:
+            _LOGGER.warning("could not warm usage: %s", e)
 
     async def _backfill_token_caps(self, rows: list[dict[str, Any]]) -> None:
         """Give every team without a token allocation the configured default.
@@ -587,82 +591,100 @@ class LiteLLMBackend:
             team_id=str(team_id),
         )
 
-    # Runtime tier overrides live on a reserved LiteLLM team rather than in
-    # llmao's own state: llmao has no database, and the only thing worse than
-    # a missing override is one that disagrees between two instances.
+    # The team a key with no project is minted into. LiteLLM wants every
+    # key in a team, and a projectless one has to go somewhere.
     _TIER_STORE_TEAM = "llmao-entitlement-defaults"
 
-    # ---- requests ------------------------------------------------------
+    # ---- LiteLLM's memory store -----------------------------------------
     #
-    # Stored on team metadata beside grantor and token_cap. llmao has no
-    # database of its own and ARCHITECTURE.md states that as a property, so a
-    # request is a row on a team rather than a row in a table llmao owns.
+    # llmao has no database of its own, and ARCHITECTURE.md states that as a
+    # property. What it needs to remember -- requests awaiting an answer, and
+    # the tier limits an admin has changed -- goes in LiteLLM's /v1/memory: a
+    # key, a string value, one row each.
     #
-    # The cost is that listing everything pending reads every team. warm()
-    # already enumerates them once per boot and at twenty projects this is
-    # noise; at three hundred it would not be, and that is the signal to lift
-    # it into a table. Nothing above this layer would have to change.
+    # Both used to live in team metadata, which made listing requests a read
+    # of every team and every write a rewrite of a team's whole blob.
+    #
+    # Nothing here is cached. There are a handful of rows and a handful of
+    # people; asking each time is quick, and leaves nothing to go stale.
+    _TIERS_KEY = "llmao:tiers"
 
-    async def _team_metadata(self, project: str) -> tuple[str, dict[str, Any]]:
-        info = await self.ensure_team(project)
-        return info.team_id, dict(info.metadata or {})
+    async def _memory_get(self, key: str) -> str | None:
+        resp = await self._request("GET", f"v1/memory/{key}")
+        if resp.status_code == 404:
+            return None
+        self._raise_http(resp)
+        body = resp.json()
+        return body.get("value") if isinstance(body, dict) else None
+
+    async def _memory_put(self, key: str, value: str) -> None:
+        resp = await self._request("PUT", f"v1/memory/{key}", json={"value": value})
+        self._raise_http(resp)
+
+    async def _memory_delete(self, key: str) -> None:
+        resp = await self._request("DELETE", f"v1/memory/{key}")
+        if resp.status_code != 404:
+            self._raise_http(resp)
+
+    async def _memory_list(self, prefix: str) -> list[dict[str, Any]]:
+        """Every row whose key starts with `prefix`, in one page.
+
+        Outstanding requests are counted on one hand, and add_request trims
+        the decided ones, so a page is far more than there will ever be.
+        """
+        resp = await self._request("GET", "v1/memory", params={"key_prefix": prefix, "page_size": 500})
+        self._raise_http(resp)
+        body = resp.json()
+        rows = body.get("memories") if isinstance(body, dict) else None
+        return [r for r in rows or [] if isinstance(r, dict)]
+
+    # ---- requests ------------------------------------------------------
 
     async def add_request(self, req: Any) -> Any:
         """Store a new request, or persist a decision on an existing one.
 
-        Projectless requests live on the reserved entitlement-defaults team,
-        which already exists for tier overrides.
-
-        Read-modify-write on the whole metadata blob: two admins answering
-        different requests in the same second can lose one. At pilot volume
-        that is theoretical, and if it stops being so that is a reason to
-        move this into a table rather than to add a lock here.
+        One row per request, so answering one cannot lose another.
         """
-        project = req.project or self._TIER_STORE_TEAM
-        team_id, meta = await self._team_metadata(project)
-        merged = _requests.upsert(_requests.load(meta), req)
-        meta[_requests.METADATA_KEY] = _requests.dump(_requests.prune(merged))
-        resp = await self._request(
-            "POST",
-            "team/update",
-            json={"team_id": team_id, "metadata": meta},
-        )
-        self._raise_http(resp)
-        # The listing carries metadata, so a request just written would not
-        # appear until the TTL expired -- which reads as the form having
-        # silently failed.
-        self._team_rows_cache = None
+        await self._memory_put(_access.key_for(req.id), _access.dumps(req))
+
+        # Nothing else trims the store, so do it while writing: a lapsed
+        # approval, or a decision older than the history we keep, goes. The
+        # request is already saved; failing to tidy is no reason to say it
+        # was not.
+        try:
+            stored = await self.list_requests()
+            kept = _access.prune(stored)
+            for old in stored:
+                if old not in kept:
+                    await self._memory_delete(_access.key_for(old.id))
+        except BackendUnavailableError as e:
+            _LOGGER.warning("could not trim stored requests: %s", e)
         return req
 
     # Same operation; named for what the caller means.
     save_request = add_request
 
     async def list_requests(self, project: str | None = None) -> list[Any]:
-        """Requests for one project, or every one across the fleet.
-
-        With no project this reads every team. That is the ugly part of
-        storing them in metadata, and it is bounded by the number of PMCs
-        rather than by the number of requests.
-        """
-        if project is not None:
-            _, meta = await self._team_metadata(project)
-            return _requests.load(meta)
-
-        out: list[Any] = []
-        for row in await self._team_list_rows():
-            if not isinstance(row, dict):
-                continue
-            meta = row.get("metadata")
-            if not isinstance(meta, dict) or _requests.METADATA_KEY not in meta:
-                continue
-            out.extend(_requests.load(meta))
+        """Requests for one project, or every one."""
+        out = []
+        for row in await self._memory_list(_access.KEY_PREFIX):
+            req = _access.loads(row.get("value"))
+            if req is not None and (project is None or req.project == project):
+                out.append(req)
         return out
 
     async def find_request(self, request_id: str) -> Any | None:
-        for r in await self.list_requests():
-            if r.id == request_id:
-                return r
-        return None
+        return _access.loads(await self._memory_get(_access.key_for(request_id)))
+
+    # ---- tier overrides ------------------------------------------------
+
+    async def _tier_overrides(self) -> dict[str, Any]:
+        """{tier: {limit: value}} as an admin has set them. Empty until one has."""
+        try:
+            held = json.loads(await self._memory_get(self._TIERS_KEY) or "{}")
+        except ValueError:
+            return {}
+        return held if isinstance(held, dict) else {}
 
     async def tier_entitlement(self, tier: str) -> dict[str, Any]:
         """A tier's effective limits: config, with any admin override on top.
@@ -679,12 +701,9 @@ class LiteLLMBackend:
                 effective[name] = val
 
         try:
-            info = await self.team_info(self._TIER_STORE_TEAM)
+            stored = (await self._tier_overrides()).get(tier)
         except BackendUnavailableError:
             return effective
-        if info is None:
-            return effective
-        stored = (info.metadata or {}).get(tier)
         if isinstance(stored, dict):
             effective.update({k: v for k, v in stored.items() if v is not None})
         return effective
@@ -733,17 +752,10 @@ class LiteLLMBackend:
             if int(val) < 0:
                 raise BackendUnavailableError(f"{name} must not be negative")
 
-        team = await self.ensure_team(self._TIER_STORE_TEAM)
-        meta = dict(team.metadata or {})
-        meta[tier] = {**(meta.get(tier) or {}), **changes}
-
-        resp = await self._request(
-            "POST",
-            "team/update",
-            json={"team_id": team.team_id, "metadata": meta},
-        )
-        self._raise_http(resp)
-        self._team_rows_cache = None
+        # Every tier shares the one row, so this is read, change, write.
+        tiers = await self._tier_overrides()
+        tiers[tier] = {**(tiers.get(tier) or {}), **changes}
+        await self._memory_put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
         _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
         # The cap is re-read on every check, but today's usage is cached --
         # without this an admin lowering a cap sees a stale remaining figure

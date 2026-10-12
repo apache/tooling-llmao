@@ -52,6 +52,11 @@ production Puppet restarts the service after a change.
 Developers: system PostgreSQL + `make db`. Production: Puppet + on-disk
 `database_url`.
 
+**LLMAO's own records** live in LiteLLM's memory store (`/v1/memory`), since
+LLMAO has no database: one row per access request (`llmao:request:<id>`) and
+one for the tier limits an admin has changed (`llmao:tiers`). Per-project
+token caps are still team metadata.
+
 **PATs:** personal keys bind ASF uid + project team + purpose; automation
 keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;

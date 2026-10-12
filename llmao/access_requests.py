@@ -31,37 +31,33 @@ answer is visible where the asking happened.
 
 WHERE THIS LIVES
 
-In LiteLLM team metadata, beside grantor and token_cap. llmao has no database
-of its own and docs/ARCHITECTURE.md states that as a property, so a request
-is a row on a team rather than a row in a table llmao owns.
+In LiteLLM's memory store (/v1/memory), one row per request, keyed
+`llmao:request:<id>` with the request as JSON. llmao has no database of its
+own and docs/ARCHITECTURE.md states that as a property; the memory store is
+LiteLLM's, and a request is a row in it.
 
-That is the ugly part and it is deliberate: listing everything pending means
-reading every team. warm() already enumerates them once per boot, and at
-twenty projects the cost is noise. At three hundred it would not be, and the
-shape here -- a dataclass with to_dict/from_dict and a store that only knows
-how to list, add and replace -- is meant to be liftable into a table without
-touching anything that calls it.
+They first lived in team metadata, beside grantor and token_cap. That made
+listing them a read of every team and every decision a rewrite of a team's
+whole metadata blob. A row each has neither cost: listing is one prefix
+query, and answering one request cannot lose another.
 
-A request with no project lives on the reserved entitlement-defaults team,
-which already exists for tier overrides.
+NAMING
 
-CONCURRENCY
-
-Writes are read-modify-write on the whole metadata blob. Two admins answering
-different requests in the same second can lose one. At pilot volume that is
-theoretical; if it stops being theoretical, that is the signal to lift this
-into a table rather than to add a lock here.
+AccessRequest, not AccessRequest. This process is a web application talking to an
+HTTP API, and a bare `AccessRequest` there means three other things first.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
-# Metadata key on the team. One list, newest last.
-METADATA_KEY = "requests"
+# Every request's key in the memory store starts with this, and listing them
+# is a prefix query on it.
+KEY_PREFIX = "llmao:request:"
 
 KIND_CAPACITY = "capacity"
 KIND_KEY = "key"
@@ -89,7 +85,7 @@ def _parse(stamp: str | None) -> dt.datetime | None:
 
 
 @dataclass
-class Request:
+class AccessRequest:
     """One ask, and its answer.
 
     `granted` carries what an admin actually approved, which is not always
@@ -118,7 +114,9 @@ class Request:
     consumed_at: str = ""
 
     @classmethod
-    def new(cls, *, kind: str, requester: str, project: str | None, reason: str, wanted: dict[str, Any]) -> Request:
+    def new(
+        cls, *, kind: str, requester: str, project: str | None, reason: str, wanted: dict[str, Any]
+    ) -> AccessRequest:
         if kind not in (KIND_CAPACITY, KIND_KEY):
             raise ValueError(f"unknown request kind: {kind}")
         requester = (requester or "").strip()
@@ -219,11 +217,11 @@ class Request:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Request | None:
+    def from_dict(cls, d: dict[str, Any]) -> AccessRequest | None:
         """Rehydrate, or None if the row is not a request.
 
-        Returns None rather than raising: metadata is shared with other
-        things, and one malformed entry must not cost the whole queue.
+        Returns None rather than raising: one malformed entry must not cost
+        the whole queue.
         """
         if not isinstance(d, dict) or not d.get("id") or not d.get("kind"):
             return None
@@ -244,38 +242,37 @@ class Request:
         )
 
 
-def load(metadata: dict[str, Any] | None) -> list[Request]:
-    """Requests stored on one team's metadata."""
-    raw = (metadata or {}).get(METADATA_KEY)
-    if not isinstance(raw, list):
-        return []
-    out = []
-    for item in raw:
-        req = Request.from_dict(item)
-        if req is not None:
-            out.append(req)
-    return out
+def key_for(request_id: str) -> str:
+    """The memory-store key for one request."""
+    return KEY_PREFIX + request_id
 
 
-def dump(requests: list[Request]) -> list[dict[str, Any]]:
-    return [r.to_dict() for r in requests]
+def dumps(req: AccessRequest) -> str:
+    """A request as the memory store holds it."""
+    return json.dumps(req.to_dict(), sort_keys=True)
 
 
-def upsert(requests: list[Request], req: Request) -> list[Request]:
-    """Replace by id, or append. Returns a new list."""
-    out = [r for r in requests if r.id != req.id]
-    out.append(req)
-    return out
+def loads(value: Any) -> AccessRequest | None:
+    """Rehydrate a stored value, or None if it is not a request.
+
+    None rather than raising: the store is shared with other things, and one
+    malformed row must not cost the whole queue.
+    """
+    try:
+        return AccessRequest.from_dict(json.loads(value))
+    except (TypeError, ValueError):
+        return None
 
 
-def prune(requests: list[Request], *, keep_decided: int = 50, now: dt.datetime | None = None) -> list[Request]:
+def prune(
+    requests: list[AccessRequest], *, keep_decided: int = 50, now: dt.datetime | None = None
+) -> list[AccessRequest]:
     """Drop expired approvals and trim decided history.
 
-    Metadata is a JSON blob on a row, not a table -- it grows forever if
-    nothing trims it, and every read of the team carries it. Pending requests
-    are always kept; decided ones are capped at the most recent `keep_decided`
-    so the audit trail survives a pilot without the blob becoming the largest
-    thing in the database.
+    Nothing else trims the store, and every listing carries all of it.
+    Pending requests are always kept; decided ones are capped at the most
+    recent `keep_decided`, which is plenty of audit trail for a pilot. The
+    caller deletes whatever this leaves out.
     """
     pending, decided = [], []
     for r in requests:
