@@ -98,7 +98,8 @@ def test_help_template_uses_the_page_frame(tmp_path):
         assert f'<a class="dropdown-item" href="{url}">{text}</a>' in out
     assert 'href="https://www.apache.org/"' in out
     footer = out[out.index("<footer") :]
-    assert "trademarks of The Apache Software Foundation" in footer
+    assert "registered trademarks or" in footer
+    assert '<a href="https://www.apache.org/">The Apache Software Foundation</a>' in footer
     assert "™" not in out and "&trade;" not in out
     assert 'href="/help/faq"' in out
 
