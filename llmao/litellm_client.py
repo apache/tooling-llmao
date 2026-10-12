@@ -331,12 +331,15 @@ class LiteLLMBackend:
         self._cfg = cfg
         self.fleet = fleet
         self._team_ids: dict[str, str] = {}  # project → team_id
-        # user → (monotonic stamp, daily token buckets). Allowances are
-        # derived from the spend log on read; this keeps a page refresh from
-        # costing a scan.
-        self._allowance_cache: dict[str, tuple[float, dict[str, int]]] = {}
-        # (monotonic stamp, folded spend rows) for the current week.
-        self._spend_cache: tuple[float, list[dict]] | None = None
+        # ISO date → usage rows for that UTC day, from LiteLLM's daily
+        # aggregate. Spend and allowances are both derived from this.
+        self._daily: dict[str, list[dict]] = {}
+        # Days that can no longer change: kept, never refetched.
+        self._closed_days: set[str] = set()
+        # Monotonic stamp of the last read of the days still open.
+        self._daily_at: float | None = None
+        # The longest window anyone has asked for; older days are dropped.
+        self._daily_span = 0
         # (monotonic stamp, team/list rows).
         self._team_rows_cache: tuple[float, list[dict[str, Any]]] | None = None
         # model_name -> cost_basis, filled when routes are registered, so a
@@ -742,7 +745,7 @@ class LiteLLMBackend:
         self._raise_http(resp)
         self._team_rows_cache = None
         _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
-        # The cap is re-read on every check, but cached buckets are not --
+        # The cap is re-read on every check, but today's usage is cached --
         # without this an admin lowering a cap sees a stale remaining figure
         # for up to a minute and concludes the control did not work.
         self.invalidate_allowance()
@@ -982,10 +985,31 @@ class LiteLLMBackend:
         resp = await self._request("POST", "key/delete", json={"keys": [token_id]})
         self._raise_http(resp)
 
-    # Spend reads are cached for the same reason allowance reads are: a page
-    # refresh should not cost a log scan. Short enough that a running job's
-    # draw appears while it is still running.
+    # Usage is read from LiteLLM's daily aggregate, never from the raw log.
+    #
+    # /spend/logs was the first choice and the wrong one. It filters by date
+    # only when BOTH start_date and end_date are sent; given one, it ignores
+    # it and returns the 10,000 most recent requests. That took twenty
+    # seconds on the pilot fleet and was not "this week" at all -- it reached
+    # back further on a quiet week and would have fallen short on a busy one.
+    #
+    # /user/daily/activity is one row per (day, model, key), a second for the
+    # whole fleet's week, and it carries each key's owner and team.
+    #
+    # A day that has ended is history: nothing will be added to it, so it is
+    # read once and kept. Only the days still open are refetched, and those
+    # are cached for a minute -- short enough that a running job's draw
+    # appears while it is still running.
     _SPEND_TTL_S = 60
+    _SPEND_DAYS = 7
+
+    # LiteLLM files a request under the day it STARTED, and writes the
+    # aggregate from a background queue. So a day goes on changing a little
+    # after midnight, until the last request begun in it has finished and
+    # been flushed. An hour is generous for both.
+    _DAY_CLOSE_GRACE_S = 3600
+
+    _DAILY_PAGE_SIZE = 1000
 
     async def usage(self, project: str | None) -> list[dict]:
         """Spend rows for a project, or across all projects when None.
@@ -1021,90 +1045,157 @@ class LiteLLMBackend:
         return out
 
     async def _spend_rows(self) -> list[dict]:
-        """This week's spend log, normalised and cached.
+        """This week's usage, one row per (user, project, model, key).
 
-        LiteLLM's /spend/logs returns one row per request. A busy week is
-        thousands of rows, so they are folded to one per
-        (user, project, model, key) before anything else sees them --
-        otherwise every caller pays to iterate the raw log.
+        The daily rows carry a date as well; it is folded away here so that
+        no caller pays to add seven days together.
         """
-        now = time.monotonic()
-        if self._spend_cache is not None:
-            at, rows = self._spend_cache
-            if (now - at) < self._SPEND_TTL_S:
-                return rows
+        daily = await self._daily_rows(self._SPEND_DAYS)
 
-        start = _dt.datetime.now(_dt.UTC).date() - _dt.timedelta(days=6)
-        resp = await self._request(
-            "GET",
-            "spend/logs",
-            params={"start_date": start.isoformat()},
-        )
-        self._raise_http(resp)
-        raw = resp.json()
-        if isinstance(raw, dict):
-            raw = raw.get("data") or raw.get("logs") or []
-        if not isinstance(raw, list):
-            raw = []
+        # Rows name a team by id; every page groups by project. Resolved here
+        # rather than when the day is stored, so a day that closed before its
+        # team was known is not left without a project for good.
+        seen = {r["team_id"] for rows in daily.values() for r in rows if r["team_id"]}
+        if seen - set(self._team_ids.values()):
+            await self._team_list_rows()
+        project_of = {tid: project for project, tid in self._team_ids.items()}
 
         by_key: dict[tuple, dict] = {}
-        for row in raw:
-            if not isinstance(row, dict):
-                continue
-            meta = row.get("metadata") or {}
-            if not isinstance(meta, dict):
-                meta = {}
-            # user_id is the request's principal; metadata.project is set by
-            # llmao when the key is minted. A row with neither is a call made
-            # with a key llmao did not issue, which is worth keeping rather
-            # than dropping -- it still consumed the fleet.
-            user = row.get("user") or row.get("user_id")
-            project = meta.get("project") or row.get("team_alias")
-            model = row.get("model")
-            token = row.get("api_key") or row.get("token")
+        for rows in daily.values():
+            for row in rows:
+                project = project_of.get(row["team_id"])
+                k = (row["user"], project, row["model"], row["token_id"])
+                acc = by_key.get(k)
+                if acc is None:
+                    acc = by_key[k] = {
+                        "user": row["user"],
+                        "project": project,
+                        "model": row["model"],
+                        "token_id": row["token_id"],
+                        "total_tokens": 0,
+                        "total_cost_usd": 0.0,
+                        "cost_basis": self._cost_basis.get(row["model"]),
+                        "requests": 0,
+                    }
+                acc["total_tokens"] += row["total_tokens"]
+                acc["total_cost_usd"] += row["total_cost_usd"]
+                acc["requests"] += row["requests"]
+        return list(by_key.values())
 
-            total = row.get("total_tokens")
-            if total is None:
-                total = (row.get("prompt_tokens") or 0) + (row.get("completion_tokens") or 0)
+    async def _daily_rows(self, days: int) -> dict[str, list[dict]]:
+        """Usage rows for each of the last `days` UTC days, today included.
 
-            k = (user, project, model, token)
-            acc = by_key.get(k)
-            if acc is None:
-                acc = by_key[k] = {
-                    "user": user,
-                    "project": project,
-                    "model": model,
-                    "token_id": token,
-                    "total_tokens": 0,
-                    "total_cost_usd": 0.0,
-                    "cost_basis": self._cost_basis.get(model),
-                    "requests": 0,
-                }
-            try:
-                acc["total_tokens"] += int(total or 0)
-                acc["total_cost_usd"] += float(row.get("spend") or 0.0)
-                acc["requests"] += 1
-            except (TypeError, ValueError):
-                continue
+        Closed days come from memory. The fetch covers the earliest day still
+        open through today: only today in the steady state, yesterday as well
+        for the first hour after midnight, the whole window once at startup.
 
-        rows = list(by_key.values())
-        self._spend_cache = (now, rows)
-        return rows
+        No coordination between callers. Two that find the open days stale
+        both ask, and the later answer is kept.
+        """
+        now = self._now()
+        today = now.date()
+        wanted = [(today - _dt.timedelta(days=i)).isoformat() for i in range(days)]
+        self._daily_span = max(self._daily_span, days)
+
+        open_days = [d for d in wanted if d not in self._closed_days]
+        fresh = self._daily_at is not None and (time.monotonic() - self._daily_at) < self._SPEND_TTL_S
+        if not fresh or any(d not in self._daily for d in wanted):
+            start = _dt.date.fromisoformat(min(open_days))
+            fetched = await self._fetch_daily(start, today)
+            grace = _dt.timedelta(seconds=self._DAY_CLOSE_GRACE_S)
+            day = start
+            while day <= today:
+                iso = day.isoformat()
+                # A day with no traffic is absent from the answer, and that
+                # absence is the answer: store it empty rather than not at all.
+                self._daily[iso] = fetched.get(iso, [])
+                day += _dt.timedelta(days=1)
+                ended = _dt.datetime.combine(day, _dt.time(), tzinfo=_dt.UTC)
+                if now >= ended + grace:
+                    self._closed_days.add(iso)
+            self._daily_at = time.monotonic()
+
+            oldest = (today - _dt.timedelta(days=self._daily_span - 1)).isoformat()
+            for iso in [d for d in self._daily if d < oldest]:
+                del self._daily[iso]
+                self._closed_days.discard(iso)
+
+        return {d: self._daily.get(d, []) for d in wanted}
+
+    def _now(self) -> _dt.datetime:
+        return _dt.datetime.now(_dt.UTC)
+
+    async def _fetch_daily(self, start: _dt.date, end: _dt.date) -> dict[str, list[dict]]:
+        """One read of LiteLLM's daily aggregate, as rows grouped by date.
+
+        The answer nests day -> model group -> key. The model GROUP is the
+        route name llmao registered, which is what cost_basis is keyed on;
+        the `models` breakdown beside it names the provider's model instead.
+        """
+        out: dict[str, list[dict]] = {}
+        page = 1
+        while True:
+            resp = await self._request(
+                "GET",
+                "user/daily/activity",
+                params={
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                    "page": page,
+                    "page_size": self._DAILY_PAGE_SIZE,
+                },
+            )
+            self._raise_http(resp)
+            body = resp.json()
+            if not isinstance(body, dict):
+                break
+            for result in body.get("results") or []:
+                if not isinstance(result, dict) or not result.get("date"):
+                    continue
+                rows = out.setdefault(str(result["date"])[:10], [])
+                groups = (result.get("breakdown") or {}).get("model_groups") or {}
+                for model, group in groups.items():
+                    keys = group.get("api_key_breakdown") if isinstance(group, dict) else None
+                    if not isinstance(keys, dict):
+                        continue
+                    for token, entry in keys.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        metrics = entry.get("metrics") or {}
+                        meta = entry.get("metadata") or {}
+                        total = metrics.get("total_tokens")
+                        if total is None:
+                            total = (metrics.get("prompt_tokens") or 0) + (metrics.get("completion_tokens") or 0)
+                        try:
+                            row = {
+                                # The key's owner and team. A key llmao did
+                                # not issue has neither, and is kept rather
+                                # than dropped -- it still consumed the fleet.
+                                "user": meta.get("user_id"),
+                                "team_id": str(meta["team_id"]) if meta.get("team_id") else None,
+                                "model": model,
+                                "token_id": token,
+                                "total_tokens": int(total or 0),
+                                "total_cost_usd": float(metrics.get("spend") or 0.0),
+                                "requests": int(metrics.get("api_requests") or 0),
+                            }
+                        except (TypeError, ValueError):
+                            continue
+                        rows.append(row)
+            if not (body.get("metadata") or {}).get("has_more"):
+                break
+            page += 1
+        return out
 
     def invalidate_spend(self) -> None:
-        """Drop the cached spend rows. Paired with invalidate_allowance."""
-        self._spend_cache = None
-
-    # Allowance reads are cached: a committer refreshing a page should not
-    # cost a spend-log scan each time. Short enough that a long job's draw
-    # shows up while it is still running.
-    _ALLOWANCE_TTL_S = 60
+        """Have the next read ask again. Closed days are history and stay."""
+        self._daily_at = None
 
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
-        """A principal's rolling allowance, derived from the spend log.
+        """A principal's rolling allowance, derived from recorded usage.
 
-        NOT stored. The buckets are computed from LiteLLM's own spend rows on
-        read, which has two properties worth the query cost:
+        NOT stored. The buckets are computed from LiteLLM's own daily usage
+        on read, which has two properties worth the query cost:
 
         The allowance cannot drift from actual usage, because it IS actual
         usage. A stored counter can disagree with the log after a crash, a
@@ -1117,10 +1208,13 @@ class LiteLLMBackend:
         table to drop and a UI to unwind. Derived, it just stops being
         called.
 
-        The cost is a query per principal per TTL. On a pilot-sized spend log
-        that is cheap; at scale it wants either LiteLLM's daily aggregate
-        table or a materialised counter, and the shape here does not change
-        if that happens.
+        It costs no query of its own: the buckets are this person's share of
+        the same daily rows the spend pages read.
+
+        Counts TOTAL tokens -- prompt plus completion -- because the
+        allowance is a share of the fleet and both halves consume it. Prefill
+        is cheaper per token than decode, which is why the DOLLAR figures are
+        weighted and this one is not: an allowance is a quota, not a bill.
         """
         user = (user or "").strip()
         if not user:
@@ -1135,66 +1229,21 @@ class LiteLLMBackend:
             # silently never exhausts.
             raise BackendUnavailableError(f"tier {tier} has no token_cap; nothing to meter against")
 
-        cached = self._allowance_cache.get(user)
-        if cached is not None:
-            at, rows = cached
-            if (time.monotonic() - at) < self._ALLOWANCE_TTL_S:
-                return RollingAllowance(cap=cap, window_days=window, buckets=dict(rows))
-
-        buckets = await self._spend_buckets(user, window)
-        self._allowance_cache[user] = (time.monotonic(), dict(buckets))
+        buckets: dict[str, int] = {}
+        for day, rows in (await self._daily_rows(window)).items():
+            spent = sum(r["total_tokens"] for r in rows if r["user"] == user)
+            if spent:
+                buckets[day] = spent
         return RollingAllowance(cap=cap, window_days=window, buckets=buckets)
 
-    async def _spend_buckets(self, user: str, window_days: int) -> dict[str, int]:
-        """Daily token totals for one user over the window.
-
-        Counts TOTAL tokens -- prompt plus completion -- because the
-        allowance is a share of the fleet and both halves consume it. Prefill
-        is cheaper per token than decode, which is why the DOLLAR figures are
-        weighted and this one is not: an allowance is a quota, not a bill.
-        """
-        start = _dt.datetime.now(_dt.UTC).date() - _dt.timedelta(days=window_days - 1)
-        resp = await self._request(
-            "GET",
-            "spend/logs",
-            params={"user_id": user, "start_date": start.isoformat()},
-        )
-        self._raise_http(resp)
-        rows = resp.json()
-        if isinstance(rows, dict):
-            rows = rows.get("data") or rows.get("logs") or []
-        if not isinstance(rows, list):
-            return {}
-
-        buckets: dict[str, int] = {}
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            stamp = row.get("startTime") or row.get("start_time")
-            if not stamp:
-                continue
-            day = str(stamp)[:10]
-            total = row.get("total_tokens")
-            if total is None:
-                total = (row.get("prompt_tokens") or 0) + (row.get("completion_tokens") or 0)
-            try:
-                buckets[day] = buckets.get(day, 0) + int(total)
-            except (TypeError, ValueError):
-                continue
-        return buckets
-
     def invalidate_allowance(self, user: str | None = None) -> None:
-        """Drop cached allowance rows.
+        """Have the next allowance read ask again.
 
-        Called after a tier change, since the cap is re-read on every check
-        but the cached buckets are not. Without this an admin lowering a cap
-        sees the old remaining figure for up to a minute, which looks like
-        the control not working.
+        Called after a tier change. The cap and window are re-read on every
+        check, so this is only so that a figure an admin has just acted on is
+        not a minute old when they look at it.
         """
-        if user is None:
-            self._allowance_cache.clear()
-        else:
-            self._allowance_cache.pop(user, None)
+        self._daily_at = None
 
     def deployment_body(self, dep, *, api_key: str | None = None) -> dict:
         """POST /model/new payload from models.yaml + this deployment's api_base.
