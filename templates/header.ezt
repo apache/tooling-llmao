@@ -39,11 +39,26 @@
                 </li>
                 [end]
                 [end]
+            </ul>
+            <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="asfDropdown" role="button"
+                       data-bs-toggle="dropdown" aria-expanded="false">
+                        ASF
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="asfDropdown">
+                        <li><a class="dropdown-item" href="https://www.apache.org/">The Apache Software Foundation</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" href="https://www.apache.org/licenses/">License</a></li>
+                        <li><a class="dropdown-item" href="https://www.apache.org/foundation/sponsorship.html">Sponsorship</a></li>
+                        <li><a class="dropdown-item" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+                        <li><a class="dropdown-item" href="https://www.apache.org/security/">Security</a></li>
+                        <li><a class="dropdown-item" href="https://privacy.apache.org/policies/privacy-policy-public.html">Privacy</a></li>
+                    </ul>
+                </li>
                 <li class="nav-item">
                     <a class="nav-link[is nav "help"] active[end]" href="/help"[is nav "help"] aria-current="page"[end]>Help</a>
                 </li>
-            </ul>
-            <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
                 [if-any uid]
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button"

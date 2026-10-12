@@ -6,6 +6,18 @@
             &middot; running <a href="[repo]/commit/[commit]">[commit]</a>
             [if-any is_site_admin]&middot; last restarted [restarted_at][end]
         </p>
+        <p class="text-muted mt-2 mb-0 small">
+            <a href="https://www.apache.org/">The Apache Software Foundation</a>
+            &middot; <a href="https://www.apache.org/licenses/">License</a>
+            &middot; <a href="https://www.apache.org/security/">Security</a>
+            &middot; <a href="https://privacy.apache.org/policies/privacy-policy-public.html">Privacy</a>
+        </p>
+        <p class="text-muted mt-2 mb-0 small">
+            Apache and the Apache logo are either registered trademarks or
+            trademarks of The Apache Software Foundation in the United States
+            and other countries. All other marks mentioned may be trademarks or
+            registered trademarks of their respective owners.
+        </p>
     </div>
 </footer>
 

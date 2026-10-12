@@ -85,7 +85,21 @@ def test_help_template_uses_the_page_frame(tmp_path):
     # Signing in from here comes back here.
     assert 'href="/auth?login=/help"' in out
     assert "Apache LLMAO" in out
-    assert "Apache LLMAO" in out
+    # Help is a utility: once in the bar, after the working pages.
+    assert out.count(">Help</a>") == 1
+    # The links the ASF asks project sites to carry in their navigation.
+    for text, url in (
+        ("License", "https://www.apache.org/licenses/"),
+        ("Sponsorship", "https://www.apache.org/foundation/sponsorship.html"),
+        ("Thanks", "https://www.apache.org/foundation/thanks.html"),
+        ("Security", "https://www.apache.org/security/"),
+        ("Privacy", "https://privacy.apache.org/policies/privacy-policy-public.html"),
+    ):
+        assert f'<a class="dropdown-item" href="{url}">{text}</a>' in out
+    assert 'href="https://www.apache.org/"' in out
+    footer = out[out.index("<footer") :]
+    assert "trademarks of The Apache Software Foundation" in footer
+    assert "™" not in out and "&trade;" not in out
     assert 'href="/help/faq"' in out
 
 
