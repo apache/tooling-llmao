@@ -321,16 +321,72 @@ def _normalize_key_obj(raw: Any) -> KeyInfo:
     )
 
 
+class LiteLLMTransport:
+    """The HTTP side of talking to LiteLLM's admin API, as the master key.
+
+    Everything that asks LiteLLM for something goes through one of these:
+    it holds the connection and the timeout, times each call, and turns the
+    ways a call can fail into the one error the pages know how to show.
+
+    It is handed to whatever needs it rather than built there, so a test can
+    hand over a stand-in (tests/fake_transport.py) and exercise the real
+    code above it without a proxy.
+    """
+
+    def __init__(self, cfg: Any, *, client: httpx.AsyncClient | None = None):
+        self._cfg = cfg
+        base = cfg.litellm.base_url.rstrip("/") + "/"
+        timeout_s = int(cfg.litellm.request_timeout_s)
+        self._client = client or httpx.AsyncClient(
+            base_url=base,
+            headers={
+                "Authorization": f"Bearer {cfg.litellm.master_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(timeout_s),
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """One call. An answer of any status is returned; see raise_http."""
+        try:
+            # One per call, built in the `with`: these overlap, and a shared
+            # Stopwatch would time one request from another's start.
+            with Stopwatch(name=f"LiteLLM {method} {path}"):
+                resp = await self._client.request(method, path, **kwargs)
+            return resp
+        except httpx.TimeoutException as e:
+            raise BackendUnavailableError(
+                f"LiteLLM admin API timed out after {self._cfg.litellm.request_timeout_s}s"
+            ) from e
+        except httpx.ConnectError as e:
+            raise BackendUnavailableError(f"could not reach LiteLLM at {self._cfg.litellm.base_url}") from e
+
+    def raise_http(self, resp: httpx.Response) -> None:
+        """Turn an error status into BackendUnavailableError.
+
+        Separate from request() because some callers look first: a 404 from
+        the memory store is an answer, not a failure.
+        """
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise BackendUnavailableError(f"LiteLLM admin error {e.response.status_code}: {e.response.text}") from e
+
+
 class LiteLLMBackend:
-    """Talks to a running litellm proxy via httpx.AsyncClient.
+    """Talks to a running litellm proxy, through a LiteLLMTransport.
 
     In-process cache is only project (team_alias) → team_id. Spend/budget are
     never taken from the cache. Call ``warm()`` at process start (fail-fast).
     """
 
-    def __init__(self, cfg: Any, fleet: Any):
+    def __init__(self, cfg: Any, fleet: Any, *, transport: Any = None):
         self._cfg = cfg
         self.fleet = fleet
+        self._transport = transport or LiteLLMTransport(cfg)
         self._team_ids: dict[str, str] = {}  # project → team_id
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
@@ -346,19 +402,9 @@ class LiteLLMBackend:
         # model_name -> cost_basis, filled when routes are registered, so a
         # spend row can be told from an invoice without a second lookup.
         self._cost_basis: dict[str, str] = {}
-        base = cfg.litellm.base_url.rstrip("/") + "/"
-        timeout_s = int(cfg.litellm.request_timeout_s)
-        self._client = httpx.AsyncClient(
-            base_url=base,
-            headers={
-                "Authorization": f"Bearer {cfg.litellm.master_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=httpx.Timeout(timeout_s),
-        )
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        await self._transport.aclose()
 
     async def proxy_version(self) -> str | None:
         """litellm_version from GET /health/readiness/details, or None when it cannot be read.
@@ -375,25 +421,14 @@ class LiteLLMBackend:
         version = body.get("litellm_version") if isinstance(body, dict) else None
         return str(version) if version else None
 
+    # Shorthand for the transport, from when the HTTP plumbing lived here.
+    # Everything below still calls these; they go as each concern moves out
+    # into a class of its own that is handed the transport directly.
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        try:
-            # One per call, built in the `with`: these overlap, and a shared
-            # Stopwatch would time one request from another's start.
-            with Stopwatch(name=f"LiteLLM {method} {path}"):
-                resp = await self._client.request(method, path, **kwargs)
-            return resp
-        except httpx.TimeoutException as e:
-            raise BackendUnavailableError(
-                f"LiteLLM admin API timed out after {self._cfg.litellm.request_timeout_s}s"
-            ) from e
-        except httpx.ConnectError as e:
-            raise BackendUnavailableError(f"could not reach LiteLLM at {self._cfg.litellm.base_url}") from e
+        return await self._transport.request(method, path, **kwargs)
 
     def _raise_http(self, resp: httpx.Response) -> None:
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise BackendUnavailableError(f"LiteLLM admin error {e.response.status_code}: {e.response.text}") from e
+        self._transport.raise_http(resp)
 
     def _ingest_team_list(self, teams: list[Any]) -> list[dict[str, Any]]:
         """Update project→team_id cache from team/list rows; return dict rows."""

@@ -394,7 +394,7 @@ def test_working_api_key_follows_the_legacy_set():
         assert await backend._working_api_key(legacy) == "sk-shared"
         assert await backend._working_api_key(in_range) == "sk-shared"
         assert await backend._working_api_key(other) == "sk-derived"
-        await backend._client.aclose()
+        await backend.aclose()
 
     asyncio.run(run())
 

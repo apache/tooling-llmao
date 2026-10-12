@@ -25,7 +25,7 @@ import ezt
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.litellm_client import LiteLLMBackend, pinned_litellm_version
+from llmao.litellm_client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_version
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -108,9 +108,7 @@ class _Client:
 
 def _backend(client):
     cfg = edict(litellm=edict(base_url="http://litellm.test", master_key="k", request_timeout_s=1))
-    backend = LiteLLMBackend(cfg, fleet=None)
-    backend._client = client
-    return backend
+    return LiteLLMBackend(cfg, fleet=None, transport=LiteLLMTransport(cfg, client=client))
 
 
 def test_proxy_version_reads_the_details_endpoint():

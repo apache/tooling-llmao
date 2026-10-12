@@ -23,7 +23,9 @@ numbers look plausible, and nobody can tell a dropped row from a quiet week.
 
 import asyncio
 import datetime as dt
-import types
+
+from easydict import EasyDict as edict  # noqa: N813
+from fake_transport import FakeTransport
 
 from llmao.litellm_client import LiteLLMBackend
 
@@ -55,41 +57,37 @@ def _day(date, groups):
 
 
 def _backend(days, *, now=NOON, page_size=1000):
-    """A backend whose only live part is the read and the fold.
+    """A real backend over a stand-in for LiteLLM.
 
-    Constructed without __init__ so the test needs no config, no fleet and no
-    HTTP client. The fake honours the date range it is asked for, because
-    which days get asked for is half of what is under test.
+    The stand-in honours the date range it is asked for, because which days
+    get asked for is half of what is under test.
     """
-    b = object.__new__(LiteLLMBackend)
-    b._daily = {}
-    b._closed_days = set()
-    b._daily_at = None
-    b._daily_span = 0
-    b._team_ids = dict(TEAMS)
-    b._cost_basis = {"gemma4-26b": "derived_capacity"}
-    b._DAILY_PAGE_SIZE = page_size
-    b._now = lambda: now
-    b.asked = []
 
-    async def fake_request(method, path, params=None, **kw):
-        b.asked.append((path, dict(params or {})))
+    def answer(call):
+        p = call.params
         hits = [
             d
             for d in days
             # something that is not a day at all is passed through, to be ignored
-            if not isinstance(d, dict) or params["start_date"] <= d["date"] <= params["end_date"]
+            if not isinstance(d, dict) or p.start_date <= d["date"] <= p.end_date
         ]
-        first = (params["page"] - 1) * params["page_size"]
-        body = {
-            "results": hits[first : first + params["page_size"]],
-            "metadata": {"has_more": first + params["page_size"] < len(hits)},
+        first = (p.page - 1) * p.page_size
+        return {
+            "results": hits[first : first + p.page_size],
+            "metadata": {"has_more": first + p.page_size < len(hits)},
         }
-        return types.SimpleNamespace(status_code=200, content=b"x", json=lambda: body)
 
-    b._request = fake_request
-    b._raise_http = lambda resp: None
+    b = LiteLLMBackend(edict(), None, transport=FakeTransport(answer))
+    b._team_ids = dict(TEAMS)
+    b._cost_basis = {"gemma4-26b": "derived_capacity"}
+    b._DAILY_PAGE_SIZE = page_size
+    b._now = lambda: now
     return b
+
+
+def _asked(b):
+    """What LiteLLM was asked for, as (path, params)."""
+    return [(c.path, c.params) for c in b._transport.calls]
 
 
 def _run(coro):
@@ -218,10 +216,10 @@ def test_second_read_is_cached():
     b = _backend(WEEK)
     _run(b._spend_rows())
     _run(b._spend_rows())
-    assert len(b.asked) == 1
+    assert len(_asked(b)) == 1
     b.invalidate_spend()
     _run(b._spend_rows())
-    assert len(b.asked) == 2
+    assert len(_asked(b)) == 2
 
 
 def test_malformed_entries_do_not_abort_the_read():
@@ -249,7 +247,7 @@ def test_every_page_is_read():
     b = _backend(days, page_size=2)
     rows = _run(b._spend_rows())
     assert rows[0]["total_tokens"] == 3
-    assert [p["page"] for _, p in b.asked] == [1, 2]
+    assert [p.page for _, p in _asked(b)] == [1, 2]
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +262,7 @@ def test_every_page_is_read():
 def test_the_first_read_asks_for_exactly_the_week():
     b = _backend(WEEK)
     _run(b._spend_rows())
-    assert b.asked == [
+    assert _asked(b) == [
         ("user/daily/activity", {"start_date": "2026-10-06", "end_date": TODAY, "page": 1, "page_size": 1000})
     ]
 
@@ -275,7 +273,7 @@ def test_a_closed_day_is_not_read_again():
     _run(b._spend_rows())
     b.invalidate_spend()
     rows = _run(b._spend_rows())
-    assert b.asked[-1][1]["start_date"] == TODAY
+    assert _asked(b)[-1][1].start_date == TODAY
     # ...and yesterday's figures are still in the answer
     assert sum(r["total_tokens"] for r in rows) == 100 + 7 + 900 + 40 + 50 + 300
 
@@ -286,14 +284,14 @@ def test_yesterday_stays_open_for_an_hour_after_midnight():
     _run(b._spend_rows())
     b.invalidate_spend()
     _run(b._spend_rows())
-    assert b.asked[-1][1]["start_date"] == YESTERDAY
+    assert _asked(b)[-1][1].start_date == YESTERDAY
 
     b._now = lambda: dt.datetime(2026, 10, 12, 1, 30, tzinfo=dt.UTC)
     b.invalidate_spend()
     _run(b._spend_rows())  # read once more after the hour, which closes it
     b.invalidate_spend()
     _run(b._spend_rows())
-    assert b.asked[-1][1]["start_date"] == TODAY
+    assert _asked(b)[-1][1].start_date == TODAY
 
 
 def test_a_day_that_leaves_the_window_is_dropped():
@@ -332,15 +330,15 @@ def test_allowance_costs_no_read_of_its_own():
     _run(b._spend_rows())
     _run(b.allowance("akm"))
     _run(b.allowance("gstein"))
-    assert len(b.asked) == 1
+    assert len(_asked(b)) == 1
 
 
 def test_a_longer_allowance_window_reads_the_extra_days():
     b = _allowance_backend(WEEK, window=10)
     _run(b._spend_rows())
     _run(b.allowance("akm"))
-    assert b.asked[-1][1]["start_date"] == "2026-10-03"
-    assert len(b.asked) == 2
+    assert _asked(b)[-1][1].start_date == "2026-10-03"
+    assert len(_asked(b)) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -353,24 +351,20 @@ def test_a_longer_allowance_window_reads_the_extra_days():
 
 
 def _backfill_backend(default_cap=20_000_000):
-    b = object.__new__(LiteLLMBackend)
-    b._cfg = types.SimpleNamespace(budgets=types.SimpleNamespace(default_team_token_cap=default_cap))
-    b.sent = []
+    cfg = edict(budgets=edict(default_team_token_cap=default_cap))
+    return LiteLLMBackend(cfg, None, transport=FakeTransport())
 
-    async def fake_request(method, path, json=None, **kw):
-        b.sent.append((path, json))
-        return types.SimpleNamespace(status_code=200, content=b"{}", json=lambda: {})
 
-    b._request = fake_request
-    b._raise_http = lambda resp: None
-    return b
+def _sent(b):
+    """What LiteLLM was sent, as (path, json)."""
+    return [(c.path, c.json) for c in b._transport.calls]
 
 
 def test_backfill_sets_a_cap_on_teams_without_one():
     b = _backfill_backend()
     _run(b._backfill_token_caps([{"team_alias": "tooling", "team_id": "t1", "metadata": {"grantor": "Free Tier"}}]))
-    assert len(b.sent) == 1
-    path, body = b.sent[0]
+    assert len(_sent(b)) == 1
+    path, body = _sent(b)[0]
     assert path == "team/update"
     assert body["metadata"]["token_cap"] == 20_000_000
     # merged, not replaced -- grantor has to survive
@@ -392,7 +386,7 @@ def test_backfill_leaves_an_existing_cap_alone():
             ]
         )
     )
-    assert b.sent == []
+    assert _sent(b) == []
 
 
 def test_backfill_is_idempotent_across_restarts():
@@ -400,16 +394,16 @@ def test_backfill_is_idempotent_across_restarts():
     b = _backfill_backend()
     rows = [{"team_alias": "tooling", "team_id": "t1", "metadata": {}}]
     _run(b._backfill_token_caps(rows))
-    assert len(b.sent) == 1
-    rows[0]["metadata"] = b.sent[0][1]["metadata"]
+    assert len(_sent(b)) == 1
+    rows[0]["metadata"] = _sent(b)[0][1]["metadata"]
     _run(b._backfill_token_caps(rows))
-    assert len(b.sent) == 1
+    assert len(_sent(b)) == 1
 
 
 def test_backfill_does_nothing_without_a_configured_default():
     b = _backfill_backend(default_cap=0)
     _run(b._backfill_token_caps([{"team_alias": "t", "team_id": "t1", "metadata": {}}]))
-    assert b.sent == []
+    assert _sent(b) == []
 
 
 def test_backfill_skips_malformed_rows_without_stopping():
@@ -424,5 +418,5 @@ def test_backfill_skips_malformed_rows_without_stopping():
             ]
         )
     )
-    assert len(b.sent) == 1
-    assert b.sent[0][1]["team_id"] == "t1"
+    assert len(_sent(b)) == 1
+    assert _sent(b)[0][1]["team_id"] == "t1"

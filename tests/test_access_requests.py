@@ -24,9 +24,10 @@ used twice, one that never lapses, or a denial with no explanation attached.
 import asyncio
 import datetime as dt
 import json
-import types
 
 import pytest
+from easydict import EasyDict as edict  # noqa: N813
+from fake_transport import FakeTransport
 
 from llmao import access_requests
 from llmao.access_requests import (
@@ -43,6 +44,7 @@ from llmao.access_requests import (
     loads,
     prune,
 )
+from llmao.litellm_client import LiteLLMBackend
 
 UTC = dt.UTC
 
@@ -316,47 +318,35 @@ def test_an_adjusted_request_differs_from_what_was_asked():
 
 
 def _backend(*, down=False):
-    from llmao.litellm_client import BackendUnavailableError, LiteLLMBackend
+    """A real backend over a memory store that behaves like LiteLLM's.
 
-    b = object.__new__(LiteLLMBackend)
-    b._cfg = types.SimpleNamespace(
-        entitlements=types.SimpleNamespace(
-            default=types.SimpleNamespace(rpm_limit=60, tpm_limit=60000, max_parallel_requests=4),
-            free_tier=types.SimpleNamespace(token_cap=1_000_000, token_window_days=7),
+    `b.store` is what the store holds, key to value.
+    """
+    store = {}
+
+    def answer(call):
+        assert call.path == "v1/memory" or call.path.startswith("v1/memory/"), f"unexpected call: {call}"
+        key = call.path.removeprefix("v1/memory").lstrip("/")
+        if call.method == "GET" and not key:
+            hits = [{"key": k, "value": v} for k, v in store.items() if k.startswith(call.params.key_prefix)]
+            return {"memories": hits, "total": len(hits)}
+        if call.method == "GET":
+            return {"key": key, "value": store[key]} if key in store else (404, {})
+        if call.method == "PUT":
+            store[key] = call.json.value
+            return {"key": key, "value": store[key]}
+        if call.method == "DELETE":
+            return {"deleted": True} if store.pop(key, None) is not None else (404, {})
+        raise AssertionError(f"unexpected call: {call}")
+
+    cfg = edict(
+        entitlements=edict(
+            default=edict(rpm_limit=60, tpm_limit=60000, max_parallel_requests=4),
+            free_tier=edict(token_cap=1_000_000, token_window_days=7),
         )
     )
-    b._daily_at = None
-    b.store = {}
-    b.calls = []
-
-    async def fake_request(method, path, params=None, json=None, **kw):
-        b.calls.append((method, path))
-        if down:
-            raise BackendUnavailableError("could not reach LiteLLM")
-        assert path == "v1/memory" or path.startswith("v1/memory/"), f"unexpected call: {method} {path}"
-        key = path.removeprefix("v1/memory").lstrip("/")
-
-        def reply(status, body):
-            return types.SimpleNamespace(status_code=status, content=b"x", json=lambda: body, text=str(body))
-
-        if method == "GET" and not key:
-            hits = [{"key": k, "value": v} for k, v in b.store.items() if k.startswith(params["key_prefix"])]
-            return reply(200, {"memories": hits, "total": len(hits)})
-        if method == "GET":
-            return reply(200, {"key": key, "value": b.store[key]}) if key in b.store else reply(404, {})
-        if method == "PUT":
-            b.store[key] = json["value"]
-            return reply(200, {"key": key, "value": json["value"]})
-        if method == "DELETE":
-            return reply(200, {"deleted": True}) if b.store.pop(key, None) is not None else reply(404, {})
-        raise AssertionError(f"unexpected call: {method} {path}")
-
-    def raise_http(resp):
-        if resp.status_code >= 400:
-            raise BackendUnavailableError(f"LiteLLM admin error {resp.status_code}")
-
-    b._request = fake_request
-    b._raise_http = raise_http
+    b = LiteLLMBackend(cfg, None, transport=FakeTransport(answer, down=down))
+    b.store = store
     return b
 
 
