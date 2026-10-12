@@ -20,6 +20,11 @@ body {
 .navbar.llmao-navbar .nav-link:focus {
   color: #fff;
 }
+/* The page you are on. */
+.navbar.llmao-navbar .nav-link.active {
+  color: #fff;
+  font-weight: 600;
+}
 
 /* Models page. */
 .models-page .model-card-off {

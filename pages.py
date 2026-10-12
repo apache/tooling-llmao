@@ -24,7 +24,7 @@ import io
 import pathlib
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import asfquart
 import asfquart.auth
@@ -164,11 +164,24 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     return deco
 
 
+_NAV_SECTIONS = ("keys", "models", "projects", "admin", "help")
+
+
+def _nav_section(path: str) -> str:
+    """Which top-nav link a path belongs under, or "" for none (home)."""
+    first = path.strip("/").split("/", 1)[0]
+    return first if first in _NAV_SECTIONS else ""
+
+
 async def basic_info(title: str = "llmao") -> edict:
     """Base-level EZT template data shared by HTML pages."""
     basic = edict()
     basic.title = title
     basic.flashes = []
+    path = quart.request.path if quart.has_request_context() else "/"
+    basic.nav = _nav_section(path)
+    # Signing in returns to the page it was started from.
+    basic.login_back = quote(path, safe="/")
 
     # Form defaults for create pages
     basic.form_project = ""

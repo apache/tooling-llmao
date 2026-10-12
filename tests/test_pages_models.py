@@ -592,6 +592,8 @@ def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
     data = edict(
         title="Models",
         is_site_admin=ezt.boolean(admin),
+        nav="models",
+        login_back="/models",
         restarted_at="10/08 14:30 (UTC)",
         reveal_supply=False,
         uid="u@example.apache.org",

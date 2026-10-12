@@ -34,6 +34,8 @@ def _render(*, running, expected):
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
+        nav="admin",
+        login_back="/admin",
         restarted_at="10/08 14:30 (UTC)",
         reveal_supply=False,
         uid="u@example.apache.org",

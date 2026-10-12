@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>llmao: [title]</title>
+    <title>[title] · Apache LLMAO</title>
     <link href="/static/css/bootstrap.min.css" rel="stylesheet"
           integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9">
     <link href="/static/css/bootstrap-icons.css" rel="stylesheet">
@@ -15,7 +15,7 @@
     <div class="container-fluid">
         <a class="navbar-brand d-flex align-items-center" href="/">
             <img src="/static/llmao-logo.svg" alt="" width="28" height="28" class="me-2">
-            llmao
+            Apache LLMAO
         </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent"
                 aria-controls="navbarContent" aria-expanded="false" aria-label="Toggle navigation">
@@ -25,22 +25,22 @@
             <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                 [if-any uid]
                 <li class="nav-item">
-                    <a class="nav-link" href="/keys">My Keys</a>
+                    <a class="nav-link[is nav "keys"] active[end]" href="/keys"[is nav "keys"] aria-current="page"[end]>My Keys</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link" href="/models">Models</a>
+                    <a class="nav-link[is nav "models"] active[end]" href="/models"[is nav "models"] aria-current="page"[end]>Models</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link" href="/projects">Projects</a>
+                    <a class="nav-link[is nav "projects"] active[end]" href="/projects"[is nav "projects"] aria-current="page"[end]>Projects</a>
                 </li>
                 [if-any is_site_admin]
                 <li class="nav-item">
-                    <a class="nav-link" href="/admin">Admin</a>
+                    <a class="nav-link[is nav "admin"] active[end]" href="/admin"[is nav "admin"] aria-current="page"[end]>Admin</a>
                 </li>
                 [end]
                 [end]
                 <li class="nav-item">
-                    <a class="nav-link" href="/help">Help</a>
+                    <a class="nav-link[is nav "help"] active[end]" href="/help"[is nav "help"] aria-current="page"[end]>Help</a>
                 </li>
             </ul>
             <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
@@ -58,7 +58,7 @@
                 </li>
                 [else]
                 <li class="nav-item">
-                    <a class="nav-link" href="/auth?login=/">Sign in with ASF</a>
+                    <a class="nav-link" href="/auth?login=[login_back]">Sign in with ASF</a>
                 </li>
                 [end]
             </ul>

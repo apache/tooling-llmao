@@ -64,6 +64,8 @@ def test_help_template_uses_the_page_frame(tmp_path):
         uid=None,
         name=None,
         is_site_admin=ezt.boolean(False),
+        nav="help",
+        login_back="/help",
         restarted_at="",
         repo="https://example.test/llmao",
         commit="abc",
@@ -77,6 +79,12 @@ def test_help_template_uses_the_page_frame(tmp_path):
     assert "&lt;h1&gt;" not in out
     assert "Body text" in out
     assert 'href="/help"' in out
+    # The bar marks the page you are on, and only that one.
+    assert 'class="nav-link active" href="/help" aria-current="page"' in out
+    assert out.count('aria-current="page"') == 1
+    # Signing in from here comes back here.
+    assert 'href="/auth?login=/help"' in out
+    assert "Apache LLMAO" in out
     assert "Apache LLMAO" in out
     assert 'href="/help/faq"' in out
 
@@ -99,6 +107,14 @@ def test_index_links_each_tool_page():
     assert 'href="/auth?login=/"' in signed_out.html
     assert "/auth?login=/" not in signed_in.html
     assert 'href="/keys"' in signed_in.html
+
+
+def test_nav_section_follows_the_first_path_segment():
+    pages = _pages()
+    assert pages._nav_section("/keys/new") == "keys"
+    assert pages._nav_section("/help/faq") == "help"
+    assert pages._nav_section("/") == ""
+    assert pages._nav_section("/do-add-deployment") == ""
 
 
 def test_home_page_does_not_list_api_paths():
