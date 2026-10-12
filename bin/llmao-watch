@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""Per-second view of what every box in the fleet is actually doing.
+
+Rates and timings, not cumulative totals. llmao-usage answers "has this box
+ever served anything"; this answers "what is it doing right now, and how fast".
+
+    ./llmao-watch                                  # 1s, auto-discovered
+    ./llmao-watch --interval 5
+    ./llmao-watch --boxes "27B=1.2.3.4:15602,GEM=5.6.7.8:12711"
+    ./llmao-watch --csv run.csv                    # also log every sample
+    ./llmao-watch --once                           # one sample, for scripts
+
+No credentials. /metrics is unauthenticated on these boxes -- which is also
+why llmao's health check cannot tell a working route from a broken one.
+
+WHERE THE BOXES COME FROM
+
+No address is committed here. RunPod reassigns the public port on every pod
+recreate, so anything written down is stale within days. Three sources, in
+order of preference:
+
+  1. --boxes, or LLMAO_WATCH_BOXES, as "label=host:port" comma-separated.
+  2. LiteLLM's routing table via /model/info, which is what the proxy
+     actually routes to. Loopback-only, so this works on the gateway host
+     with MK exported (or as root, reading /opt/llmao/litellm.env).
+     EVERY row is kept, duplicates included -- if a model has three routes
+     this shows three boxes, which is exactly what you want to see when
+     routes are proliferating.
+  3. LLMAO_DIRECT_<MODEL>=host:port, same convention as llmao-smoke.
+
+COLUMNS
+
+  run    requests generating right now                        (gauge)
+  wait   requests queued behind them                          (gauge)
+  in/s   prompt tokens read per second, this interval         (rate)
+  out/s  tokens generated per second, this interval           (rate)
+  ttft   mean time to first token for requests that finished
+         in this interval, in seconds                         (interval mean)
+  tpot   mean time per output token, in milliseconds          (interval mean)
+  e2e    mean end-to-end request latency, in seconds          (interval mean)
+  kv     KV cache occupancy                                   (gauge)
+  hit    prefix cache hit rate over the interval              (rate)
+  fin    requests that completed in this interval             (delta)
+  pre    preemptions in this interval -- nonzero means the
+         scheduler evicted running work to fit more           (delta)
+
+HOW TO READ IT
+
+  wait sustained > 0, kv low        scheduler limit. --max-num-batched-tokens.
+  wait sustained > 0, kv >= 70%     memory limit. Only here does a bigger
+                                    card help.
+  pre climbing                      requests are being evicted and restarted;
+                                    out/s will sag and e2e will spike.
+  out/s near zero with run > 0      generating thinking tokens. Normal for a
+                                    reasoning model, invisible without this.
+  ttft rising, in/s flat            prefill queueing behind other prefills.
+  all dashes                        box unreachable. On this fleet that is
+                                    usually the tunnel, not the GPU -- the
+                                    public port changes on every recreate.
+
+Timings are interval means over requests that FINISHED in the window, so a
+long call contributes nothing until it lands and then moves the mean a lot.
+At interval 1 they are noisy by construction; read the gauges per-second and
+the timings over several rows.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from _fleet import fleet, scrape
+except ImportError:  # pragma: no cover - a deployment accident, not a code path
+    # _fleet.py has to sit next to this script. It is easy to copy one file to
+    # a host and not the other, and the stock traceback does not say that.
+    sys.exit(
+        "llmao-watch: cannot import _fleet.py\n"
+        "  It must be in the same directory as this script:\n"
+        f"    {os.path.dirname(os.path.abspath(__file__))}\n"
+        "  Both files travel together:\n"
+        "    scp bin/_fleet.py bin/llmao-watch <host>:\n"
+        "  They do not need to live in /opt/llmao -- that is the Puppet/VCS\n"
+        "  checkout, and running them from anywhere on the host works."
+    )
+
+
+# Width of the label column. The labeller trims to fit it, because a label
+# truncated AFTER being made unique can collide again -- two
+# `qwen3-8b-bf16.N` labels both became `qwen3-8b-bf13.` once.
+LABEL_W = 14
+
+
+def _label(box) -> str:
+    """Short row label. The fleet.hosts name when there is one."""
+    name = box.label or box.model
+    m = (box.model or "").lower()
+    if name == box.model:
+        if m.startswith("gemma"):
+            name = "GEM"
+        elif m.startswith("qwen3.8"):
+            name = "27B"
+        elif m.startswith("qwen3-8b"):
+            name = "8B"
+    return name[:LABEL_W]
+
+
+def _unique_labels(rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Make every row label distinct, escalating only where it has to.
+
+    Four boxes of one model all shortened to "8B" made the label column
+    useless -- the rows were only distinguishable by the address printed at
+    the far right, which is the wrong place to look when watching numbers
+    move. The host's last octet separates boxes on different machines; two
+    boxes on ONE machine need the port too, which this fleet has had.
+    """
+
+    def levels(label: str, addr: str) -> list[str]:
+        host, _, port = addr.rpartition(":")
+        octet = host.rsplit(".", 1)[-1]
+        out = [label[:LABEL_W]]
+        for suffix in (f".{octet}", f".{octet}:{port}"):
+            # Trim the BASE so the distinguishing suffix always survives.
+            room = LABEL_W - len(suffix)
+            out.append((label[:room] + suffix) if room > 0 else suffix[-LABEL_W:])
+        return out
+
+    groups: dict[str, list[int]] = {}
+    for i, (label, _addr) in enumerate(rows):
+        groups.setdefault(label, []).append(i)
+
+    out: list[str] = [""] * len(rows)
+    for label, idxs in groups.items():
+        if len(idxs) == 1:
+            out[idxs[0]] = label[:LABEL_W]
+            continue
+        # Escalate the whole colliding group together, so the rows stay
+        # comparable, and stop at the first level that separates them.
+        for level in (1, 2):
+            cands = [levels(*rows[i])[level] for i in idxs]
+            if len(set(cands)) == len(cands):
+                for i, cand in zip(idxs, cands, strict=True):
+                    out[i] = cand
+                break
+        else:
+            for i in idxs:  # identical address twice: nothing left to vary
+                out[i] = rows[i][1][-LABEL_W:]
+    return [(out[i], addr) for i, (_label, addr) in enumerate(rows)]
+
+
+def _parse_spec(spec: str) -> list[tuple[str, str]]:
+    out = []
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        label, _, addr = item.partition("=")
+        addr = (addr or label).strip().replace("http://", "").rstrip("/")
+        out.append((label.strip()[:LABEL_W], addr))
+    return out
+
+
+def discover(spec: str | None, include_down: bool) -> tuple[list[tuple[str, str]], str]:
+    """Every box worth a row, from the same join llmao-fleet uses.
+
+    Returns (rows, source). The source is named in the header because a short
+    box list is otherwise indistinguishable from a short fleet -- an
+    environment variable set in an earlier shell is the usual cause.
+
+    --boxes still wins, for watching something that is in no config at all.
+    """
+    if spec:
+        return _unique_labels(_parse_spec(spec)), "--boxes"
+    boxes, meta = fleet()
+    rows = []
+    for b in boxes:
+        if b.addr:
+            rows.append((_label(b), b.addr))
+        elif include_down:
+            # No public port: nothing to scrape, but a row of dashes is how
+            # you see that a box has never fetched its config.
+            rows.append((_label(b), f"{b.host}:{b.listen_port}"))
+    return _unique_labels(rows), meta["source"]
+
+
+# -------------------------------------------------------------------- display
+
+HDR = (
+    f"{'box':>{LABEL_W}} {'run':>4} {'wait':>5} {'in/s':>8} {'out/s':>7} "
+    f"{'ttft':>6} {'tpot':>6} {'e2e':>7} {'kv':>5} {'hit':>5} "
+    f"{'fin':>4} {'pre':>4}"
+)
+
+
+def _rate(cur: dict, prev: dict | None, key: str, dt: float) -> float | None:
+    if prev is None or dt <= 0 or key not in cur or key not in prev:
+        return None
+    d = cur[key] - prev[key]
+    if d < 0:  # counter reset: the box restarted
+        return None
+    return d / dt
+
+
+def _mean(cur: dict, prev: dict | None, key: str) -> float | None:
+    """Mean over requests that finished in the interval."""
+    ks, kn = key + "_s", key + "_n"
+    if prev is None or ks not in cur or kn not in cur or ks not in prev:
+        return None
+    dn = cur[kn] - prev[kn]
+    ds = cur[ks] - prev[ks]
+    if dn <= 0 or ds < 0:
+        return None
+    return ds / dn
+
+
+def render(label: str, cur: dict | None, prev: dict | None, dt: float) -> tuple[str, dict]:
+    if cur is None:
+        return (
+            f"{label:>{LABEL_W}} {'—':>4} {'—':>5} {'—':>8} {'—':>7} "
+            f"{'—':>6} {'—':>6} {'—':>7} {'—':>5} {'—':>5} "
+            f"{'—':>4} {'—':>4}"
+        ), {}
+
+    def g(k):
+        v = cur.get(k)
+        return "·" if v is None else f"{v:.0f}"
+
+    tin = _rate(cur, prev, "in", dt)
+    tout = _rate(cur, prev, "out", dt)
+    ttft = _mean(cur, prev, "ttft")
+    tpot = _mean(cur, prev, "tpot")
+    e2e = _mean(cur, prev, "e2e")
+
+    kv = cur.get("kv")
+    # Some builds report 0-1, others 0-100. Disambiguate by magnitude.
+    kv_s = "·" if kv is None else f"{(kv * 100 if kv <= 1.0 else kv):.0f}%"
+
+    q = _rate(cur, prev, "pcq", dt)
+    h = _rate(cur, prev, "pch", dt)
+    hit_s = f"{h / q * 100:.0f}%" if (q and h is not None and q > 0) else "·"
+
+    fin = _rate(cur, prev, "fin", dt)
+    pre = _rate(cur, prev, "pre", dt)
+
+    row = (
+        f"{label:>{LABEL_W}} {g('run'):>4} {g('wait'):>5} "
+        f"{('·' if tin is None else f'{tin:,.0f}'):>8} "
+        f"{('·' if tout is None else f'{tout:,.0f}'):>7} "
+        f"{('·' if ttft is None else f'{ttft:.2f}'):>6} "
+        f"{('·' if tpot is None else f'{tpot * 1000:.0f}'):>6} "
+        f"{('·' if e2e is None else f'{e2e:.1f}'):>7} "
+        f"{kv_s:>5} {hit_s:>5} "
+        f"{('·' if fin is None else f'{fin * dt:.0f}'):>4} "
+        f"{('·' if pre is None else f'{pre * dt:.0f}'):>4}"
+    )
+    vals = {
+        "in": tin,
+        "out": tout,
+        "ttft": ttft,
+        "tpot": tpot,
+        "e2e": e2e,
+        "run": cur.get("run"),
+        "wait": cur.get("wait"),
+        "kv": kv,
+    }
+    return row, vals
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-n", "--interval", type=float, default=1.0)
+    ap.add_argument("--boxes", help='"label=host:port,..." (overrides discovery)')
+    ap.add_argument(
+        "--timeout", type=float, default=0.0, help="per-box HTTP timeout; default is interval*0.8, min 0.5s"
+    )
+    ap.add_argument("--csv", help="append every sample to this file")
+    ap.add_argument("--once", action="store_true", help="two samples, print one row set, exit")
+    ap.add_argument("--include-down", action="store_true", help="also show boxes with no public port (rows of dashes)")
+    ap.add_argument("--no-clear", action="store_true", help="scroll instead of repainting; use when piping to a file")
+    args = ap.parse_args()
+
+    boxes, source = discover(args.boxes, args.include_down)
+    if not boxes:
+        print(
+            "llmao-watch: no boxes.\n"
+            "  on the gateway host: sudo ./llmao-watch  (reads config.yaml)\n"
+            '  elsewhere:           export LLMAO_DIRECT="model=host:port,..."',
+            file=sys.stderr,
+        )
+        return 2
+
+    timeout = args.timeout or max(0.5, args.interval * 0.8)
+    prev: dict[str, dict | None] = {lbl: None for lbl, _ in boxes}
+    prev_t = None
+    csv = None
+    if args.csv:
+        new = not os.path.exists(args.csv)
+        csv = open(args.csv, "a", buffering=1)
+        if new:
+            csv.write("ts,box,addr,run,wait,in_per_s,out_per_s,ttft_s,tpot_s,e2e_s,kv\n")
+
+    width = max((len(a) for _, a in boxes), default=0)
+    first = True
+    try:
+        while True:
+            t0 = time.time()
+            cur = {lbl: scrape(addr, timeout) for lbl, addr in boxes}
+            now = time.time()
+            dt = (now - prev_t) if prev_t else 0.0
+
+            lines = [
+                f"{time.strftime('%H:%M:%S')}   every {args.interval:g}s   "
+                f"{sum(1 for v in cur.values() if v is not None)}/{len(boxes)} reachable"
+                f"   via {source}",
+                "",
+                HDR,
+            ]
+            tot_in = tot_out = 0.0
+            for lbl, addr in boxes:
+                row, vals = render(lbl, cur[lbl], prev[lbl], dt)
+                lines.append(f"{row}   {addr:<{width}}")
+                tot_in += vals.get("in") or 0.0
+                tot_out += vals.get("out") or 0.0
+                if csv and cur[lbl] is not None and dt > 0:
+
+                    def _c(x):
+                        return "" if x is None else f"{x:.4f}"
+
+                    csv.write(
+                        f"{now:.1f},{lbl},{addr},"
+                        f"{_c(vals.get('run'))},{_c(vals.get('wait'))},"
+                        f"{_c(vals.get('in'))},{_c(vals.get('out'))},"
+                        f"{_c(vals.get('ttft'))},{_c(vals.get('tpot'))},"
+                        f"{_c(vals.get('e2e'))},{_c(vals.get('kv'))}\n"
+                    )
+            if dt > 0:
+                lines.append(f"{'fleet':>{LABEL_W}} {'':>4} {'':>5} {tot_in:>8,.0f} {tot_out:>7,.0f}")
+
+            # --once needs two samples to have any rate at all, so the first
+            # pass is silent rather than a screen of dots.
+            if not (args.once and first):
+                out = "\n".join(lines)
+                if args.no_clear:
+                    print(out + "\n", flush=True)
+                else:
+                    sys.stdout.write("\033[H\033[2J" + out + "\n")
+                    sys.stdout.flush()
+
+            prev, prev_t = cur, now
+            if args.once and not first:
+                return 0
+            first = False
+            time.sleep(max(0.0, args.interval - (time.time() - t0)))
+    except KeyboardInterrupt:
+        if not args.no_clear:
+            print()
+        return 0
+    finally:
+        if csv:
+            csv.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+

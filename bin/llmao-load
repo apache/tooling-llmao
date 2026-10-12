@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""Put every box under load at once, whatever the gateway thinks of them.
+
+    sudo ./llmao-load                      # all boxes, 4 concurrent, 120s
+    sudo ./llmao-load --concurrency 8 --seconds 300
+    sudo ./llmao-load --box 142.189.180.247:51310
+    sudo ./llmao-load --gateway            # through LiteLLM instead, needs LLMAO_KEY
+
+Watch it from another pane with llmao-watch.
+
+WHY NOT llmao-saturate
+
+Saturate answers "where does ONE box start queueing" and resolves one
+endpoint per model, with one VLLM_API_KEY for all of them. This fleet breaks
+both assumptions: there are two qwen3-8b boxes, and they do not share a key
+-- some were hand-launched with the shared key and some derive their own. So
+saturate can reach one of the two, with the wrong credential half the time.
+
+This asks each box, per box: which key do you accept, and what model name do
+you answer to. Then it loads all of them together. That makes it the only
+way to drive a box that the gateway cannot reach at all -- a box serving
+under the wrong name 404s through LiteLLM and works perfectly direct, which
+is exactly the state worth being able to see under load.
+
+PROMPT SIZE
+
+Default is one third of each box's own window, because KV cache is consumed
+by context and not by request count: eight 60-token prompts occupy 0.03% of
+a 1.7M-token cache, so a load test built from small prompts proves nothing.
+The filler is randomised per request -- identical prompts would be served
+from the prefix cache and never fill anything.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import random
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from _fleet import fleet, probe_auth, served_model
+except ImportError:  # pragma: no cover - a deployment accident, not a code path
+    sys.exit(
+        "llmao-load: cannot import _fleet.py\n"
+        "  It must be in the same directory as this script:\n"
+        f"    {os.path.dirname(os.path.abspath(__file__))}\n"
+        "    scp bin/_fleet.py bin/llmao-load <host>:"
+    )
+
+GATEWAY = "https://llm.apache.org/v1/chat/completions"
+
+WORDS = (
+    "cache token prefill decode batch tensor kernel scheduler latency throughput "
+    "quantise attention residual embedding gradient checkpoint shard replica "
+    "cluster deployment router bearer entitlement allowance quota"
+).split()
+
+
+def filler(tokens: int, rng: random.Random) -> str:
+    """Roughly `tokens` tokens of unique text. ~0.75 words per token.
+
+    A seeded word generator for load filler, not a secret -- the same
+    exemption llmao-saturate's prompt builder has.
+    """
+    return " ".join(rng.choice(WORDS) for _ in range(int(tokens * 0.75)))
+
+
+class Target:
+    def __init__(self, label, url, key, model, window):
+        self.label, self.url, self.key, self.model, self.window = label, url, key, model, window
+        self.ok = self.fail = 0
+        self.prompt_tokens = self.completion_tokens = 0
+        self.latencies: list[float] = []
+        self.errors: dict[str, int] = {}
+        self.lock = threading.Lock()
+
+    def record_ok(self, secs, usage):
+        with self.lock:
+            self.ok += 1
+            self.latencies.append(secs)
+            self.prompt_tokens += (usage or {}).get("prompt_tokens") or 0
+            self.completion_tokens += (usage or {}).get("completion_tokens") or 0
+
+    def record_fail(self, why):
+        with self.lock:
+            self.fail += 1
+            self.errors[why] = self.errors.get(why, 0) + 1
+
+
+def one_request(t: Target, prompt_tokens: int, max_tokens: int, rng, timeout: float):
+    body = json.dumps(
+        {
+            "model": t.model,
+            "messages": [{"role": "user", "content": filler(prompt_tokens, rng)}],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }
+    ).encode()
+    headers = {"Content-Type": "application/json"}
+    if t.key:
+        headers["Authorization"] = f"Bearer {t.key}"
+    req = urllib.request.Request(t.url, data=body, headers=headers, method="POST")
+    start = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        t.record_fail(f"HTTP {e.code}")
+        return
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
+        t.record_fail(type(e).__name__)
+        return
+    t.record_ok(time.monotonic() - start, data.get("usage"))
+
+
+def worker(t: Target, deadline: float, prompt_tokens: int, max_tokens: int, timeout: float, seed: int):
+    # Seeded so a run is reproducible; load filler, not a secret.
+    rng = random.Random(seed)  # noqa: S311
+    while time.monotonic() < deadline:
+        one_request(t, prompt_tokens, max_tokens, rng, timeout)
+
+
+def resolve(args) -> list[Target]:
+    boxes, meta = fleet()
+    targets: list[Target] = []
+
+    if args.gateway:
+        key = os.environ.get("LLMAO_KEY")
+        if not key:
+            sys.exit("llmao-load --gateway needs LLMAO_KEY (a PAT from My Keys)")
+        for model in sorted({b.model for b in boxes if b.in_config}):
+            targets.append(Target(f"gw:{model}", GATEWAY, key, model, 40960))
+        return targets
+
+    for b in boxes:
+        if not b.addr:
+            print(f"  skip {b.model}/{b.label} {b.host}:{b.listen_port} -- no public port")
+            continue
+        if args.box and b.addr not in args.box:
+            continue
+        auth, key = probe_auth(b, meta.get("salt"), meta.get("shared"), 5.0)
+        if auth not in ("derived", "shared", "OPEN"):
+            print(f"  skip {b.model}/{b.label} {b.addr} -- auth {auth}")
+            continue
+        # The name the BOX answers to, which is not always the name LiteLLM
+        # routes by. A box serving under its HF id 404s on the alias.
+        served, window = served_model(b.addr, key, 5.0)
+        if not served:
+            print(f"  skip {b.model}/{b.label} {b.addr} -- cannot read /v1/models")
+            continue
+        label = f"{b.label}@{b.host.split('.')[-1]}"
+        targets.append(Target(label, f"http://{b.addr}/v1/chat/completions", key, served, window or 40960))
+
+    # Two boxes on one machine share the last octet, which this fleet has
+    # had: without the port the summary prints two identical rows.
+    seen: dict[str, int] = {}
+    for t in targets:
+        seen[t.label] = seen.get(t.label, 0) + 1
+    for t in targets:
+        if seen[t.label] > 1:
+            t.label = f"{t.label}:{t.url.split('/')[2].rpartition(':')[2]}"
+    return targets
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-c", "--concurrency", type=int, default=4, help="per box")
+    ap.add_argument("-s", "--seconds", type=float, default=120.0)
+    ap.add_argument("--prompt-tokens", type=int, default=0, help="0 = one third of each box's window")
+    ap.add_argument("--max-tokens", type=int, default=256)
+    ap.add_argument("--timeout", type=float, default=600.0)
+    ap.add_argument("--box", action="append", help="host:port, repeatable; default is every box")
+    ap.add_argument("--gateway", action="store_true", help="load through llm.apache.org instead of the boxes")
+    args = ap.parse_args()
+
+    print("resolving targets")
+    targets = resolve(args)
+    if not targets:
+        print("no loadable targets", file=sys.stderr)
+        return 2
+
+    print(f"\n{len(targets)} target(s), {args.concurrency} concurrent each, {args.seconds:g}s\n")
+    for t in targets:
+        pt = args.prompt_tokens or max(512, t.window // 3)
+        print(f"  {t.label:22} {t.model:22} {pt:>7,} prompt tokens  ->  {t.url}")
+    print("\nwatch it with: sudo ./llmao-watch\n")
+
+    started = time.monotonic()
+    deadline = started + args.seconds
+    threads = []
+    for ti, t in enumerate(targets):
+        pt = args.prompt_tokens or max(512, t.window // 3)
+        for ci in range(args.concurrency):
+            th = threading.Thread(
+                target=worker,
+                args=(t, deadline, pt, args.max_tokens, args.timeout, ti * 1000 + ci),
+                daemon=True,
+            )
+            th.start()
+            threads.append(th)
+
+    try:
+        while any(th.is_alive() for th in threads):
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\ninterrupted; in-flight requests are abandoned\n")
+
+    # Actual wall time, not the requested window: a Ctrl-C partway through
+    # would otherwise divide by the full duration and understate every rate.
+    elapsed = max(0.001, time.monotonic() - started)
+    print(f"\n{elapsed:.0f}s elapsed")
+    print(
+        f"{'target':22} {'ok':>5} {'fail':>5} {'req/s':>6} "
+        f"{'p50':>7} {'p95':>8} {'in tok':>9} {'out tok':>8} {'out/s':>7}"
+    )
+    print("-" * 95)
+    bad = 0
+    for t in targets:
+        lat = sorted(t.latencies)
+        p50 = lat[len(lat) // 2] if lat else 0.0
+        p95 = lat[int(len(lat) * 0.95)] if lat else 0.0
+        print(
+            f"{t.label:22} {t.ok:>5} {t.fail:>5} {t.ok / elapsed:>6.2f} "
+            f"{p50:>6.1f}s {p95:>7.1f}s {t.prompt_tokens:>9,} "
+            f"{t.completion_tokens:>8,} {t.completion_tokens / elapsed:>7.1f}"
+        )
+        if t.fail:
+            bad += 1
+            for why, n in sorted(t.errors.items(), key=lambda kv: -kv[1]):
+                print(f"{'':22}   {n:>5} x {why}")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+

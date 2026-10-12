@@ -1,111 +1,81 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+"""One endpoint per model, for llmao-smoke and llmao-saturate.
 
-"""Find each model's direct endpoint without hardcoding it.
+A thin shim over _fleet.py, which does the real work. Kept because both
+scripts import `direct_endpoints` and `endpoint_for`, and because they want
+something _fleet deliberately does not provide: exactly one address per
+model, since they send one request at a time and need a single target.
 
-Shared by llmao-smoke and llmao-saturate.
+Sources, in _fleet's order: config.yaml fleet.hosts (root on the gateway
+host), LiteLLM's routing table, then LLMAO_DIRECT / LLMAO_WATCH_BOXES.
 
-Endpoints are not committed anywhere in this repo. RunPod reassigns the port
-on every pod recreate -- even when the pod lands on the same machine, we saw
-one host go 17140 -> 14296 -> 10755 -> 15602 across four rebuilds -- so any
-committed value is stale within days, and the addresses are not something to
-publish regardless.
+    export LLMAO_DIRECT="gemma4-26b=1.2.3.4:12711,qwen3.8-27b=5.6.7.8:15602"
 
-Three sources, in order:
+THE BUG THIS REPLACES
 
-  1. LiteLLM's routing table, via model_info. Always current, since it is
-     what the proxy actually routes to. Loopback-only, so this works on the
-     gateway host and nowhere else.
+The old version iterated the LiteLLM result to apply LLMAO_DIRECT_<MODEL>
+overrides, so with no LiteLLM there was nothing to iterate and every
+override was ignored. Both callers invoke it with no arguments, which meant
+`--direct` and all of llmao-saturate silently found nothing off the gateway
+host. `python3 _discover.py` reported "no endpoints discovered" with the
+variables correctly set.
 
-  2. LLMAO_DIRECT_<MODEL> environment variables, for running from a
-     workstation. Model name upper-cased with . and - as underscores:
-         export LLMAO_DIRECT_QWEN3_8B=1.2.3.4:15601
-
-  3. Nothing, in which case --direct is unavailable and the gateway checks
-     still run. That is most of the value anyway.
+The old LLMAO_DIRECT_<MODEL> form is still read, but it cannot be resolved
+on its own: the suffix is the model name upper-cased with `.` and `-` as
+underscores, and that does not reverse -- QWEN3_8_27B could be `qwen3.8-27b`
+or `qwen3-8-27b`. It is matched against the real names when _fleet knows
+them, and reported as unresolved when it cannot be. Prefer LLMAO_DIRECT.
 """
-
 from __future__ import annotations
 
-import json
 import os
 import re
-import urllib.request
+import sys
 
-LITELLM = "http://127.0.0.1:4000/model/info"
-ENV_FILE = "/opt/llmao/litellm.env"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def _master_key() -> str | None:
-    if key := os.environ.get("LITELLM_MASTER_KEY") or os.environ.get("MK"):
-        return key
-    # 0440 root:root, so this only succeeds when run as root on the gateway.
-    try:
-        with open(ENV_FILE) as fh:
-            for line in fh:
-                if line.startswith("LITELLM_MASTER_KEY="):
-                    return line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    return None
-
-
-def _from_litellm() -> dict[str, str]:
-    key = _master_key()
-    if not key:
-        return {}
-    req = urllib.request.Request(LITELLM, headers={"Authorization": f"Bearer {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.load(r)["data"]
-    except Exception:
-        return {}
-
-    out: dict[str, str] = {}
-    for m in data:
-        base = (m.get("model_info") or {}).get("asf_api_base")
-        if base:
-            # Last wins: if duplicate routes exist for one model_name the
-            # newest is the one to use. They should not, but they have --
-            # twelve for one host at one point, invisible in both UIs.
-            out[m["model_name"]] = base.replace("http://", "").rstrip("/")
-    return out
-
-
-def _from_env() -> dict[str, str]:
-    out = {}
-    for k, v in os.environ.items():
-        if k.startswith("LLMAO_DIRECT_") and v:
-            out[k[len("LLMAO_DIRECT_") :]] = v.replace("http://", "").rstrip("/")
-    return out
+from _fleet import NO_ENDPOINTS_HELP, fleet   # noqa: E402,F401
 
 
 def _envkey(model: str) -> str:
     return re.sub(r"[.-]", "_", model).upper()
 
 
-def direct_endpoints(models: list[str] | None = None) -> dict[str, str]:
-    """{model_name: 'host:port'} from whichever source is available."""
-    found = _from_litellm()
-    env = _from_env()
-    for model in models or list(found):
-        if v := env.get(_envkey(model)):
-            found[model] = v  # an explicit override wins
-    return found
+def _legacy_env(known: set[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """LLMAO_DIRECT_<MODEL> variables, resolved against real model names."""
+    by_suffix = {_envkey(m): m for m in known}
+    resolved: dict[str, str] = {}
+    unresolved: dict[str, str] = {}
+    for k, v in sorted(os.environ.items()):
+        if not k.startswith("LLMAO_DIRECT_") or not v.strip():
+            continue
+        suffix = k[len("LLMAO_DIRECT_"):]
+        addr = v.strip().replace("http://", "").rstrip("/")
+        if model := by_suffix.get(suffix):
+            resolved[model] = addr
+        else:
+            unresolved[suffix] = addr
+    return resolved, unresolved
+
+
+def direct_endpoints(models: list[str] | None = None,
+                     unresolved: dict[str, str] | None = None) -> dict[str, str]:
+    """{model_name: 'host:port'} -- one reachable box per model.
+
+    When a model has several boxes, the one with a LiteLLM route wins, since
+    that is what the gateway would have sent the request to anyway. Use
+    llmao-fleet to see all of them.
+    """
+    boxes, _meta = fleet()
+    out: dict[str, str] = {}
+    for b in sorted(boxes, key=lambda b: (bool(b.routes), bool(b.public_port))):
+        if b.addr and b.model:
+            out[b.model] = b.addr          # last wins; routed boxes sort last
+
+    legacy, unmatched = _legacy_env(set(models or ()) | set(out))
+    out.update(legacy)                     # an explicit override wins
+    if unresolved is not None:
+        unresolved.update(unmatched)
+    return out
 
 
 def endpoint_for(model: str) -> str | None:
@@ -113,12 +83,15 @@ def endpoint_for(model: str) -> str | None:
 
 
 if __name__ == "__main__":
-    eps = direct_endpoints()
+    unres: dict[str, str] = {}
+    eps = direct_endpoints(unresolved=unres)
     if not eps:
-        print(
-            "no endpoints discovered\n"
-            "  on the gateway host: run as root, or export MK=<master key>\n"
-            "  elsewhere: export LLMAO_DIRECT_<MODEL>=host:port"
-        )
+        print("no endpoints discovered\n" + NO_ENDPOINTS_HELP)
     for m, hp in sorted(eps.items()):
         print(f"{m:16} {hp}")
+    for suffix, hp in sorted(unres.items()):
+        print(f"\nLLMAO_DIRECT_{suffix}={hp}\n"
+              f"  cannot tell which model that names -- the suffix mangling\n"
+              f"  does not reverse. Use the literal name instead:\n"
+              f'    export LLMAO_DIRECT="<model>={hp}"')
+

@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""Every box, whether the gateway knows about it or not.
+
+One table, three sources joined: what config.yaml intends, what LiteLLM
+routes to, and what the box itself reports. The disagreements are the point
+-- each one is a failure mode that none of the three views shows on its own.
+
+    sudo ./llmao-fleet              # on the gateway host; reads config.yaml
+    ./llmao-fleet --no-auth         # skip the per-box key probe (faster)
+    ./llmao-fleet --json            # same data, for scripting
+    LLMAO_DIRECT="qwen3-8b=1.2.3.4:18490" ./llmao-fleet    # off-box, reduced
+
+Run it as root on the gateway: config.yaml is 0440 and carries the LiteLLM
+master key, the fleet salt and the shared key, so as root there is nothing
+to export and nothing lands in shell history.
+
+COLUMNS
+
+  src     C = in config.yaml's fleet.hosts, L = LiteLLM has a route
+  rt      how many LiteLLM routes point at this box. >1 is route duplication.
+  vllm    is the box answering /metrics (unauthenticated, so this is true
+          even when every key is wrong)
+  ctx     served --max-model-len
+  kv      KV cache occupancy right now
+  auth    which bearer the box accepts: derived (per-box HMAC), shared
+          (fleet-wide selfhost_api_key), OPEN (no key at all -- a finding),
+          401 (neither), or unreachable
+  run/wt  requests running / waiting right now
+
+WHY auth IS HERE
+
+/healthz needs no credential. So a box with the wrong --api-key answers
+healthy to llmao and 401 to LiteLLM, forever: LiteLLM cools the deployment
+down, llmao reads that as the backend being down and deletes the route, the
+next probe finds /healthz answering and re-adds it with the same wrong key.
+That is the loop that produced twenty-two routes for three models. This
+column is the only place the mismatch is visible before it starts.
+
+A box showing `shared` is one that was launched with the fleet-wide key as a
+container argument. It works, and it will break the next time the box is
+recreated from config, because llmao registers the derived key.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from _fleet import completion, fleet, probe_auth, scrape, served_model
+except ImportError:  # pragma: no cover - a deployment accident, not a code path
+    # _fleet.py has to sit next to this script. It is easy to copy one file to
+    # a host and not the other, and the stock traceback does not say that.
+    sys.exit(
+        "llmao-fleet: cannot import _fleet.py\n"
+        "  It must be in the same directory as this script:\n"
+        f"    {os.path.dirname(os.path.abspath(__file__))}\n"
+        "  Both files travel together:\n"
+        "    scp bin/_fleet.py bin/llmao-fleet <host>:\n"
+        "  They do not need to live in /opt/llmao -- that is the Puppet/VCS\n"
+        "  checkout, and running them from anywhere on the host works."
+    )
+
+OK, WARN, BAD = "ok", "!", "X"
+GATEWAY = "https://llm.apache.org/v1"
+
+
+def why_untestable(box, metrics, auth) -> str | None:
+    """Why this box cannot be sent a request. None means it can be.
+
+    Every box in fleet.hosts gets an answer here, including the ones the UI
+    calls stalled or awaiting -- "not alive" is a reason, not grounds for
+    leaving it out of the run.
+    """
+    if box.addr is None:
+        return "no public port: nothing has mapped its listen port, so it is unreachable from outside the box"
+    if metrics is None:
+        return "/metrics does not answer: the tunnel is down or vLLM is not listening"
+    if auth in ("401", "403"):
+        return f"rejects every key we hold ({auth}): a request would 401, which is the finding"
+    if auth == "no keys":
+        return "no credential available to send (see the auth note)"
+    return None
+
+
+def human(n: float | None) -> str:
+    if n is None:
+        return "·"
+    n = int(n)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n // 1_000}k"
+    return str(n)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-auth", action="store_true", help="skip the key probe; /metrics and routing only")
+    ap.add_argument(
+        "--test",
+        action="store_true",
+        help="also send one 8-token completion to every box directly, and one per model through the gateway",
+    )
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--timeout", type=float, default=5.0)
+    ap.add_argument("--test-timeout", type=float, default=120.0, help="--test only; a cold box can be slow")
+    args = ap.parse_args()
+
+    boxes, meta = fleet()
+    if not boxes:
+        print(
+            "no boxes found.\n"
+            "  on the gateway host: sudo ./llmao-fleet  (reads config.yaml)\n"
+            '  elsewhere:           export LLMAO_DIRECT="model=host:port,..."',
+            file=sys.stderr,
+        )
+        return 2
+
+    rows = []
+    keys: dict[tuple, str | None] = {}
+    for b in boxes:
+        m = scrape(b.addr, args.timeout) if b.addr else None
+        auth, key = (None, None)
+        if not args.no_auth:
+            auth, key = probe_auth(b, meta.get("salt"), meta.get("shared"), args.timeout)
+        # /v1/models is authenticated, so this needs the key the probe found.
+        # With --no-auth there is no key and ctx stays blank; that is the
+        # trade for not touching the boxes with credentials.
+        served, ctx = served_model(b.addr, key, args.timeout) if b.addr else (None, None)
+        rows.append((b, m, served, ctx, auth))
+        keys[b.key()] = key
+
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "model": b.model,
+                        "label": b.label,
+                        "host": b.host,
+                        "listen_port": b.listen_port,
+                        "public_port": b.public_port,
+                        "in_config": b.in_config,
+                        "routes": b.routes,
+                        "reachable": m is not None,
+                        "auth": auth,
+                        "served": served,
+                        "ctx": ctx,
+                        "running": (m or {}).get("run"),
+                        "waiting": (m or {}).get("wait"),
+                        "prompt_tokens": (m or {}).get("in"),
+                        "generation_tokens": (m or {}).get("out"),
+                    }
+                    for b, m, served, ctx, auth in rows
+                ],
+                indent=2,
+            )
+        )
+        return 0
+
+    print(
+        f"source: {meta['source']}   "
+        f"{len(boxes)} box(es), {meta['routes']} route(s), "
+        f"{len(meta['models']) or '?'} model(s) in models.yaml\n"
+    )
+
+    hdr = (
+        f"{'model':14} {'label':14} {'box':22} {'serves-as':20} {'src':>4} {'rt':>3} "
+        f"{'vllm':>5} {'ctx':>8} {'kv':>5} {'auth':>11} {'run':>4} {'wt':>3} "
+        f"{'in':>6} {'out':>6}"
+    )
+    print(hdr)
+    print("-" * len(hdr))
+
+    for b, m, served, ctx, auth in rows:
+        addr = b.addr or f"{b.host}:{b.listen_port}*"
+        met = m or {}
+        kv = met.get("kv")
+        kv_s = "·" if kv is None else f"{(kv * 100 if kv <= 1.0 else kv):.0f}%"
+        run_s = f"{int(met.get('run', 0))}" if m else "·"
+        wait_s = f"{int(met.get('wait', 0))}" if m else "·"
+        # A name that differs from the routed model name is the 404 class:
+        # flag it in the row rather than only in PROBLEMS.
+        serves = served or "·"
+        if served and served != b.model:
+            serves = f"! {served}"
+        print(
+            f"{b.model[:14]:14} {b.label[:14]:14} {addr[:22]:22} {serves[:20]:20} "
+            f"{b.src:>4} {len(b.routes):>3} "
+            f"{('up' if m is not None else 'down'):>5} "
+            f"{(str(ctx) if ctx else '·'):>8} {kv_s:>5} "
+            f"{(auth or '-'):>11} {run_s:>4} {wait_s:>3} "
+            f"{human(met.get('in')):>6} {human(met.get('out')):>6}"
+        )
+    if any(b.addr is None for b, _m, _s, _c, _a in rows):
+        print("\n* no public port known -- the listen port is shown and is not reachable from here")
+
+    # ----------------------------------------------------------- real traffic
+    test_fails: list[str] = []
+    if args.test:
+        print("\nDIRECT -- one 8-token completion per box, bypassing LiteLLM")
+        for b, m, served, _c, auth in rows:
+            label = f"{b.model}/{b.label} {b.addr or f'{b.host}:{b.listen_port}'}"
+            reason = why_untestable(b, m, auth)
+            if reason:
+                print(f"  skip  {label}\n          {reason}")
+                test_fails.append(f"{WARN} {label}: not tested -- {reason}")
+                continue
+            # vLLM wants the name it serves under, which is not always the
+            # model_name LiteLLM routes by.
+            ok, detail, secs = completion(b.addr, served or b.model, keys.get(b.key()), args.test_timeout)
+            print(f"  {'PASS' if ok else 'FAIL'}  {label}  {secs:.1f}s  {detail}")
+            if not ok:
+                test_fails.append(f"{BAD} {label}: direct completion failed -- {detail}")
+
+        gw_key = os.environ.get("LLMAO_KEY")
+        print("\nGATEWAY -- one completion per model through llm.apache.org")
+        if not gw_key:
+            print(
+                "  skip  no LLMAO_KEY exported. That is a PAT from My Keys and is\n"
+                "        not in config.yaml, so it cannot be discovered."
+            )
+        else:
+            for model in sorted({b.model for b, *_ in rows if b.in_config}):
+                ok, detail, secs = completion(GATEWAY, model, gw_key, args.test_timeout)
+                print(f"  {'PASS' if ok else 'FAIL'}  {model}  {secs:.1f}s  {detail}")
+                if not ok:
+                    test_fails.append(f"{BAD} {model} through the gateway failed -- {detail}")
+
+    # ------------------------------------------------------------- problems
+    problems: list[str] = list(test_fails)
+    known = meta["models"]
+
+    by_model: dict[str, list] = {}
+    for b, m, _s, _c, auth in rows:
+        by_model.setdefault(b.model, []).append((b, m, auth))
+
+    for model, group in sorted(by_model.items()):
+        if known and model not in known:
+            where = ", ".join(f"{b.host}:{b.listen_port}" for b, _, _ in group)
+            problems.append(
+                f"{BAD} {model!r} is not in models.yaml ({where}). "
+                f"validate_fleet raises on this at startup, so llmao will not "
+                f"boot once config.yaml is reapplied. Field 0 of a host row is "
+                f"the MODEL and field 2 is the label -- this looks reversed."
+            )
+        total = sum(len(b.routes) for b, _, _ in group)
+        live = sum(1 for b, _, _ in group if b.in_config)
+        if total > live and live:
+            problems.append(
+                f"{WARN} {model}: {total} routes for {live} configured box(es). "
+                f"LiteLLM balances across all of them, so a bad one fails "
+                f"intermittently rather than outright."
+            )
+
+    for b, m, served, _c, auth in rows:
+        if not b.in_config and b.routes:
+            problems.append(
+                f"{BAD} orphan route {b.routes[0]} -> {b.api_base}: no fleet.hosts entry. LiteLLM still routes to it."
+            )
+        if b.in_config and not b.routes and m is not None:
+            problems.append(
+                f"{WARN} {b.model} on {b.addr} is running but has no LiteLLM route, so it takes no gateway traffic."
+            )
+        if b.in_config and not b.routes and m is None and not b.addr:
+            problems.append(
+                f"{WARN} {b.model} on {b.host}:{b.listen_port} has no public "
+                f"port and no route -- it has not fetched its config."
+            )
+        if served and served != b.model:
+            problems.append(
+                f"{BAD} {b.addr} answers to {served!r} but LiteLLM routes it as "
+                f"{b.model!r}, so every request through the gateway 404s. Add "
+                f"--served-model-name {b.model} to this model's args in "
+                f"models.yaml, or it needs a models.yaml entry of its own."
+            )
+        if auth == "shared":
+            problems.append(
+                f"{WARN} {b.addr} accepts the shared key, not its derived one. "
+                f"It works now and breaks on the next recreate, because llmao "
+                f"registers the derived key."
+            )
+        if auth == "OPEN":
+            problems.append(f"{BAD} {b.addr} accepts requests with NO bearer at all.")
+        # "no keys" is not a verdict about the box -- see the note below.
+        if auth not in (None, "derived", "shared", "no port", "unreachable", "no keys") and m is not None:
+            # Name what was actually tried. "both keys" would be a lie when
+            # only one of the two credentials was available.
+            tried = []
+            if meta.get("salt") and b.listen_port:
+                tried.append("its derived key")
+            if meta.get("shared"):
+                tried.append("the shared key")
+            problems.append(
+                f"{BAD} {b.addr} is running but rejects {' and '.join(tried)} "
+                f"({auth}). This is the 401-then-route-churn loop: /healthz "
+                f"answers without a credential, so llmao cannot see it."
+            )
+
+    print()
+    if any(a == "no keys" for _b, _m, _s, _c, a in rows):
+        print(
+            "auth: not tested, so the column says nothing about these boxes. The\n"
+            "  only request sent was unauthenticated, and a correctly keyed box\n"
+            "  answers that with the same 401 as a mis-keyed one.\n"
+            "\n"
+            "  sudo ./llmao-fleet on the gateway host tests both keys properly.\n"
+            "  From here:\n"
+            "    export VLLM_API_KEY=...     tests the shared key\n"
+            "    export LLMAO_VLLM_SALT=...  tests the derived keys, but only for\n"
+            "                                boxes whose CONTAINER listen port is\n"
+            "                                known -- the HMAC covers host and\n"
+            "                                listen port, and a public address\n"
+            "                                cannot imply it. Add it as a third\n"
+            "                                field:  model=host:public:listen\n"
+        )
+    if problems:
+        print("PROBLEMS")
+        for p in problems:
+            print(f"  {p}")
+        return 1
+    print(f"no disagreements between the sources consulted ({meta['source']})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
