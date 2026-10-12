@@ -22,7 +22,7 @@
       <select class="form-select" name="project" id="project" required>
         <option value="">Select project…</option>
         [for projects]
-        <option value="[projects.name]">[projects.name]</option>
+        <option value="[projects.name]"[is projects.name form_project] selected[end]>[projects.name]</option>
         [end]
       </select>
     </div>

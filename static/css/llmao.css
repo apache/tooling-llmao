@@ -6,6 +6,45 @@ body {
   max-width: 40rem;
 }
 
+/* Home: the steps, numbered down a rail. */
+.home-page .home-steps {
+  counter-reset: step;
+  max-width: 40rem;
+}
+.home-page .home-step {
+  counter-increment: step;
+  position: relative;
+  padding: 0 0 1.75rem 3rem;
+}
+.home-page .home-step::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: -0.2rem;
+  width: 2rem;
+  height: 2rem;
+  line-height: 2rem;
+  border-radius: 50%;
+  text-align: center;
+  font-weight: 600;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+}
+/* The rail joining one number to the next. */
+.home-page .home-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  top: 2rem;
+  bottom: 0.2rem;
+  border-left: 2px solid var(--bs-border-color);
+}
+.home-page .home-step-done::before {
+  content: "\2713";
+  background: var(--bs-success);
+  color: #fff;
+}
+
 /* Dark grey bar (not pure black) so the logo disc edge stays visible. */
 .navbar.llmao-navbar {
   background-color: #343a40;

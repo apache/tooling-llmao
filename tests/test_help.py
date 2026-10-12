@@ -137,3 +137,56 @@ def test_home_page_does_not_list_api_paths():
     assert "/healthz" not in text
     assert "LiteLLM" not in text
     assert "llm.apache.org" in text
+    assert "PAT" not in text
+
+
+def _frame(**extra):
+    data = dict(
+        title="t",
+        flashes=[],
+        uid=None,
+        name=None,
+        projects=[],
+        projects_label=None,
+        is_site_admin=ezt.boolean(False),
+        nav="",
+        login_back="/",
+        restarted_at="",
+        repo="https://example.test/llmao",
+        commit="abc",
+        can_create_automation=ezt.boolean(False),
+    )
+    data.update(extra)
+    return edict(data)
+
+
+def _generate(name: str, data) -> str:
+    template = ezt.Template(str(THIS_DIR / "templates" / name), base_format=ezt.FORMAT_HTML)
+    buf = io.StringIO()
+    template.generate(buf, data)
+    return buf.getvalue()
+
+
+def test_home_page_is_the_steps_to_a_first_request():
+    signed_out = _generate("home.ezt", _frame())
+    assert signed_out.count('<li class="home-step') == 4
+    assert "home-step-done" not in signed_out
+    assert 'href="/auth?login=/"' in signed_out
+    assert 'href="/help"' in signed_out
+
+    signed_in = _generate("home.ezt", _frame(uid="gstein", name="Greg", projects_label="infra"))
+    assert signed_in.count("home-step-done") == 1
+    assert "Signed in as" in signed_in
+    for href in ("/keys", "/models", "/help"):
+        assert f'btn-sm" href="{href}"' in signed_in
+
+
+def test_create_key_form_preselects_a_given_project():
+    common = dict(uid="gstein", name="Greg", form_purpose="", for_model="", has_for_model=ezt.boolean(False))
+    one = _generate("key_create.ezt", _frame(projects=[edict(name="infra")], form_project="infra", **common))
+    assert '<option value="infra" selected>infra</option>' in one
+    two = _generate(
+        "key_create.ezt",
+        _frame(projects=[edict(name="infra"), edict(name="tooling")], form_project="", **common),
+    )
+    assert " selected>" not in two

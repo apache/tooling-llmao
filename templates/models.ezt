@@ -106,10 +106,10 @@
             <span class="badge text-bg-success">[models.rollup_label]</span>
             [end]
             <a class="btn btn-outline-primary btn-sm"
-               href="/keys/new?model=[models.model_name]">Request a key</a>
+               href="/keys/new?model=[models.model_name]">Create a key</a>
             [else]
             <span class="badge text-bg-secondary">Unavailable</span>
-            <button type="button" class="btn btn-outline-secondary btn-sm" disabled>Request a key</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" disabled>Create a key</button>
             [end]
             <button type="button" class="btn btn-link btn-sm p-0 ms-auto"
                     data-bs-toggle="modal" data-bs-target="#modelDetailModal"

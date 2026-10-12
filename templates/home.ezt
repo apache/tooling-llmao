@@ -1,38 +1,53 @@
 [include "header.ezt"]
-<div class="container py-4">
+<div class="container py-4 home-page">
     <div class="mt-2">
         [include "flashes.ezt"]
     </div>
 
-    <h1 class="h3 mb-3">Apache LLMAO</h1>
+    <h1 class="h3 mb-3">Welcome to Apache LLMAO</h1>
     <p class="llmao-lede text-muted">
-        The ASF's gateway to AI models. Sign in with your ASF account,
-        create a personal access token (PAT), and use Foundation-sanctioned
-        models from any OpenAI&nbsp;API-compatible tool, with your
-        usage attributed to you.
-    </p>
-    <p class="text-muted">
-        Point your tool at <span class="font-monospace">https://llm.apache.org</span>
-        and use your PAT as the key. The endpoint follows the OpenAI API specification.
+        The ASF's gateway to AI models. Use Foundation-sanctioned models from
+        any OpenAI&nbsp;API-compatible tool, with your usage attributed to you.
+        Four steps get you there.
     </p>
 
-    [if-any uid]
-    <div class="card mb-3" style="max-width: 28rem;">
-        <div class="card-body">
-            <h2 class="h6 card-title">Signed in</h2>
-            <p class="card-text mb-0">
-                <span class="font-monospace">[uid]</span>
-                [if-any projects_label]
-                <br><span class="text-muted small">projects: [projects_label]</span>
-                [end]
+    <ol class="home-steps list-unstyled mt-4">
+        <li class="home-step[if-any uid] home-step-done[end]">
+            <h2 class="h6 mb-1">Sign in</h2>
+            [if-any uid]
+            <p class="text-muted mb-0">
+                Signed in as <span class="font-monospace">[uid]</span>[if-any projects_label]
+                &middot; projects: [projects_label][end]
             </p>
-            <a class="btn btn-primary btn-sm mt-3" href="/keys">Manage my keys</a>
-        </div>
-    </div>
-    [else]
-    <p>
-        <a class="btn btn-primary" href="/auth?login=/">Sign in with ASF</a>
-    </p>
-    [end]
+            [else]
+            <p class="text-muted mb-2">Use your ASF account.</p>
+            <a class="btn btn-primary btn-sm" href="/auth?login=/">Sign in with ASF</a>
+            [end]
+        </li>
+        <li class="home-step">
+            <h2 class="h6 mb-1">Create a key</h2>
+            <p class="text-muted mb-2">
+                A personal access token ties your usage to you and one of your
+                projects. The secret is shown once.
+            </p>
+            [if-any uid]<a class="btn btn-primary btn-sm" href="/keys">My Keys</a>[end]
+        </li>
+        <li class="home-step">
+            <h2 class="h6 mb-1">Pick a model</h2>
+            <p class="text-muted mb-2">
+                Each model lists its ID, its context window, and who can see
+                your prompts.
+            </p>
+            [if-any uid]<a class="btn btn-outline-primary btn-sm" href="/models">Models</a>[end]
+        </li>
+        <li class="home-step">
+            <h2 class="h6 mb-1">Connect a tool</h2>
+            <p class="text-muted mb-2">
+                Point it at <span class="font-monospace">https://llm.apache.org</span>
+                and use that token as the key. The endpoint follows the OpenAI API.
+            </p>
+            <a class="btn btn-outline-primary btn-sm" href="/help">Help</a>
+        </li>
+    </ol>
 </div>
 [include "footer.ezt"]

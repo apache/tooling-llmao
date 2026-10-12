@@ -230,7 +230,8 @@ def test_models_template_renders_the_catalog_row():
     assert "<strong>Private.</strong>" in out
     assert "4 long requests at once" in out
     assert 'title="Accepts images"' in out
-    assert "Request a key" in out
+    assert "Create a key" in out
+    assert "Request a key" not in out
 
 
 def test_admin_rows_carry_their_models_deployments_and_summary():
@@ -565,7 +566,7 @@ def test_mixed_card_and_unavailable_card():
     assert "you can't choose which" in out
     assert "model-privacy-mixed" in out
     # The unavailable card keeps its button, disabled, and says why once.
-    assert "disabled>Request a key</button>" in out
+    assert "disabled>Create a key</button>" in out
     assert out.count(">Unavailable<") == 1
     assert "Unavailable right now" not in out
 

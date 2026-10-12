@@ -1555,6 +1555,9 @@ async def keys_new_form(result):
     model = (quart.request.args.get("model") or "").strip()
     result.for_model = model
     result.has_for_model = ezt.boolean(bool(model))
+    # Nothing to choose between, so do not make them choose.
+    if not result.form_project and len(result.projects) == 1:
+        result.form_project = result.projects[0].name
     return result
 
 
