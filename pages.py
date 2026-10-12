@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import io
+import logging
 import pathlib
 import re
 import time
@@ -33,6 +34,7 @@ import asfquart.utils
 import cmarkgfm
 import ezt
 import quart
+from asfpy.stopwatch import Stopwatch
 from cmarkgfm.cmark import Options
 from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
@@ -65,6 +67,8 @@ from llmao.seam import AuthzError
 _REPLICA_ORDER = (HEALTHY, LOADING, AWAITING, "no deployment", "pending", UNHEALTHY, STALLED)
 
 APP = asfquart.APP
+
+_LOGGER = logging.getLogger(__name__)
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 TEMPLATES = THIS_DIR / "templates"
@@ -134,9 +138,14 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     def deco(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            result = await basic_info(title)
+            with Stopwatch(name=f"Page {fn.__name__}: basic_info"):
+                result = await basic_info(title)
             try:
-                data = await fn(*args, result=result, **kwargs)
+                # The handler alone: template rendering happens after this
+                # returns, so time missing from here and from the LiteLLM
+                # lines is the render or the session.
+                with Stopwatch(name=f"Page {fn.__name__}: handler"):
+                    data = await fn(*args, result=result, **kwargs)
             except types as e:
                 # Redirect rather than falling through to the render.
                 #

@@ -37,6 +37,7 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
+from asfpy.stopwatch import Stopwatch
 
 from llmao import requests as _requests
 from llmao.fleet import LEGACY_SERVERS, ExtraLiteLLM, normalize_peer_ip, snapshot_for_status
@@ -372,7 +373,10 @@ class LiteLLMBackend:
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         try:
-            resp = await self._client.request(method, path, **kwargs)
+            # One per call, built in the `with`: these overlap, and a shared
+            # Stopwatch would time one request from another's start.
+            with Stopwatch(name=f"LiteLLM {method} {path}"):
+                resp = await self._client.request(method, path, **kwargs)
             return resp
         except httpx.TimeoutException as e:
             raise BackendUnavailableError(

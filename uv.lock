@@ -1671,6 +1671,7 @@ name = "llmao"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "asfpy" },
     { name = "asfquart" },
     { name = "cmarkgfm" },
     { name = "dunamai" },
@@ -1690,6 +1691,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "asfpy" },
     { name = "asfquart" },
     { name = "cmarkgfm", specifier = ">=2024.11.20" },
     { name = "dunamai", specifier = ">=1.26.0" },
