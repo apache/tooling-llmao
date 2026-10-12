@@ -399,9 +399,6 @@ class LiteLLMBackend:
         self._daily_span = 0
         # (monotonic stamp, team/list rows).
         self._team_rows_cache: tuple[float, list[dict[str, Any]]] | None = None
-        # model_name -> cost_basis, filled when routes are registered, so a
-        # spend row can be told from an invoice without a second lookup.
-        self._cost_basis: dict[str, str] = {}
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -1068,8 +1065,9 @@ class LiteLLMBackend:
         three queries would be three chances to disagree.
 
         `cost_basis` is carried through so a caller can tell an estimate from
-        an amount payable. Self-hosted routes are tagged derived_capacity by
-        deployment_body; commercial rows have no tag and their cost is real.
+        an amount payable. It comes from the fleet: a model served from our
+        own boxes is derived_capacity; anything else has no tag and its cost
+        is real.
         """
         rows = await self._spend_rows()
         if project is None:
@@ -1121,7 +1119,7 @@ class LiteLLMBackend:
                         "token_id": row["token_id"],
                         "total_tokens": 0,
                         "total_cost_usd": 0.0,
-                        "cost_basis": self._cost_basis.get(row["model"]),
+                        "cost_basis": self.fleet.cost_basis(row["model"]) if self.fleet else None,
                         "requests": 0,
                     }
                 acc["total_tokens"] += row["total_tokens"]
@@ -1176,8 +1174,8 @@ class LiteLLMBackend:
         """One read of LiteLLM's daily aggregate, as rows grouped by date.
 
         The answer nests day -> model group -> key. The model GROUP is the
-        route name llmao registered, which is what cost_basis is keyed on;
-        the `models` breakdown beside it names the provider's model instead.
+        route name llmao registered, which is the name the fleet knows it
+        by; the `models` breakdown beside it names the provider's model.
         """
         out: dict[str, list[dict]] = {}
         page = 1
@@ -1347,10 +1345,7 @@ class LiteLLMBackend:
                         info[name] = float(val)
                 # Marks the row as capacity rather than money, so a report can
                 # keep the two apart instead of adding them together.
-                info["cost_basis"] = "derived_capacity"
-                # Remembered so a spend row can be classified without a
-                # second call to /model/info per page load.
-                self._cost_basis[dep.model_name] = "derived_capacity"
+                info["cost_basis"] = dep.cost_basis
 
         return {
             "model_name": dep.model_name,

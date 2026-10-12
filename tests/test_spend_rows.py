@@ -27,6 +27,7 @@ import datetime as dt
 from easydict import EasyDict as edict  # noqa: N813
 from fake_transport import FakeTransport
 
+from llmao.fleet import Fleet, FleetDeployment
 from llmao.litellm_client import LiteLLMBackend
 
 NOON = dt.datetime(2026, 10, 12, 12, 0, tzinfo=dt.UTC)
@@ -77,9 +78,17 @@ def _backend(days, *, now=NOON, page_size=1000):
             "metadata": {"has_more": first + p.page_size < len(hits)},
         }
 
-    b = LiteLLMBackend(edict(), None, transport=FakeTransport(answer))
+    # gemma runs on our own box; claude-opus-5 is bought in
+    fleet = Fleet(
+        None,
+        [],
+        deployments=[
+            FleetDeployment(model_name="gemma4-26b", name="gemma4-26b", self_hosted=True),
+            FleetDeployment(model_name="claude-opus-5", name="claude-opus-5", self_hosted=False),
+        ],
+    )
+    b = LiteLLMBackend(edict(), fleet, transport=FakeTransport(answer))
     b._team_ids = dict(TEAMS)
-    b._cost_basis = {"gemma4-26b": "derived_capacity"}
     b._DAILY_PAGE_SIZE = page_size
     b._now = lambda: now
     return b
@@ -183,6 +192,20 @@ def test_cost_basis_distinguishes_capacity_from_money():
     assert all(r["cost_basis"] is None for r in commercial)
     real_money = sum(r["total_cost_usd"] for r in rows if r["cost_basis"] != "derived_capacity")
     assert real_money == 1.25
+
+
+def test_a_model_served_both_ways_is_not_called_an_estimate():
+    """The same name can be on our boxes and bought in.
+
+    Usage is recorded per name, so the two cannot be told apart, and some of
+    those dollars are a bill. Calling the lot an estimate would hide it.
+    """
+    ours = FleetDeployment(model_name="m", name="m", self_hosted=True)
+    bought = FleetDeployment(model_name="m", name="m-bedrock", self_hosted=False)
+    assert Fleet(None, [], deployments=[ours]).cost_basis("m") == "derived_capacity"
+    assert Fleet(None, [], deployments=[ours, bought]).cost_basis("m") is None
+    assert Fleet(None, [], deployments=[bought]).cost_basis("m") is None
+    assert Fleet(None, [], deployments=[]).cost_basis("never-heard-of-it") is None
 
 
 def test_a_key_llmao_did_not_issue_is_kept():

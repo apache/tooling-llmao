@@ -533,6 +533,10 @@ class VllmServer:
             _LOGGER.warning("fleet server %s@%s %s (%s)", self.name, self.api_base, self.state, self.last_error)
 
 
+# What a deployment's cost figure means, when it is not simply money owed.
+COST_BASIS_CAPACITY = "derived_capacity"
+
+
 class FleetDeployment:
     """One intended LiteLLM deployment (definitions + api_base).
 
@@ -586,6 +590,18 @@ class FleetDeployment:
         if self.vllm is not None:
             return self.vllm.api_base
         return self._api_base
+
+    @property
+    def cost_basis(self) -> str | None:
+        """Whether this deployment's cost is a capacity estimate or real money.
+
+        A fact about where the deployment runs, and nothing else. The same
+        model can be served from our own boxes or bought from a provider:
+        on our boxes the dollars are derived from throughput and are a share
+        of capacity already paid for, and from a provider they are a bill.
+        None means real money.
+        """
+        return COST_BASIS_CAPACITY if self.self_hosted else None
 
     @property
     def litellm_health_display(self) -> str:
@@ -881,6 +897,18 @@ class Fleet:
             if flag is not None:
                 catalog = bool(flag)
         return model_status(model_name, views, catalog_self_hosted=catalog)
+
+    def cost_basis(self, model_name: str) -> str | None:
+        """How to read a cost recorded against this model name.
+
+        Usage is recorded per model name, not per deployment, so this is as
+        fine as it can be told apart. A capacity estimate only when every
+        deployment of the name is one: where a name is served both ways,
+        some of its dollars are real, and calling the lot an estimate would
+        hide a bill. A name with no deployment is likewise treated as money.
+        """
+        bases = {d.cost_basis for d in self.deployments if d.model_name == model_name}
+        return COST_BASIS_CAPACITY if bases == {COST_BASIS_CAPACITY} else None
 
     def model_in_litellm(self, model_name: str) -> bool:
         """True if any vLLM for this model_name has a LiteLLM deployment (skew)."""
