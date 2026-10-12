@@ -19,7 +19,7 @@
 
 ## Done (today — thin)
 
-Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `models.yaml` definitions; PAT UX (**My Keys** / **Other Keys**); **Models** page (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
+Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `models.yaml` definitions; PAT UX (**My Keys**, including key requests; automation keys are listed for site admins as **Service keys**); **Models** page (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
 
 **Models page:** definitions-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing Healthy or no deployment is No. Sort puts No last. Per-process state is in the `/models` admin drill-down.
 

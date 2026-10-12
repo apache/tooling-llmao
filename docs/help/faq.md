@@ -13,7 +13,7 @@ A personal key belongs to you and to one project you are a member of. The secret
 
 ## Can a script have its own key?
 
-Yes, as an automation key, which belongs to a project and not to a person. These are uncommon. A project admin creates one on [[]Other Keys](/keys/other) after a formal request, and is recorded as the person to ask about it.
+Yes. Ask for one under **Request a key** on [[]My Keys](/keys), and say what it is for. The same request covers work outside a project. If it is approved, you create the key there. The secret is shown once, to you, and passes through nobody else.
 
 ## How do I connect a tool?
 
