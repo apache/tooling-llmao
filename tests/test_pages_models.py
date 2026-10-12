@@ -515,6 +515,20 @@ def test_every_state_has_a_badge_class():
     assert pages._badge_class(HEALTHY, routed=False) == "text-bg-warning"
 
 
+def test_card_copies_the_model_id_from_an_icon():
+    pages = _app()
+    rows = pages.model_catalog_rows(_fleet(_server("gemma")), [_catalog("gemma")])
+    out = _render(rows)
+    button = out[out.index("js-copy-model") :]
+    button = button[: button.index("</button>")]
+    assert 'title="Copy gemma to the clipboard"' in button
+    assert 'aria-label="Copy gemma to the clipboard"' in button
+    assert 'data-copy="gemma"' in button
+    assert "bi-clipboard" in button
+    # The icon is the whole content; the name is in the attributes.
+    assert button.rstrip().endswith("</i>")
+
+
 def test_mixed_card_and_unavailable_card():
     pages = _app()
     box = _server("gemma")

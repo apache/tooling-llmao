@@ -66,10 +66,18 @@ document.addEventListener("DOMContentLoaded", function () {
     btn.addEventListener("click", function () {
       var text = btn.getAttribute("data-copy") || "";
       if (!text || !navigator.clipboard) return;
+      var icon = btn.querySelector(".bi");
+      var label = btn.getAttribute("title") || "";
       navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = "Copied";
+        if (icon) icon.className = "bi bi-check-lg";
+        btn.classList.add("model-copy-done");
+        btn.setAttribute("title", "Copied");
+        btn.setAttribute("aria-label", "Copied");
         setTimeout(function () {
-          btn.textContent = "Copy";
+          if (icon) icon.className = "bi bi-clipboard";
+          btn.classList.remove("model-copy-done");
+          btn.setAttribute("title", label);
+          btn.setAttribute("aria-label", label);
         }, 1500);
       });
     });

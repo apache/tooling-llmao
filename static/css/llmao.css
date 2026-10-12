@@ -28,6 +28,18 @@ body {
 .models-page .model-id {
   font-size: 0.85rem;
 }
+/* An icon, not a link: muted until it is pointed at. */
+.models-page .model-copy {
+  color: var(--bs-secondary-color);
+  line-height: 1;
+}
+.models-page .model-copy:hover,
+.models-page .model-copy:focus-visible {
+  color: var(--bs-body-color);
+}
+.models-page .model-copy.model-copy-done {
+  color: var(--bs-success);
+}
 /* Privacy is a full sentence in its own block. Color only reinforces it. */
 .models-page .model-privacy {
   display: flex;
