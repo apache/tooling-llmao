@@ -676,7 +676,8 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
             row.deployments = [r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name]
             row.replica_summary = _replica_summary(row.model_name, fleet)
         rows.append(row)
-    rows.sort(key=lambda r: (bool(r.unavailable), (r.display_name or "").lower()))
+    # Usable first: available, then degraded, then the ones nobody can call.
+    rows.sort(key=lambda r: (bool(r.unavailable), bool(r.degraded), (r.display_name or "").lower()))
     for i, row in enumerate(rows):
         row.index = i
     return rows

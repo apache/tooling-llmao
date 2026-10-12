@@ -88,7 +88,11 @@
               <span class="badge text-bg-secondary" title="[models.chips.title]">[models.chips.label]</span>
               [end]
               [if-any models.supports_thinking]
-              <span class="badge text-bg-info" title="Reasons before answering">Thinking</span>
+              [if-any models.thinks_by_default]
+              <span class="badge text-bg-info" title="Reasons before answering unless you turn it off">Thinks by default</span>
+              [else]
+              <span class="badge text-bg-info" title="Can reason before answering, and does so only when asked">Thinking</span>
+              [end]
               [end]
             </div>
             <div class="small text-muted mt-2">
@@ -104,9 +108,8 @@
             <a class="btn btn-outline-primary btn-sm"
                href="/keys/new?model=[models.model_name]">Request a key</a>
             [else]
-            <span class="badge text-bg-secondary">[models.rollup_label]</span>
+            <span class="badge text-bg-secondary">Unavailable</span>
             <button type="button" class="btn btn-outline-secondary btn-sm" disabled>Request a key</button>
-            <span class="small text-muted">Unavailable right now</span>
             [end]
             <button type="button" class="btn btn-link btn-sm p-0 ms-auto"
                     data-bs-toggle="modal" data-bs-target="#modelDetailModal"

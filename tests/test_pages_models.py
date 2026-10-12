@@ -546,9 +546,28 @@ def test_mixed_card_and_unavailable_card():
     assert "<strong>Mixed.</strong>" in out
     assert "you can't choose which" in out
     assert "model-privacy-mixed" in out
-    # The unavailable card keeps its button, disabled, and says why in text.
+    # The unavailable card keeps its button, disabled, and says why once.
     assert "disabled>Request a key</button>" in out
-    assert "Unavailable right now" in out
+    assert out.count(">Unavailable<") == 1
+    assert "Unavailable right now" not in out
+
+
+def test_thinking_chip_says_when_it_is_the_default():
+    pages = _app()
+    quiet = _catalog("gemma")
+    loud = _catalog("qwen")
+    loud["thinks_by_default"] = ezt.boolean(True)
+    out = _render(pages.model_catalog_rows(_fleet(_server("gemma"), _server("qwen")), [quiet, loud]))
+    assert out.count('unless you turn it off">Thinks by default<') == 1
+    assert out.count('only when asked">Thinking<') == 1
+
+
+def test_cards_put_degraded_after_available_and_unavailable_last():
+    pages = _app()
+    fleet = _fleet(_server("alpha"), _server("beta"), _server("beta", host="10.0.0.9", ok=False))
+    rows = pages.model_catalog_rows(fleet, [_catalog("aaa-missing"), _catalog("beta"), _catalog("alpha")])
+    assert [r.model_name for r in rows] == ["alpha", "beta", "aaa-missing"]
+    assert rows[1].degraded
 
 
 def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
