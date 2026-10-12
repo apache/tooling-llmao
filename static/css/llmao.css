@@ -80,10 +80,27 @@ body {
 .models-page .dep-reason { grid-area: reason; }
 .models-page .dep-flag { grid-area: flag; }
 .models-page .dep-actions { grid-area: actions; text-align: right; white-space: nowrap; }
+/* Separate facts with a dot between them: a quiet label, then its value. */
 .models-page .dep-diag {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 1rem;
+  font-variant-numeric: tabular-nums;
+  /* Every fact leads with a dot; the one that starts a line is clipped. */
+  margin-left: -1.25rem;
+  clip-path: inset(0 0 0 1.25rem);
+}
+.models-page .dep-fact::before {
+  content: "\00b7";
+  display: inline-block;
+  width: 1.25rem;
+  text-align: center;
+  color: var(--bs-secondary-color);
+}
+.models-page .dep-fact-k {
+  color: var(--bs-secondary-color);
+}
+.models-page .dep-fact-bad {
+  color: var(--bs-danger-text-emphasis);
 }
 /* The accent replaces the 1px border, so the columns still line up. */
 .models-page .dep-attention {

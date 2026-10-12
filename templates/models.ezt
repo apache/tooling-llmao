@@ -206,9 +206,9 @@
       <div class="small text-danger mt-1">Context window exceeds the measured KV cache. vLLM will hang on a request that needs the space rather than refuse it.</div>
       [end]
       [if-any models.deployments.diags]
-      <div class="dep-diag small text-muted mt-1">
+      <div class="dep-diag small mt-1">
         [for models.deployments.diags]
-        <span>[models.deployments.diags.label] [models.deployments.diags.value]</span>
+        <span class="dep-fact[if-any models.deployments.diags.bad] dep-fact-bad[end]"><span class="dep-fact-k">[models.deployments.diags.label]</span> [models.deployments.diags.value]</span>
         [end]
       </div>
       [end]

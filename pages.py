@@ -795,16 +795,28 @@ def deployment_rows(fleet, *, admin: bool) -> list:
         skew_pills = [SKEW_PHRASE.get(n, n) for n in dep.skew] if admin else []
         diags = []
         if admin and state in (HEALTHY, UNHEALTHY):
+
+            def ago(age: str) -> str:
+                return f"{age} ago" if age and age not in ("—", "never") else ""
+
+            # Each fact names its subject, then says one thing about it.
+            vllm_fact = ""
+            if srv is not None:
+                vllm_fact = f"last healthy {ago(last_ok)}" if ago(last_ok) else "never healthy"
+            litellm_fact = ""
+            if litellm_health != "—":
+                verdict = "check passed" if dep.litellm_healthy else "check failed"
+                litellm_fact = f"{verdict} {ago(litellm_health_ago)}".strip()
             fields = [
                 # The public address only when Vast maps it to another port.
-                ("Public", public if srv is not None and public != listen else ""),
-                ("Context", context),
-                ("KV cache", kv_cache),
-                ("vLLM last healthy", last_ok if srv is not None else ""),
-                ("LiteLLM health", f"{litellm_health} {litellm_health_ago}" if litellm_health != "—" else ""),
-                ("Config served", config_ago),
+                ("Public", public if srv is not None and public != listen else "", False),
+                ("Context", context, False),
+                ("KV cache", kv_cache, False),
+                ("vLLM", vllm_fact, srv is not None and state == UNHEALTHY),
+                ("LiteLLM", litellm_fact, dep.litellm_healthy is False),
+                ("Config", f"served {ago(config_ago)}" if ago(config_ago) else "", False),
             ]
-            diags = [edict(label=k, value=v) for k, v in fields if v and v != "—"]
+            diags = [edict(label=k, value=v, bad=ezt.boolean(bad)) for k, v, bad in fields if v and v != "—"]
         lifecycle = deployment_status(snapshot_for_status(dep, cfg), cfg).lifecycle
         rows.append(
             edict(

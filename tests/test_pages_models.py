@@ -478,6 +478,24 @@ def test_healthy_row_has_one_menu_entry_and_no_clutter():
     # The diagnostics line leaves out anything it has no value for.
     assert all(d.value and d.value != "—" for d in row.diags)
     assert "Context" in [d.label for d in row.diags]
+    facts = {d.label: d for d in row.diags}
+    assert facts["vLLM"].value.startswith("last healthy ") and facts["vLLM"].value.endswith(" ago")
+    assert not any(d.bad for d in row.diags)
+
+
+def test_diagnostics_say_a_failed_litellm_check_plainly():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    dep = fleet.deployments[0]
+    dep.litellm_healthy = False
+    dep.litellm_health_at = time.time() - 300
+    row = pages.deployment_rows(fleet, admin=True)[0]
+    facts = {d.label: d for d in row.diags}
+    assert facts["LiteLLM"].value == "check failed 5m ago"
+    assert facts["LiteLLM"].bad
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
+    assert "health unhealthy" not in out
+    assert "dep-fact-bad" in out
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
     assert "disabled" not in out
     assert "<table" not in out
