@@ -18,7 +18,7 @@
     </div>
 </footer>
 
-    <script src="/static/js/llmao.js"></script>
+    <script src="/static/js/llmao.js?v=[commit]"></script>
     <script src="/static/js/bootstrap.bundle.min.js"
             integrity="sha384-HwwvtgBNo3bZJJLYd8oVXjrBZt8cqVSpeBNS5n7C8IVInixGAoxmnlMuBnhbgrkm"></script>
 </body>
