@@ -74,6 +74,9 @@ REPO_URL = "https://github.com/apache/tooling-llmao"
 # Import is process start: create_app loads this module once, and a restart is a new process.
 # The server clock is UTC. The label says so, rather than shifting to an admin's zone.
 RESTARTED_AT = time.strftime("%m/%d %H:%M", time.gmtime()) + " (UTC)"
+# Read once, for the same reason: the commit this process loaded is the one it is running,
+# whatever is checked out since. Asking git per request also blocked the event loop.
+COMMIT = Version.from_git().commit
 
 # STeVe-style flash helpers (Bootstrap alert categories).
 flash_success = functools.partial(quart.flash, category="success")
@@ -223,8 +226,7 @@ async def basic_info(title: str = "llmao") -> edict:
         basic.can_create_automation = ezt.boolean(False)
         basic.admin_projects = []
 
-    version = Version.from_git()
-    basic.commit = version.commit
+    basic.commit = COMMIT
     basic.repo = REPO_URL
     basic.restarted_at = RESTARTED_AT
 
