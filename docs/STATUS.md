@@ -26,7 +26,7 @@ Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBacke
 **models.yaml vs LiteLLM:** admin definitions; the proxy does **not** include this file.
 `litellm.yaml` `general_settings.store_model_in_db: true` (Puppet may also set the env). `self_hosted` is a required boolean. Commercial rows need a static `api_base` (fail-fast). Self-host `litellm_params.model` is `hosted_vllm/<name>` (not `openai/`). Standalone watches `config.yaml`; Puppet restarts on change. YAML edit ≠ live deployment until llmao POSTs `/model/new` again.
 
-**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy or Stalled when a route exists (`models.yaml` template). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment is identified everywhere by `host:port`, the listen port, since one host can run several servers; the public port is shown only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy or Stalled when a route exists (`models.yaml` template). Commercial: `/model/new` at llmao startup. LiteLLM `/health` cached on the deployment by the skew runner.
 
 **Public port resolution differs by provider.** Vast exposes its container→public mapping through an API and resolves automatically. RunPod does not, so a host row takes an optional fourth element pinning the public port. RunPod also reassigns the port on every pod recreate, even when the pod lands on the same machine — so a pinned value is expected to change, not to be stable.
 
@@ -43,7 +43,15 @@ overhead and run roughly half these. Single-stream decode is
 memory-bandwidth bound, so the models sit closer together than their sizes
 suggest — the difference between them is concurrency, not per-request speed.
 
-**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. Requirements sum across co-resident servers. Silent when `nvidia-smi` is absent — an unknown is not a failure. The box then divides the card between its servers: the budget is 0.9 of the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM), and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card.
+`qwen3-8b-bf16` is `qwen3-8b` from the unquantized weights, for hardware the
+FP8 build cannot load on (the GB10, below). It is a separate `model_name`:
+callers ask for it by that name and it does not pool with the `qwen3-8b`
+boxes. Weights measured at 15.27 GiB. No throughput or price measured yet, so
+its usage prices at zero.
+
+**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. VRAM sums across co-resident servers, since each loads its own copy; disk counts once per distinct model, since servers of the same model share one copy of the weights. Silent when `nvidia-smi` is absent — an unknown is not a failure. The box then divides the card between its servers: the budget is 0.9 of the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM), and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card. A fraction set in `models.yaml` is kept and deducted from the budget first.
+
+Limits of that sizing, all in `hosting/README.md`: it happens once, at install; re-running the install on a box whose servers are already up sees little free memory and sets no fraction; and servers that load at the same moment get less KV cache than their share.
 
 **Observed state:** the `/models` drill-down shows measured KV cache against the served context window, scraped from vLLM's `/metrics` on the transition into Healthy. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
 
@@ -88,6 +96,30 @@ parser the call arrives as text in `content`, `tool_calls` is absent, and
 nothing reports an error. Verify by running each candidate against the
 model's real output offline; `vllm:tool_call_parser_invocations`
 distinguishes "the parser declined" from "the model never called".
+
+**Qwen's FP8 checkpoints do not load on a GB10.** They are block-quantized
+(`weight_block_size [128, 128]`), which vLLM runs through DeepGEMM, and
+DeepGEMM handles only SM90 (Hopper) and SM100 (datacenter Blackwell). The
+GB10 reports compute capability 12.1, and the engine dies during load with
+`Unknown SF transformation` and nothing else — no mention of the card or of
+quantization. The unquantized weights avoid that path entirely, which is
+what `qwen3-8b-bf16` is. `qwen3.8-27b` is the same kind of checkpoint and
+should be expected to fail the same way there.
+
+**A unified-memory machine has no VRAM to query.** On the GB10
+`nvidia-smi --query-gpu=memory.total` prints `[N/A]`. The box reads
+`MemTotal` and `MemAvailable` from `/proc/meminfo` instead, and vLLM agrees
+with that view: it reported 121.63 GiB as the device total.
+
+**Servers that load together shrink each other's KV cache.** vLLM charges a
+server for the drop in device-wide free memory while it loads. Two
+`qwen3-8b-bf16` servers starting at once on the GB10 were each billed 34.72
+GiB against 15.27 GiB of weights, most likely for both copies, and ended
+with 17.11 GiB of KV cache where their 0.436 share allowed about 36. They
+serve; they hold roughly half the context they could. vLLM's own suggestion
+is an explicit `--kv-cache-memory` in bytes, which does not depend on what
+else is loading. Not done: the installer is left alone while the boxes are
+in use.
 
 ---
 

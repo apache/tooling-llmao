@@ -9,9 +9,24 @@ Open [[]My Keys](/keys) and create a personal key.
 [end]
 The model id on the [[]Models page](/models) is the `model` parameter.
 
+A personal key belongs to you and to one project you are a member of. The secret is shown once, when you create the key. Copy it then.
+
+## Can a script have its own key?
+
+Yes, as an automation key, which belongs to a project and not to a person. These are uncommon. A project admin creates one on [[]Other Keys](/keys/other) after a formal request, and is recorded as the person to ask about it.
+
 ## How do I connect a tool?
 
-Point a tool that speaks the OpenAI API at `https://llm.apache.org` and use your personal access token as the API key. Setup for each tool:
+Point a tool that speaks the OpenAI API at `https://llm.apache.org` and use your personal access token as the API key. Many tools need only two variables:
+
+```sh
+export OPENAI_BASE_URL=https://llm.apache.org/v1
+export OPENAI_API_KEY=<your personal access token>
+```
+
+`GET https://llm.apache.org/v1/models` with that key lists the models it can reach.
+
+Setup for each tool:
 
 * [[]Claude Code](/help/claude-code)
 * [[]Codex](/help/codex)
@@ -20,7 +35,7 @@ Point a tool that speaks the OpenAI API at `https://llm.apache.org` and use your
 
 ## Why did a request succeed with an empty answer?
 
-A small output budget on a reasoning model can return HTTP 200 with empty content. The model spent the budget thinking. Where the tool allows it, turn reasoning off:
+A small output budget on a reasoning model can return HTTP 200 with empty content, a `finish_reason` of `length`, and no error. The model spent the budget thinking. Some models reason unless told not to, and others do the reverse. Where the tool allows it, turn reasoning off:
 
 ```json
 "chat_template_kwargs": {"enable_thinking": false}
@@ -34,6 +49,14 @@ Prompt and output share the context window. A client whose output budget is larg
 
 A stop on a round token count is the output budget. Raise it. A stop on a round amount of clock time is a timeout.
 
+## What does the Models page tell me?
+
+For each model: the id to use, whether it is available now, its context window, its licence, where its weights and training data come from, and who can see your prompts.
+
 ## Who can see my prompts?
 
 The [[]Models page](/models) states that for each model. Private means every deployment runs on infrastructure the ASF controls. External means every request is sent to a third-party provider. Mixed means a request may take either path, and you cannot choose which.
+
+## Why are there two Qwen3 8B models?
+
+`qwen3-8b` and `qwen3-8b-bf16` are the same model. They run on different hardware, and one of the machines cannot load the compressed weights the other uses. Answers should be equivalent. Use whichever the [[]Models page](/models) shows as available.

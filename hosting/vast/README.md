@@ -42,7 +42,21 @@ Set template env `PROVISIONING_SCRIPT` to the raw GitHub URL of
 `install_set.py` from `main`; pin that second URL to a commit SHA when this
 is no longer a moving target (a broken `main` would brick every new box).
 
+## Several servers on one box
+
+List each as a row under the host in `fleet.hosts`. The installer divides
+the card's memory between them and prints each server's fraction; see
+[`../README.md`](../README.md) (sizing) for the rule and its limits. Two
+servers of the same model need the disk for one copy of the weights.
+
+To change the set on a running box, stop the servers and re-run the
+provisioning script. A re-run with the old servers still up finds no free
+memory.
+
 ## Smoke
 
 1. `supervisorctl status`
 2. `curl -sS -H "Authorization: Bearer <api_key>" http://127.0.0.1:<port>/v1/models`
+3. In `$DATA_DIRECTORY/logs/<name>.log`: `Model loading took … GiB` (compare
+   with `vram_gb`), and the `Free memory on device` line, which gives the
+   requested fraction in GiB and the KV cache actually obtained.

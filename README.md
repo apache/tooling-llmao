@@ -12,7 +12,8 @@ here.
 |-----|------|
 | **`apache/rai-private` → `services/llmao/README.md`** | Product design (concepts, policy) |
 | **[`docs/STATUS.md`](docs/STATUS.md)** | Build status + **planned UX** backlog |
-| **This README** | How to run and use the software |
+| **This README** | How to run the software |
+| **[Help](https://llm.apache.org/help)** (`docs/help/`) | How to use the gateway: keys, connecting tools |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
 | [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) | GPU fleet: control-plane contract, box provisioning |
 | [`docs/fleet-state.md`](docs/fleet-state.md) | Fleet membership: ownership, lifecycle, recovery |
@@ -94,186 +95,25 @@ make test          # offline seam + models.yaml tests (no OAuth session automati
 
 ---
 
-## Using the gateway (after sign-in)
+## Using the gateway
 
-1. **My Keys** — create a personal PAT for a project you belong to (purpose optional).
-   Copy the secret **once**.
-2. Point your client at the LiteLLM OpenAI-compatible base URL with that `sk-…` key.
-   Use a **model id** from **Models** as the `model` parameter.
-3. **Other Keys** (PMC / site admin) — automation keys; who minted them is recorded as `created_by`.
-4. **Models** — sanctioned inventory (supply-path details for site admins only).
+How to get a key and connect a tool is in the live Help, which is the user
+documentation:
+
+- [Help](https://llm.apache.org/help) — what the gateway is and where to start
+- [FAQ](https://llm.apache.org/help/faq) — keys, connecting an
+  OpenAI-compatible tool, empty answers, rejected requests, truncation, who
+  can see your prompts
+- [Claude Code](https://llm.apache.org/help/claude-code)
+- [Codex](https://llm.apache.org/help/codex)
+- [Grok Build](https://llm.apache.org/help/grok-build)
+- [Pi](https://llm.apache.org/help/pi)
+
+Those pages are rendered from [`docs/help/`](docs/help/) on each request, so
+edit them there; see [`docs/help-authoring.md`](docs/help-authoring.md). A
+local run serves the same pages at `/help`.
 
 **Projects** (envelopes, member caps, by-person usage) and **Reports** are product intent — see design §6 and the UX backlog in [`docs/STATUS.md`](docs/STATUS.md).
-
-### Things worth knowing before you call a model
-
-**Reasoning defaults differ by model, and the failure is silent.** Some models
-reason unless told not to; others do the reverse. A request with a small
-`max_tokens` to a reasoning model can spend the whole budget thinking and
-return **nothing** — HTTP 200, empty `content`, `finish_reason: length`, no
-error. To turn it off:
-
-```json
-"chat_template_kwargs": {"enable_thinking": false}
-```
-
-**Prompt and output share the context window.** vLLM rejects a request where
-prompt tokens + `max_tokens` exceeds the model's window, so the two are not
-independent. A client configured with a max-tokens larger than the window gets
-a 400 before any prompt is counted — and raising the client's context setting
-makes it worse, not better.
-
-**Truncation at a round number is a budget, not the model.** Raise
-`max_tokens`. Truncation at a round wall-clock time is a proxy timeout.
-
-The **Models** page carries context window, licence and provenance per model.
-
----
-
-## Connecting your agent
-
-The gateway speaks both the OpenAI and Anthropic APIs, so most agents work
-with environment variables alone.
-
-### Claude Code
-
-```bash
-export ANTHROPIC_BASE_URL=https://llm.apache.org
-export ANTHROPIC_AUTH_TOKEN=<your PAT from My Keys>
-export ANTHROPIC_MODEL=gemma4-26b
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000
-claude
-```
-
-LiteLLM exposes `/v1/messages`, so Claude Code talks to it without a shim.
-
-**`CLAUDE_CODE_MAX_CONTEXT_TOKENS` matters.** Claude Code assumes a 200k
-window for a model it does not recognise and auto-compacts too late; requests
-then fail once prompt + output exceeds the real window. Set it below the
-model's window — 120000 against 131072 leaves room for the response.
-
-**Pick a model whose reasoning is off by default.** A model that reasons
-before answering emits nothing for a minute or more, and Claude Code abandons
-the stream and retries. The retries stack: we watched a box run the same
-expensive generation twice for a response nobody was reading. `gemma4-26b`
-starts emitting immediately and works well.
-
-**`--effort` may be needed.** Claude Code sends `reasoning_effort: high` by
-default, and not every model accepts that value — Qwen3.8-27B takes only
-`xhigh`, `medium` and `low`, and 400s on `high`. `claude --effort medium`
-sets it. Gemma accepts all five levels, so no flag is needed there.
-
-**Tool use is currently broken through the Anthropic path.** LiteLLM routes
-it to vLLM's `/v1/responses` endpoint with a `tool_choice` shape vLLM does
-not accept, so web search and other tools fail with a validation error.
-`models.yaml` now uses `hosted_vllm/`; re-push deployments if a DB row is
-still `openai/`.
-Plain conversation is unaffected.
-
-### Pi
-
-This guide explains how to configure the **Pi coding agent** to use Apaache
-LLMAO.
-
-The configuration uses:
-
-- Pi coding agent
-- pi-localllm-provider extension
-- Apache LLMAO server URL: `https://llm.apache.org/v1`
-- Your Apache LLMAO API key that you should have already obtained
-
-The result is that the private models become available inside Pi alongside your
-normal frontier-model providers.
-
----
-
-#### Prerequisites
-
-You need:
-
-
-```bash
-pi --version
-```
-
-If Pi isn't installed yet, install it according to the [Pi installation
-instructions](https://pi.dev).
-
----
-
-#### Install pi-localllm-provider
-
-Install the LocalLLM provider extension. From the command line type:
-
-```text
-pi install npm:pi-localllm-provider
-```
-
-Then run Pi.
-
-At the pi command prompt, verify that the extension is available:
-
-```text
-/localllm
-```
-
-You should see the LocalLLM configuration interface.
-
-```text
- LocalLLM - no servers configured
-
- → ＋ Add server
-```
-
-Select **Add server** to configure your private LLM server. It will ask for
-a Name.  Type Apache LLMAO or what yu wish to call it:
-
-```text
- Step 1/3 - Server name (e.g. "My vLLM", "Ollama", "LM Studio")
-
-> Apache LLMAO
-```
-
-Then it will ask for the **Base URL**. Enter the base URL of your private LLM server:
-
-```text
- Step 2/3 - Base URL
-
-> https://llm.apache.org/v1
-```
-
-Finally, it will ask for your **API Key**. Enter your LLMAO API key:
-
-```text
-Step 3/3 - API key (leave blank if not required)
-
-> <your LLMAO API key>
-```
-
-If everything is entered correctly, you should see a confirmation message asking
-you to confirm the server addition. Confirm it, and you should see something
-similar to the following:
-
-```text
- 3 models found via OpenAI-compatible - which to enable?
-
- → All (3 models)
-   gemma4-26b
-   qwen3-8b
-   qwen3.8-27b
-```
-Select the models you want to enable in Pi. You can select all or just a subset.
-AT this point you should be able to use LLMAP models in Pi. You can now use the
-models in Pi alongside your other providers.
-
-### Anything OpenAI-compatible
-
-```bash
-export OPENAI_BASE_URL=https://llm.apache.org/v1
-export OPENAI_API_KEY=<your PAT>
-```
-
-`GET /v1/models` lists what your key can reach.
 
 ---
 

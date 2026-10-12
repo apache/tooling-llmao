@@ -286,6 +286,13 @@ Same `model_name`, different recipes — fine:
 - weights from HF on one, an internal mirror on another
 - different cards, `gpu_memory_utilization`, `--kv-cache-memory`
 
+Not yet possible for weights: a recipe is looked up by `model_name`, so one
+name has one recipe. The GB10 cannot load the FP8 build of Qwen3 8B, and
+serving it BF16 there took a second entry, `qwen3-8b-bf16`, which callers see
+as a different model. A per-host recipe override would let it join the
+`qwen3-8b` pool. Memory already differs per box: the fraction is worked out
+on the box.
+
 Different `model_name` required:
 
 - different served context window — a 32k deployment cannot take a 100k prompt
@@ -328,6 +335,13 @@ The model's requirement goes in the recipe; the box decides fit against
 hardware it can see. `--kv-cache-memory` makes this exact: vLLM prints the byte
 count it wants, so the install step can start conservative, read the figure,
 and relaunch.
+
+As built, the box reads its memory (`nvidia-smi`, or `/proc/meminfo` on a
+unified-memory machine), checks the recipes fit, and divides what is free
+between its servers as `--gpu-memory-utilization`. It does not use
+`--kv-cache-memory` or relaunch. That matters when servers load together:
+each is charged for the other's weights and ends up with less KV cache than
+its share. See `hosting/README.md`.
 
 ---
 

@@ -24,7 +24,10 @@ image and `fleet.hosts` row must satisfy.
   `statvfs`. That is **not** vLLM: vLLM only sizes KV after the weights
   are on disk (`torch` / HIP `mem_get_info`). NVIDIA probe today is
   `nvidia-smi`; missing probe is not a failure. AMD (`rocm-smi`) when we
-  have a ROCm image.
+  have a ROCm image. VRAM sums over the pod's servers; disk counts once per
+  distinct model.
+- The same installer divides the card between the pod's servers; see
+  [`../README.md`](../README.md) (sizing).
 
 ## Different from Vast
 

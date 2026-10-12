@@ -89,6 +89,8 @@ Same page, with three additions. A role-based view with an optional "preview as 
 
 Fields that don't apply are omitted for that type, so the table doesn't fill with "—" cells. The old highlighted-row convention (fleet key presented from a box not in `config.yaml`) becomes an explicit **Unknown** state badge.
 
+**As built.** Deployments are one list grouped by model, not a table per model. A row is identified by `host:port` (the listen port); the public port appears only where it differs. Each row has one primary button and a menu holding the other actions, and an action that does not apply is not offered there. Removing a box from the list is labelled "Stop tracking" and asks for confirmation, since it does not stop the box. The diagnostics line appears only for Healthy and Unhealthy rows, with empty fields left out. "Reboot requested" is still only a label; nothing reboots a box.
+
 ## 6. Privacy tiers
 
 Privacy is a first-class, user-facing field. The question it answers: *will my query leave the LLMs we control?* (For example, private email archives must not be sent to a commercial LLM.)

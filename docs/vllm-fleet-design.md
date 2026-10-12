@@ -175,18 +175,26 @@ Response: 200 application/json
       "api_key": "sk-...",
       "gpu_memory_utilization": 0.42,
       "max_model_len": 16384,
+      "vram_gb": 9,
+      "disk_gb": 12,
       "args": ["--dtype", "auto"]
     }
   ]
 }
 ```
 
-Catalog model (`model_info.vllm`): HF weights id, optional util, max len, `args`.
+Catalog model (`model_info.vllm`): HF weights id, optional util, max len,
+`vram_gb`, `disk_gb`, `args`. All but the weights id and `args` are omitted
+from the JSON when the catalog does not set them.
 Host row (`fleet_path` → `hosts`): `[model_name, port]` or `[model_name, port, name]`.
 `api_key` comes from `litellm_params` (same secret LiteLLM presents).
 
 Notes:
 - `args` may be a list of strings or a single string; the installer normalises either form.
+- `gpu_memory_utilization` is normally absent. The box then works out a
+  fraction for each server from the memory it finds and the servers'
+  `vram_gb`; a value sent here is used as given. See `hosting/README.md`.
+- `vram_gb` and `disk_gb` are what the box checks before pulling weights.
 - Boxes fetch `https://llm.apache.org/vllm/config` with default TLS verify.
 
 ---
@@ -203,6 +211,9 @@ Notes:
 
 2. Provisioning (`hosting/vast/provision.sh` → `install_set.py`):
    - GETs JSON from asfquart.
+   - Checks the servers' `vram_gb` and `disk_gb` against the box and stops
+     if they do not fit.
+   - Divides the card's memory between the servers.
    - Writes one Supervisor `[program:vllm-<name>]` per server.
    - `supervisorctl update`. supervisord runs:
 
