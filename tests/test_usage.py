@@ -123,23 +123,23 @@ WEEK = [
         {
             "gemma4-26b": {
                 # one person, one model, one key, two days -- must fold to a single row
-                "tok1": _entry(100, user="akm", project="tooling", requests=1),
+                "tok1": _entry(100, user="alice", project="tooling", requests=1),
                 # same person, different key -- must NOT fold together
-                "tok2": _entry(7, user="akm", project="tooling"),
+                "tok2": _entry(7, user="alice", project="tooling"),
                 # someone else
-                "tok4": _entry(900, user="gstein", project="tooling"),
+                "tok4": _entry(900, user="bob", project="tooling"),
             },
             # a commercial row: real money, no cost_basis tag
-            "claude-opus-5": {"tok1": _entry(40, user="akm", project="tooling", spend=1.25)},
+            "claude-opus-5": {"tok1": _entry(40, user="alice", project="tooling", spend=1.25)},
         },
     ),
     _day(
         YESTERDAY,
         {
             "gemma4-26b": {
-                "tok1": _entry(50, user="akm", project="tooling", requests=1),
+                "tok1": _entry(50, user="alice", project="tooling", requests=1),
                 # different project
-                "tok3": _entry(300, user="akm", project="mahout"),
+                "tok3": _entry(300, user="alice", project="mahout"),
             },
         },
     ),
@@ -164,7 +164,7 @@ def test_prompt_and_completion_are_summed_when_total_is_absent():
             TODAY,
             {
                 "gemma4-26b": {
-                    "t": _entry(user="akm", project="tooling", prompt_tokens=40000, completion_tokens=11000),
+                    "t": _entry(user="alice", project="tooling", prompt_tokens=40000, completion_tokens=11000),
                 }
             },
         )
@@ -187,7 +187,7 @@ def test_usage_with_none_returns_every_project():
 
 def test_key_usage_groups_by_key_for_one_person():
     b = _usage(WEEK)
-    got = _run(b.by_key("akm"))
+    got = _run(b.by_key("alice"))
     assert got == {"tok1": 150 + 40, "tok2": 7, "tok3": 300}
     assert "tok4" not in got, "another person's key must not appear"
 
@@ -252,8 +252,8 @@ def test_malformed_entries_do_not_abort_the_read():
         _day(
             TODAY,
             {
-                "m": {"t": _entry("not a number", user="akm", project="tooling")},
-                "m2": {"t2": _entry(10, user="akm", project="tooling"), "t3": "a string where a dict should be"},
+                "m": {"t": _entry("not a number", user="alice", project="tooling")},
+                "m2": {"t2": _entry(10, user="alice", project="tooling"), "t3": "a string where a dict should be"},
                 "m3": "a string where a group should be",
             },
         ),
@@ -266,7 +266,8 @@ def test_malformed_entries_do_not_abort_the_read():
 def test_every_page_is_read():
     """A busy week must not be silently cut at the first page."""
     days = [
-        _day(f"2026-10-{d:02d}", {"gemma4-26b": {"t": _entry(1, user="akm", project="tooling")}}) for d in (10, 11, 12)
+        _day(f"2026-10-{d:02d}", {"gemma4-26b": {"t": _entry(1, user="alice", project="tooling")}})
+        for d in (10, 11, 12)
     ]
     b = _usage(days, page_size=2)
     rows = _run(b._spend_rows())
@@ -333,7 +334,7 @@ def test_a_day_that_leaves_the_window_is_dropped():
 
 
 def test_allowance_buckets_are_one_persons_tokens_by_day():
-    a = _run(_usage(WEEK).allowance("akm"))
+    a = _run(_usage(WEEK).allowance("alice"))
     assert a.buckets == {TODAY: 100 + 7 + 40, YESTERDAY: 50 + 300}
     assert a.cap == 1_000_000
 
@@ -342,14 +343,14 @@ def test_allowance_costs_no_read_of_its_own():
     """It was a second scan of the log, per person. Now it is the same rows."""
     b = _usage(WEEK)
     _run(b._spend_rows())
-    _run(b.allowance("akm"))
-    _run(b.allowance("gstein"))
+    _run(b.allowance("alice"))
+    _run(b.allowance("bob"))
     assert len(_asked(b)) == 1
 
 
 def test_a_longer_allowance_window_reads_the_extra_days():
     b = _usage(WEEK, window=10)
     _run(b._spend_rows())
-    _run(b.allowance("akm"))
+    _run(b.allowance("alice"))
     assert _asked(b)[-1][1].start_date == "2026-10-03"
     assert len(_asked(b)) == 2

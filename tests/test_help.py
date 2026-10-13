@@ -118,7 +118,7 @@ def test_index_links_each_tool_page():
     assert "/keys" in prose
     assert "/models" in prose
     signed_out = _pages().help_article("index")
-    signed_in = _pages().help_article("index", uid="gstein")
+    signed_in = _pages().help_article("index", uid="alice")
     assert 'href="/auth?login=/"' in signed_out.html
     assert "/auth?login=/" not in signed_in.html
     assert 'href="/keys"' in signed_in.html
@@ -175,7 +175,7 @@ def test_home_page_is_the_steps_to_a_first_request():
     assert 'href="/auth?login=/"' in signed_out
     assert 'href="/help"' in signed_out
 
-    signed_in = _generate("home.ezt", _frame(uid="gstein", name="Greg", projects_label="infra"))
+    signed_in = _generate("home.ezt", _frame(uid="alice", name="Alice", projects_label="infra"))
     assert signed_in.count("home-step-done") == 1
     assert "Signed in as" in signed_in
     for href in ("/keys", "/models", "/help"):
@@ -183,7 +183,7 @@ def test_home_page_is_the_steps_to_a_first_request():
 
 
 def test_create_key_form_preselects_a_given_project():
-    common = dict(uid="gstein", name="Greg", form_purpose="", for_model="", has_for_model=ezt.boolean(False))
+    common = dict(uid="alice", name="Alice", form_purpose="", for_model="", has_for_model=ezt.boolean(False))
     one = _generate("key_create.ezt", _frame(projects=[edict(name="infra")], form_project="infra", **common))
     assert '<option value="infra" selected>infra</option>' in one
     two = _generate(

@@ -51,7 +51,7 @@ UTC = dt.UTC
 def _capacity(**kw):
     base = {
         "kind": KIND_CAPACITY,
-        "requester": "akm",
+        "requester": "alice",
         "project": "tooling",
         "reason": "weekly audit hits the cap on Thursday",
         "wanted": {"token_cap": 40_000_000},
@@ -102,7 +102,7 @@ def test_a_key_request_does_not_need_one():
 
 def test_an_unknown_kind_is_refused():
     with pytest.raises(ValueError):
-        AccessRequest.new(kind="whatever", requester="akm", project="p", reason="", wanted={})
+        AccessRequest.new(kind="whatever", requester="alice", project="p", reason="", wanted={})
 
 
 # ---------------------------------------------------------------------------
