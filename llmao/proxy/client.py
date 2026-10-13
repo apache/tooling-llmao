@@ -370,6 +370,7 @@ class LiteLLMBackend:
         self.fleet = fleet
         self._transport = transport or LiteLLMTransport(cfg)
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
+        self._memory = MemoryStore(self._transport)
         self._team_ids: dict[str, str] = {}  # project → team_id
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
@@ -1107,10 +1108,12 @@ class LiteLLMBackend:
 
     # ---- tier overrides ------------------------------------------------
 
+    _TIERS_KEY = "llmao:tiers"
+
     async def _tier_overrides(self) -> dict[str, Any]:
         """{tier: {limit: value}} as an admin has set them. Empty until one has."""
         try:
-            held = json.loads(await self._memory_get(self._TIERS_KEY) or "{}")
+            held = json.loads(await self._memory.get(self._TIERS_KEY) or "{}")
         except ValueError:
             return {}
         return held if isinstance(held, dict) else {}
@@ -1184,7 +1187,7 @@ class LiteLLMBackend:
         # Every tier shares the one row, so this is read, change, write.
         tiers = await self._tier_overrides()
         tiers[tier] = {**(tiers.get(tier) or {}), **changes}
-        await self._memory_put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
+        await self._memory.put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
         _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
         # The cap is re-read on every check, but today's usage is cached --
         # without this an admin lowering a cap sees a stale remaining figure
@@ -1199,7 +1202,7 @@ class LiteLLMBackend:
 
         One row per request, so answering one cannot lose another.
         """
-        await self._memory_put(_access.key_for(req.id), _access.dumps(req))
+        await self._memory.put(_access.key_for(req.id), _access.dumps(req))
 
         # Nothing else trims the store, so do it while writing: a lapsed
         # approval, or a decision older than the history we keep, goes. The
@@ -1210,7 +1213,7 @@ class LiteLLMBackend:
             kept = _access.prune(stored)
             for old in stored:
                 if old not in kept:
-                    await self._memory_delete(_access.key_for(old.id))
+                    await self._memory.delete(_access.key_for(old.id))
         except BackendUnavailableError as e:
             _LOGGER.warning("could not trim stored requests: %s", e)
         return req
@@ -1221,17 +1224,22 @@ class LiteLLMBackend:
     async def list_requests(self, project: str | None = None) -> list[Any]:
         """Requests for one project, or every one."""
         out = []
-        for row in await self._memory_list(_access.KEY_PREFIX):
+        for row in await self._memory.find(_access.KEY_PREFIX):
             req = _access.loads(row.get("value"))
             if req is not None and (project is None or req.project == project):
                 out.append(req)
         return out
 
     async def find_request(self, request_id: str) -> Any | None:
-        return _access.loads(await self._memory_get(_access.key_for(request_id)))
+        return _access.loads(await self._memory.get(_access.key_for(request_id)))
 
-    # ---- LiteLLM's memory store -----------------------------------------
-    #
+
+class MemoryStore:
+    """LiteLLM's /v1/memory: a key, a string value, one row each.
+
+    Handed the transport. Whatever keeps its records here is handed this.
+    """
+
     # llmao has no database of its own, and ARCHITECTURE.md states that as a
     # property. What it needs to remember -- requests awaiting an answer, and
     # the tier limits an admin has changed -- goes in LiteLLM's /v1/memory: a
@@ -1242,33 +1250,35 @@ class LiteLLMBackend:
     #
     # Nothing here is cached. There are a handful of rows and a handful of
     # people; asking each time is quick, and leaves nothing to go stale.
-    _TIERS_KEY = "llmao:tiers"
 
-    async def _memory_get(self, key: str) -> str | None:
-        resp = await self._request("GET", f"v1/memory/{key}")
+    def __init__(self, transport: Any):
+        self._transport = transport
+
+    async def get(self, key: str) -> str | None:
+        resp = await self._transport.request("GET", f"v1/memory/{key}")
         if resp.status_code == 404:
             return None
-        self._raise_http(resp)
+        self._transport.raise_http(resp)
         body = resp.json()
         return body.get("value") if isinstance(body, dict) else None
 
-    async def _memory_put(self, key: str, value: str) -> None:
-        resp = await self._request("PUT", f"v1/memory/{key}", json={"value": value})
-        self._raise_http(resp)
+    async def put(self, key: str, value: str) -> None:
+        resp = await self._transport.request("PUT", f"v1/memory/{key}", json={"value": value})
+        self._transport.raise_http(resp)
 
-    async def _memory_delete(self, key: str) -> None:
-        resp = await self._request("DELETE", f"v1/memory/{key}")
+    async def delete(self, key: str) -> None:
+        resp = await self._transport.request("DELETE", f"v1/memory/{key}")
         if resp.status_code != 404:
-            self._raise_http(resp)
+            self._transport.raise_http(resp)
 
-    async def _memory_list(self, prefix: str) -> list[dict[str, Any]]:
+    async def find(self, prefix: str) -> list[dict[str, Any]]:
         """Every row whose key starts with `prefix`, in one page.
 
         Outstanding requests are counted on one hand, and add_request trims
         the decided ones, so a page is far more than there will ever be.
         """
-        resp = await self._request("GET", "v1/memory", params={"key_prefix": prefix, "page_size": 500})
-        self._raise_http(resp)
+        resp = await self._transport.request("GET", "v1/memory", params={"key_prefix": prefix, "page_size": 500})
+        self._transport.raise_http(resp)
         body = resp.json()
         rows = body.get("memories") if isinstance(body, dict) else None
         return [r for r in rows or [] if isinstance(r, dict)]
