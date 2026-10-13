@@ -53,6 +53,8 @@ def test_deployment_body_from_models():
     assert body["litellm_params"]["api_key"] == "sk-x"
     assert body["model_info"]["asf_api_base"] == "http://10.0.0.1:8001"
     assert body["model_info"]["self_hosted"] is True
+    # in the group the pretend projects are limited to
+    assert body["model_info"]["access_groups"] == ["llmao:self-hosted"]
 
 
 def test_sync_selfhost_posts_new_when_serving():
@@ -131,6 +133,9 @@ def test_ensure_commercial():
     }
     fleet = Fleet(None, [], deployments=[dep], models=models)
     be = _manager(fleet, {"data": []})
+    # bought in, so in no access group: a pretend project's key cannot reach it
+    assert dep.access_groups == set()
+    assert "access_groups" not in be.deployment_body(dep)["model_info"]
     asyncio.run(be.ensure_commercial())
     assert _paths(be) == ["model/new"]
     assert dep.in_litellm is True

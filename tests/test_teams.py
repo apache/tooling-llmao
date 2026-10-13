@@ -18,9 +18,16 @@
 
 import asyncio
 
+import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.proxy.client import PROJECT_FREE_TIER, PROJECT_SERVICE, TeamManager
+from llmao.proxy.client import (
+    PRETEND_PROJECTS,
+    PROJECT_FREE_TIER,
+    PROJECT_SERVICE,
+    BackendUnavailableError,
+    TeamManager,
+)
 from tests.fake_transport import FakeTransport
 
 
@@ -76,12 +83,18 @@ def test_a_pretend_projects_team_has_no_dollar_budget():
 
 def _litellm_with(existing):
     """A stand-in LiteLLM that has `existing` teams and can be given more."""
-    teams = [{"team_alias": alias, "team_id": f"id-{alias}"} for alias in existing]
+    if not isinstance(existing, dict):
+        existing = {alias: [GROUP] if alias in PRETEND_PROJECTS else [] for alias in existing}
+    teams = [{"team_alias": alias, "team_id": f"id-{alias}", "models": models} for alias, models in existing.items()]
 
     def litellm(call):
         if call.path == "team/new":
-            teams.append({"team_alias": call.json.team_alias, "team_id": f"id-{call.json.team_alias}"})
+            new = call.json
+            teams.append({"team_alias": new.team_alias, "team_id": f"id-{new.team_alias}", "models": new.get("models")})
             return teams[-1]
+        if call.path == "team/update":
+            next(t for t in teams if t["team_id"] == call.json.team_id)["models"] = call.json.models
+            return {}
         if call.path == "team/info":
             return {"team_info": next(t for t in teams if t["team_id"] == call.params.team_id)}
         return {"teams": teams}
@@ -108,6 +121,51 @@ def test_pretend_projects_already_there_are_left_alone():
     _run(teams.rows())
     _run(teams.ensure_pretend_projects())
     assert _made(teams) == []
+    assert _updated(teams) == []
+
+
+# ---------------------------------------------------------------------------
+# What a pretend project's keys may use
+#
+# Our own boxes and nothing else: a key with no project has no PMC to be
+# asked about a bill. LiteLLM enforces it, from the team's list of models.
+# ---------------------------------------------------------------------------
+
+GROUP = "llmao:self-hosted"
+
+
+def _updated(teams):
+    return [(c.json.team_id, c.json.models) for c in teams._transport.calls if c.path == "team/update"]
+
+
+def test_a_pretend_project_is_made_restricted_to_our_own_boxes():
+    teams = _litellm_with(["airflow"])
+    _run(teams.ensure_pretend_projects())
+    sent = [c.json for c in teams._transport.calls if c.path == "team/new"]
+    assert [new.models for new in sent] == [[GROUP], [GROUP]]
+
+
+def test_a_real_projects_team_is_not_restricted():
+    """No list at all, which LiteLLM reads as any model."""
+    assert "models" not in _new_team("airflow")
+
+
+def test_a_pretend_project_found_unrestricted_is_put_right_and_reported(caplog):
+    """Made before the restriction, or edited in LiteLLM. Either way a free key could reach a bill."""
+    teams = _litellm_with({PROJECT_FREE_TIER: [], PROJECT_SERVICE: [GROUP, "claude-opus-5"]})
+    with caplog.at_level("ERROR"):
+        _run(teams.ensure_pretend_projects())
+    assert _updated(teams) == [(f"id-{PROJECT_FREE_TIER}", [GROUP]), (f"id-{PROJECT_SERVICE}", [GROUP])]
+    assert [r.levelname for r in caplog.records] == ["ERROR", "ERROR"]
+    assert "any model" in caplog.records[0].getMessage()
+    assert "claude-opus-5" in caplog.records[1].getMessage()
+
+
+def test_the_order_litellm_lists_models_in_does_not_matter():
+    assert TeamManager._PRETEND_MODELS == {GROUP}
+    teams = _litellm_with({PROJECT_FREE_TIER: [GROUP], PROJECT_SERVICE: [GROUP]})
+    _run(teams.ensure_pretend_projects())
+    assert _updated(teams) == []
 
 
 # ---------------------------------------------------------------------------
@@ -189,3 +247,23 @@ def test_backfill_skips_malformed_rows_without_stopping():
     )
     assert len(_sent(b)) == 1
     assert _sent(b)[0][1]["team_id"] == "t1"
+
+
+def test_startup_stops_if_a_pretend_project_cannot_be_made_or_restricted():
+    """Fail-fast: a service that cannot restrict free keys should not start."""
+
+    def refuses_writes(existing):
+        def litellm(call):
+            if call.path == "team/list":
+                return {"teams": existing}
+            return (500, {"error": "no"})
+
+        cfg = edict(budgets=edict(default_team_budget_usd=100, duration="30d", default_team_token_cap=0))
+        return TeamManager(cfg, FakeTransport(litellm))
+
+    with pytest.raises(BackendUnavailableError):
+        _run(refuses_writes([]).ensure_pretend_projects())
+
+    unrestricted = [{"team_alias": p, "team_id": f"id-{p}", "models": []} for p in PRETEND_PROJECTS]
+    with pytest.raises(BackendUnavailableError):
+        _run(refuses_writes(unrestricted).ensure_pretend_projects())

@@ -536,6 +536,12 @@ class VllmServer:
 # What a deployment's cost figure means, when it is not simply money owed.
 COST_BASIS_CAPACITY = "derived_capacity"
 
+# The LiteLLM access group every deployment on our own boxes is put in. A
+# LiteLLM team can be limited to a group in place of a list of models, and
+# the group then follows the fleet: a box added or removed changes what the
+# group contains, and nothing that names the group has to be told.
+ACCESS_GROUP_SELF_HOSTED = "llmao:self-hosted"
+
 
 class FleetDeployment:
     """One intended LiteLLM deployment (definitions + api_base).
@@ -602,6 +608,16 @@ class FleetDeployment:
         None means real money.
         """
         return COST_BASIS_CAPACITY if self.self_hosted else None
+
+    @property
+    def access_groups(self) -> set[str]:
+        """The LiteLLM access groups this deployment belongs in.
+
+        Like cost_basis, decided by where it runs. A deployment bought from
+        a provider is in none, which is what keeps a key limited to the
+        self-hosted group from spending money.
+        """
+        return {ACCESS_GROUP_SELF_HOSTED} if self.self_hosted else set()
 
     @property
     def litellm_health_display(self) -> str:

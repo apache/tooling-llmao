@@ -77,6 +77,12 @@ class DeploymentManager:
             "self_hosted": dep.self_hosted,
             "asf_api_base": _norm_base(dep.api_base),
         }
+        if dep.access_groups:
+            # What LiteLLM reads to decide which teams may use this
+            # deployment. The pretend projects are limited to the
+            # self-hosted group, so a key with no project can reach our own
+            # boxes and nothing that costs money.
+            info["access_groups"] = sorted(dep.access_groups)
 
         # Price self-hosted tokens so usage reporting shows something other
         # than 0.00. LiteLLM has no cost-map entry for these models, so every

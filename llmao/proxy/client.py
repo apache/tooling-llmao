@@ -39,6 +39,7 @@ import httpx
 from asfpy.stopwatch import Stopwatch
 
 from llmao import access_requests as _access
+from llmao.fleet import ACCESS_GROUP_SELF_HOSTED
 from llmao.proxy.deployments import DeploymentManager
 from llmao.proxy.errors import BackendUnavailableError
 from llmao.token_window import RollingAllowance
@@ -984,16 +985,48 @@ class TeamManager:
                 ", ".join(sorted(patched)),
             )
 
+    # What a pretend project's keys may use: our own boxes, and nothing
+    # else. Commercial access needs an owner who can be asked about the
+    # bill, and a PMC is that owner; a key with no project has none.
+    #
+    # LiteLLM enforces this, not llmao -- requests go to it directly, and a
+    # rule kept only in our pages would stop nothing. A team with a `models`
+    # list may use those and no others, and every key in the team is bound
+    # by it. A real project's team has no list, which LiteLLM reads as any.
+    _PRETEND_MODELS = frozenset({ACCESS_GROUP_SELF_HOSTED})
+
     async def ensure_pretend_projects(self) -> None:
-        """Make the pretend projects' teams if they are not there yet.
+        """Make the pretend projects' teams, and see that they are restricted.
 
         Done at startup rather than when the first projectless key is
         minted, so that they always exist and always have a team id: the
         allowance is counted by one, and both say which models a projectless
         key may use.
+
+        A team that is already there is checked. One that allows anything
+        other than what it should is put right, and that is logged as an
+        error: until this ran, a free key could reach a model that costs
+        money.
         """
+        listed = {row.get("team_alias"): row for row in await self.rows()}
         for project in PRETEND_PROJECTS:
-            await self.ensure(project)
+            row = listed.get(project)
+            if row is None:
+                await self.ensure(project)
+            elif set(row.get("models") or []) != self._PRETEND_MODELS:
+                _LOGGER.error(
+                    "%s allowed %s, not %s; restricting it",
+                    project,
+                    sorted(row.get("models") or []) or "any model",
+                    sorted(self._PRETEND_MODELS),
+                )
+                resp = await self._transport.request(
+                    "POST",
+                    "team/update",
+                    json={"team_id": row["team_id"], "models": sorted(self._PRETEND_MODELS)},
+                )
+                self._transport.raise_http(resp)
+                self._team_rows_cache = None
 
     async def ensure_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
@@ -1033,6 +1066,7 @@ class TeamManager:
             # to exhaust; this one would be shared by everybody with a
             # projectless key, and one person reaching it would stop them all.
             del new_team["max_budget"], new_team["budget_duration"]
+            new_team["models"] = sorted(self._PRETEND_MODELS)
         resp = await self._transport.request("POST", "team/new", json=new_team)
         if resp.status_code >= 400:
             again = await self.info(project)
