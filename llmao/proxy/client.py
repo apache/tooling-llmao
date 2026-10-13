@@ -31,12 +31,14 @@ import json
 import logging
 import pathlib
 import re
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 from asfpy.stopwatch import Stopwatch
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import access_requests as _access
 from llmao.fleet import ACCESS_GROUP_SELF_HOSTED
@@ -337,6 +339,8 @@ class LiteLLMBackend:
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
         memory = MemoryStore(self._transport)
         self.requests = AccessRequestManager(memory)
+        self.skew = SkewManager(memory)
+        self.log = LogManager(memory)
         self.tiers = TierManager(cfg, memory)
         self.teams = TeamManager(cfg, self._transport)
         self.metering = UsageManager(self._transport, fleet, self.teams, self.tiers)
@@ -1326,6 +1330,122 @@ class AccessRequestManager:
 
     async def find(self, request_id: str) -> Any | None:
         return _access.loads(await self._memory.get(_access.key_for(request_id)))
+
+
+def _notice(row: dict[str, Any]) -> edict | None:
+    """A stored skew or log row as the pages want it, or None if it is not one."""
+    try:
+        held = json.loads(row.get("value") or "")
+    except ValueError:
+        return None
+    if not isinstance(held, dict):
+        return None
+    # LiteLLM stamps every row itself, so when a thing was first and last
+    # seen does not have to be kept by us.
+    return edict(held, key=row.get("key"), first_seen=row.get("created_at"), last_seen=row.get("updated_at"))
+
+
+class SkewManager:
+    """Work that needs doing: something is out of line and a person must act.
+
+    One row per thing that is wrong, keyed `llmao:skew:<kind>:<subject>`. A
+    row is there for as long as the thing is wrong and goes when it is put
+    right -- never because somebody has looked at it. Whatever checks for a
+    kind of skew owns that kind's rows: it says what it found, and the rows
+    are made to match.
+
+    Handed the MemoryStore.
+    """
+
+    PREFIX = "llmao:skew:"
+
+    def __init__(self, memory: MemoryStore):
+        self._memory = memory
+
+    def _key(self, kind: str, subject: str) -> str:
+        return f"{self.PREFIX}{kind}:{subject}"
+
+    async def open(self, kind: str | None = None) -> list[edict]:
+        """Everything still wrong, or everything of one kind."""
+        prefix = self._key(kind, "") if kind else self.PREFIX
+        return [n for n in map(_notice, await self._memory.find(prefix)) if n is not None]
+
+    async def reconcile(self, kind: str, found: dict[str, dict[str, Any]]) -> None:
+        """Make the rows of one kind match what a check has just found.
+
+        `found` is {subject: what is wrong with it}. A subject not seen
+        before gets a row, one whose trouble has changed is rewritten, and a
+        row for anything no longer in `found` is removed: it has been fixed.
+        A row that is already right is left alone, so a problem that sits
+        for a week is not rewritten on every pass.
+        """
+        held = {n.subject: n for n in await self.open(kind)}
+        for subject, detail in found.items():
+            row = {"kind": kind, "subject": subject, **detail}
+            old = held.get(subject) or {}
+            # what is stored, without the three fields _notice adds on the way out
+            stored = {k: v for k, v in old.items() if k not in ("key", "first_seen", "last_seen")}
+            if stored != row:
+                await self._memory.put(self._key(kind, subject), json.dumps(row, sort_keys=True))
+        for subject in held.keys() - found.keys():
+            await self._memory.delete(self._key(kind, subject))
+
+    async def clear(self, kind: str, subject: str) -> None:
+        """One thing has just been put right; do not wait for the next check."""
+        await self._memory.delete(self._key(kind, subject))
+
+
+class LogManager:
+    """Things somebody should see: it has happened, and they ought to know.
+
+    Unlike skew there is nothing to do about an entry but read it, so it
+    goes when it has been acknowledged. This is not an audit trail -- it is
+    for what needs attention, and an entry is gone once it has had it.
+
+    An entry is for the site admins, or for one person: why their key
+    stopped working is better told to them than found out by a support
+    ticket. The store can only be asked for keys by prefix, so the audience
+    is the start of the key: `llmao:log:admin:` or `llmao:log:user:<uid>:`.
+
+    Handed the MemoryStore.
+    """
+
+    PREFIX = "llmao:log:"
+
+    def __init__(self, memory: MemoryStore):
+        self._memory = memory
+
+    def _audience(self, user: str | None) -> str:
+        return f"{self.PREFIX}user:{user}:" if user else f"{self.PREFIX}admin:"
+
+    async def note(self, what: str, *, user: str | None = None, subject: str | None = None, **detail: Any) -> None:
+        """Record something for the admins, or for `user`.
+
+        With a `subject` there is one entry for it however often it happens,
+        carrying a count: the same thing found on every pass of a check is
+        one line to read, not hundreds. Without one, each call is its own
+        entry.
+        """
+        key = self._audience(user) + (subject or secrets.token_urlsafe(9))
+        count = 1
+        if subject:
+            try:
+                count = int(json.loads(await self._memory.get(key) or "{}").get("count") or 0) + 1
+            except (ValueError, AttributeError):
+                pass
+        await self._memory.put(key, json.dumps({"what": what, "count": count, **detail}, sort_keys=True))
+
+    async def unseen(self, user: str | None = None) -> list[edict]:
+        """What the admins have not acknowledged, or what `user` has not."""
+        return [n for n in map(_notice, await self._memory.find(self._audience(user))) if n is not None]
+
+    def is_for(self, key: str, user: str | None = None) -> bool:
+        """Whether an entry's key belongs to this audience. For checking an acknowledgement."""
+        return key.startswith(self._audience(user))
+
+    async def ack(self, key: str) -> None:
+        """Seen. The entry is removed."""
+        await self._memory.delete(key)
 
 
 class MemoryStore:
