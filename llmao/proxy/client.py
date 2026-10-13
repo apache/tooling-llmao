@@ -610,174 +610,6 @@ class LiteLLMBackend:
     # key in a team, and a projectless one has to go somewhere.
     _TIER_STORE_TEAM = "llmao-entitlement-defaults"
 
-    # ---- LiteLLM's memory store -----------------------------------------
-    #
-    # llmao has no database of its own, and ARCHITECTURE.md states that as a
-    # property. What it needs to remember -- requests awaiting an answer, and
-    # the tier limits an admin has changed -- goes in LiteLLM's /v1/memory: a
-    # key, a string value, one row each.
-    #
-    # Both used to live in team metadata, which made listing requests a read
-    # of every team and every write a rewrite of a team's whole blob.
-    #
-    # Nothing here is cached. There are a handful of rows and a handful of
-    # people; asking each time is quick, and leaves nothing to go stale.
-    _TIERS_KEY = "llmao:tiers"
-
-    async def _memory_get(self, key: str) -> str | None:
-        resp = await self._request("GET", f"v1/memory/{key}")
-        if resp.status_code == 404:
-            return None
-        self._raise_http(resp)
-        body = resp.json()
-        return body.get("value") if isinstance(body, dict) else None
-
-    async def _memory_put(self, key: str, value: str) -> None:
-        resp = await self._request("PUT", f"v1/memory/{key}", json={"value": value})
-        self._raise_http(resp)
-
-    async def _memory_delete(self, key: str) -> None:
-        resp = await self._request("DELETE", f"v1/memory/{key}")
-        if resp.status_code != 404:
-            self._raise_http(resp)
-
-    async def _memory_list(self, prefix: str) -> list[dict[str, Any]]:
-        """Every row whose key starts with `prefix`, in one page.
-
-        Outstanding requests are counted on one hand, and add_request trims
-        the decided ones, so a page is far more than there will ever be.
-        """
-        resp = await self._request("GET", "v1/memory", params={"key_prefix": prefix, "page_size": 500})
-        self._raise_http(resp)
-        body = resp.json()
-        rows = body.get("memories") if isinstance(body, dict) else None
-        return [r for r in rows or [] if isinstance(r, dict)]
-
-    # ---- requests ------------------------------------------------------
-
-    async def add_request(self, req: Any) -> Any:
-        """Store a new request, or persist a decision on an existing one.
-
-        One row per request, so answering one cannot lose another.
-        """
-        await self._memory_put(_access.key_for(req.id), _access.dumps(req))
-
-        # Nothing else trims the store, so do it while writing: a lapsed
-        # approval, or a decision older than the history we keep, goes. The
-        # request is already saved; failing to tidy is no reason to say it
-        # was not.
-        try:
-            stored = await self.list_requests()
-            kept = _access.prune(stored)
-            for old in stored:
-                if old not in kept:
-                    await self._memory_delete(_access.key_for(old.id))
-        except BackendUnavailableError as e:
-            _LOGGER.warning("could not trim stored requests: %s", e)
-        return req
-
-    # Same operation; named for what the caller means.
-    save_request = add_request
-
-    async def list_requests(self, project: str | None = None) -> list[Any]:
-        """Requests for one project, or every one."""
-        out = []
-        for row in await self._memory_list(_access.KEY_PREFIX):
-            req = _access.loads(row.get("value"))
-            if req is not None and (project is None or req.project == project):
-                out.append(req)
-        return out
-
-    async def find_request(self, request_id: str) -> Any | None:
-        return _access.loads(await self._memory_get(_access.key_for(request_id)))
-
-    # ---- tier overrides ------------------------------------------------
-
-    async def _tier_overrides(self) -> dict[str, Any]:
-        """{tier: {limit: value}} as an admin has set them. Empty until one has."""
-        try:
-            held = json.loads(await self._memory_get(self._TIERS_KEY) or "{}")
-        except ValueError:
-            return {}
-        return held if isinstance(held, dict) else {}
-
-    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
-        """A tier's effective limits: config, with any admin override on top.
-
-        Config is the floor and the fallback. An override that has never been
-        set leaves config showing through, so a fresh deployment has working
-        limits before anyone opens an admin page.
-        """
-        effective = dict(resolve_entitlement(self._cfg, tier))
-        tier_cfg = getattr(getattr(self._cfg, "entitlements", None), tier, None)
-        for name in ("token_cap", "token_window_days"):
-            val = getattr(tier_cfg, name, None)
-            if val is not None:
-                effective[name] = val
-
-        try:
-            stored = (await self._tier_overrides()).get(tier)
-        except BackendUnavailableError:
-            return effective
-        if isinstance(stored, dict):
-            effective.update({k: v for k, v in stored.items() if v is not None})
-        return effective
-
-    async def set_tier_entitlement(
-        self,
-        tier: str,
-        *,
-        rpm_limit: int | None = None,
-        tpm_limit: int | None = None,
-        max_parallel_requests: int | None = None,
-        token_cap: int | None = None,
-        token_window_days: int | None = None,
-    ) -> dict[str, Any]:
-        """Change a tier's ceilings for everyone on it. RAI admin only.
-
-        The lever for "the free tier is too generous" or "nobody can get
-        anything done": one change, every key on that tier, no redeploy.
-
-        ONE ASYMMETRY WORTH SURFACING IN THE UI. The token cap is re-read on
-        every check, so a change takes effect immediately. rpm, tpm and
-        max_parallel_requests live on the LiteLLM key object and existing keys
-        keep what they were minted with -- an admin who lowers rpm and sees no
-        change would reasonably conclude the control is broken. A sweep
-        calling update_key_entitlement across a tier would fix that and is not
-        built yet.
-        """
-        tier = (tier or "").strip()
-        if not tier:
-            raise BackendUnavailableError("set_tier_entitlement requires a tier")
-
-        changes = {
-            k: v
-            for k, v in (
-                ("rpm_limit", rpm_limit),
-                ("tpm_limit", tpm_limit),
-                ("max_parallel_requests", max_parallel_requests),
-                ("token_cap", token_cap),
-                ("token_window_days", token_window_days),
-            )
-            if v is not None
-        }
-        if not changes:
-            raise BackendUnavailableError("set_tier_entitlement: nothing to change")
-        for name, val in changes.items():
-            if int(val) < 0:
-                raise BackendUnavailableError(f"{name} must not be negative")
-
-        # Every tier shares the one row, so this is read, change, write.
-        tiers = await self._tier_overrides()
-        tiers[tier] = {**(tiers.get(tier) or {}), **changes}
-        await self._memory_put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
-        _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
-        # The cap is re-read on every check, but today's usage is cached --
-        # without this an admin lowering a cap sees a stale remaining figure
-        # for up to a minute and concludes the control did not work.
-        self.invalidate_allowance()
-        return await self.tier_entitlement(tier)
-
     async def update_team_entitlement(
         self,
         project: str,
@@ -1272,3 +1104,171 @@ class LiteLLMBackend:
         not a minute old when they look at it.
         """
         self._daily_at = None
+
+    # ---- tier overrides ------------------------------------------------
+
+    async def _tier_overrides(self) -> dict[str, Any]:
+        """{tier: {limit: value}} as an admin has set them. Empty until one has."""
+        try:
+            held = json.loads(await self._memory_get(self._TIERS_KEY) or "{}")
+        except ValueError:
+            return {}
+        return held if isinstance(held, dict) else {}
+
+    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
+        """A tier's effective limits: config, with any admin override on top.
+
+        Config is the floor and the fallback. An override that has never been
+        set leaves config showing through, so a fresh deployment has working
+        limits before anyone opens an admin page.
+        """
+        effective = dict(resolve_entitlement(self._cfg, tier))
+        tier_cfg = getattr(getattr(self._cfg, "entitlements", None), tier, None)
+        for name in ("token_cap", "token_window_days"):
+            val = getattr(tier_cfg, name, None)
+            if val is not None:
+                effective[name] = val
+
+        try:
+            stored = (await self._tier_overrides()).get(tier)
+        except BackendUnavailableError:
+            return effective
+        if isinstance(stored, dict):
+            effective.update({k: v for k, v in stored.items() if v is not None})
+        return effective
+
+    async def set_tier_entitlement(
+        self,
+        tier: str,
+        *,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+        token_cap: int | None = None,
+        token_window_days: int | None = None,
+    ) -> dict[str, Any]:
+        """Change a tier's ceilings for everyone on it. RAI admin only.
+
+        The lever for "the free tier is too generous" or "nobody can get
+        anything done": one change, every key on that tier, no redeploy.
+
+        ONE ASYMMETRY WORTH SURFACING IN THE UI. The token cap is re-read on
+        every check, so a change takes effect immediately. rpm, tpm and
+        max_parallel_requests live on the LiteLLM key object and existing keys
+        keep what they were minted with -- an admin who lowers rpm and sees no
+        change would reasonably conclude the control is broken. A sweep
+        calling update_key_entitlement across a tier would fix that and is not
+        built yet.
+        """
+        tier = (tier or "").strip()
+        if not tier:
+            raise BackendUnavailableError("set_tier_entitlement requires a tier")
+
+        changes = {
+            k: v
+            for k, v in (
+                ("rpm_limit", rpm_limit),
+                ("tpm_limit", tpm_limit),
+                ("max_parallel_requests", max_parallel_requests),
+                ("token_cap", token_cap),
+                ("token_window_days", token_window_days),
+            )
+            if v is not None
+        }
+        if not changes:
+            raise BackendUnavailableError("set_tier_entitlement: nothing to change")
+        for name, val in changes.items():
+            if int(val) < 0:
+                raise BackendUnavailableError(f"{name} must not be negative")
+
+        # Every tier shares the one row, so this is read, change, write.
+        tiers = await self._tier_overrides()
+        tiers[tier] = {**(tiers.get(tier) or {}), **changes}
+        await self._memory_put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
+        _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
+        # The cap is re-read on every check, but today's usage is cached --
+        # without this an admin lowering a cap sees a stale remaining figure
+        # for up to a minute and concludes the control did not work.
+        self.invalidate_allowance()
+        return await self.tier_entitlement(tier)
+
+    # ---- requests ------------------------------------------------------
+
+    async def add_request(self, req: Any) -> Any:
+        """Store a new request, or persist a decision on an existing one.
+
+        One row per request, so answering one cannot lose another.
+        """
+        await self._memory_put(_access.key_for(req.id), _access.dumps(req))
+
+        # Nothing else trims the store, so do it while writing: a lapsed
+        # approval, or a decision older than the history we keep, goes. The
+        # request is already saved; failing to tidy is no reason to say it
+        # was not.
+        try:
+            stored = await self.list_requests()
+            kept = _access.prune(stored)
+            for old in stored:
+                if old not in kept:
+                    await self._memory_delete(_access.key_for(old.id))
+        except BackendUnavailableError as e:
+            _LOGGER.warning("could not trim stored requests: %s", e)
+        return req
+
+    # Same operation; named for what the caller means.
+    save_request = add_request
+
+    async def list_requests(self, project: str | None = None) -> list[Any]:
+        """Requests for one project, or every one."""
+        out = []
+        for row in await self._memory_list(_access.KEY_PREFIX):
+            req = _access.loads(row.get("value"))
+            if req is not None and (project is None or req.project == project):
+                out.append(req)
+        return out
+
+    async def find_request(self, request_id: str) -> Any | None:
+        return _access.loads(await self._memory_get(_access.key_for(request_id)))
+
+    # ---- LiteLLM's memory store -----------------------------------------
+    #
+    # llmao has no database of its own, and ARCHITECTURE.md states that as a
+    # property. What it needs to remember -- requests awaiting an answer, and
+    # the tier limits an admin has changed -- goes in LiteLLM's /v1/memory: a
+    # key, a string value, one row each.
+    #
+    # Both used to live in team metadata, which made listing requests a read
+    # of every team and every write a rewrite of a team's whole blob.
+    #
+    # Nothing here is cached. There are a handful of rows and a handful of
+    # people; asking each time is quick, and leaves nothing to go stale.
+    _TIERS_KEY = "llmao:tiers"
+
+    async def _memory_get(self, key: str) -> str | None:
+        resp = await self._request("GET", f"v1/memory/{key}")
+        if resp.status_code == 404:
+            return None
+        self._raise_http(resp)
+        body = resp.json()
+        return body.get("value") if isinstance(body, dict) else None
+
+    async def _memory_put(self, key: str, value: str) -> None:
+        resp = await self._request("PUT", f"v1/memory/{key}", json={"value": value})
+        self._raise_http(resp)
+
+    async def _memory_delete(self, key: str) -> None:
+        resp = await self._request("DELETE", f"v1/memory/{key}")
+        if resp.status_code != 404:
+            self._raise_http(resp)
+
+    async def _memory_list(self, prefix: str) -> list[dict[str, Any]]:
+        """Every row whose key starts with `prefix`, in one page.
+
+        Outstanding requests are counted on one hand, and add_request trims
+        the decided ones, so a page is far more than there will ever be.
+        """
+        resp = await self._request("GET", "v1/memory", params={"key_prefix": prefix, "page_size": 500})
+        self._raise_http(resp)
+        body = resp.json()
+        rows = body.get("memories") if isinstance(body, dict) else None
+        return [r for r in rows or [] if isinstance(r, dict)]
