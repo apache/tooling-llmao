@@ -309,13 +309,11 @@ class LiteLLMBackend:
     """
 
     def __init__(self, cfg: Any, fleet: Any, *, transport: Any = None):
-        self._cfg = cfg
-        self.fleet = fleet
         self._transport = transport or LiteLLMTransport(cfg)
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
-        self._memory = MemoryStore(self._transport)
-        self.requests = AccessRequestManager(self._memory)
-        self.tiers = TierManager(cfg, self._memory)
+        memory = MemoryStore(self._transport)
+        self.requests = AccessRequestManager(memory)
+        self.tiers = TierManager(cfg, memory)
         self.teams = TeamManager(cfg, self._transport)
         self.metering = UsageManager(self._transport, fleet, self.teams, self.tiers)
         self.keys = KeyManager(cfg, self._transport, self.teams)
