@@ -43,7 +43,7 @@ from llmao.access_requests import (
     loads,
     prune,
 )
-from llmao.proxy.client import AccessRequestManager, LiteLLMBackend, MemoryStore
+from llmao.proxy.client import AccessRequestManager, MemoryStore, TierManager
 from tests.fake_transport import FakeTransport
 
 UTC = dt.UTC
@@ -312,8 +312,8 @@ def test_an_adjusted_request_differs_from_what_was_asked():
 # The backend, against a memory store that behaves like LiteLLM's
 #
 # Requests and tier overrides used to live in team metadata. The point of
-# moving them is that reading them no longer touches a team at all, so these
-# fail on any call that is not to /v1/memory.
+# moving them is that reading them no longer touches a team at all, so the
+# stand-in fails on any call that is not to /v1/memory.
 # ---------------------------------------------------------------------------
 
 
@@ -345,8 +345,8 @@ def _requests():
     return AccessRequestManager(MemoryStore(transport)), store
 
 
-def _backend(*, down=False):
-    """A real backend over that store. `b.store` is what the store holds."""
+def _tiers(*, down=False):
+    """A TierManager over that store, and what the store holds."""
     transport, store = _litellm(down=down)
     cfg = edict(
         entitlements=edict(
@@ -354,9 +354,7 @@ def _backend(*, down=False):
             free_tier=edict(token_cap=1_000_000, token_window_days=7),
         )
     )
-    b = LiteLLMBackend(cfg, None, transport=transport)
-    b.store = store
-    return b
+    return TierManager(cfg, MemoryStore(transport)), store
 
 
 def _run(coro):
@@ -413,21 +411,21 @@ def test_a_lapsed_approval_is_deleted_on_the_next_write():
 
 
 def test_tier_limits_are_config_until_an_admin_changes_them():
-    b = _backend()
-    assert _run(b.tier_entitlement("free_tier"))["token_cap"] == 1_000_000
-    got = _run(b.set_tier_entitlement("free_tier", token_cap=250_000))
+    t, store = _tiers()
+    assert _run(t.limits("free_tier"))["token_cap"] == 1_000_000
+    got = _run(t.set_limits("free_tier", token_cap=250_000))
     assert got["token_cap"] == 250_000
     assert got["token_window_days"] == 7, "what was not changed still comes from config"
-    assert list(b.store) == ["llmao:tiers"]
+    assert list(store) == ["llmao:tiers"]
 
 
 def test_changing_one_tier_leaves_another_alone():
     """Every tier shares the one row."""
-    b = _backend()
-    _run(b.set_tier_entitlement("free_tier", token_cap=250_000))
-    _run(b.set_tier_entitlement("service", rpm_limit=10))
-    _run(b.set_tier_entitlement("free_tier", token_window_days=3))
-    assert json.loads(b.store["llmao:tiers"]) == {
+    t, store = _tiers()
+    _run(t.set_limits("free_tier", token_cap=250_000))
+    _run(t.set_limits("service", rpm_limit=10))
+    _run(t.set_limits("free_tier", token_window_days=3))
+    assert json.loads(store["llmao:tiers"]) == {
         "free_tier": {"token_cap": 250_000, "token_window_days": 3},
         "service": {"rpm_limit": 10},
     }
@@ -435,4 +433,4 @@ def test_changing_one_tier_leaves_another_alone():
 
 def test_tier_limits_fall_back_to_config_when_litellm_is_down():
     """A page must still have limits to show during a proxy restart."""
-    assert _run(_backend(down=True).tier_entitlement("free_tier"))["token_cap"] == 1_000_000
+    assert _run(_tiers(down=True)[0].limits("free_tier"))["token_cap"] == 1_000_000

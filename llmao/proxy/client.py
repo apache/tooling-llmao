@@ -372,6 +372,7 @@ class LiteLLMBackend:
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
         self._memory = MemoryStore(self._transport)
         self.requests = AccessRequestManager(self._memory)
+        self.tiers = TierManager(cfg, self._memory)
         self._team_ids: dict[str, str] = {}  # project → team_id
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
@@ -1107,11 +1108,34 @@ class LiteLLMBackend:
         """
         self._daily_at = None
 
-    # ---- tier overrides ------------------------------------------------
+    # ---- tiers: TierManager, below --------------------------------------
+
+    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
+        return await self.tiers.limits(tier)
+
+    async def set_tier_entitlement(self, tier: str, **limits: int | None) -> dict[str, Any]:
+        result = await self.tiers.set_limits(tier, **limits)
+        # The cap is re-read on every check, but today's usage is cached --
+        # without this an admin lowering a cap sees a stale remaining figure
+        # for up to a minute and concludes the control did not work.
+        self.invalidate_allowance()
+        return result
+
+
+class TierManager:
+    """What each tier of key is allowed: config, and what an admin has changed.
+
+    Handed the config and the MemoryStore. The changes are one row there,
+    every tier in it.
+    """
 
     _TIERS_KEY = "llmao:tiers"
 
-    async def _tier_overrides(self) -> dict[str, Any]:
+    def __init__(self, cfg: Any, memory: MemoryStore):
+        self._cfg = cfg
+        self._memory = memory
+
+    async def _overrides(self) -> dict[str, Any]:
         """{tier: {limit: value}} as an admin has set them. Empty until one has."""
         try:
             held = json.loads(await self._memory.get(self._TIERS_KEY) or "{}")
@@ -1119,7 +1143,7 @@ class LiteLLMBackend:
             return {}
         return held if isinstance(held, dict) else {}
 
-    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
+    async def limits(self, tier: str) -> dict[str, Any]:
         """A tier's effective limits: config, with any admin override on top.
 
         Config is the floor and the fallback. An override that has never been
@@ -1134,14 +1158,14 @@ class LiteLLMBackend:
                 effective[name] = val
 
         try:
-            stored = (await self._tier_overrides()).get(tier)
+            stored = (await self._overrides()).get(tier)
         except BackendUnavailableError:
             return effective
         if isinstance(stored, dict):
             effective.update({k: v for k, v in stored.items() if v is not None})
         return effective
 
-    async def set_tier_entitlement(
+    async def set_limits(
         self,
         tier: str,
         *,
@@ -1186,15 +1210,11 @@ class LiteLLMBackend:
                 raise BackendUnavailableError(f"{name} must not be negative")
 
         # Every tier shares the one row, so this is read, change, write.
-        tiers = await self._tier_overrides()
+        tiers = await self._overrides()
         tiers[tier] = {**(tiers.get(tier) or {}), **changes}
         await self._memory.put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
         _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
-        # The cap is re-read on every check, but today's usage is cached --
-        # without this an admin lowering a cap sees a stale remaining figure
-        # for up to a minute and concludes the control did not work.
-        self.invalidate_allowance()
-        return await self.tier_entitlement(tier)
+        return await self.limits(tier)
 
 
 class AccessRequestManager:
