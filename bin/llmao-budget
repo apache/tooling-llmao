@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""What max_tokens does each model need before it says anything?
+
+    sudo ./llmao-budget                        # every model, reasoning on and off
+    sudo ./llmao-budget --model qwen3.8-27b
+    sudo ./llmao-budget --budgets 500,1000,2000,4000,8000
+
+Run on the gateway. Reads the master key from litellm.env and goes through
+the proxy on loopback, so no PAT is needed and no rate limit is in the way.
+It prints a table meant to be pasted onto the Models page.
+
+WHY THIS NUMBER IS NOT OBVIOUS
+
+A reasoning model emits its thinking FIRST, into the SAME budget as the
+answer. Too small a budget therefore returns NO answer rather than a short
+one: finish_reason "length", empty content, HTTP 200, no error anywhere.
+
+Two things drive how big the thinking phase is, and only one of them is
+visible to the caller:
+
+  the DIFFICULTY of the question   a hard question thinks longer, and this
+                                   is why a trivial probe measures nothing
+                                   useful -- "reply with one sentence"
+                                   passes at any budget and tells you the
+                                   floor is zero, which is false
+
+  the LENGTH of the input          more context, more to think about
+
+reasoning_effort is NOT one of them, measured: low, medium and xhigh all
+returned nothing at 2000 tokens on the same question. Effort changes how
+much thinking happens above the floor, not the floor itself.
+
+So this asks something genuinely hard, by default with no padding, and
+sweeps the budget. Use --input-words to add context and watch the floor
+move; that is the number a long coding session actually needs.
+
+READING IT
+
+    ok        an answer came back, complete
+    cut       an answer came back and was itself truncated -- budget is
+              marginal but the caller can SEE the problem
+    EMPTY     no answer at all; the budget went entirely on reasoning.
+              This is the one that cannot be diagnosed from the client.
+
+Publish a floor comfortably above the lowest `ok`. These are single
+samples, and a harder question on a different day will think longer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import random
+import sys
+import urllib.error
+import urllib.request
+
+ENV_FILE = "/opt/llmao/litellm.env"
+PROXY = "http://127.0.0.1:4000"
+
+# Hard enough to provoke real reasoning, short enough that the prompt itself
+# is not the variable, and deterministic to grade: either the answer is there
+# or it is not.
+QUESTION = (
+    "Given a directed graph with negative edge weights but no negative cycles, "
+    "explain precisely why Dijkstra's algorithm fails and how Johnson's algorithm "
+    "repairs it. Give the time complexity of each step."
+)
+
+WORDS = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu".split()
+
+
+def master_key() -> str:
+    try:
+        for line in pathlib.Path(ENV_FILE).read_text().splitlines():
+            if line.startswith("LITELLM_MASTER_KEY="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    sys.exit(f"cannot read {ENV_FILE} -- run this with sudo on the gateway host")
+
+
+def models(key: str) -> list[str]:
+    req = urllib.request.Request(f"{PROXY}/v1/models", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            names = sorted(m["id"] for m in json.load(r)["data"])
+    except Exception as e:
+        sys.exit(f"cannot list models: {type(e).__name__}: {e}")
+    # Temporary routes from testing advertise here too and are not worth
+    # measuring; the same filter llmao-smoke uses.
+    return [m for m in names if not m.startswith(("hv-", "ovr-", "test-"))]
+
+
+def ask(key, model, max_tokens, thinking, input_words, timeout):
+    rng = random.Random(input_words)  # noqa: S311 - prompt padding, not a secret
+    padding = " ".join(rng.choice(WORDS) for _ in range(input_words))
+    content = (padding + "\n\n" if input_words else "") + QUESTION
+    body = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": content}]}
+    if not thinking:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+    req = urllib.request.Request(
+        f"{PROXY}/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    try:
+        data = json.load(urllib.request.urlopen(req, timeout=timeout))
+    except urllib.error.HTTPError as e:
+        # Once the empty-completion guard is deployed this is what EMPTY
+        # looks like from outside: an error rather than a silent 200.
+        return "EMPTY*" if e.code == 400 else f"HTTP{e.code}"
+    except Exception as e:
+        return type(e).__name__[:6]
+
+    try:
+        choice = data["choices"][0]
+    except (KeyError, IndexError):
+        return "?"
+    text = (choice["message"].get("content") or "").strip()
+    finish = choice.get("finish_reason")
+    if not text:
+        return "EMPTY" if finish == "length" else "none"
+    return "cut" if finish == "length" else "ok"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", action="append", help="repeatable; default is every advertised model")
+    ap.add_argument("--budgets", default="500,1000,2000,4000,8000")
+    ap.add_argument("--input-words", type=int, default=0, help="pad the prompt, to see the floor move")
+    ap.add_argument("--timeout", type=float, default=600)
+    args = ap.parse_args()
+
+    key = master_key()
+    names = args.model or models(key)
+    budgets = [int(b) for b in args.budgets.split(",")]
+
+    pad = f", {args.input_words:,} words of padding" if args.input_words else ""
+    print(f"budget floor per model{pad}\n")
+    header = f"{'model':16} {'reasoning':10} " + "".join(f"{b:>8}" for b in budgets)
+    print(header)
+    print("-" * len(header))
+
+    floors: dict[tuple[str, bool], int | None] = {}
+    for model in names:
+        for thinking in (False, True):
+            cells, floor = [], None
+            for budget in budgets:
+                verdict = ask(key, model, budget, thinking, args.input_words, args.timeout)
+                cells.append(f"{verdict:>8}")
+                if verdict == "ok" and floor is None:
+                    floor = budget
+            floors[(model, thinking)] = floor
+            print(f"{model:16} {'on' if thinking else 'off':10} " + "".join(cells))
+        print()
+
+    print("for the Models page:\n")
+    print(f"  {'model':16} {'reasoning off':>14} {'reasoning on':>14}")
+    for model in names:
+        off, on = floors.get((model, False)), floors.get((model, True))
+        print(f"  {model:16} {off or '>' + str(budgets[-1])!s:>14} {on or '>' + str(budgets[-1])!s:>14}")
+    print(
+        "\nEMPTY means the whole budget went on reasoning: no content, and\n"
+        "(before the empty-completion guard) HTTP 200 with no error. EMPTY*\n"
+        "means the guard rejected it, which is the same condition reported\n"
+        "properly. Publish a floor above the lowest `ok`, not at it."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
