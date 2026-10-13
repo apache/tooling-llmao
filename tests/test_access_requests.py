@@ -27,7 +27,6 @@ import json
 
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
-from fake_transport import FakeTransport
 
 from llmao import access_requests
 from llmao.access_requests import (
@@ -45,6 +44,7 @@ from llmao.access_requests import (
     prune,
 )
 from llmao.proxy.client import LiteLLMBackend
+from tests.fake_transport import FakeTransport
 
 UTC = dt.UTC
 

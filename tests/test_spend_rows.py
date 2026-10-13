@@ -25,10 +25,10 @@ import asyncio
 import datetime as dt
 
 from easydict import EasyDict as edict  # noqa: N813
-from fake_transport import FakeTransport
 
 from llmao.fleet import Fleet, FleetDeployment
 from llmao.proxy.client import LiteLLMBackend
+from tests.fake_transport import FakeTransport
 
 NOON = dt.datetime(2026, 10, 12, 12, 0, tzinfo=dt.UTC)
 TODAY = "2026-10-12"

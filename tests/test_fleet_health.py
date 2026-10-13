@@ -45,7 +45,8 @@ from llmao.model_status import (
     UNAVAILABLE,
     UNHEALTHY,
 )
-from llmao.proxy.client import LiteLLMBackend
+from llmao.proxy.deployments import DeploymentManager
+from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
 
 
@@ -154,25 +155,21 @@ def test_add_refusal_until_serving():
     assert add_refusal(dep) == "already in LiteLLM"
 
 
-class _Backend:
-    def __init__(self, fleet, info, health):
-        self.fleet = fleet
+class _LiteLLM:
+    """What the stand-in LiteLLM says. A test changes these as it goes."""
+
+    def __init__(self, info, health):
         self.info = info
         self.health = health
-        self.added = []
 
-    async def _request(self, method, path, **kwargs):
-        body = self.info if path == "model/info" else self.health
-        resp = _Resp(body=body)
-        resp.content = b"{}"
-        return resp
+    def __call__(self, call):
+        return self.info if call.path == "model/info" else self.health
 
-    def _raise_http(self, resp):
-        return None
 
-    async def add_deployment(self, dep):
-        self.added.append(dep)
-        dep.in_litellm = True
+def _skew_manager(fleet, info, health=None):
+    """A DeploymentManager, and the stand-in LiteLLM it is talking to."""
+    litellm = _LiteLLM(info, health or {})
+    return DeploymentManager(fleet.cfg, fleet, FakeTransport(litellm)), litellm
 
 
 def test_skew_sentences_replace_old_phrases():
@@ -187,35 +184,26 @@ def test_skew_sentences_replace_old_phrases():
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
     fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
-    backend = _Backend(fleet, info=[], health={})
-    backend._cfg = fleet.cfg
-    backend._store_skew = lambda dep, now: LiteLLMBackend._store_skew(backend, dep, now)
-    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    backend, litellm = _skew_manager(fleet, [])
+    asyncio.run(backend.check_config_skew())
     # Loading is not a missing-route badge. The old sentence is dropped.
     assert dep.skew == []
     assert "missing from LiteLLM" not in dep.skew
     srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
     assert srv.state == HEALTHY
-    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    asyncio.run(backend.check_config_skew())
     assert dep.skew == [SKEW_INTENDED_NOT_IN_LITELLM]
     base = srv.api_base
-    backend.health = {"unhealthy_endpoints": [{"api_base": base}], "healthy_endpoints": []}
-    asyncio.run(LiteLLMBackend.check_health_skew(backend))
+    litellm.health = {"unhealthy_endpoints": [{"api_base": base}], "healthy_endpoints": []}
+    asyncio.run(backend.check_health_skew())
     assert SKEW_VLLM_UP_LITELLM_DOWN in dep.skew
     for _ in range(3):
         srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
     assert srv.state == UNHEALTHY
-    backend.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
-    asyncio.run(LiteLLMBackend.check_health_skew(backend))
+    litellm.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
+    asyncio.run(backend.check_health_skew())
     assert SKEW_VLLM_DOWN_LITELLM_UP in dep.skew
     assert "LiteLLM health disagrees" not in dep.skew
-
-
-def _skew_backend(fleet, info):
-    backend = _Backend(fleet, info=info, health={})
-    backend._cfg = fleet.cfg
-    backend._store_skew = lambda dep, now: LiteLLMBackend._store_skew(backend, dep, now)
-    return backend
 
 
 def test_extra_routes_are_per_port_and_model():
@@ -227,7 +215,7 @@ def test_extra_routes_are_per_port_and_model():
         {"model_name": "other-b", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
         {"model_name": "other-c", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
     ]
-    asyncio.run(LiteLLMBackend.check_config_skew(_skew_backend(fleet, info)))
+    asyncio.run(_skew_manager(fleet, info)[0].check_config_skew())
     found = {(row.host, row.port, row.model_name) for row in fleet.extra_litellm}
     assert found == {("10.0.0.1", 9001, "other-a"), ("10.0.0.1", 9002, "other-b"), ("10.0.0.1", 9002, "other-c")}
     assert all(SKEW_IN_LITELLM_NOT_IN_CONFIG in row.skew for row in fleet.extra_litellm)
@@ -239,14 +227,14 @@ def test_model_name_mismatch_survives_health_check():
     srv.state = HEALTHY
     dep = FleetDeployment.from_vllm(srv)
     fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
-    backend = _skew_backend(fleet, [{"model_name": "not-gemma", "litellm_params": {"api_base": srv.api_base}}])
-    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    backend, litellm = _skew_manager(fleet, [{"model_name": "not-gemma", "litellm_params": {"api_base": srv.api_base}}])
+    asyncio.run(backend.check_config_skew())
     assert SKEW_CONFIG_MISMATCH in dep.skew
-    backend.health = {"healthy_endpoints": [{"api_base": srv.api_base}], "unhealthy_endpoints": []}
-    asyncio.run(LiteLLMBackend.check_health_skew(backend))
+    litellm.health = {"healthy_endpoints": [{"api_base": srv.api_base}], "unhealthy_endpoints": []}
+    asyncio.run(backend.check_health_skew())
     assert SKEW_CONFIG_MISMATCH in dep.skew
-    backend.info = [{"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}]
-    asyncio.run(LiteLLMBackend.check_config_skew(backend))
+    litellm.info = [{"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}]
+    asyncio.run(backend.check_config_skew())
     assert SKEW_CONFIG_MISMATCH not in dep.skew
     assert fleet.extra_litellm == []
 
@@ -255,19 +243,19 @@ def test_add_calls_deployment_only_when_serving():
     srv = _server()
     dep = FleetDeployment.from_vllm(srv)
     fleet = Fleet(cfg=edict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
-    backend = _Backend(fleet, info=[], health={})
+    added = []
 
-    async def attempt():
+    def attempt():
+        """What the Add button does: ask add_refusal, and add only if it does not object."""
         if add_refusal(dep):
             return
-        await backend.add_deployment(dep)
+        added.append(dep)
 
-    asyncio.run(attempt())
-    assert backend.added == []
+    attempt()
+    assert added == []
     srv.state = HEALTHY
-    asyncio.run(attempt())
-    assert backend.added == [dep]
-    assert dep.in_litellm is True
+    attempt()
+    assert added == [dep]
 
 
 def test_box_json_listen_not_public():

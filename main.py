@@ -81,10 +81,10 @@ def create_app():
     fleet = Fleet.from_cfg(app.cfg, models=definitions)
 
     backend = LiteLLMBackend(app.cfg, fleet)
-    fleet.after_probe = backend.sync_selfhost
+    fleet.after_probe = backend.deployments.sync_selfhost
     app.fleet = fleet
     app.add_runner(fleet.run_lifecycle, name="fleet-lifecycle")
-    app.add_runner(backend.run_skew, name="litellm-skew")
+    app.add_runner(backend.deployments.run_skew, name="litellm-skew")
 
     # Sample queue depth on each box.
     #

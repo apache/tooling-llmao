@@ -23,20 +23,19 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment
 from llmao.model_status import HEALTHY, UNHEALTHY
-from llmao.proxy.client import LiteLLMBackend
+from llmao.proxy.deployments import DeploymentManager
+from tests.fake_transport import FakeTransport
 from tests.test_fleet_health import _server
 
 
-def _backend(fleet):
-    cfg = edict(
-        litellm=edict(
-            base_url="http://127.0.0.1:9",
-            master_key="sk-x",
-            request_timeout_s=1,
-        ),
-        fleet=edict(),
-    )
-    return LiteLLMBackend(cfg, fleet)
+def _manager(fleet, answer=None):
+    """A DeploymentManager over a stand-in LiteLLM that answers every call with `answer`."""
+    cfg = edict(fleet=edict())
+    return DeploymentManager(cfg, fleet, FakeTransport(lambda call: answer))
+
+
+def _paths(manager):
+    return [c.path for c in manager._transport.calls]
 
 
 def test_deployment_body_from_models():
@@ -45,7 +44,7 @@ def test_deployment_body_from_models():
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(None, [s], models=models)
-    body = _backend(fleet).deployment_body(fleet.deployments[0])
+    body = _manager(fleet).deployment_body(fleet.deployments[0])
     assert body["model_name"] == "gemma4-26b"
     assert body["litellm_params"]["model"] == "hosted_vllm/gemma4-26b"
     # api_base keeps the /v1 LiteLLM needs (it appends /chat/completions to it);
@@ -63,27 +62,10 @@ def test_sync_selfhost_posts_new_when_serving():
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(None, [s], models=models)
-    be = _backend(fleet)
-    calls = []
-
-    async def _req(method, path, **kw):
-        calls.append((method, path, kw.get("json")))
-
-        class R:
-            status_code = 200
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"data": []}
-
-        return R()
-
-    be._request = _req
+    be = _manager(fleet, {"data": []})
     asyncio.run(be.sync_selfhost())
-    assert ("POST", "model/new") == (calls[-1][0], calls[-1][1])
+    last = be._transport.calls[-1]
+    assert (last.method, last.path) == ("POST", "model/new")
     assert fleet.deployments[0].in_litellm is True
 
 
@@ -95,21 +77,7 @@ def test_sync_selfhost_deletes_when_down():
     }
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
-    be = _backend(fleet)
-
-    async def _req(method, path, **kw):
-        class R:
-            status_code = 200
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return _info("10.0.0.1", 8001, model_id="abc")
-
-        return R()
-
-    be._request = _req
+    be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
 
@@ -132,27 +100,9 @@ def test_sync_selfhost_does_not_repost_the_same_deployment():
     for port in (12711, 10100):
         fleet = Fleet(None, [s], models=models)
         fleet.deployments[0].in_litellm = False
-        be = _backend(fleet)
-        calls = []
-
-        async def _req(method, path, _calls=calls, _port=port, **kw):
-            _calls.append(path)
-
-            class R:
-                status_code = 200
-                content = b"{}"
-
-                def raise_for_status(self):
-                    return None
-
-                def json(self):
-                    return _info("80.188.223.202", _port)
-
-            return R()
-
-        be._request = _req
+        be = _manager(fleet, _info("80.188.223.202", port))
         asyncio.run(be.sync_selfhost())
-        assert "model/new" not in calls
+        assert "model/new" not in _paths(be)
         assert fleet.deployments[0].in_litellm is True
 
 
@@ -161,27 +111,9 @@ def test_other_port_is_not_this_deployment():
     s.state = HEALTHY
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(None, [s], models=models)
-    be = _backend(fleet)
-    calls = []
-
-    async def _req(method, path, **kw):
-        calls.append(path)
-
-        class R:
-            status_code = 200
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return _info("10.1.2.3", 19999)
-
-        return R()
-
-    be._request = _req
+    be = _manager(fleet, _info("10.1.2.3", 19999))
     asyncio.run(be.sync_selfhost())
-    assert "model/new" in calls
+    assert "model/new" in _paths(be)
 
 
 def test_ensure_commercial():
@@ -198,25 +130,7 @@ def test_ensure_commercial():
         )
     }
     fleet = Fleet(None, [], deployments=[dep], models=models)
-    be = _backend(fleet)
-    calls = []
-
-    async def _req(method, path, **kw):
-        calls.append(path)
-
-        class R:
-            status_code = 200
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"data": []}
-
-        return R()
-
-    be._request = _req
+    be = _manager(fleet, {"data": []})
     asyncio.run(be.ensure_commercial())
-    assert calls == ["model/new"]
+    assert _paths(be) == ["model/new"]
     assert dep.in_litellm is True

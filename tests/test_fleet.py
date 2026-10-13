@@ -38,7 +38,7 @@ from llmao.fleet import (
 )
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models
-from llmao.proxy.client import _norm_base
+from llmao.proxy.deployments import _norm_base
 from llmao.vllm_api_key import derive_vllm_api_key
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
@@ -391,9 +391,9 @@ def test_working_api_key_follows_the_legacy_set():
     in_range = edict(self_hosted=True, vllm=edict(host="213.173.110.78", listen_port=8003, api_key="sk-derived"))
 
     async def run():
-        assert await backend._working_api_key(legacy) == "sk-shared"
-        assert await backend._working_api_key(in_range) == "sk-shared"
-        assert await backend._working_api_key(other) == "sk-derived"
+        assert await backend.deployments._working_api_key(legacy) == "sk-shared"
+        assert await backend.deployments._working_api_key(in_range) == "sk-shared"
+        assert await backend.deployments._working_api_key(other) == "sk-derived"
         await backend.aclose()
 
     asyncio.run(run())

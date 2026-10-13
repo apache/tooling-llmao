@@ -638,7 +638,7 @@ class Fleet:
         # model_name → models.yaml row. POST /model/new copies litellm_params
         # from here; LiteLLM /model/info encrypts them on the way back.
         self.models = models if models is not None else {}
-        # Awaitable after each vLLM probe tick (LiteLLMBackend.sync_selfhost).
+        # Awaitable after each vLLM probe tick (DeploymentManager.sync_selfhost).
         # Wired from create_app so this module does not import the LiteLLM client.
         self.after_probe = after_probe
         self.config_fetch_at: dict[str, float] = {}
