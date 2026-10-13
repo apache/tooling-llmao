@@ -10,7 +10,7 @@
 
   [if-any attention]
   <div class="alert alert-warning py-2 small">
-    <strong>Needs attention</strong>
+    <strong>Work needed</strong>
     <ul class="mb-0 mt-1 ps-3">
       [for attention]
       <li class="mb-2">

@@ -24,27 +24,6 @@
   </div>
   [end]
 
-  [if-any log]
-  <div class="card mb-3">
-    <div class="card-header fw-semibold">For your attention</div>
-    <ul class="list-group list-group-flush">
-      [for log]
-      <li class="list-group-item small d-flex justify-content-between align-items-start">
-        <div>
-          [log.what]
-          <span class="text-muted">[if-any log.times]&middot; [log.times] [end][if-any log.when]&middot; [log.when][end]</span>
-        </div>
-        <form method="post" action="/do-acknowledge" class="mb-0 ms-3">
-          <input type="hidden" name="key" value="[log.key]">
-          <input type="hidden" name="after_path" value="/admin">
-          <button type="submit" class="btn btn-outline-secondary btn-sm">Acknowledge</button>
-        </form>
-      </li>
-      [end]
-    </ul>
-  </div>
-  [end]
-
   <div class="list-group">
     <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-start"
        href="/admin/requests">

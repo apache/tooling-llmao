@@ -101,6 +101,55 @@ def _flash_rows():
     return [edict(category=c, message=m) for c, m in msgs]
 
 
+async def _work_pointer(path: str):
+    """One line for every page: there is work to do, and where to go to do it.
+
+    The work itself is shown where there is room for it and its buttons --
+    the Admin page for a site admin, My Keys for anyone else. Somebody
+    reading Help is told it is waiting and is not made to look at it. On
+    the page it points to there is nothing to point at, so this is None.
+    """
+    try:
+        ident = await current_identity(APP.cfg)
+        count = await APP.seam.work_count(ident)
+    except (AuthzError, BackendUnavailableError):
+        return None
+    href, label = ("/admin", "Admin") if ident.is_site_admin else ("/keys", "My Keys")
+    if not count or path == href:
+        return None
+    return edict(what="1 thing needs doing." if count == 1 else f"{count} things need doing.", href=href, label=label)
+
+
+async def _notice_rows() -> list:
+    """What the signed-in person should see, as rows for flashes.ezt.
+
+    The same partial shows both, so there is one place on every page where
+    a person is told things, but they are kept apart there. A flash answers
+    what was just done and is gone on the next page; one of these stays
+    until it is acknowledged. Mixed together, a person would be left
+    wondering why one went away and the other did not.
+
+    Every page calls this, so it always returns a list. The list is empty
+    when the visitor is signed out or the memory store cannot be reached.
+    """
+    try:
+        entries = await APP.seam.notices(await current_identity(APP.cfg))
+    except (AuthzError, BackendUnavailableError):
+        return []
+    rows = []
+    for n in entries:
+        count = int(n.get("count") or 1)
+        rows.append(
+            edict(
+                what=n.get("what") or "",
+                key=n.key,
+                times=f"{count} times" if count > 1 else "",
+                when=_stamp(n.get("last_seen")),
+            )
+        )
+    return rows
+
+
 def _safe_back(default: str = "/") -> str:
     """Where to send someone after a handler raised.
 
@@ -169,6 +218,11 @@ def page(*extra_exc, title: str = "llmao", category: str = "warning"):
             if data is None:
                 data = result
             data.flashes = _flash_rows()
+            # Three things a page can have to tell a person, kept apart
+            # because each goes away differently: a flash on the next page,
+            # work when it is done, a notice when it is acknowledged.
+            data.work = await _work_pointer(quart.request.path)
+            data.notices = await _notice_rows()
             return data
 
         return wrapper
@@ -190,6 +244,8 @@ async def basic_info(title: str = "llmao") -> edict:
     basic = edict()
     basic.title = title
     basic.flashes = []
+    basic.work = None
+    basic.notices = []
     path = quart.request.path if quart.has_request_context() else "/"
     basic.nav = _nav_section(path)
     # Signing in returns to the page it was started from.
@@ -1227,13 +1283,6 @@ async def keys_list(result):
     # Answers appear where the asking happened, so nobody has to find an
     # email to learn they were turned down.
     result.my_requests = _request_rows(mine)
-
-    # What this person has been told: why a key stopped working is better
-    # read here than found out by asking.
-    try:
-        result.notices = _notice_rows(await APP.seam.my_notices(ident))
-    except BackendUnavailableError:
-        result.notices = []
     return result
 
 
@@ -1332,13 +1381,12 @@ async def admin_index(result):
     except (AuthzError, BackendUnavailableError):
         pending = []
     result.pending_count = len(pending) or None
-    # The page is still worth having when these cannot be read.
+    # The page is still worth having when this cannot be read.
     try:
-        skew, log = await APP.seam.admin_notices(await current_identity(APP.cfg))
+        skew = await APP.seam.work_needed(await current_identity(APP.cfg))
     except (AuthzError, BackendUnavailableError):
-        skew, log = [], []
-    result.skew = _notice_rows(skew)
-    result.log = _notice_rows(log)
+        skew = []
+    result.skew = _skew_rows(skew)
     try:
         result.litellm_running = await APP.seam.proxy_version()
     except BackendUnavailableError:
@@ -1356,26 +1404,19 @@ def _stamp(at) -> str:
     return f"{at[:16].replace('T', ' ')} UTC" if at else ""
 
 
-def _notice_rows(entries) -> list:
-    """Template rows for skew and log entries."""
-    rows = []
-    for n in entries:
-        count = int(n.get("count") or 1)
-        rows.append(
-            edict(
-                key=n.key,
-                what=n.get("what") or "",
-                # which thing, for skew: "key tok1", "deployment gemma"
-                about=" ".join(str(x) for x in (n.get("kind"), n.get("subject")) if x),
-                times=f"{count} times" if count > 1 else "",
-                # A log entry: when it last happened. Skew: how long it has
-                # been wrong -- an unchanged row is not rewritten, so its
-                # last write says nothing about when it was last checked.
-                when=_stamp(n.get("last_seen")),
-                since=_stamp(n.get("first_seen")),
-            )
+def _skew_rows(entries) -> list:
+    """Template rows for the Admin page's "Work needed"."""
+    return [
+        edict(
+            what=n.get("what") or "",
+            # which thing: "key tok1", "deployment gemma"
+            about=" ".join(str(x) for x in (n.get("kind"), n.get("subject")) if x),
+            # How long it has been wrong. An unchanged row is not rewritten,
+            # so its last write says nothing about when it was last checked.
+            since=_stamp(n.get("first_seen")),
         )
-    return rows
+        for n in entries
+    ]
 
 
 def _request_rows(reqs) -> list:
@@ -1705,14 +1746,17 @@ async def do_create_other_key():
 @APP.post("/do-acknowledge")
 @asfquart.auth.require
 async def do_acknowledge():
-    """Mark one log entry seen. Whose it is to clear is the seam's to decide."""
+    """Mark one log entry seen. Whose it is to clear is the seam's to decide.
+
+    The button is on every page, so this goes back to whichever one it was
+    pressed on.
+    """
     form = await quart.request.form
-    after_path = "/admin" if form.get("after_path") == "/admin" else "/keys"
     try:
         await APP.seam.acknowledge(await current_identity(APP.cfg), form.get("key") or "")
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
-    return _see_other(after_path)
+    return _see_other(_safe_back())
 
 
 @APP.post("/do-revoke-key")

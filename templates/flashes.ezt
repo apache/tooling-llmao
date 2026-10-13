@@ -13,3 +13,31 @@
 [end]
 [end]
 [end]
+[if-any work]
+<div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center" role="alert">
+  <div><strong>Work needed.</strong> [work.what]</div>
+  <a class="btn btn-outline-dark btn-sm ms-3" href="[work.href]">Go to [work.label]</a>
+</div>
+[end]
+[if-any notices]
+<div class="card border-info mb-3">
+  <div class="card-header py-2 small fw-semibold">Notices</div>
+  <ul class="list-group list-group-flush">
+    [for notices]
+    <li class="list-group-item d-flex justify-content-between align-items-start small">
+      <div>
+        [notices.what]
+        <span class="text-muted">[if-any notices.times]&middot; [notices.times] [end][if-any notices.when]&middot; [notices.when][end]</span>
+      </div>
+      <form method="post" action="/do-acknowledge" class="mb-0 ms-3">
+        <input type="hidden" name="key" value="[notices.key]">
+        <button type="submit" class="btn btn-outline-secondary btn-sm">Acknowledge</button>
+      </form>
+    </li>
+    [end]
+  </ul>
+  <div class="card-footer py-1 small text-muted">
+    Each of these stays until you acknowledge it.
+  </div>
+</div>
+[end]

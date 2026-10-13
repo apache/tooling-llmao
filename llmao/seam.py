@@ -372,15 +372,37 @@ class Seam:
 
     # ---- what people are told ------------------------------------------
 
-    async def admin_notices(self, identity: Identity) -> tuple[list, list]:
-        """(work that needs doing, things to be seen) for the site admins."""
+    async def work_needed(self, identity: Identity) -> list:
+        """Everything that is out of line and needs somebody to act. Site admins."""
         if not identity.is_site_admin:
             raise AuthzError("That is limited to site admins.")
-        return await self._backend.skew.open(), await self._backend.log.unseen()
+        return await self._backend.skew.open()
 
-    async def my_notices(self, identity: Identity) -> list:
-        """What this person has been told and not yet acknowledged."""
-        return await self._backend.log.unseen(identity.uid)
+    async def work_count(self, identity: Identity) -> int:
+        """How many things are out of line that this person is the one to act on.
+
+        For a site admin, all of them. For anyone else, the ones that name
+        them as owner: a key of theirs that has to be revoked and reissued.
+        Only a number, because every page shows it -- as one line saying
+        where to go, not as the list.
+        """
+        rows = await self._backend.skew.open()
+        if identity.is_site_admin:
+            return len(rows)
+        return sum(1 for row in rows if row.get("owner") == identity.uid)
+
+    async def notices(self, identity: Identity) -> list:
+        """What this person should see and has not yet acknowledged.
+
+        What was addressed to them, and, for a site admin, what was
+        addressed to the admins as well. One list, because it is shown in
+        one place: at the top of whatever page they are on.
+        """
+        log = self._backend.log
+        entries = await log.unseen(identity.uid)
+        if identity.is_site_admin:
+            entries = entries + await log.unseen()
+        return entries
 
     async def acknowledge(self, identity: Identity, key: str) -> None:
         """Mark a log entry seen, which removes it.

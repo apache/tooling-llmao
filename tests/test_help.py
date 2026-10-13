@@ -61,6 +61,8 @@ def test_help_template_uses_the_page_frame(tmp_path):
         body=doc.html,
         guides=[edict(slug="pi", title="Pi")],
         flashes=[],
+        work=None,
+        notices=[],
         uid=None,
         name=None,
         is_site_admin=ezt.boolean(False),
@@ -145,6 +147,8 @@ def _frame(**extra):
     data = dict(
         title="t",
         flashes=[],
+        work=None,
+        notices=[],
         uid=None,
         name=None,
         projects=[],

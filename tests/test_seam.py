@@ -454,7 +454,7 @@ def test_a_person_acknowledges_what_was_addressed_to_them():
     async def run():
         seam, backend, store = _with_log()
         await backend.log.note("a site admin revoked your key ci", user="alice")
-        (entry,) = await seam.my_notices(ALICE)
+        (entry,) = await seam.notices(ALICE)
         await seam.acknowledge(ALICE, entry.key)
         assert store == {}
 
@@ -491,11 +491,59 @@ def test_skew_cannot_be_acknowledged_away():
     asyncio.run(run())
 
 
-def test_only_a_site_admin_reads_the_admins_notices():
+def test_a_person_is_shown_what_was_addressed_to_them_and_no_more():
     async def run():
-        seam, _, _ = _with_log()
+        seam, backend, _ = _with_log()
+        await backend.log.note("yours", user="alice")
+        await backend.log.note("bob's", user="bob")
+        await backend.log.note("for the admins")
+        assert [n.what for n in await seam.notices(ALICE)] == ["yours"]
+        assert [n.what for n in await seam.notices(BOB)] == ["bob's"]
+
+    asyncio.run(run())
+
+
+def test_a_site_admin_is_shown_the_admins_entries_as_well_as_their_own():
+    """One list, because it is shown in one place."""
+
+    async def run():
+        seam, backend, _ = _with_log()
+        await backend.log.note("yours", user="root")
+        await backend.log.note("bob's", user="bob")
+        await backend.log.note("for the admins")
+        assert [n.what for n in await seam.notices(ROOT)] == ["yours", "for the admins"]
+
+    asyncio.run(run())
+
+
+def test_only_a_site_admin_reads_the_work_needed():
+    async def run():
+        seam, backend, _ = _with_log()
+        await backend.skew.reconcile("key", {"t1": {"what": "limits differ"}})
         with pytest.raises(AuthzError):
-            await seam.admin_notices(ALICE)
-        assert await seam.admin_notices(ROOT) == ([], [])
+            await seam.work_needed(ALICE)
+        assert [n.subject for n in await seam.work_needed(ROOT)] == ["t1"]
+
+    asyncio.run(run())
+
+
+def test_work_is_counted_for_whoever_is_the_one_to_do_it():
+    """A site admin answers for all of it; anyone else for what names them."""
+
+    async def run():
+        seam, backend, _ = _with_log()
+        await backend.skew.reconcile(
+            "key",
+            {
+                "t1": {"what": "limits differ from the service tier", "owner": "alice"},
+                "t2": {"what": "no tier recorded", "owner": "alice"},
+                "t3": {"what": "no tier recorded", "owner": "bob"},
+            },
+        )
+        await backend.skew.reconcile("deployment", {"gemma": {"what": "not marked self-hosted"}})
+        assert await seam.work_count(ALICE) == 2
+        assert await seam.work_count(BOB) == 1
+        assert await seam.work_count(ROOT) == 4
+        assert await seam.work_count(Identity(uid="carol", projects=[], committees=[])) == 0
 
     asyncio.run(run())

@@ -215,7 +215,7 @@ def test_attention_items_lists_only_actionable_items():
     assert "192.0.2.7" in unknown.what
     # The strip renders in the template.
     out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)[0]], attention=items)
-    assert "Needs attention" in out
+    assert "Work needed" in out
     assert "192.0.2.7" in out
 
 
@@ -604,6 +604,8 @@ def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
         projects_label=None,
         admin_projects=[],
         flashes=[],
+        work=None,
+        notices=[],
         repo="https://github.com/apache/tooling-llmao",
         commit="deadbeef",
         models=rows,
