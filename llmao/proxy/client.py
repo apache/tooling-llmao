@@ -33,7 +33,7 @@ import pathlib
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 from asfpy.stopwatch import Stopwatch
@@ -195,66 +195,6 @@ class CreatedKey:
     info: KeyInfo
 
 
-class Backend(Protocol):
-    async def team_info(self, project: str) -> TeamInfo | None: ...
-    async def set_tier_entitlement(
-        self,
-        tier: str,
-        *,
-        rpm_limit: int | None = None,
-        tpm_limit: int | None = None,
-        max_parallel_requests: int | None = None,
-        token_cap: int | None = None,
-        token_window_days: int | None = None,
-    ) -> dict[str, Any]: ...
-    async def tier_entitlement(self, tier: str) -> dict[str, Any]: ...
-    async def update_team_entitlement(
-        self,
-        project: str,
-        *,
-        max_budget_usd: float | None = None,
-        token_cap: int | None = None,
-        rpm_limit: int | None = None,
-        tpm_limit: int | None = None,
-        max_parallel_requests: int | None = None,
-    ) -> TeamInfo: ...
-    async def update_key_entitlement(
-        self,
-        token_id: str,
-        *,
-        rpm_limit: int | None = None,
-        tpm_limit: int | None = None,
-        max_parallel_requests: int | None = None,
-        max_budget_usd: float | None = None,
-    ) -> None: ...
-    async def ensure_team(self, project: str) -> TeamInfo: ...
-    async def list_keys(
-        self,
-        *,
-        user: str | None = None,
-        project: str | None = None,
-        size: int = 100,
-    ) -> list[KeyInfo]: ...
-    async def create_key(
-        self,
-        *,
-        project: str,
-        purpose: str,
-        user: str | None = None,
-        metadata: dict | None = None,
-        tier: str = TIER_PROJECT,
-        token_cap: int | None = None,
-    ) -> CreatedKey: ...
-    async def delete_key(self, token_id: str) -> None: ...
-    async def usage(self, project: str | None) -> list[dict]: ...
-    async def key_usage(self, user: str) -> dict[str, int]: ...
-    def invalidate_spend(self) -> None: ...
-    async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance: ...
-    def invalidate_allowance(self, user: str | None = None) -> None: ...
-    async def proxy_version(self) -> str | None: ...
-    async def aclose(self) -> None: ...
-
-
 def _normalize_key_obj(raw: Any) -> KeyInfo:
     """Build KeyInfo from a LiteLLM key object (wire → design names)."""
     if isinstance(raw, str):
@@ -412,19 +352,6 @@ class LiteLLMBackend:
     # key in a team, and a projectless one has to go somewhere.
     _TIER_STORE_TEAM = "llmao-entitlement-defaults"
 
-    # ---- tiers: TierManager, below --------------------------------------
-
-    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
-        return await self.tiers.limits(tier)
-
-    async def set_tier_entitlement(self, tier: str, **limits: int | None) -> dict[str, Any]:
-        result = await self.tiers.set_limits(tier, **limits)
-        # The cap is re-read on every check, but today's usage is cached --
-        # without this an admin lowering a cap sees a stale remaining figure
-        # for up to a minute and concludes the control did not work.
-        self.invalidate_allowance()
-        return result
-
     # ---- teams: TeamManager, below --------------------------------------
 
     async def team_info(self, project: str) -> TeamInfo | None:
@@ -433,25 +360,10 @@ class LiteLLMBackend:
     async def ensure_team(self, project: str) -> TeamInfo:
         return await self.teams.ensure(project)
 
-    async def update_team_entitlement(self, project: str, **limits: float | int | None) -> TeamInfo:
-        return await self.teams.update_entitlement(project, **limits)
-
     # ---- usage: UsageManager, below -------------------------------------
 
     async def usage(self, project: str | None) -> list[dict]:
         return await self.metering.rows(project)
-
-    async def key_usage(self, user: str) -> dict[str, int]:
-        return await self.metering.by_key(user)
-
-    async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
-        return await self.metering.allowance(user, tier=tier)
-
-    def invalidate_spend(self) -> None:
-        self.metering.invalidate()
-
-    def invalidate_allowance(self, user: str | None = None) -> None:
-        self.metering.invalidate()
 
     # ---- keys: KeyManager, below ----------------------------------------
 
@@ -463,9 +375,6 @@ class LiteLLMBackend:
 
     async def delete_key(self, token_id: str) -> None:
         await self.keys.delete(token_id)
-
-    async def update_key_entitlement(self, token_id: str, **limits: int | None) -> None:
-        await self.keys.update_entitlement(token_id, **limits)
 
 
 class KeyManager:

@@ -36,10 +36,10 @@ from .proxy.client import (
     TIER_FREE,
     TIER_PROJECT,
     TIER_SERVICE,
-    Backend,
     BackendUnavailableError,
     CreatedKey,
     KeyInfo,
+    LiteLLMBackend,
     TeamInfo,
 )
 
@@ -217,7 +217,7 @@ def _tokens_short(n) -> str:
 
 
 class Seam:
-    def __init__(self, cfg: Any, backend: Backend):
+    def __init__(self, cfg: Any, backend: LiteLLMBackend):
         self._cfg = cfg
         self._backend = backend
 
@@ -340,7 +340,7 @@ class Seam:
             raise AuthzError("Tiers are limited to site admins.")
         out = []
         for tier in (TIER_FREE, TIER_PROJECT, TIER_SERVICE):
-            out.append({"tier": tier, **(await self._backend.tier_entitlement(tier))})
+            out.append({"tier": tier, **(await self._backend.tiers.limits(tier))})
         return out
 
     async def set_tier(self, identity: Identity, tier: str, **limits) -> dict:
@@ -354,7 +354,12 @@ class Seam:
         named = {k: v for k, v in limits.items() if v is not None}
         if not named:
             raise AuthzError("Nothing to change.")
-        return await self._backend.set_tier_entitlement(tier, **named)
+        limits = await self._backend.tiers.set_limits(tier, **named)
+        # The cap is re-read on every check, but today's usage is cached --
+        # without this an admin lowering a cap sees a stale remaining figure
+        # for up to a minute and concludes the control did not work.
+        self._backend.metering.invalidate()
+        return limits
 
     async def my_requests(self, identity: Identity) -> list:
         """This person's own requests, newest first.
@@ -400,7 +405,7 @@ class Seam:
             granted=granted,
         )
         if approve and req.kind == _access.KIND_CAPACITY:
-            await self._backend.update_team_entitlement(req.project, token_cap=int(req.granted.get("token_cap") or 0))
+            await self._backend.teams.update_entitlement(req.project, token_cap=int(req.granted.get("token_cap") or 0))
         return await self._backend.requests.save(req)
 
     @require_member
@@ -462,7 +467,7 @@ class Seam:
         spend log groups differently for each.
         """
         try:
-            return await self._backend.key_usage(identity.uid)
+            return await self._backend.metering.by_key(identity.uid)
         except BackendUnavailableError:
             # An empty map renders dashes rather than zeros. "0" claims the
             # key is idle; we only know we could not ask.
@@ -558,7 +563,7 @@ class Seam:
         No authz decision: a principal always sees their own draw. Project
         figures go through the normal membership checks below.
         """
-        return await self._backend.allowance(identity.uid)
+        return await self._backend.metering.allowance(identity.uid)
 
     async def my_project_usage(self, identity: Identity) -> list[dict]:
         """Per-project draw for the projects this committer belongs to.
