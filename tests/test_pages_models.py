@@ -106,12 +106,10 @@ def _fleet(*servers) -> Fleet:
     return Fleet(cfg=cfg, servers=list(servers), deployments=deployments)
 
 
-def _catalog(name: str, *, self_hosted: bool = True, modality: str = "text+vision") -> dict:
+def _catalog(name: str, *, modality: str = "text+vision") -> dict:
     return {
         "model_name": name,
         "display_name": name.upper(),
-        "self_hosted": ezt.boolean(self_hosted),
-        "hosting_label": "Self-hosted" if self_hosted else "External",
         "context_window": "999,999",
         "license": "Apache-2.0",
         "modality": modality,
@@ -136,6 +134,8 @@ def test_catalog_shows_rollup_not_the_yaml_context():
     row = rows[0]
     assert row.rollup == DEGRADED
     assert row.rollup_label == "Degraded"
+    # nothing in the catalog says so; its deployments are on our boxes
+    assert row.hosting_label == "Self-hosted"
     assert row.available
     assert row.degraded
     # The catalog said 999,999. The roll-up reports the served window.
@@ -164,7 +164,7 @@ def test_commercial_is_external_and_has_no_concurrency():
     dep = FleetDeployment.from_commercial(
         edict(
             model_name="claude",
-            model_info=edict(self_hosted=False),
+            model_info=edict(),
             litellm_params=edict(api_base="https://api.example"),
         )
     )
@@ -182,10 +182,11 @@ def test_commercial_is_external_and_has_no_concurrency():
         }
     )
     fleet = Fleet(cfg=cfg, servers=[], deployments=[dep])
-    rows = pages.model_catalog_rows(fleet, [_catalog("claude", self_hosted=False, modality="text")])
+    rows = pages.model_catalog_rows(fleet, [_catalog("claude", modality="text")])
     assert rows[0].rollup == AVAILABLE
     assert not rows[0].private
     assert rows[0].privacy_lead == "External"
+    assert rows[0].hosting_label == "External"
     assert "third-party provider" in rows[0].privacy
     assert rows[0].concurrency == ""
     assert [c.label for c in rows[0].chips] == ["Text"]
@@ -555,7 +556,7 @@ def test_mixed_card_and_unavailable_card():
     commercial = FleetDeployment.from_commercial(
         edict(
             model_name="gemma",
-            model_info=edict(self_hosted=False),
+            model_info=edict(),
             litellm_params=edict(api_base="https://api.example"),
         )
     )

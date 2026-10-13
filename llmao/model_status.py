@@ -250,7 +250,7 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
     )
 
 
-def _privacy(rows: list[DeploymentStatus], *, catalog_self_hosted: bool) -> str:
+def _privacy(rows: list[DeploymentStatus]) -> str:
     """Where requests for this model can be handled.
 
     Every configured row counts, including one that is down and therefore not
@@ -260,7 +260,9 @@ def _privacy(rows: list[DeploymentStatus], *, catalog_self_hosted: bool) -> str:
     if any(v.litellm_only for v in rows):
         return MIXED
     if not rows:
-        return PRIVATE if catalog_self_hosted else EXTERNAL
+        # A provider's model always has its deployment. One with none is
+        # waiting for a box of ours.
+        return PRIVATE
     hosted = any(v.self_hosted for v in rows)
     external = any(not v.self_hosted for v in rows)
     if hosted and external:
@@ -278,8 +280,6 @@ def unknown_fetch_status() -> str:
 def model_status(
     model_name: str,
     views: list[DeploymentStatus],
-    *,
-    catalog_self_hosted: bool,
 ) -> ModelStatus:
     """Roll up one model. ``views`` may include other models; they are ignored."""
     rows = [v for v in views if v.model_name == model_name]
@@ -292,7 +292,7 @@ def model_status(
     else:
         rollup = AVAILABLE
 
-    privacy = _privacy(rows, catalog_self_hosted=catalog_self_hosted)
+    privacy = _privacy(rows)
 
     contexts = [v.context_window for v in healthy if v.context_window is not None]
     context = min(contexts) if contexts else None

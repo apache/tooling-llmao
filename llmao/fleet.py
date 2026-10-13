@@ -50,7 +50,7 @@ from llmao.model_status import (
     model_status,
     self_hosted_lifecycle,
 )
-from llmao.models import load_models, validate_models
+from llmao.models import load_models, provider_api_base, validate_models, vllm_recipe
 from llmao.vast_client import fetch_port_map
 
 _LOGGER = logging.getLogger(__name__)
@@ -229,8 +229,8 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             _require_listen_port(host, port)
             if model_name not in known:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
-            if not by_name[model_name].model_info.self_hosted:
-                raise ValueError(f"fleet.hosts.{host}[{i}]: {model_name} is not self_hosted")
+            if vllm_recipe(by_name[model_name]) is None:
+                raise ValueError(f"fleet.hosts.{host}[{i}]: {model_name} has no vLLM recipe")
             if label in seen_names:
                 raise ValueError(f"fleet.hosts.{host}: duplicate name {label!r}")
             if port in seen_ports:
@@ -698,7 +698,7 @@ class Fleet:
                 servers.append(srv)
         deployments = [FleetDeployment.from_vllm(s) for s in servers]
         for model in models:
-            if not model.model_info.self_hosted:
+            if provider_api_base(model):
                 deployments.append(FleetDeployment.from_commercial(model))
         return cls(cfg, servers, deployments, models=by_name)
 
@@ -837,9 +837,8 @@ class Fleet:
             model = by_name.get(name)
             if model is None:
                 raise ValueError(f"Unknown model: {name}")
-            info = model.model_info
-            if not (info.get("self_hosted") if hasattr(info, "get") else False):
-                raise ValueError(f"{name} is not self-hosted")
+            if vllm_recipe(model) is None:
+                raise ValueError(f"{name} has no vLLM recipe, so a box cannot load it")
         self.approved_models[host] = chosen
         self.set_admin_label(host, APPROVED)
 
@@ -905,14 +904,7 @@ class Fleet:
         stamp = now or time.time()
         cfg = self.cfg.fleet
         views = [deployment_status(snapshot_for_status(dep, cfg, stamp), cfg, stamp) for dep in self.deployments]
-        catalog = True
-        model = self.models.get(model_name) if self.models else None
-        if model is not None:
-            info = getattr(model, "model_info", None)
-            flag = getattr(info, "self_hosted", None) if info is not None else None
-            if flag is not None:
-                catalog = bool(flag)
-        return model_status(model_name, views, catalog_self_hosted=catalog)
+        return model_status(model_name, views)
 
     def cost_basis(self, model_name: str) -> str | None:
         """How to read a cost recorded against this model name.

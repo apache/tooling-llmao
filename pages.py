@@ -59,7 +59,7 @@ from llmao.model_status import (
     UNKNOWN,
     deployment_status,
 )
-from llmao.models import load_models, model_available_for, model_in_service, ux_models
+from llmao.models import load_models, model_available_for, model_in_service, ux_models, vllm_recipe
 from llmao.proxy.client import PRETEND_PROJECTS, BackendUnavailableError, KeyInfo, pinned_litellm_version
 from llmao.seam import AuthzError
 
@@ -714,6 +714,15 @@ def attention_items(fleet) -> list:
     return items
 
 
+def _hosting_label(ours: int, bought: int) -> str:
+    """Where a model runs, from where its deployments run."""
+    if ours and bought:
+        return "Self-hosted and external"
+    if ours:
+        return "Self-hosted"
+    return "External" if bought else "—"
+
+
 def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
     """One Models-page row per catalog entry, with the user-facing roll-up.
 
@@ -728,9 +737,12 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         row = edict(m)
         status = fleet.model_rollup(row.model_name)
         rollup = status.rollup
-        self_hosted = bool(m.get("self_hosted"))
+        own = [d for d in fleet.deployments if d.model_name == row.model_name and not getattr(d, "litellm_only", False)]
+        row.self_count = sum(1 for d in own if d.self_hosted)
+        row.external_count = sum(1 for d in own if not d.self_hosted)
+        row.hosting_label = _hosting_label(row.self_count, row.external_count)
         in_service = model_available_for(None, m) and model_in_service(rollup)
-        if self_hosted:
+        if row.self_count:
             in_service = in_service and fleet.model_in_litellm(row.model_name)
         row.rollup = rollup
         row.rollup_label = _ROLLUP_LABEL.get(rollup, rollup)
@@ -752,9 +764,6 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         row.privacy_icon = _PRIVACY_ICON.get(privacy, "")
         row.privacy = f"{lead}. {rest}" if lead else ""
         row.chips = _modality_chips(m.get("modality") or "")
-        own = [d for d in fleet.deployments if d.model_name == row.model_name and not getattr(d, "litellm_only", False)]
-        row.self_count = sum(1 for d in own if d.self_hosted)
-        row.external_count = sum(1 for d in own if not d.self_hosted)
         if admin:
             row.deployments = [r for r in deployment_rows(fleet, admin=True) if r.model_name == row.model_name]
             row.replica_summary = _replica_summary(row.model_name, fleet)
@@ -786,7 +795,7 @@ def _approve_choices(cfg) -> list:
     choices = []
     for model in load_models(cfg=cfg):
         info = model.model_info
-        if not info.self_hosted:
+        if vllm_recipe(model) is None:
             continue
         choices.append(
             edict(model_name=str(model.model_name), display_name=str(info.get("display_name") or model.model_name))

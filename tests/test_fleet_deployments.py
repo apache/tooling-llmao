@@ -41,7 +41,7 @@ def test_commercial_deployment_from_definitions():
         edict(
             model_name="paid-chat",
             litellm_params=edict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
-            model_info=edict(self_hosted=False, license="proprietary"),
+            model_info=edict(license="proprietary"),
         )
     )
     cfg = edict(

@@ -114,7 +114,7 @@ def test_fleet_fixture_rollup_is_degraded():
     assert all(not v.skew for v in views[1:4])
     assert unknown_fetch_status() == UNKNOWN
 
-    summary = model_status(MODEL, views, catalog_self_hosted=True)
+    summary = model_status(MODEL, views)
     assert summary.rollup == DEGRADED
     assert summary.privacy == PRIVATE
     assert summary.context_window == 40958
@@ -236,7 +236,7 @@ def test_stale_vllm_is_excluded():
     assert view.lifecycle == HEALTHY
     assert view.vllm_signal == "unknown"
     assert view.counted is False
-    summary = model_status(MODEL, [view], catalog_self_hosted=True)
+    summary = model_status(MODEL, [view])
     assert summary.rollup == UNAVAILABLE
     assert summary.concurrency is None
     assert summary.privacy == PRIVATE
@@ -265,7 +265,7 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
         CFG,
         NOW,
     )
-    summary = model_status(MODEL, [healthy_box, up_commercial], catalog_self_hosted=True)
+    summary = model_status(MODEL, [healthy_box, up_commercial])
     assert summary.privacy == MIXED
     # The external row is configured even while LiteLLM does not have it.
     down_commercial = deployment_status(
@@ -273,8 +273,8 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
         CFG,
         NOW,
     )
-    assert model_status(MODEL, [healthy_box, down_commercial], catalog_self_hosted=True).privacy == MIXED
-    assert model_status(MODEL, [up_commercial], catalog_self_hosted=False).privacy == EXTERNAL
+    assert model_status(MODEL, [healthy_box, down_commercial]).privacy == MIXED
+    assert model_status(MODEL, [up_commercial]).privacy == EXTERNAL
     assert summary.rollup == AVAILABLE
     # Minimum across healthy deployments. The commercial window is the smaller one.
     assert summary.context_window == 8000
@@ -291,11 +291,11 @@ def test_extra_route_and_mismatch_are_badges_only():
     assert extra.lifecycle == UNKNOWN
     assert extra.counted is False
     assert extra.skew == (SKEW_IN_LITELLM_NOT_IN_CONFIG, SKEW_CONFIG_MISMATCH)
-    summary = model_status(MODEL, [extra], catalog_self_hosted=False)
+    summary = model_status(MODEL, [extra])
     assert summary.rollup == UNAVAILABLE
     assert summary.privacy == MIXED
     hosted = deployment_status(_self(), CFG, NOW)
-    assert model_status(MODEL, [hosted, extra], catalog_self_hosted=True).privacy == MIXED
+    assert model_status(MODEL, [hosted, extra]).privacy == MIXED
 
 
 def test_vllm_down_litellm_up():

@@ -18,9 +18,13 @@
 #   GET /vllm/config    vLLM recipe for the box
 #   POST /model/new     litellm_params + instance api_base
 #
-# True of the MODEL, never of one machine. self_hosted (required boolean):
-# true = vLLM recipe + fleet.hosts; api_base per instance. false = commercial;
-# require static litellm_params.api_base (fail-fast).
+# Each model is one of two kinds, told apart by what it carries (fail-fast
+# if it has neither, or both):
+#   model_info.vllm            a recipe for our own boxes. Which boxes is
+#                              fleet.hosts; api_base is added per instance.
+#   litellm_params.api_base    a provider's endpoint. Commercial.
+# Whether a model is self-hosted is not written here. It follows from where
+# each of its deployments runs.
 #
 # On --max-num-batched-tokens, which every self-hosted entry sets:
 # vLLM defaults it to 2048, and that default admitted only 2-3 concurrent
@@ -92,7 +96,6 @@ models:
       weights_distribution: "google/gemma-4-26B-A4B-it (HF, BF16) · vLLM"
       training_data_provenance: "undisclosed (Google DeepMind)"
       provenance_record: absent
-      self_hosted: true
       # Verified: correctly identified a base64 data-URL test image.
       modality: text+vision
       supports_thinking: true
@@ -182,7 +185,6 @@ models:
       weights_distribution: "Qwen/Qwen3.8-27B-FP8 (HF, FP8) · vLLM"
       training_data_provenance: "undisclosed (Alibaba)"
       provenance_record: absent
-      self_hosted: true
       # Verified: correctly identified a base64 data-URL test image.
       modality: text+vision
       supports_thinking: true
@@ -267,7 +269,6 @@ models:
       weights_distribution: "Qwen/Qwen3-8B-FP8 (HF, FP8) · vLLM"
       training_data_provenance: "undisclosed (Alibaba)"
       provenance_record: absent
-      self_hosted: true
       modality: text
       supports_thinking: true
       thinks_by_default: true
@@ -335,7 +336,6 @@ models:
       weights_distribution: "Qwen/Qwen3-8B (HF, BF16) · vLLM"
       training_data_provenance: "undisclosed (Alibaba)"
       provenance_record: absent
-      self_hosted: true
       modality: text
       supports_thinking: true
       thinks_by_default: true

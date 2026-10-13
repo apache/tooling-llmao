@@ -56,8 +56,24 @@ def load_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[di
     return data.models
 
 
+def vllm_recipe(model: Any) -> Any:
+    """How to run this model on one of our own boxes, or None if it says nothing."""
+    info = model.get("model_info") if hasattr(model, "get") else None
+    return (info.get("vllm") if hasattr(info, "get") else None) or None
+
+
+def provider_api_base(model: Any) -> str:
+    """Where a provider serves this model, or "" if it names no provider."""
+    params = model.get("litellm_params") if hasattr(model, "get") else None
+    return str((params.get("api_base") if hasattr(params, "get") else None) or "").strip()
+
+
 def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -> None:
-    """Fail-fast: self_hosted boolean; vLLM recipe vs commercial api_base."""
+    """Fail-fast. Each model is a vLLM recipe or a provider's api_base, one or the other.
+
+    Whether a model is self-hosted is not written down. It follows from
+    where each of its deployments runs.
+    """
     seen: set[str] = set()
     for model in models:
         if "model_name" not in model or not model.model_name:
@@ -70,21 +86,21 @@ def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -
             raise ValueError(f"{name}: litellm_params is required")
         if "model_info" not in model:
             raise ValueError(f"{name}: model_info is required")
-        info = model.model_info
-        flag = info.get("self_hosted") if hasattr(info, "get") else None
-        if not isinstance(flag, bool):
-            raise ValueError(f"{name}: model_info.self_hosted must be true or false")
-        if flag:
-            if "vllm" not in info:
-                raise ValueError(f"{name}: model_info.vllm is required when self_hosted")
-            vllm = info.vllm
-            if "model" not in vllm or not vllm.model:
-                raise ValueError(f"{name}: model_info.vllm.model is required")
-        else:
-            params = model.litellm_params
-            base = params.get("api_base") if hasattr(params, "get") else None
-            if not str(base or "").strip():
-                raise ValueError(f"{name}: self_hosted false requires litellm_params.api_base")
+        recipe = vllm_recipe(model)
+        base = provider_api_base(model)
+        if recipe is None and not base:
+            raise ValueError(
+                f"{name}: needs model_info.vllm (to run on our boxes) or litellm_params.api_base (a provider)"
+            )
+        if recipe is not None and base:
+            # litellm_params is one block, and the two want different things
+            # in it: hosted_vllm/<name> for our boxes, the provider's own
+            # model for theirs.
+            raise ValueError(
+                f"{name}: has both model_info.vllm and litellm_params.api_base; give the provider's a name of its own"
+            )
+        if recipe is not None and ("model" not in recipe or not recipe.model):
+            raise ValueError(f"{name}: model_info.vllm.model is required")
 
 
 def public_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
@@ -113,15 +129,6 @@ def _oneline(s: Any) -> str:
     if s is None or s is False:
         return ""
     return " ".join(str(s).split())
-
-
-def _hosting_label(m: dict[str, Any]) -> str:
-    """Public hosting class from the required self_hosted boolean."""
-    if m.get("self_hosted") is True:
-        return "Self-hosted"
-    if m.get("self_hosted") is False:
-        return "External"
-    return "—"
 
 
 def model_available_for(identity: Any, model: dict[str, Any]) -> bool:
@@ -169,8 +176,6 @@ def ux_models(
             {
                 "model_name": name,
                 "display_name": display,
-                "hosting_label": _hosting_label(m),
-                "self_hosted": ezt.boolean(m.get("self_hosted")),
                 "context_window": ctx if ctx is not None else "—",
                 "license": _oneline(m.get("license")) or "—",
                 "modality": _oneline(m.get("modality")),

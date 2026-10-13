@@ -123,7 +123,7 @@ def test_ensure_commercial():
         edict(
             model_name="paid-chat",
             litellm_params=edict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
-            model_info=edict(self_hosted=False),
+            model_info=edict(),
         )
     )
     models = {

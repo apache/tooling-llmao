@@ -114,7 +114,9 @@ def test_approve_rejects_bad_selections():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
-    fleet.models["claude"] = edict(model_name="claude", model_info=edict(self_hosted=False))
+    fleet.models["claude"] = edict(
+        model_name="claude", litellm_params=edict(api_base="https://api.example.com"), model_info=edict()
+    )
     for names in ([], ["nope"], ["claude"]):
         with pytest.raises(ValueError):
             fleet.approve_models("198.51.100.8", names)
