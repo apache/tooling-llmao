@@ -1227,6 +1227,13 @@ async def keys_list(result):
     # Answers appear where the asking happened, so nobody has to find an
     # email to learn they were turned down.
     result.my_requests = _request_rows(mine)
+
+    # What this person has been told: why a key stopped working is better
+    # read here than found out by asking.
+    try:
+        result.notices = _notice_rows(await APP.seam.my_notices(ident))
+    except BackendUnavailableError:
+        result.notices = []
     return result
 
 
@@ -1325,6 +1332,13 @@ async def admin_index(result):
     except (AuthzError, BackendUnavailableError):
         pending = []
     result.pending_count = len(pending) or None
+    # The page is still worth having when these cannot be read.
+    try:
+        skew, log = await APP.seam.admin_notices(await current_identity(APP.cfg))
+    except (AuthzError, BackendUnavailableError):
+        skew, log = [], []
+    result.skew = _notice_rows(skew)
+    result.log = _notice_rows(log)
     try:
         result.litellm_running = await APP.seam.proxy_version()
     except BackendUnavailableError:
@@ -1334,6 +1348,34 @@ async def admin_index(result):
         bool(result.litellm_running) and result.litellm_running == result.litellm_expected
     )
     return result
+
+
+def _stamp(at) -> str:
+    """LiteLLM's own stamp on a memory row, to the minute."""
+    at = str(at or "")
+    return f"{at[:16].replace('T', ' ')} UTC" if at else ""
+
+
+def _notice_rows(entries) -> list:
+    """Template rows for skew and log entries."""
+    rows = []
+    for n in entries:
+        count = int(n.get("count") or 1)
+        rows.append(
+            edict(
+                key=n.key,
+                what=n.get("what") or "",
+                # which thing, for skew: "key tok1", "deployment gemma"
+                about=" ".join(str(x) for x in (n.get("kind"), n.get("subject")) if x),
+                times=f"{count} times" if count > 1 else "",
+                # A log entry: when it last happened. Skew: how long it has
+                # been wrong -- an unchanged row is not rewritten, so its
+                # last write says nothing about when it was last checked.
+                when=_stamp(n.get("last_seen")),
+                since=_stamp(n.get("first_seen")),
+            )
+        )
+    return rows
 
 
 def _request_rows(reqs) -> list:
@@ -1658,6 +1700,19 @@ async def do_create_other_key():
         keys_create_another="/keys/other/new",
     )
     return _see_other("/keys/other")
+
+
+@APP.post("/do-acknowledge")
+@asfquart.auth.require
+async def do_acknowledge():
+    """Mark one log entry seen. Whose it is to clear is the seam's to decide."""
+    form = await quart.request.form
+    after_path = "/admin" if form.get("after_path") == "/admin" else "/keys"
+    try:
+        await APP.seam.acknowledge(await current_identity(APP.cfg), form.get("key") or "")
+    except (AuthzError, BackendUnavailableError) as e:
+        await flash_danger(str(e))
+    return _see_other(after_path)
 
 
 @APP.post("/do-revoke-key")

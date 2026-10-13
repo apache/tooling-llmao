@@ -370,6 +370,34 @@ class Seam:
         self._backend.metering.invalidate()
         return limits
 
+    # ---- what people are told ------------------------------------------
+
+    async def admin_notices(self, identity: Identity) -> tuple[list, list]:
+        """(work that needs doing, things to be seen) for the site admins."""
+        if not identity.is_site_admin:
+            raise AuthzError("That is limited to site admins.")
+        return await self._backend.skew.open(), await self._backend.log.unseen()
+
+    async def my_notices(self, identity: Identity) -> list:
+        """What this person has been told and not yet acknowledged."""
+        return await self._backend.log.unseen(identity.uid)
+
+    async def acknowledge(self, identity: Identity, key: str) -> None:
+        """Mark a log entry seen, which removes it.
+
+        The key comes from a form post and names a row to delete, so it is
+        checked against who is asking: a person may clear what was addressed
+        to them, a site admin what was addressed to the admins, and nobody
+        anything else. Skew cannot be acknowledged at all -- it goes when
+        the work is done.
+        """
+        log = self._backend.log
+        key = (key or "").strip()
+        if log.is_for(key, identity.uid) or (identity.is_site_admin and log.is_for(key)):
+            await log.ack(key)
+            return
+        raise AuthzError("That is not yours to acknowledge.")
+
     async def my_requests(self, identity: Identity) -> list:
         """This person's own requests, newest first.
 

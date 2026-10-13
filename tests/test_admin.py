@@ -30,7 +30,7 @@ from llmao.proxy.client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _render(*, running, expected):
+def _render(*, running, expected, skew=(), log=()):
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
@@ -48,6 +48,8 @@ def _render(*, running, expected):
         repo="https://github.com/apache/tooling-llmao",
         commit="deadbeef",
         pending_count=None,
+        skew=list(skew),
+        log=list(log),
         litellm_running=running,
         litellm_expected=expected,
         litellm_matches=ezt.boolean(bool(running) and running == expected),
@@ -130,3 +132,45 @@ def test_proxy_version_is_unavailable_when_litellm_cannot_be_reached():
         assert await backend.proxy_version() is None
 
     asyncio.run(run())
+
+
+def test_admin_shows_work_needed_and_things_to_see():
+    """Skew stays until it is put right; a log entry can be acknowledged."""
+    pin = pinned_litellm_version()
+    skew = [
+        edict(
+            key="llmao:skew:key:t1",
+            what="limits differ from the service tier",
+            about="key t1",
+            times="",
+            when="",
+            since="2026-10-12 09:00 UTC",
+        )
+    ]
+    log = [
+        edict(
+            key="llmao:log:admin:project:free-tier",
+            what="free tier allowed any model; restricted",
+            about="",
+            times="3 times",
+            when="2026-10-13 01:02 UTC",
+            since="",
+        )
+    ]
+    out = _render(running=pin, expected=pin, skew=skew, log=log)
+    assert "Work needed" in out
+    assert "limits differ from the service tier" in out
+    assert "key t1" in out
+    assert "since 2026-10-12 09:00 UTC" in out
+    assert "For your attention" in out
+    assert "3 times" in out
+    assert 'name="key" value="llmao:log:admin:project:free-tier"' in out
+    # there is no button that makes skew go away
+    assert out.count("/do-acknowledge") == 1
+
+
+def test_admin_shows_neither_heading_when_there_is_nothing():
+    pin = pinned_litellm_version()
+    out = _render(running=pin, expected=pin)
+    assert "Work needed" not in out
+    assert "For your attention" not in out

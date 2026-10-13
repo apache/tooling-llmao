@@ -2,6 +2,20 @@
 <div class="container py-4">
   <div class="mt-2">[include "flashes.ezt"]</div>
 
+  [for notices]
+  <div class="alert alert-info d-flex justify-content-between align-items-start py-2 small">
+    <div>
+      [notices.what]
+      [if-any notices.when]<span class="text-muted">&middot; [notices.when]</span>[end]
+    </div>
+    <form method="post" action="/do-acknowledge" class="mb-0 ms-3">
+      <input type="hidden" name="key" value="[notices.key]">
+      <input type="hidden" name="after_path" value="/keys">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">Acknowledge</button>
+    </form>
+  </div>
+  [end]
+
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3 mb-0">My Keys</h1>
     <a class="btn btn-primary btn-sm" href="/keys/new">

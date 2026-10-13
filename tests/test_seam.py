@@ -35,7 +35,9 @@ from llmao.proxy.client import (
     PROJECT_SERVICE,
     AccessRequestManager,
     BackendUnavailableError,
+    LogManager,
     MemoryStore,
+    SkewManager,
     pretend_project,
     resolve_budget_duration,
 )
@@ -426,3 +428,74 @@ def test_a_pretend_project_cannot_be_an_ldap_one():
     assert all(":" in name for name in PRETEND_PROJECTS)
     assert pretend_project("free_tier") == PROJECT_FREE_TIER
     assert pretend_project("service") == PROJECT_SERVICE
+
+
+# ---------------------------------------------------------------------------
+# Acknowledging
+#
+# The key comes from a form post and names a row to delete.
+# ---------------------------------------------------------------------------
+
+
+def _with_log():
+    seam, _, backend = _seam()
+    transport, store = fake_memory()
+    backend.log = LogManager(MemoryStore(transport))
+    backend.skew = SkewManager(MemoryStore(transport))
+    return seam, backend, store
+
+
+ALICE = Identity(uid="alice", projects=[], committees=[])
+BOB = Identity(uid="bob", projects=[], committees=[])
+ROOT = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
+
+
+def test_a_person_acknowledges_what_was_addressed_to_them():
+    async def run():
+        seam, backend, store = _with_log()
+        await backend.log.note("a site admin revoked your key ci", user="alice")
+        (entry,) = await seam.my_notices(ALICE)
+        await seam.acknowledge(ALICE, entry.key)
+        assert store == {}
+
+    asyncio.run(run())
+
+
+def test_nobody_acknowledges_what_was_addressed_to_someone_else():
+    async def run():
+        seam, backend, store = _with_log()
+        await backend.log.note("yours", user="alice")
+        await backend.log.note("for the admins")
+        mine = next(k for k in store if ":user:alice:" in k)
+        admins = next(k for k in store if ":admin:" in k)
+        for who, key in ((BOB, mine), (ALICE, admins), (ROOT, mine)):
+            with pytest.raises(AuthzError):
+                await seam.acknowledge(who, key)
+        assert len(store) == 2
+        await seam.acknowledge(ROOT, admins)
+        assert list(store) == [mine]
+
+    asyncio.run(run())
+
+
+def test_skew_cannot_be_acknowledged_away():
+    """It goes when the work is done, and by no other route."""
+
+    async def run():
+        seam, backend, store = _with_log()
+        await backend.skew.reconcile("key", {"t1": {"what": "limits differ"}})
+        with pytest.raises(AuthzError):
+            await seam.acknowledge(ROOT, "llmao:skew:key:t1")
+        assert list(store) == ["llmao:skew:key:t1"]
+
+    asyncio.run(run())
+
+
+def test_only_a_site_admin_reads_the_admins_notices():
+    async def run():
+        seam, _, _ = _with_log()
+        with pytest.raises(AuthzError):
+            await seam.admin_notices(ALICE)
+        assert await seam.admin_notices(ROOT) == ([], [])
+
+    asyncio.run(run())
