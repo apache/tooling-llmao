@@ -1099,7 +1099,7 @@ class TeamManager:
                 info = {}
             return self._team_info_from_dict(info, team_id=team_id)
 
-        rows = await self._team_list_rows()
+        rows = await self.rows()
         for row in rows:
             if str(row.get("team_alias") or "") == project:
                 return self._team_info_from_dict(row)
