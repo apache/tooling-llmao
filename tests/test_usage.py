@@ -25,7 +25,7 @@ import asyncio
 import datetime as dt
 
 from llmao.fleet import Fleet, FleetDeployment
-from llmao.proxy.client import UsageManager
+from llmao.proxy.client import PROJECT_FREE_TIER, UsageManager
 from tests.fake_transport import FakeTransport
 
 NOON = dt.datetime(2026, 10, 12, 12, 0, tzinfo=dt.UTC)
@@ -33,7 +33,7 @@ TODAY = "2026-10-12"
 YESTERDAY = "2026-10-11"
 
 # project -> team id, as team/list would have filled it
-TEAMS = {"tooling": "team-tooling", "mahout": "team-mahout"}
+TEAMS = {"tooling": "team-tooling", "mahout": "team-mahout", PROJECT_FREE_TIER: "team-free"}
 
 
 def _entry(tokens=None, *, user=None, project=None, spend=0.0, requests=1, **metrics):
@@ -60,6 +60,9 @@ class _Teams:
 
     async def projects(self, team_ids):
         return {tid: project for project, tid in TEAMS.items()}
+
+    async def team_id(self, project):
+        return TEAMS[project]
 
 
 class _Tiers:
@@ -333,10 +336,36 @@ def test_a_day_that_leaves_the_window_is_dropped():
 # ---------------------------------------------------------------------------
 
 
-def test_allowance_buckets_are_one_persons_tokens_by_day():
-    a = _run(_usage(WEEK).allowance("alice"))
-    assert a.buckets == {TODAY: 100 + 7 + 40, YESTERDAY: 50 + 300}
+# alice has a free-tier key as well as the project keys in WEEK, and so does bob
+FREE = [
+    _day(TODAY, {"gemma4-26b": {"free1": _entry(60, user="alice", project=PROJECT_FREE_TIER)}}),
+    _day(
+        YESTERDAY,
+        {
+            "gemma4-26b": {
+                "free1": _entry(25, user="alice", project=PROJECT_FREE_TIER),
+                "free2": _entry(999, user="bob", project=PROJECT_FREE_TIER),
+            }
+        },
+    ),
+]
+
+
+def test_allowance_buckets_are_one_persons_free_tier_tokens_by_day():
+    a = _run(_usage(FREE).allowance("alice"))
+    assert a.buckets == {TODAY: 60, YESTERDAY: 25}
     assert a.cap == 1_000_000
+
+
+def test_what_a_person_draws_through_a_project_is_not_their_allowance():
+    """A project's key draws on the project's share.
+
+    Counting it against the person as well filled their bar with work the
+    allowance was never meant to cover.
+    """
+    a = _run(_usage(WEEK).allowance("alice"))
+    assert a.buckets == {}
+    assert a.used() == 0
 
 
 def test_allowance_costs_no_read_of_its_own():

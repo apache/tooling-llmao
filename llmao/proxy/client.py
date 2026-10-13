@@ -814,9 +814,15 @@ class UsageManager:
             # silently never exhausts.
             raise BackendUnavailableError(f"tier {tier} has no token_cap; nothing to meter against")
 
+        # Only what was drawn through the person's free-tier keys, which are
+        # the ones in the free-tier pretend project. What they draw through
+        # a project's key comes out of that project's share, and counting it
+        # here as well would fill their bar with work the allowance was
+        # never meant to cover.
+        free = await self.teams.team_id(PROJECT_FREE_TIER)
         buckets: dict[str, int] = {}
         for day, rows in (await self._daily_rows(window)).items():
-            spent = sum(r["total_tokens"] for r in rows if r["user"] == user)
+            spent = sum(r["total_tokens"] for r in rows if r["team_id"] == free and r["user"] == user)
             if spent:
                 buckets[day] = spent
         return RollingAllowance(cap=cap, window_days=window, buckets=buckets)
