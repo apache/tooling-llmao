@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """One endpoint per model, for llmao-smoke and llmao-saturate.
 
 A thin shim over _fleet.py, which does the real work. Kept because both
@@ -25,6 +42,7 @@ underscores, and that does not reverse -- QWEN3_8_27B could be `qwen3.8-27b`
 or `qwen3-8-27b`. It is matched against the real names when _fleet knows
 them, and reported as unresolved when it cannot be. Prefer LLMAO_DIRECT.
 """
+
 from __future__ import annotations
 
 import os
@@ -33,7 +51,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _fleet import NO_ENDPOINTS_HELP, fleet   # noqa: E402,F401
+from _fleet import NO_ENDPOINTS_HELP, fleet
 
 
 def _envkey(model: str) -> str:
@@ -48,7 +66,7 @@ def _legacy_env(known: set[str]) -> tuple[dict[str, str], dict[str, str]]:
     for k, v in sorted(os.environ.items()):
         if not k.startswith("LLMAO_DIRECT_") or not v.strip():
             continue
-        suffix = k[len("LLMAO_DIRECT_"):]
+        suffix = k[len("LLMAO_DIRECT_") :]
         addr = v.strip().replace("http://", "").rstrip("/")
         if model := by_suffix.get(suffix):
             resolved[model] = addr
@@ -57,8 +75,7 @@ def _legacy_env(known: set[str]) -> tuple[dict[str, str], dict[str, str]]:
     return resolved, unresolved
 
 
-def direct_endpoints(models: list[str] | None = None,
-                     unresolved: dict[str, str] | None = None) -> dict[str, str]:
+def direct_endpoints(models: list[str] | None = None, unresolved: dict[str, str] | None = None) -> dict[str, str]:
     """{model_name: 'host:port'} -- one reachable box per model.
 
     When a model has several boxes, the one with a LiteLLM route wins, since
@@ -69,10 +86,10 @@ def direct_endpoints(models: list[str] | None = None,
     out: dict[str, str] = {}
     for b in sorted(boxes, key=lambda b: (bool(b.routes), bool(b.public_port))):
         if b.addr and b.model:
-            out[b.model] = b.addr          # last wins; routed boxes sort last
+            out[b.model] = b.addr  # last wins; routed boxes sort last
 
     legacy, unmatched = _legacy_env(set(models or ()) | set(out))
-    out.update(legacy)                     # an explicit override wins
+    out.update(legacy)  # an explicit override wins
     if unresolved is not None:
         unresolved.update(unmatched)
     return out
@@ -90,8 +107,9 @@ if __name__ == "__main__":
     for m, hp in sorted(eps.items()):
         print(f"{m:16} {hp}")
     for suffix, hp in sorted(unres.items()):
-        print(f"\nLLMAO_DIRECT_{suffix}={hp}\n"
-              f"  cannot tell which model that names -- the suffix mangling\n"
-              f"  does not reverse. Use the literal name instead:\n"
-              f'    export LLMAO_DIRECT="<model>={hp}"')
-
+        print(
+            f"\nLLMAO_DIRECT_{suffix}={hp}\n"
+            f"  cannot tell which model that names -- the suffix mangling\n"
+            f"  does not reverse. Use the literal name instead:\n"
+            f'    export LLMAO_DIRECT="<model>={hp}"'
+        )

@@ -666,4 +666,3 @@ if __name__ == "__main__":
             f"{b.listen_port or '?'} -> {b.public_port or '?'}  "
             f"routes={len(b.routes)}"
         )
-
