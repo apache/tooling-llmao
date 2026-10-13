@@ -17,8 +17,8 @@
 
 """In-process LiteLLM stand-in for the test suite only.
 
-Speaks **project** (LDAP name) like the product Backend. Uses the project
-string as the opaque team identity — no separate team_id map.
+Speaks **project** (LDAP name) like LiteLLMBackend. Uses the project string
+as the opaque team identity — no separate team_id map.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from __future__ import annotations
 import time
 import uuid
 from typing import Any
+
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.proxy.client import (
     GRANTOR_FREE_TIER,
@@ -47,6 +49,11 @@ class MockBackend:
             "keys": [],
             "usage": [],
         }
+        # The seam talks to the backend's managers. Here a manager is only a
+        # name for some of the methods below.
+        self.teams = edict(info=self.team_info, ensure=self.ensure_team)
+        self.keys = edict(find=self.list_keys, create=self.create_key, delete=self.delete_key)
+        self.metering = edict(rows=self.usage)
 
     async def team_info(self, project: str) -> TeamInfo | None:
         t = self._data.get("teams", {}).get(project)

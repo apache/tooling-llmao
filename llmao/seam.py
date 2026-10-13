@@ -242,7 +242,7 @@ class Seam:
         names = sorted(identity.all_projects())
         rows: list[ProjectListRow] = []
         for project in names:
-            info = await self._backend.ensure_team(project)
+            info = await self._backend.teams.ensure(project)
             rows.append(self._row_from_team(project, identity, info))
         return rows
 
@@ -250,8 +250,8 @@ class Seam:
     async def project_overview(self, identity: Identity, project: str) -> ProjectOverview:
         """Read-only project budget + key-based people/automation breakdown."""
         project = (project or "").strip()
-        info = await self._backend.ensure_team(project)
-        keys = await self._backend.list_keys(project=project, size=100)
+        info = await self._backend.teams.ensure(project)
+        keys = await self._backend.keys.find(project=project, size=100)
         people, automation, by_person, auto_keys = _aggregate_keys(keys)
         return ProjectOverview(
             project=project,
@@ -271,7 +271,7 @@ class Seam:
 
     @require_member
     async def team_status(self, identity: Identity, project: str) -> TeamInfo | None:
-        return await self._backend.team_info(project)
+        return await self._backend.teams.info(project)
 
     # ---- requests -------------------------------------------------------
 
@@ -421,8 +421,8 @@ class Seam:
         the largest single consumer -- which is the thing a PMC most needs to
         see and the thing hiding it inside a person's row would obscure.
         """
-        rows = await self._backend.usage(project)
-        keys = await self._backend.list_keys(project=project, size=200)
+        rows = await self._backend.metering.rows(project)
+        keys = await self._backend.keys.find(project=project, size=200)
         # token_id -> (display name, is_service). A key with no user is
         # automation; one with a user belongs to that person.
         owner: dict[str, tuple[str, bool]] = {}
@@ -457,7 +457,7 @@ class Seam:
         return sorted(acc.values(), key=lambda e: -e["tokens"])
 
     async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
-        return await self._backend.list_keys(user=identity.uid, size=100)
+        return await self._backend.keys.find(user=identity.uid, size=100)
 
     async def my_key_usage(self, identity: Identity) -> dict[str, int]:
         """Tokens drawn per key, this week.
@@ -542,8 +542,8 @@ class Seam:
             raise AuthzError("That request has not been approved.")
 
         granted = {**req.wanted, **req.granted}
-        created = await self._backend.create_key(
-            project=req.project or self._backend._TIER_STORE_TEAM,
+        created = await self._backend.keys.create(
+            project=req.project or self._backend.keys.PROJECTLESS_TEAM,
             purpose=granted.get("purpose") or "",
             user=identity.uid,
             tier=granted.get("tier") or TIER_SERVICE,
@@ -577,7 +577,7 @@ class Seam:
         out = []
         for project in sorted(identity.committees):
             try:
-                rows = await self._backend.usage(project)
+                rows = await self._backend.metering.rows(project)
             except BackendUnavailableError:
                 continue
             tokens = 0
@@ -598,7 +598,7 @@ class Seam:
             # 20M" does.
             cap = budget = None
             try:
-                info = await self._backend.team_info(project)
+                info = await self._backend.teams.info(project)
                 if info is not None:
                     cap = getattr(info, "token_cap", None)
                     budget = info.max_budget
@@ -619,7 +619,7 @@ class Seam:
     @require_admin
     async def list_automation_keys(self, identity: Identity, project: str) -> list[KeyInfo]:
         """Automation keys for a project (admin / PMC only)."""
-        keys = await self._backend.list_keys(project=project, size=100)
+        keys = await self._backend.keys.find(project=project, size=100)
         return [k for k in keys if k.is_automation]
 
     @require_member
@@ -630,7 +630,7 @@ class Seam:
         purpose: str,
     ) -> CreatedKey:
         purpose = (purpose or "").strip()
-        return await self._backend.create_key(
+        return await self._backend.keys.create(
             project=project,
             purpose=purpose,
             user=identity.uid,
@@ -645,7 +645,7 @@ class Seam:
     ) -> CreatedKey:
         """Admin-only team-scoped key (no user) for scripts after formal request."""
         purpose = (purpose or "").strip()
-        return await self._backend.create_key(
+        return await self._backend.keys.create(
             project=project,
             purpose=purpose,
             user=None,
@@ -658,21 +658,21 @@ class Seam:
             raise AuthzError("key id required")
         # Confirm ownership: personal key belongs to uid, or automation key on
         # a project they admin.
-        keys = await self._backend.list_keys(size=100)
+        keys = await self._backend.keys.find(size=100)
         match = next((k for k in keys if k.token_id == token_id), None)
         if match is None:
-            mine = await self._backend.list_keys(user=identity.uid, size=100)
+            mine = await self._backend.keys.find(user=identity.uid, size=100)
             match = next((k for k in mine if k.token_id == token_id), None)
         if match is None:
             raise AuthzError("key not found or not visible")
         if match.user == identity.uid:
-            await self._backend.delete_key(token_id)
+            await self._backend.keys.delete(token_id)
             _log_revocation(identity, match, "own key")
             return
         if match.is_automation:
             project = match.project
             if identity.is_site_admin:
-                await self._backend.delete_key(token_id)
+                await self._backend.keys.delete(token_id)
                 _log_revocation(identity, match, "site admin")
                 return
             # Any PMC member, not only whoever created it. A service key
@@ -680,11 +680,11 @@ class Seam:
             # cannot stop -- because the creator is away at 2am -- is the
             # failure mode worth avoiding.
             if project and identity.admin_of(project):
-                await self._backend.delete_key(token_id)
+                await self._backend.keys.delete(token_id)
                 _log_revocation(identity, match, f"PMC member of {project}")
                 return
         raise AuthzError("not allowed to revoke this key")
 
     @require_admin
     async def project_activity(self, identity: Identity, project: str) -> list[dict]:
-        return await self._backend.usage(project)
+        return await self._backend.metering.rows(project)

@@ -299,10 +299,13 @@ class LiteLLMTransport:
 
 
 class LiteLLMBackend:
-    """Talks to a running litellm proxy, through a LiteLLMTransport.
+    """Everything llmao asks of a running litellm proxy, as one object.
 
-    In-process cache is only project (team_alias) → team_id. Spend/budget are
-    never taken from the cache. Call ``warm()`` at process start (fail-fast).
+    It builds the managers, each over the one transport, and holds them;
+    callers go to the manager for what they want -- `backend.keys.find()`,
+    `backend.teams.info()`. What each manager keeps in memory is its own
+    business and is described there. Call ``warm()`` at process start
+    (fail-fast).
     """
 
     def __init__(self, cfg: Any, fleet: Any, *, transport: Any = None):
@@ -348,34 +351,6 @@ class LiteLLMBackend:
         except BackendUnavailableError as e:
             _LOGGER.warning("could not warm usage: %s", e)
 
-    # The team a key with no project is minted into. LiteLLM wants every
-    # key in a team, and a projectless one has to go somewhere.
-    _TIER_STORE_TEAM = "llmao-entitlement-defaults"
-
-    # ---- teams: TeamManager, below --------------------------------------
-
-    async def team_info(self, project: str) -> TeamInfo | None:
-        return await self.teams.info(project)
-
-    async def ensure_team(self, project: str) -> TeamInfo:
-        return await self.teams.ensure(project)
-
-    # ---- usage: UsageManager, below -------------------------------------
-
-    async def usage(self, project: str | None) -> list[dict]:
-        return await self.metering.rows(project)
-
-    # ---- keys: KeyManager, below ----------------------------------------
-
-    async def list_keys(self, *, user: str | None = None, project: str | None = None, size: int = 100) -> list[KeyInfo]:
-        return await self.keys.find(user=user, project=project, size=size)
-
-    async def create_key(self, **wanted: Any) -> CreatedKey:
-        return await self.keys.create(**wanted)
-
-    async def delete_key(self, token_id: str) -> None:
-        await self.keys.delete(token_id)
-
 
 class KeyManager:
     """LiteLLM's virtual keys: listing, minting, revoking, and what each may do.
@@ -383,6 +358,11 @@ class KeyManager:
     Handed the config, the transport and the teams -- every key is minted
     into its project's team.
     """
+
+    # The team a key with no project is minted into. LiteLLM wants every
+    # key in a team, and a projectless one has to go somewhere. (The name
+    # is from when tier overrides were kept on this team's metadata.)
+    PROJECTLESS_TEAM = "llmao-entitlement-defaults"
 
     def __init__(self, cfg: Any, transport: Any, teams: Any):
         self._cfg = cfg
