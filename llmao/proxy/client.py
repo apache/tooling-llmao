@@ -413,68 +413,6 @@ class LiteLLMBackend:
     def _raise_http(self, resp: httpx.Response) -> None:
         self._transport.raise_http(resp)
 
-    def _ingest_team_list(self, teams: list[Any]) -> list[dict[str, Any]]:
-        """Update project→team_id cache from team/list rows; return dict rows."""
-        rows: list[dict[str, Any]] = []
-        for t in teams:
-            if hasattr(t, "model_dump"):
-                d = t.model_dump()
-            elif hasattr(t, "dict"):
-                d = t.dict()
-            elif isinstance(t, dict):
-                d = t
-            else:
-                continue
-            rows.append(d)
-            alias = d.get("team_alias")
-            tid = d.get("team_id")
-            if alias and tid:
-                self._team_ids[str(alias)] = str(tid)
-        return rows
-
-    # The listing is every team with its budget and metadata, and it is the
-    # slowest admin call left. Sixty seconds: long enough that a page load
-    # is one listing rather than several, short enough that a cap an admin
-    # has just changed shows while they are still looking at the page.
-    _TEAM_TTL_S = 60
-
-    async def _team_list_rows(self, *, fresh: bool = False) -> list[dict[str, Any]]:
-        if not fresh and self._team_rows_cache is not None:
-            at, rows = self._team_rows_cache
-            if (time.monotonic() - at) < self._TEAM_TTL_S:
-                return rows
-        rows = await self._team_list_rows_uncached()
-        self._team_rows_cache = (time.monotonic(), rows)
-        return rows
-
-    async def _team_list_rows_uncached(self) -> list[dict[str, Any]]:
-        resp = await self._request("GET", "team/list")
-        self._raise_http(resp)
-        body = resp.json()
-        teams = body if isinstance(body, list) else body.get("teams") or body.get("data") or []
-        if not isinstance(teams, list):
-            teams = []
-        return self._ingest_team_list(teams)
-
-    def _team_info_from_dict(self, d: dict[str, Any], *, team_id: str | None = None) -> TeamInfo:
-        tid = team_id if team_id is not None else str(d.get("team_id") or "")
-        raw_dur = d.get("budget_duration")
-        if raw_dur is None or raw_dur == "":
-            raw_dur = d.get("duration")
-        meta = d.get("metadata")
-        if not isinstance(meta, dict):
-            meta = {}
-        return TeamInfo(
-            tid,
-            float(d.get("max_budget") or 0),
-            float(d.get("spend") or 0),
-            budget_duration=resolve_budget_duration(raw_dur, self._cfg),
-            grantor=resolve_grantor(d.get("grantor"), meta),
-            token_cap=int(meta.get("token_cap") or 0),
-            token_window_days=int(meta.get("token_window_days") or 7),
-            metadata=meta,
-        )
-
     async def warm(self) -> None:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
         rows = await self._team_list_rows(fresh=True)
@@ -488,183 +426,22 @@ class LiteLLMBackend:
         except BackendUnavailableError as e:
             _LOGGER.warning("could not warm usage: %s", e)
 
-    async def _backfill_token_caps(self, rows: list[dict[str, Any]]) -> None:
-        """Give every team without a token allocation the configured default.
-
-        Projects come from LDAP. Nobody sets a project up, so there is no
-        moment at which someone could be asked for its allocation --
-        ensure_team writes the default when it first sees a new PMC, which
-        covers everything from now on but not the teams that already exist,
-        and not one created while an older build was running.
-
-        So this runs at every startup rather than being a one-off script: a
-        migration that only works if someone remembers to run it is one that
-        silently misses the project created last Tuesday.
-
-        Idempotent. The test is on the token_cap key being ABSENT rather than
-        on its value, so a project an admin deliberately capped at something
-        unusual -- including zero -- is left alone.
-
-        Failures are logged and swallowed: an unreachable team should not stop
-        the portal booting, and the next restart retries.
-        """
-        default = int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0)
-        if default <= 0:
-            return
-
-        patched = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            alias = row.get("team_alias")
-            team_id = row.get("team_id")
-            if not alias or not team_id:
-                continue
-            meta = row.get("metadata")
-            if not isinstance(meta, dict):
-                meta = {}
-            if "token_cap" in meta:
-                continue
-
-            merged = {**meta, "token_cap": default, "token_window_days": 7}
-            try:
-                resp = await self._request(
-                    "POST",
-                    "team/update",
-                    json={"team_id": str(team_id), "metadata": merged},
-                )
-                self._raise_http(resp)
-            except BackendUnavailableError:
-                _LOGGER.warning("token cap backfill failed for %s", alias)
-                continue
-            patched.append(alias)
-
-        if patched:
-            _LOGGER.info(
-                "token cap %s applied to %d team(s) without one: %s",
-                f"{default:,}",
-                len(patched),
-                ", ".join(sorted(patched)),
-            )
-
-    async def ensure_team_id(self, project: str) -> str:
-        """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
-        info = await self.ensure_team(project)
-        return info.team_id
-
-    async def ensure_team(self, project: str) -> TeamInfo:
-        """Ensure a LiteLLM team exists for the project; return live budget facts."""
-        project = (project or "").strip()
-        if not project:
-            raise BackendUnavailableError("project is required")
-
-        existing = await self.team_info(project)
-        if existing is not None:
-            return existing
-
-        budget_usd = float(self._cfg.budgets.default_team_budget_usd)
-        duration = resolve_budget_duration(None, self._cfg)
-        resp = await self._request(
-            "POST",
-            "team/new",
-            json={
-                "team_alias": project,
-                "max_budget": budget_usd,
-                "budget_duration": duration,
-                "metadata": {
-                    "grantor": GRANTOR_FREE_TIER,
-                    # A project starts with an allocation so the page has
-                    # something to show and "Request more" has something to
-                    # request against. Deliberately generous for the pilot:
-                    # a cap that binds generates support requests and teaches
-                    # us nothing about real usage, while one that rarely
-                    # binds measures what people actually draw.
-                    "token_cap": int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0),
-                    "token_window_days": 7,
-                },
-            },
-        )
-        if resp.status_code >= 400:
-            again = await self.team_info(project)
-            if again is not None:
-                return again
-            self._raise_http(resp)
-
-        body = resp.json() if resp.content else {}
-        if not isinstance(body, dict):
-            body = {}
-        team_id = body.get("team_id")
-        if not team_id:
-            raise BackendUnavailableError("LiteLLM team/new returned no team_id")
-        self._team_ids[project] = str(team_id)
-        live = await self.team_info(project)
-        if live is not None:
-            return live
-        return self._team_info_from_dict(
-            {
-                **body,
-                "max_budget": body.get("max_budget", budget_usd),
-                "spend": body.get("spend", 0),
-            },
-            team_id=str(team_id),
-        )
-
     # The team a key with no project is minted into. LiteLLM wants every
     # key in a team, and a projectless one has to go somewhere.
     _TIER_STORE_TEAM = "llmao-entitlement-defaults"
 
-    async def update_team_entitlement(
-        self,
-        project: str,
-        *,
-        max_budget_usd: float | None = None,
-        token_cap: int | None = None,
-        rpm_limit: int | None = None,
-        tpm_limit: int | None = None,
-        max_parallel_requests: int | None = None,
-    ) -> TeamInfo:
-        """Adjust what a project may spend and how fast it may draw.
+    # ---- tiers: TierManager, below --------------------------------------
 
-        Site-admin operation: a project's allocation is a claim on shared
-        capacity, so it is not something a PMC can raise for itself.
+    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
+        return await self.tiers.limits(tier)
 
-        Only the named fields are sent. Passing None leaves LiteLLM's current
-        value alone rather than clearing it, which matters because a partial
-        update that silently zeroed the others would uncap the project.
-
-        max_budget_usd binds only on commercial models. Self-hosted spend
-        accrues at a derived price and will never reach a ceiling, so the rate
-        limits are what actually constrain a project's draw on the fleet.
-        """
-        team_id = await self.ensure_team_id(project)
-        payload: dict[str, Any] = {"team_id": team_id}
-        if max_budget_usd is not None:
-            payload["max_budget"] = float(max_budget_usd)
-        if token_cap is not None:
-            # Capacity lives in metadata, not a LiteLLM field: LiteLLM meters
-            # dollars, and merging rather than replacing keeps grantor and
-            # anything else already there.
-            existing = await self.team_info(project)
-            meta = dict(existing.metadata or {}) if existing else {}
-            meta["token_cap"] = int(token_cap)
-            payload["metadata"] = meta
-        for name, val in (
-            ("rpm_limit", rpm_limit),
-            ("tpm_limit", tpm_limit),
-            ("max_parallel_requests", max_parallel_requests),
-        ):
-            if val is not None:
-                payload[name] = int(val)
-        if len(payload) == 1:
-            raise BackendUnavailableError("update_team_entitlement: nothing to change")
-
-        resp = await self._request("POST", "team/update", json=payload)
-        self._raise_http(resp)
-        _LOGGER.info("team/update %s %s", project, sorted(payload))
-        live = await self.team_info(project)
-        if live is None:
-            raise BackendUnavailableError(f"team {project} vanished after update")
-        return live
+    async def set_tier_entitlement(self, tier: str, **limits: int | None) -> dict[str, Any]:
+        result = await self.tiers.set_limits(tier, **limits)
+        # The cap is re-read on every check, but today's usage is cached --
+        # without this an admin lowering a cap sees a stale remaining figure
+        # for up to a minute and concludes the control did not work.
+        self.invalidate_allowance()
+        return result
 
     async def update_key_entitlement(
         self,
@@ -706,36 +483,6 @@ class LiteLLMBackend:
         resp = await self._request("POST", "key/update", json=payload)
         self._raise_http(resp)
         _LOGGER.info("key/update %s %s", token_id[:12], sorted(payload))
-
-    async def team_info(self, project: str) -> TeamInfo | None:
-        """Live team spend/budget. Cache holds ids only; spend is never cached.
-
-        Cache hit → team/info. Cache miss → team/list (fills cache + returns
-        list-row fields; no second team/info).
-        """
-        project = (project or "").strip()
-        if not project:
-            return None
-
-        if project in self._team_ids:
-            team_id = self._team_ids[project]
-            resp = await self._request(
-                "GET",
-                "team/info",
-                params={"team_id": team_id},
-            )
-            self._raise_http(resp)
-            body = resp.json()
-            info = body.get("team_info") or body
-            if not isinstance(info, dict):
-                info = {}
-            return self._team_info_from_dict(info, team_id=team_id)
-
-        rows = await self._team_list_rows()
-        for row in rows:
-            if str(row.get("team_alias") or "") == project:
-                return self._team_info_from_dict(row)
-        return None
 
     async def list_keys(
         self,
@@ -1108,18 +855,271 @@ class LiteLLMBackend:
         """
         self._daily_at = None
 
-    # ---- tiers: TierManager, below --------------------------------------
+    def _ingest_team_list(self, teams: list[Any]) -> list[dict[str, Any]]:
+        """Update project→team_id cache from team/list rows; return dict rows."""
+        rows: list[dict[str, Any]] = []
+        for t in teams:
+            if hasattr(t, "model_dump"):
+                d = t.model_dump()
+            elif hasattr(t, "dict"):
+                d = t.dict()
+            elif isinstance(t, dict):
+                d = t
+            else:
+                continue
+            rows.append(d)
+            alias = d.get("team_alias")
+            tid = d.get("team_id")
+            if alias and tid:
+                self._team_ids[str(alias)] = str(tid)
+        return rows
 
-    async def tier_entitlement(self, tier: str) -> dict[str, Any]:
-        return await self.tiers.limits(tier)
+    # The listing is every team with its budget and metadata, and it is the
+    # slowest admin call left. Sixty seconds: long enough that a page load
+    # is one listing rather than several, short enough that a cap an admin
+    # has just changed shows while they are still looking at the page.
+    _TEAM_TTL_S = 60
 
-    async def set_tier_entitlement(self, tier: str, **limits: int | None) -> dict[str, Any]:
-        result = await self.tiers.set_limits(tier, **limits)
-        # The cap is re-read on every check, but today's usage is cached --
-        # without this an admin lowering a cap sees a stale remaining figure
-        # for up to a minute and concludes the control did not work.
-        self.invalidate_allowance()
-        return result
+    async def _team_list_rows(self, *, fresh: bool = False) -> list[dict[str, Any]]:
+        if not fresh and self._team_rows_cache is not None:
+            at, rows = self._team_rows_cache
+            if (time.monotonic() - at) < self._TEAM_TTL_S:
+                return rows
+        rows = await self._team_list_rows_uncached()
+        self._team_rows_cache = (time.monotonic(), rows)
+        return rows
+
+    async def _team_list_rows_uncached(self) -> list[dict[str, Any]]:
+        resp = await self._request("GET", "team/list")
+        self._raise_http(resp)
+        body = resp.json()
+        teams = body if isinstance(body, list) else body.get("teams") or body.get("data") or []
+        if not isinstance(teams, list):
+            teams = []
+        return self._ingest_team_list(teams)
+
+    def _team_info_from_dict(self, d: dict[str, Any], *, team_id: str | None = None) -> TeamInfo:
+        tid = team_id if team_id is not None else str(d.get("team_id") or "")
+        raw_dur = d.get("budget_duration")
+        if raw_dur is None or raw_dur == "":
+            raw_dur = d.get("duration")
+        meta = d.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
+        return TeamInfo(
+            tid,
+            float(d.get("max_budget") or 0),
+            float(d.get("spend") or 0),
+            budget_duration=resolve_budget_duration(raw_dur, self._cfg),
+            grantor=resolve_grantor(d.get("grantor"), meta),
+            token_cap=int(meta.get("token_cap") or 0),
+            token_window_days=int(meta.get("token_window_days") or 7),
+            metadata=meta,
+        )
+
+    async def _backfill_token_caps(self, rows: list[dict[str, Any]]) -> None:
+        """Give every team without a token allocation the configured default.
+
+        Projects come from LDAP. Nobody sets a project up, so there is no
+        moment at which someone could be asked for its allocation --
+        ensure_team writes the default when it first sees a new PMC, which
+        covers everything from now on but not the teams that already exist,
+        and not one created while an older build was running.
+
+        So this runs at every startup rather than being a one-off script: a
+        migration that only works if someone remembers to run it is one that
+        silently misses the project created last Tuesday.
+
+        Idempotent. The test is on the token_cap key being ABSENT rather than
+        on its value, so a project an admin deliberately capped at something
+        unusual -- including zero -- is left alone.
+
+        Failures are logged and swallowed: an unreachable team should not stop
+        the portal booting, and the next restart retries.
+        """
+        default = int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0)
+        if default <= 0:
+            return
+
+        patched = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            alias = row.get("team_alias")
+            team_id = row.get("team_id")
+            if not alias or not team_id:
+                continue
+            meta = row.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            if "token_cap" in meta:
+                continue
+
+            merged = {**meta, "token_cap": default, "token_window_days": 7}
+            try:
+                resp = await self._request(
+                    "POST",
+                    "team/update",
+                    json={"team_id": str(team_id), "metadata": merged},
+                )
+                self._raise_http(resp)
+            except BackendUnavailableError:
+                _LOGGER.warning("token cap backfill failed for %s", alias)
+                continue
+            patched.append(alias)
+
+        if patched:
+            _LOGGER.info(
+                "token cap %s applied to %d team(s) without one: %s",
+                f"{default:,}",
+                len(patched),
+                ", ".join(sorted(patched)),
+            )
+
+    async def ensure_team_id(self, project: str) -> str:
+        """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
+        info = await self.ensure_team(project)
+        return info.team_id
+
+    async def ensure_team(self, project: str) -> TeamInfo:
+        """Ensure a LiteLLM team exists for the project; return live budget facts."""
+        project = (project or "").strip()
+        if not project:
+            raise BackendUnavailableError("project is required")
+
+        existing = await self.team_info(project)
+        if existing is not None:
+            return existing
+
+        budget_usd = float(self._cfg.budgets.default_team_budget_usd)
+        duration = resolve_budget_duration(None, self._cfg)
+        resp = await self._request(
+            "POST",
+            "team/new",
+            json={
+                "team_alias": project,
+                "max_budget": budget_usd,
+                "budget_duration": duration,
+                "metadata": {
+                    "grantor": GRANTOR_FREE_TIER,
+                    # A project starts with an allocation so the page has
+                    # something to show and "Request more" has something to
+                    # request against. Deliberately generous for the pilot:
+                    # a cap that binds generates support requests and teaches
+                    # us nothing about real usage, while one that rarely
+                    # binds measures what people actually draw.
+                    "token_cap": int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0),
+                    "token_window_days": 7,
+                },
+            },
+        )
+        if resp.status_code >= 400:
+            again = await self.team_info(project)
+            if again is not None:
+                return again
+            self._raise_http(resp)
+
+        body = resp.json() if resp.content else {}
+        if not isinstance(body, dict):
+            body = {}
+        team_id = body.get("team_id")
+        if not team_id:
+            raise BackendUnavailableError("LiteLLM team/new returned no team_id")
+        self._team_ids[project] = str(team_id)
+        live = await self.team_info(project)
+        if live is not None:
+            return live
+        return self._team_info_from_dict(
+            {
+                **body,
+                "max_budget": body.get("max_budget", budget_usd),
+                "spend": body.get("spend", 0),
+            },
+            team_id=str(team_id),
+        )
+
+    async def update_team_entitlement(
+        self,
+        project: str,
+        *,
+        max_budget_usd: float | None = None,
+        token_cap: int | None = None,
+        rpm_limit: int | None = None,
+        tpm_limit: int | None = None,
+        max_parallel_requests: int | None = None,
+    ) -> TeamInfo:
+        """Adjust what a project may spend and how fast it may draw.
+
+        Site-admin operation: a project's allocation is a claim on shared
+        capacity, so it is not something a PMC can raise for itself.
+
+        Only the named fields are sent. Passing None leaves LiteLLM's current
+        value alone rather than clearing it, which matters because a partial
+        update that silently zeroed the others would uncap the project.
+
+        max_budget_usd binds only on commercial models. Self-hosted spend
+        accrues at a derived price and will never reach a ceiling, so the rate
+        limits are what actually constrain a project's draw on the fleet.
+        """
+        team_id = await self.ensure_team_id(project)
+        payload: dict[str, Any] = {"team_id": team_id}
+        if max_budget_usd is not None:
+            payload["max_budget"] = float(max_budget_usd)
+        if token_cap is not None:
+            # Capacity lives in metadata, not a LiteLLM field: LiteLLM meters
+            # dollars, and merging rather than replacing keeps grantor and
+            # anything else already there.
+            existing = await self.team_info(project)
+            meta = dict(existing.metadata or {}) if existing else {}
+            meta["token_cap"] = int(token_cap)
+            payload["metadata"] = meta
+        for name, val in (
+            ("rpm_limit", rpm_limit),
+            ("tpm_limit", tpm_limit),
+            ("max_parallel_requests", max_parallel_requests),
+        ):
+            if val is not None:
+                payload[name] = int(val)
+        if len(payload) == 1:
+            raise BackendUnavailableError("update_team_entitlement: nothing to change")
+
+        resp = await self._request("POST", "team/update", json=payload)
+        self._raise_http(resp)
+        _LOGGER.info("team/update %s %s", project, sorted(payload))
+        live = await self.team_info(project)
+        if live is None:
+            raise BackendUnavailableError(f"team {project} vanished after update")
+        return live
+
+    async def team_info(self, project: str) -> TeamInfo | None:
+        """Live team spend/budget. Cache holds ids only; spend is never cached.
+
+        Cache hit → team/info. Cache miss → team/list (fills cache + returns
+        list-row fields; no second team/info).
+        """
+        project = (project or "").strip()
+        if not project:
+            return None
+
+        if project in self._team_ids:
+            team_id = self._team_ids[project]
+            resp = await self._request(
+                "GET",
+                "team/info",
+                params={"team_id": team_id},
+            )
+            self._raise_http(resp)
+            body = resp.json()
+            info = body.get("team_info") or body
+            if not isinstance(info, dict):
+                info = {}
+            return self._team_info_from_dict(info, team_id=team_id)
+
+        rows = await self._team_list_rows()
+        for row in rows:
+            if str(row.get("team_alias") or "") == project:
+                return self._team_info_from_dict(row)
+        return None
 
 
 class TierManager:
