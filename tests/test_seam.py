@@ -28,8 +28,19 @@ import time
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.proxy.client import GRANTOR_FREE_TIER, BackendUnavailableError, resolve_budget_duration
+from llmao.proxy.client import (
+    GRANTOR_FREE_TIER,
+    PRETEND_PROJECTS,
+    PROJECT_FREE_TIER,
+    PROJECT_SERVICE,
+    AccessRequestManager,
+    BackendUnavailableError,
+    MemoryStore,
+    pretend_project,
+    resolve_budget_duration,
+)
 from llmao.seam import AuthzError, Identity, Seam
+from tests.fake_transport import fake_memory
 from tests.mock_backend import MockBackend
 
 
@@ -375,3 +386,43 @@ def test_an_admin_cannot_change_a_tier_that_does_not_exist():
             await seam.set_tier(root, "platinum", rpm_limit=1)
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# A key for no project
+#
+# It still has to be in a LiteLLM team. There are two pretend projects for
+# that, one per kind of projectless key, so their usage can be told apart
+# and their models restricted in one place.
+# ---------------------------------------------------------------------------
+
+
+def _approved_key(tier):
+    """Ask for a projectless key on `tier`, have it approved, and create it."""
+
+    async def run():
+        seam, _, backend = _seam()
+        # the mock has no requests of its own; the real manager will do
+        backend.requests = AccessRequestManager(MemoryStore(fake_memory()[0]))
+        jdoe = Identity(uid="jdoe", projects=[], committees=[])
+        root = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
+        req = await seam.request_key(jdoe, purpose="ci", tier=tier, reason="because")
+        await seam.decide_request(root, req.id, approve=True)
+        return (await seam.create_approved_key(jdoe, req.id)).info
+
+    return asyncio.run(run())
+
+
+def test_a_projectless_free_tier_key_goes_in_the_free_tier_project():
+    assert _approved_key("free_tier").project == PROJECT_FREE_TIER
+
+
+def test_a_projectless_service_key_goes_in_the_service_project():
+    assert _approved_key("service").project == PROJECT_SERVICE
+
+
+def test_a_pretend_project_cannot_be_an_ldap_one():
+    """LDAP names have no colon, which is what keeps these from colliding."""
+    assert all(":" in name for name in PRETEND_PROJECTS)
+    assert pretend_project("free_tier") == PROJECT_FREE_TIER
+    assert pretend_project("service") == PROJECT_SERVICE

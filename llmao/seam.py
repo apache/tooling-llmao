@@ -41,6 +41,7 @@ from .proxy.client import (
     KeyInfo,
     LiteLLMBackend,
     TeamInfo,
+    pretend_project,
 )
 
 
@@ -550,11 +551,13 @@ class Seam:
             raise AuthzError("That request has not been approved.")
 
         granted = {**req.wanted, **req.granted}
+        tier = granted.get("tier") or TIER_SERVICE
         created = await self._backend.keys.create(
-            project=req.project or self._backend.keys.PROJECTLESS_TEAM,
+            # A key for no project goes in the pretend project for its tier.
+            project=req.project or pretend_project(tier),
             purpose=granted.get("purpose") or "",
             user=identity.uid,
-            tier=granted.get("tier") or TIER_SERVICE,
+            tier=tier,
             token_cap=int(granted.get("token_cap") or 0) or None,
         )
 

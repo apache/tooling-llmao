@@ -56,6 +56,28 @@ TIER_PROJECT = "project"
 TIER_SERVICE = "service"
 TIERS = (TIER_FREE, TIER_PROJECT, TIER_SERVICE)
 
+# A key that belongs to no project still has to be in a LiteLLM team, so
+# there are two pretend projects for them, one per kind of projectless key.
+# Being teams, they give those keys what a real project's keys have: usage
+# that can be told apart, and one place to say which models they may use.
+#
+# The names are scoped the way llmao's rows in the memory store are. An LDAP
+# project name has no colon in it, so these can never collide with one.
+PROJECT_FREE_TIER = "llmao:project:free-tier"
+PROJECT_SERVICE = "llmao:project:service"
+
+# What a page calls each of them. The names above are never shown.
+PRETEND_PROJECTS = {
+    PROJECT_FREE_TIER: "free tier",
+    PROJECT_SERVICE: "service, no project",
+}
+
+
+def pretend_project(tier: str) -> str:
+    """Where a key with no project goes, by its tier."""
+    return PROJECT_FREE_TIER if tier == TIER_FREE else PROJECT_SERVICE
+
+
 # LiteLLM fields these map to. Named here so the mapping is in one place
 # rather than spread across call sites.
 _LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "max_parallel_requests")
@@ -357,11 +379,6 @@ class KeyManager:
     Handed the transport, the teams -- every key is minted into its
     project's team -- and the tiers, which say what a new key may do.
     """
-
-    # The team a key with no project is minted into. LiteLLM wants every
-    # key in a team, and a projectless one has to go somewhere. (The name
-    # is from when tier overrides were kept on this team's metadata.)
-    PROJECTLESS_TEAM = "llmao-entitlement-defaults"
 
     def __init__(self, transport: Any, teams: Any, tiers: Any):
         self._transport = transport
@@ -977,26 +994,28 @@ class TeamManager:
 
         budget_usd = float(self._cfg.budgets.default_team_budget_usd)
         duration = resolve_budget_duration(None, self._cfg)
-        resp = await self._transport.request(
-            "POST",
-            "team/new",
-            json={
-                "team_alias": project,
-                "max_budget": budget_usd,
-                "budget_duration": duration,
-                "metadata": {
-                    "grantor": GRANTOR_FREE_TIER,
-                    # A project starts with an allocation so the page has
-                    # something to show and "Request more" has something to
-                    # request against. Deliberately generous for the pilot:
-                    # a cap that binds generates support requests and teaches
-                    # us nothing about real usage, while one that rarely
-                    # binds measures what people actually draw.
-                    "token_cap": int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0),
-                    "token_window_days": 7,
-                },
+        new_team = {
+            "team_alias": project,
+            "max_budget": budget_usd,
+            "budget_duration": duration,
+            "metadata": {
+                "grantor": GRANTOR_FREE_TIER,
+                # A project starts with an allocation so the page has
+                # something to show and "Request more" has something to
+                # request against. Deliberately generous for the pilot:
+                # a cap that binds generates support requests and teaches
+                # us nothing about real usage, while one that rarely
+                # binds measures what people actually draw.
+                "token_cap": int(getattr(self._cfg.budgets, "default_team_token_cap", 0) or 0),
+                "token_window_days": 7,
             },
-        )
+        }
+        if project in PRETEND_PROJECTS:
+            # No dollar ceiling. A real project's budget is that project's
+            # to exhaust; this one would be shared by everybody with a
+            # projectless key, and one person reaching it would stop them all.
+            del new_team["max_budget"], new_team["budget_duration"]
+        resp = await self._transport.request("POST", "team/new", json=new_team)
         if resp.status_code >= 400:
             again = await self.info(project)
             if again is not None:

@@ -20,7 +20,7 @@ import asyncio
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.proxy.client import TeamManager
+from llmao.proxy.client import PROJECT_FREE_TIER, TeamManager
 from tests.fake_transport import FakeTransport
 
 
@@ -41,6 +41,37 @@ def test_a_team_not_yet_listed_is_looked_up():
     # ...and once it is known, it is not asked about again
     _run(teams.projects({"team-tooling"}))
     assert [c.path for c in teams._transport.calls] == ["team/list"]
+
+
+# ---------------------------------------------------------------------------
+# Making a team
+# ---------------------------------------------------------------------------
+
+
+def _new_team(project):
+    """What LiteLLM is sent to create `project`'s team."""
+
+    def litellm(call):
+        return {"teams": []} if call.path == "team/list" else {"team_id": "t1", **(call.json or {})}
+
+    cfg = edict(budgets=edict(default_team_budget_usd=100, duration="30d", default_team_token_cap=20_000_000))
+    teams = TeamManager(cfg, FakeTransport(litellm))
+    _run(teams.ensure(project))
+    return next(c.json for c in teams._transport.calls if c.path == "team/new")
+
+
+def test_a_real_projects_team_starts_with_a_dollar_budget():
+    sent = _new_team("airflow")
+    assert sent.max_budget == 100
+    assert sent.budget_duration == "30d"
+
+
+def test_a_pretend_projects_team_has_no_dollar_budget():
+    """It would be one budget shared by everybody with a projectless key."""
+    sent = _new_team(PROJECT_FREE_TIER)
+    assert sent.team_alias == PROJECT_FREE_TIER
+    assert "max_budget" not in sent
+    assert "budget_duration" not in sent
 
 
 # ---------------------------------------------------------------------------

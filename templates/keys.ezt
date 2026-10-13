@@ -90,7 +90,7 @@
         [for keys]
         <tr>
           <td class="font-monospace small">[keys.purpose]</td>
-          <td>[if-any keys.project][keys.project][else]<span class="text-muted">free tier</span>[end]</td>
+          <td>[if-any keys.project][keys.project][else]<span class="text-muted">[keys.no_project]</span>[end]</td>
           <td class="small font-monospace text-end">[keys.used_h]</td>
           <td class="small text-muted">[keys.last_used]</td>
           <td class="small text-muted">[keys.created_at]</td>

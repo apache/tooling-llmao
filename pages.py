@@ -60,7 +60,7 @@ from llmao.model_status import (
     deployment_status,
 )
 from llmao.models import load_models, model_available_for, model_in_service, ux_models
-from llmao.proxy.client import BackendUnavailableError, KeyInfo, pinned_litellm_version
+from llmao.proxy.client import PRETEND_PROJECTS, BackendUnavailableError, KeyInfo, pinned_litellm_version
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.
@@ -259,7 +259,10 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
                 {
                     "token_id": k.token_id,
                     "purpose": k.purpose or "—",
-                    "project": k.project,
+                    # A pretend project is not one to the reader: the column
+                    # is left empty and the template says what it is instead.
+                    "project": "" if k.project in PRETEND_PROJECTS else k.project,
+                    "no_project": PRETEND_PROJECTS.get(k.project, ""),
                     "kind_label": "Automation" if k.is_automation else "Personal",
                     "is_automation": ezt.boolean(k.is_automation),
                     "created_by": k.created_by or "—",
@@ -1181,7 +1184,7 @@ async def keys_list(result):
         after_path="/keys",
         used_by_token=await APP.seam.my_key_usage(ident),
     )
-    result.has_project_keys = ezt.boolean(any(getattr(k, "project", None) for k in keys))
+    result.has_project_keys = ezt.boolean(any(k.project not in PRETEND_PROJECTS for k in keys))
 
     # A page that fails because the allowance could not be read is worse than
     # one that renders without it: the keys are what the person came for.
