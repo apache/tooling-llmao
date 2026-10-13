@@ -70,9 +70,10 @@ class _Tiers:
 
     def __init__(self, window):
         self.window = window
+        self.cap = 1_000_000
 
     async def limits(self, tier):
-        return {"token_cap": 1_000_000, "token_window_days": self.window}
+        return {"token_cap": self.cap, "token_window_days": self.window}
 
 
 def _usage(days, *, now=NOON, page_size=1000, window=7):
@@ -114,6 +115,11 @@ def _usage(days, *, now=NOON, page_size=1000, window=7):
 def _asked(b):
     """What LiteLLM was asked for, as (path, params)."""
     return [(c.path, c.params) for c in b._transport.calls]
+
+
+def _a_minute_later(b):
+    """The open days have aged out, so the next read asks LiteLLM again."""
+    b._daily_at = None
 
 
 def _run(coro):
@@ -244,7 +250,7 @@ def test_second_read_is_cached():
     _run(b._spend_rows())
     _run(b._spend_rows())
     assert len(_asked(b)) == 1
-    b.invalidate()
+    _a_minute_later(b)
     _run(b._spend_rows())
     assert len(_asked(b)) == 2
 
@@ -299,7 +305,7 @@ def test_a_closed_day_is_not_read_again():
     """History does not change. Only today is worth asking about twice."""
     b = _usage(WEEK)
     _run(b._spend_rows())
-    b.invalidate()
+    _a_minute_later(b)
     rows = _run(b._spend_rows())
     assert _asked(b)[-1][1].start_date == TODAY
     # ...and yesterday's figures are still in the answer
@@ -310,14 +316,14 @@ def test_yesterday_stays_open_for_an_hour_after_midnight():
     """A request begun at 23:59 is filed under yesterday when it finishes."""
     b = _usage(WEEK, now=dt.datetime(2026, 10, 12, 0, 30, tzinfo=dt.UTC))
     _run(b._spend_rows())
-    b.invalidate()
+    _a_minute_later(b)
     _run(b._spend_rows())
     assert _asked(b)[-1][1].start_date == YESTERDAY
 
     b._now = lambda: dt.datetime(2026, 10, 12, 1, 30, tzinfo=dt.UTC)
-    b.invalidate()
+    _a_minute_later(b)
     _run(b._spend_rows())  # read once more after the hour, which closes it
-    b.invalidate()
+    _a_minute_later(b)
     _run(b._spend_rows())
     assert _asked(b)[-1][1].start_date == TODAY
 
@@ -374,6 +380,17 @@ def test_allowance_costs_no_read_of_its_own():
     _run(b._spend_rows())
     _run(b.allowance("alice"))
     _run(b.allowance("bob"))
+    assert len(_asked(b)) == 1
+
+
+def test_a_changed_cap_shows_at_once_and_costs_no_read():
+    """The cap is asked for each time. Changing it does not change what was used."""
+    b = _usage(FREE)
+    before = _run(b.allowance("alice"))
+    b.tiers.cap = 500_000
+    after = _run(b.allowance("alice"))
+    assert (before.cap, after.cap) == (1_000_000, 500_000)
+    assert after.buckets == before.buckets
     assert len(_asked(b)) == 1
 
 

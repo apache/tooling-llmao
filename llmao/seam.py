@@ -364,12 +364,7 @@ class Seam:
         named = {k: v for k, v in limits.items() if v is not None}
         if not named:
             raise AuthzError("Nothing to change.")
-        limits = await self._backend.tiers.set_limits(tier, **named)
-        # The cap is re-read on every check, but today's usage is cached --
-        # without this an admin lowering a cap sees a stale remaining figure
-        # for up to a minute and concludes the control did not work.
-        self._backend.metering.invalidate()
-        return limits
+        return await self._backend.tiers.set_limits(tier, **named)
 
     # ---- what people are told ------------------------------------------
 

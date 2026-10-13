@@ -846,10 +846,6 @@ class UsageManager:
             page += 1
         return out
 
-    def invalidate(self) -> None:
-        """Have the next read ask again. Closed days are history and stay."""
-        self._daily_at = None
-
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
         """A principal's rolling allowance, derived from recorded usage.
 
