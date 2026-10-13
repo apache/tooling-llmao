@@ -116,8 +116,10 @@ class MockBackend:
         *,
         project: str,
         purpose: str,
+        tier: str,
         user: str | None = None,
         metadata: dict | None = None,
+        token_cap: int | None = None,
     ) -> CreatedKey:
         project = (project or "").strip()
         purpose = (purpose or "").strip()
@@ -126,6 +128,7 @@ class MockBackend:
         token_id = f"tok-{uuid.uuid4().hex[:16]}"
         meta = dict(metadata or {})
         meta["project"] = project
+        meta["tier"] = tier
         if purpose:
             meta["purpose"] = purpose
         row = {

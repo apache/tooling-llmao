@@ -33,9 +33,9 @@ from typing import Any
 from . import access_requests as _access
 from .proxy.client import (
     GRANTOR_FREE_TIER,
-    TIER_FREE,
     TIER_PROJECT,
     TIER_SERVICE,
+    TIERS,
     BackendUnavailableError,
     CreatedKey,
     KeyInfo,
@@ -319,12 +319,18 @@ class Seam:
             raise AuthzError("Say what the key is for.")
         if project and project not in (identity.committees or []):
             raise AuthzError(f"You are not on the {project} PMC.")
+        tier = (tier or "").strip() or TIER_SERVICE
+        if tier not in TIERS:
+            # The tier arrives in a form post and ends up deciding a key's
+            # limits. An unknown one would mint a key on the defaults, under
+            # a name no page lists.
+            raise AuthzError(f"There is no {tier} tier.")
         req = _access.AccessRequest.new(
             kind=_access.KIND_KEY,
             requester=identity.uid,
             project=project,
             reason=reason,
-            wanted={"purpose": purpose, "tier": tier or TIER_SERVICE},
+            wanted={"purpose": purpose, "tier": tier},
         )
         return await self._backend.requests.add(req)
 
@@ -339,7 +345,7 @@ class Seam:
         if not identity.is_site_admin:
             raise AuthzError("Tiers are limited to site admins.")
         out = []
-        for tier in (TIER_FREE, TIER_PROJECT, TIER_SERVICE):
+        for tier in TIERS:
             out.append({"tier": tier, **(await self._backend.tiers.limits(tier))})
         return out
 
@@ -351,6 +357,8 @@ class Seam:
         """
         if not identity.is_site_admin:
             raise AuthzError("Changing tiers is limited to site admins.")
+        if tier not in TIERS:
+            raise AuthzError(f"There is no {tier} tier.")
         named = {k: v for k, v in limits.items() if v is not None}
         if not named:
             raise AuthzError("Nothing to change.")
@@ -634,6 +642,8 @@ class Seam:
             project=project,
             purpose=purpose,
             user=identity.uid,
+            # A person's key in a project draws on the project's share.
+            tier=TIER_PROJECT,
         )
 
     @require_admin
@@ -650,6 +660,8 @@ class Seam:
             purpose=purpose,
             user=None,
             metadata={"created_by": identity.uid},
+            # No person at the keyboard: this is what the service tier is for.
+            tier=TIER_SERVICE,
         )
 
     async def revoke_key(self, identity: Identity, token_id: str) -> None:

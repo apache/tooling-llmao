@@ -434,3 +434,13 @@ def test_changing_one_tier_leaves_another_alone():
 def test_tier_limits_fall_back_to_config_when_litellm_is_down():
     """A page must still have limits to show during a proxy restart."""
     assert _run(_tiers(down=True)[0].limits("free_tier"))["token_cap"] == 1_000_000
+
+
+def test_a_new_keys_limits_include_what_an_admin_has_changed():
+    """The Tiers page says a change applies to keys issued from then on."""
+    t, _ = _tiers()
+    assert _run(t.key_limits("service")) == {"rpm_limit": 60, "tpm_limit": 60000, "max_parallel_requests": 4}
+    _run(t.set_limits("service", rpm_limit=10, token_cap=5_000_000))
+    limits = _run(t.key_limits("service"))
+    assert limits == {"rpm_limit": 10, "tpm_limit": 60000, "max_parallel_requests": 4}
+    assert "token_cap" not in limits, "LiteLLM holds rate limits on a key, not our token cap"

@@ -177,3 +177,58 @@ def test_site_admin_sees_any_project():
         assert len(rows) == 1
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Which tier a key is minted on
+#
+# The tier decides a key's rate limits, and those are the only control there
+# is on self-hosted capacity. Minting used to default to the project tier,
+# so a path that did not say got project limits whatever it was for.
+# ---------------------------------------------------------------------------
+
+
+def _minted_tier(backend):
+    return backend._data["keys"][-1]["metadata"]["tier"]
+
+
+def test_a_persons_project_key_is_on_the_project_tier():
+    async def run():
+        seam, _, backend = _seam()
+        await seam.create_personal_key(Identity(uid="jdoe", projects=["airflow"], committees=[]), "airflow", "cli")
+        assert _minted_tier(backend) == "project"
+
+    asyncio.run(run())
+
+
+def test_an_automation_key_is_on_the_service_tier():
+    """No person at the keyboard is what the service tier is for."""
+
+    async def run():
+        seam, _, backend = _seam()
+        await seam.create_automation_key(Identity(uid="chair", projects=[], committees=["airflow"]), "airflow", "ci")
+        assert _minted_tier(backend) == "service"
+
+    asyncio.run(run())
+
+
+def test_a_key_request_cannot_name_a_tier_that_does_not_exist():
+    """The tier comes from a form post and ends up deciding a key's limits."""
+
+    async def run():
+        seam, _, _ = _seam()
+        ident = Identity(uid="jdoe", projects=[], committees=[])
+        with pytest.raises(AuthzError, match="no platinum tier"):
+            await seam.request_key(ident, purpose="ci", tier="platinum", reason="because")
+
+    asyncio.run(run())
+
+
+def test_an_admin_cannot_change_a_tier_that_does_not_exist():
+    async def run():
+        seam, _, _ = _seam()
+        root = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
+        with pytest.raises(AuthzError, match="no platinum tier"):
+            await seam.set_tier(root, "platinum", rpm_limit=1)
+
+    asyncio.run(run())

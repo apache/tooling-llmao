@@ -54,6 +54,7 @@ GRANTOR_FREE_TIER = "Free Tier"
 TIER_FREE = "free_tier"
 TIER_PROJECT = "project"
 TIER_SERVICE = "service"
+TIERS = (TIER_FREE, TIER_PROJECT, TIER_SERVICE)
 
 # LiteLLM fields these map to. Named here so the mapping is in one place
 # rather than spread across call sites.
@@ -316,7 +317,7 @@ class LiteLLMBackend:
         self.tiers = TierManager(cfg, memory)
         self.teams = TeamManager(cfg, self._transport)
         self.metering = UsageManager(self._transport, fleet, self.teams, self.tiers)
-        self.keys = KeyManager(cfg, self._transport, self.teams)
+        self.keys = KeyManager(self._transport, self.teams, self.tiers)
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -353,8 +354,8 @@ class LiteLLMBackend:
 class KeyManager:
     """LiteLLM's virtual keys: listing, minting, revoking, and what each may do.
 
-    Handed the config, the transport and the teams -- every key is minted
-    into its project's team.
+    Handed the transport, the teams -- every key is minted into its
+    project's team -- and the tiers, which say what a new key may do.
     """
 
     # The team a key with no project is minted into. LiteLLM wants every
@@ -362,10 +363,10 @@ class KeyManager:
     # is from when tier overrides were kept on this team's metadata.)
     PROJECTLESS_TEAM = "llmao-entitlement-defaults"
 
-    def __init__(self, cfg: Any, transport: Any, teams: Any):
-        self._cfg = cfg
+    def __init__(self, transport: Any, teams: Any, tiers: Any):
         self._transport = transport
         self.teams = teams
+        self.tiers = tiers
 
     async def update_entitlement(
         self,
@@ -444,10 +445,15 @@ class KeyManager:
         project: str,
         purpose: str,
         user: str | None = None,
+        tier: str,
         metadata: dict | None = None,
-        tier: str = TIER_PROJECT,
         token_cap: int | None = None,
     ) -> CreatedKey:
+        """Mint a key on `tier`, which decides its rate limits.
+
+        The tier has no default. It used to be the project tier, and a
+        caller that forgot to say got project limits for a pipeline key.
+        """
         project = (project or "").strip()
         if not project:
             raise BackendUnavailableError("create_key requires project")
@@ -463,7 +469,7 @@ class KeyManager:
         # price and no budget can ever be exhausted by them. A key minted
         # without limits can saturate the fleet, and LiteLLM's default is
         # unlimited.
-        meta.setdefault("tier", tier)
+        meta["tier"] = tier
         if token_cap is not None:
             # A per-key allowance, set by an admin when approving. Only a
             # projectless service key really needs one: a project key draws
@@ -471,7 +477,10 @@ class KeyManager:
             # a key belonging to neither has nothing to draw on, and
             # unattended automation would consume a week in an afternoon.
             meta["token_cap"] = int(token_cap)
-        limits = resolve_entitlement(self._cfg, tier)
+        # From the tiers rather than from config alone: an admin who has
+        # changed a tier's limits is told they apply to keys issued from
+        # then on, and this is where that is made true.
+        limits = await self.tiers.key_limits(tier)
 
         payload: dict[str, Any] = {
             "team_id": team_id,
@@ -1139,6 +1148,15 @@ class TierManager:
         if isinstance(stored, dict):
             effective.update({k: v for k, v in stored.items() if v is not None})
         return effective
+
+    async def key_limits(self, tier: str) -> dict[str, Any]:
+        """The rate limits a key minted on this tier is given.
+
+        Config with the admin's changes on top, like limits(), but only what
+        LiteLLM holds on a key. The token cap is not one of those: it is
+        metered here, against usage, and LiteLLM would not know the field.
+        """
+        return {k: v for k, v in (await self.limits(tier)).items() if k in _LIMIT_FIELDS}
 
     async def set_limits(
         self,
