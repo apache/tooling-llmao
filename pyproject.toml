@@ -9,7 +9,7 @@ dependencies = [
     "httpx>=0.27",  # async LiteLLM admin client (ProxyBackend)
     "asfquart",
     "asfpy",  # stopwatch timing; also arrives via asfquart
-    "litellm[proxy,extra-proxy]==1.102.2",  # proxy stack + prisma (DB client)
+    "litellm[proxy,extra-proxy]==1.105.0",  # proxy stack + prisma (DB client)
     "PyYAML>=6.0.1",  # model_list.yaml / config loading
     "easydict>=1.13",  # APP.cfg dotted access / tests
     "dunamai>=1.26.0",
