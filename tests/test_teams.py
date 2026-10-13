@@ -272,7 +272,7 @@ def test_restricting_one_pretend_project_leaves_the_other_alone():
 def test_only_a_pretend_project_can_be_restricted_this_way():
     """A real project's team has no list on purpose."""
     teams = _litellm_with(["airflow"])
-    with pytest.raises(BackendUnavailableError):
+    with pytest.raises(ValueError):
         _run(teams.restrict_pretend_project("airflow"))
     assert _updated(teams) == []
 

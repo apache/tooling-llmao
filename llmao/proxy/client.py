@@ -1110,7 +1110,7 @@ class TeamManager:
     async def restrict_pretend_project(self, project: str) -> None:
         """Limit a pretend project to our own boxes, making its team if it has none."""
         if project not in PRETEND_PROJECTS:
-            raise BackendUnavailableError(f"{project} is not a pretend project")
+            raise ValueError(f"{project} is not a pretend project")
         team_id = await self.team_id(project)
         if team_id is None:
             await self.ensure(project)
