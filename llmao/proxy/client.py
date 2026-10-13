@@ -26,6 +26,7 @@ LiteLLM opaque team_id is internal to LiteLLMBackend only.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 import logging
@@ -335,6 +336,7 @@ class LiteLLMBackend:
     """
 
     def __init__(self, cfg: Any, fleet: Any, *, transport: Any = None):
+        self._cfg = cfg
         self._transport = transport or LiteLLMTransport(cfg)
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
         memory = MemoryStore(self._transport)
@@ -377,6 +379,73 @@ class LiteLLMBackend:
             await self.metering.warm()
         except BackendUnavailableError as e:
             _LOGGER.warning("could not warm usage: %s", e)
+
+    # ---- the two things that run for as long as the service does --------
+    #
+    # Both compare LiteLLM with what it ought to hold, and they are kept
+    # apart by why it might not. They live here because each asks more than
+    # one manager, and no manager should have to know another.
+
+    async def run_skew(self) -> None:
+        """The fleet has changed and LiteLLM has not followed, or the reverse.
+
+        Config skew often; LiteLLM GET /health (tokens) on a long interval.
+        """
+        skew_s = float(self._cfg.fleet.skew_interval_s)
+        health_s = float(self._cfg.fleet.litellm_health_interval_s)
+        last_health = 0.0
+        first = True
+        while True:
+            try:
+                await self.deployments.check_config_skew()
+                now = time.time()
+                if first or (now - last_health) >= health_s:
+                    await self.deployments.check_health_skew()
+                    last_health = now
+                    first = False
+            except Exception:
+                _LOGGER.exception("LiteLLM skew check failed")
+            await asyncio.sleep(skew_s)
+
+    async def watch_outside_edits(self) -> None:
+        """Somebody has changed LiteLLM where llmao should have been the one to.
+
+        llmao is the only thing meant to write the teams, keys and
+        deployments it made. An edit in LiteLLM's own admin interface is not
+        seen by llmao, may be undone by its next write, and can take away a
+        limit that was there for a reason.
+        """
+        while True:
+            try:
+                await self.check_outside_edits()
+            except Exception:
+                _LOGGER.exception("check for edits outside llmao failed")
+            await asyncio.sleep(float(self._cfg.fleet.skew_interval_s))
+
+    async def check_outside_edits(self) -> None:
+        """One pass. Finds and records; it puts nothing right.
+
+        Each manager is asked a plain question, and the answer is handed to
+        the skew store, which makes its rows match. What is found shows
+        under "Work needed" until somebody deals with it.
+        """
+        # From the same listing everything else uses, up to a minute old.
+        # This comes round every few minutes; a minute either way is nothing.
+        wrong = await self.teams.pretend_projects_out_of_line()
+        await self.skew.reconcile(
+            "project",
+            {
+                project: {
+                    "what": (
+                        f"The {PRETEND_PROJECTS[project]} project has no team."
+                        if allows is None
+                        else f"The {PRETEND_PROJECTS[project]} project allows "
+                        f"{', '.join(allows) or 'any model'}. Its keys should reach only our own boxes."
+                    )
+                }
+                for project, allows in wrong.items()
+            },
+        )
 
 
 class KeyManager:
@@ -1012,25 +1081,47 @@ class TeamManager:
         error: until this ran, a free key could reach a model that costs
         money.
         """
-        listed = {row.get("team_alias"): row for row in await self.rows()}
-        for project in PRETEND_PROJECTS:
-            row = listed.get(project)
-            if row is None:
-                await self.ensure(project)
-            elif set(row.get("models") or []) != self._PRETEND_MODELS:
+        for project, allows in (await self.pretend_projects_out_of_line()).items():
+            if allows is not None:
                 _LOGGER.error(
                     "%s allowed %s, not %s; restricting it",
                     project,
-                    sorted(row.get("models") or []) or "any model",
+                    allows or "any model",
                     sorted(self._PRETEND_MODELS),
                 )
-                resp = await self._transport.request(
-                    "POST",
-                    "team/update",
-                    json={"team_id": row["team_id"], "models": sorted(self._PRETEND_MODELS)},
-                )
-                self._transport.raise_http(resp)
-                self._team_rows_cache = None
+            await self.restrict_pretend_project(project)
+
+    async def pretend_projects_out_of_line(self) -> dict[str, list[str] | None]:
+        """The pretend projects that are not restricted as they should be.
+
+        {project: the models its team allows}, an empty list meaning any, or
+        None where the project has no team at all. Empty when all is well.
+        """
+        listed = {row.get("team_alias"): row for row in await self.rows()}
+        wrong: dict[str, list[str] | None] = {}
+        for project in PRETEND_PROJECTS:
+            row = listed.get(project)
+            if row is None:
+                wrong[project] = None
+            elif set(row.get("models") or []) != self._PRETEND_MODELS:
+                wrong[project] = sorted(row.get("models") or [])
+        return wrong
+
+    async def restrict_pretend_project(self, project: str) -> None:
+        """Limit a pretend project to our own boxes, making its team if it has none."""
+        if project not in PRETEND_PROJECTS:
+            raise BackendUnavailableError(f"{project} is not a pretend project")
+        team_id = await self.team_id(project)
+        if team_id is None:
+            await self.ensure(project)
+            return
+        resp = await self._transport.request(
+            "POST",
+            "team/update",
+            json={"team_id": team_id, "models": sorted(self._PRETEND_MODELS)},
+        )
+        self._transport.raise_http(resp)
+        self._team_rows_cache = None
 
     async def ensure_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""

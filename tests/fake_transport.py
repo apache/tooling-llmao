@@ -60,11 +60,12 @@ class FakeTransport:
         return None
 
 
-def fake_memory(*, down: bool = False):
-    """A FakeTransport that behaves like LiteLLM's /v1/memory, and what it holds.
+def memory_answers():
+    """How LiteLLM's /v1/memory answers, and what it holds.
 
-    Returns (transport, store). `store` is the rows, key to value, for a
-    test to seed or to look at. Any call that is not to /v1/memory fails.
+    Returns (answer, store), for a test whose stand-in LiteLLM has to answer
+    other calls as well. `store` is the rows, key to value. The answer
+    function fails on any call that is not to /v1/memory.
     """
     store = {}
 
@@ -83,4 +84,14 @@ def fake_memory(*, down: bool = False):
             return {"deleted": True} if store.pop(key, None) is not None else (404, {})
         raise AssertionError(f"unexpected call: {call}")
 
+    return answer, store
+
+
+def fake_memory(*, down: bool = False):
+    """A FakeTransport that behaves like LiteLLM's /v1/memory, and what it holds.
+
+    Returns (transport, store). `store` is the rows, key to value, for a
+    test to seed or to look at.
+    """
+    answer, store = memory_answers()
     return FakeTransport(answer, down=down), store

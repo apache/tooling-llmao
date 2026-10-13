@@ -24,7 +24,6 @@ then in case they have drifted.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
@@ -235,24 +234,6 @@ class DeploymentManager:
                 await self.add_deployment(dep)
             elif srv.state in (UNHEALTHY, STALLED) and dep.in_litellm:
                 await self.delete_deployment(dep)
-
-    async def run_skew(self) -> None:
-        """Config skew often; LiteLLM GET /health (tokens) on a long interval."""
-        skew_s = float(self._cfg.fleet.skew_interval_s)
-        health_s = float(self._cfg.fleet.litellm_health_interval_s)
-        last_health = 0.0
-        first = True
-        while True:
-            try:
-                await self.check_config_skew()
-                now = time.time()
-                if first or (now - last_health) >= health_s:
-                    await self.check_health_skew()
-                    last_health = now
-                    first = False
-            except Exception:
-                _LOGGER.exception("LiteLLM skew check failed")
-            await asyncio.sleep(skew_s)
 
     async def check_config_skew(self) -> None:
         resp = await self._transport.request("GET", "model/info")

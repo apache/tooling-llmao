@@ -547,3 +547,26 @@ def test_work_is_counted_for_whoever_is_the_one_to_do_it():
         assert await seam.work_count(Identity(uid="carol", projects=[], committees=[])) == 0
 
     asyncio.run(run())
+
+
+def test_a_site_admin_puts_a_pretend_project_back_and_the_work_is_gone():
+    async def run():
+        seam, backend, store = _with_log()
+        restricted = []
+
+        async def restrict(project):
+            restricted.append(project)
+
+        backend.teams.restrict_pretend_project = restrict
+        await backend.skew.reconcile("project", {PROJECT_FREE_TIER: {"what": "allows any model"}})
+
+        for who, project in ((ALICE, PROJECT_FREE_TIER), (ROOT, "airflow")):
+            with pytest.raises(AuthzError):
+                await seam.restrict_pretend_project(who, project)
+        assert restricted == [] and len(store) == 1
+
+        await seam.restrict_pretend_project(ROOT, PROJECT_FREE_TIER)
+        assert restricted == [PROJECT_FREE_TIER]
+        assert store == {}
+
+    asyncio.run(run())

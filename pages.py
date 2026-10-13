@@ -1404,13 +1404,22 @@ def _stamp(at) -> str:
     return f"{at[:16].replace('T', ' ')} UTC" if at else ""
 
 
+# What a site admin can press to deal with each kind of skew: (where the
+# form posts, what the button says). A kind with no entry has no button yet
+# and is put right some other way.
+_SKEW_ACTIONS = {
+    "project": ("/do-restrict-project", "Restrict"),
+}
+
+
 def _skew_rows(entries) -> list:
     """Template rows for the Admin page's "Work needed"."""
     return [
         edict(
             what=n.get("what") or "",
-            # which thing: "key tok1", "deployment gemma"
-            about=" ".join(str(x) for x in (n.get("kind"), n.get("subject")) if x),
+            subject=n.get("subject") or "",
+            action=_SKEW_ACTIONS.get(n.get("kind"), ("", ""))[0],
+            action_label=_SKEW_ACTIONS.get(n.get("kind"), ("", ""))[1],
             # How long it has been wrong. An unchanged row is not rewritten,
             # so its last write says nothing about when it was last checked.
             since=_stamp(n.get("first_seen")),
@@ -1741,6 +1750,19 @@ async def do_create_other_key():
         keys_create_another="/keys/other/new",
     )
     return _see_other("/keys/other")
+
+
+@APP.post("/do-restrict-project")
+@asfquart.auth.require
+async def do_restrict_project():
+    """A site admin puts a pretend project back to our own boxes only."""
+    form = await quart.request.form
+    try:
+        await APP.seam.restrict_pretend_project(await current_identity(APP.cfg), (form.get("subject") or "").strip())
+        await flash_success("Restricted to our own boxes.")
+    except (AuthzError, BackendUnavailableError) as e:
+        await flash_danger(str(e))
+    return _see_other("/admin")
 
 
 @APP.post("/do-acknowledge")

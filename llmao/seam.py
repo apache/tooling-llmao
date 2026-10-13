@@ -33,6 +33,7 @@ from typing import Any
 from . import access_requests as _access
 from .proxy.client import (
     GRANTOR_FREE_TIER,
+    PRETEND_PROJECTS,
     TIER_PROJECT,
     TIER_SERVICE,
     TIERS,
@@ -377,6 +378,19 @@ class Seam:
         if not identity.is_site_admin:
             raise AuthzError("That is limited to site admins.")
         return await self._backend.skew.open()
+
+    async def restrict_pretend_project(self, identity: Identity, project: str) -> None:
+        """Put a pretend project back to our own boxes only. Site admins.
+
+        The button on its "Work needed" row. The row is cleared here rather
+        than left for the next check to find gone.
+        """
+        if not identity.is_site_admin:
+            raise AuthzError("That is limited to site admins.")
+        if project not in PRETEND_PROJECTS:
+            raise AuthzError("There is no such project to restrict.")
+        await self._backend.teams.restrict_pretend_project(project)
+        await self._backend.skew.clear("project", project)
 
     async def work_count(self, identity: Identity) -> int:
         """How many things are out of line that this person is the one to act on.

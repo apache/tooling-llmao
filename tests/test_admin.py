@@ -138,14 +138,41 @@ def test_proxy_version_is_unavailable_when_litellm_cannot_be_reached():
 def test_admin_shows_work_needed():
     """Skew stays until it is put right, so it has no button to dismiss it."""
     pin = pinned_litellm_version()
-    skew = [edict(what="limits differ from the service tier", about="key t1", since="2026-10-12 09:00 UTC")]
+    skew = [
+        edict(
+            what="limits differ from the service tier",
+            subject="t1",
+            action="",
+            action_label="",
+            since="2026-10-12 09:00 UTC",
+        )
+    ]
     out = _render(running=pin, expected=pin, skew=skew)
     assert "Work needed" in out
     assert "limits differ from the service tier" in out
-    assert "key t1" in out
     assert "since 2026-10-12 09:00 UTC" in out
     assert "/do-acknowledge" not in out
+    assert "<form" not in out[out.index("Work needed") : out.index("list-group-item-action")]
     assert "Work needed" not in _render(running=pin, expected=pin)
+
+
+def test_work_with_a_way_to_do_it_has_a_button_that_does_it():
+    pin = pinned_litellm_version()
+    skew = [
+        edict(
+            what="The free tier project allows any model.",
+            subject="llmao:project:free-tier",
+            action="/do-restrict-project",
+            action_label="Restrict",
+            since="",
+        )
+    ]
+    out = _render(running=pin, expected=pin, skew=skew)
+    assert 'action="/do-restrict-project"' in out
+    assert 'name="subject" value="llmao:project:free-tier"' in out
+    assert ">Restrict</button>" in out
+    # the identifier is for the form; the sentence is what a person reads
+    assert out.count("llmao:project:free-tier") == 1
 
 
 def test_something_to_see_is_shown_on_the_page_and_can_be_acknowledged():

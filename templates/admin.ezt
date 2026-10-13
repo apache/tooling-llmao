@@ -12,9 +12,17 @@
     <div class="card-header fw-semibold">Work needed</div>
     <ul class="list-group list-group-flush">
       [for skew]
-      <li class="list-group-item small">
-        <span class="fw-semibold">[skew.what]</span>
-        <span class="text-muted">&middot; [skew.about][if-any skew.since] &middot; since [skew.since][end]</span>
+      <li class="list-group-item small d-flex justify-content-between align-items-start">
+        <div>
+          <span class="fw-semibold">[skew.what]</span>
+          <span class="text-muted">[if-any skew.since]&middot; since [skew.since][end]</span>
+        </div>
+        [if-any skew.action]
+        <form method="post" action="[skew.action]" class="mb-0 ms-3">
+          <input type="hidden" name="subject" value="[skew.subject]">
+          <button type="submit" class="btn btn-warning btn-sm">[skew.action_label]</button>
+        </form>
+        [end]
       </li>
       [end]
     </ul>

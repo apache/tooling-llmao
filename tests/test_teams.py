@@ -249,6 +249,34 @@ def test_backfill_skips_malformed_rows_without_stopping():
     assert _sent(b)[0][1]["team_id"] == "t1"
 
 
+def test_asking_which_pretend_projects_are_out_of_line_changes_nothing():
+    """The question a watcher asks. Finding is separate from putting right."""
+    teams = _litellm_with({PROJECT_FREE_TIER: [], PROJECT_SERVICE: [GROUP, "claude-opus-5"]})
+    assert _run(teams.pretend_projects_out_of_line()) == {
+        PROJECT_FREE_TIER: [],
+        PROJECT_SERVICE: ["claude-opus-5", GROUP],
+    }
+    assert _updated(teams) == [] and _made(teams) == []
+    assert _run(_litellm_with([PROJECT_FREE_TIER, PROJECT_SERVICE]).pretend_projects_out_of_line()) == {}
+    # one with no team at all is out of line too
+    assert _run(_litellm_with([PROJECT_FREE_TIER]).pretend_projects_out_of_line()) == {PROJECT_SERVICE: None}
+
+
+def test_restricting_one_pretend_project_leaves_the_other_alone():
+    teams = _litellm_with({PROJECT_FREE_TIER: [], PROJECT_SERVICE: []})
+    _run(teams.restrict_pretend_project(PROJECT_FREE_TIER))
+    assert _updated(teams) == [(f"id-{PROJECT_FREE_TIER}", [GROUP])]
+    assert _run(teams.pretend_projects_out_of_line()) == {PROJECT_SERVICE: []}
+
+
+def test_only_a_pretend_project_can_be_restricted_this_way():
+    """A real project's team has no list on purpose."""
+    teams = _litellm_with(["airflow"])
+    with pytest.raises(BackendUnavailableError):
+        _run(teams.restrict_pretend_project("airflow"))
+    assert _updated(teams) == []
+
+
 def test_startup_stops_if_a_pretend_project_cannot_be_made_or_restricted():
     """Fail-fast: a service that cannot restrict free keys should not start."""
 
