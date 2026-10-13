@@ -16,6 +16,15 @@
 
 litellm_settings:
   drop_params: true
+  # Rejects a 200 that carries no answer, with a message saying what to do.
+  # A reasoning model emits its thinking into the SAME budget as the reply,
+  # so too small a max_tokens returns finish_reason "length" and EMPTY
+  # content -- a success at the HTTP layer that no client can interpret.
+  # Measured on qwen3.8-27b: nothing at all below ~3000 tokens, at every
+  # reasoning_effort. See llmao/litellm_hooks.py.
+  #
+  # Production sets this through the same file Puppet writes.
+  callbacks: ["llmao.litellm_hooks.empty_completion_guard"]
 
 general_settings:
   # Proxy admin key (must start with sk-). Same value as config.yaml → litellm.master_key.
