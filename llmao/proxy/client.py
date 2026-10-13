@@ -363,6 +363,7 @@ class LiteLLMBackend:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
         rows = await self.teams.rows(fresh=True)
         await self.teams.backfill_token_caps(rows)
+        await self.teams.ensure_pretend_projects()
         await self.deployments.ensure_commercial()
         # Six of the week's seven days are history and are never asked for
         # again, so reading them here means no visitor waits for them. Not
@@ -976,6 +977,17 @@ class TeamManager:
                 len(patched),
                 ", ".join(sorted(patched)),
             )
+
+    async def ensure_pretend_projects(self) -> None:
+        """Make the pretend projects' teams if they are not there yet.
+
+        Done at startup rather than when the first projectless key is
+        minted, so that they always exist and always have a team id: the
+        allowance is counted by one, and both say which models a projectless
+        key may use.
+        """
+        for project in PRETEND_PROJECTS:
+            await self.ensure(project)
 
     async def ensure_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""

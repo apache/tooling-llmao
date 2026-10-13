@@ -20,7 +20,7 @@ import asyncio
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.proxy.client import PROJECT_FREE_TIER, TeamManager
+from llmao.proxy.client import PROJECT_FREE_TIER, PROJECT_SERVICE, TeamManager
 from tests.fake_transport import FakeTransport
 
 
@@ -72,6 +72,42 @@ def test_a_pretend_projects_team_has_no_dollar_budget():
     assert sent.team_alias == PROJECT_FREE_TIER
     assert "max_budget" not in sent
     assert "budget_duration" not in sent
+
+
+def _litellm_with(existing):
+    """A stand-in LiteLLM that has `existing` teams and can be given more."""
+    teams = [{"team_alias": alias, "team_id": f"id-{alias}"} for alias in existing]
+
+    def litellm(call):
+        if call.path == "team/new":
+            teams.append({"team_alias": call.json.team_alias, "team_id": f"id-{call.json.team_alias}"})
+            return teams[-1]
+        if call.path == "team/info":
+            return {"team_info": next(t for t in teams if t["team_id"] == call.params.team_id)}
+        return {"teams": teams}
+
+    cfg = edict(budgets=edict(default_team_budget_usd=100, duration="30d", default_team_token_cap=0))
+    return TeamManager(cfg, FakeTransport(litellm))
+
+
+def _made(teams):
+    return [c.json.team_alias for c in teams._transport.calls if c.path == "team/new"]
+
+
+def test_the_pretend_projects_are_made_at_startup():
+    """So they always exist, and always have a team id to count usage by."""
+    teams = _litellm_with(["airflow"])
+    _run(teams.ensure_pretend_projects())
+    assert _made(teams) == [PROJECT_FREE_TIER, PROJECT_SERVICE]
+    assert _run(teams.team_id(PROJECT_FREE_TIER)) == f"id-{PROJECT_FREE_TIER}"
+    assert _run(teams.team_id(PROJECT_SERVICE)) == f"id-{PROJECT_SERVICE}"
+
+
+def test_pretend_projects_already_there_are_left_alone():
+    teams = _litellm_with(["airflow", PROJECT_FREE_TIER, PROJECT_SERVICE])
+    _run(teams.rows())
+    _run(teams.ensure_pretend_projects())
+    assert _made(teams) == []
 
 
 # ---------------------------------------------------------------------------
