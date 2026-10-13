@@ -43,7 +43,7 @@ from llmao.access_requests import (
     loads,
     prune,
 )
-from llmao.proxy.client import LiteLLMBackend
+from llmao.proxy.client import AccessRequestManager, LiteLLMBackend, MemoryStore
 from tests.fake_transport import FakeTransport
 
 UTC = dt.UTC
@@ -317,11 +317,8 @@ def test_an_adjusted_request_differs_from_what_was_asked():
 # ---------------------------------------------------------------------------
 
 
-def _backend(*, down=False):
-    """A real backend over a memory store that behaves like LiteLLM's.
-
-    `b.store` is what the store holds, key to value.
-    """
+def _litellm(*, down=False):
+    """A memory store that behaves like LiteLLM's: (transport, what it holds)."""
     store = {}
 
     def answer(call):
@@ -339,13 +336,25 @@ def _backend(*, down=False):
             return {"deleted": True} if store.pop(key, None) is not None else (404, {})
         raise AssertionError(f"unexpected call: {call}")
 
+    return FakeTransport(answer, down=down), store
+
+
+def _requests():
+    """An AccessRequestManager, and what its store holds."""
+    transport, store = _litellm()
+    return AccessRequestManager(MemoryStore(transport)), store
+
+
+def _backend(*, down=False):
+    """A real backend over that store. `b.store` is what the store holds."""
+    transport, store = _litellm(down=down)
     cfg = edict(
         entitlements=edict(
             default=edict(rpm_limit=60, tpm_limit=60000, max_parallel_requests=4),
             free_tier=edict(token_cap=1_000_000, token_window_days=7),
         )
     )
-    b = LiteLLMBackend(cfg, None, transport=FakeTransport(answer, down=down))
+    b = LiteLLMBackend(cfg, None, transport=transport)
     b.store = store
     return b
 
@@ -355,52 +364,52 @@ def _run(coro):
 
 
 def test_a_stored_request_is_listed_and_found():
-    b = _backend()
+    m, store = _requests()
     r = _key()
-    _run(b.add_request(r))
-    assert list(b.store) == [f"llmao:request:{r.id}"]
-    assert [x.id for x in _run(b.list_requests())] == [r.id]
-    assert _run(b.find_request(r.id)).to_dict() == r.to_dict()
-    assert _run(b.find_request("no-such-id")) is None
+    _run(m.add(r))
+    assert list(store) == [f"llmao:request:{r.id}"]
+    assert [x.id for x in _run(m.find_all())] == [r.id]
+    assert _run(m.find(r.id)).to_dict() == r.to_dict()
+    assert _run(m.find("no-such-id")) is None
 
 
 def test_listing_for_a_project_leaves_the_others_out():
-    b = _backend()
+    m, _ = _requests()
     mine, theirs, nobodys = _capacity(project="tooling"), _capacity(project="mahout"), _key()
     for r in (mine, theirs, nobodys):
-        _run(b.add_request(r))
-    assert [x.id for x in _run(b.list_requests("tooling"))] == [mine.id]
-    assert len(_run(b.list_requests())) == 3
+        _run(m.add(r))
+    assert [x.id for x in _run(m.find_all("tooling"))] == [mine.id]
+    assert len(_run(m.find_all())) == 3
 
 
 def test_a_decision_rewrites_one_row_and_no_other():
     """In team metadata, answering one request rewrote all of them."""
-    b = _backend()
+    m, store = _requests()
     first, second = _capacity(), _capacity()
-    _run(b.add_request(first))
-    _run(b.add_request(second))
-    untouched = b.store[key_for(second.id)]
+    _run(m.add(first))
+    _run(m.add(second))
+    untouched = store[key_for(second.id)]
 
-    found = _run(b.find_request(first.id))
+    found = _run(m.find(first.id))
     found.decide(state=STATE_APPROVED, by="admin")
-    _run(b.save_request(found))
+    _run(m.save(found))
 
-    assert _run(b.find_request(first.id)).state == STATE_APPROVED
-    assert b.store[key_for(second.id)] == untouched
-    assert len(b.store) == 2
+    assert _run(m.find(first.id)).state == STATE_APPROVED
+    assert store[key_for(second.id)] == untouched
+    assert len(store) == 2
 
 
 def test_a_lapsed_approval_is_deleted_on_the_next_write():
-    b = _backend()
+    m, store = _requests()
     stale = _key()
     stale.decide(state=STATE_APPROVED, by="admin")
     long_ago = dt.datetime.now(UTC) - dt.timedelta(days=APPROVAL_TTL_DAYS + 1)
     stale.decided_at = long_ago.isoformat(timespec="seconds")
-    b.store[key_for(stale.id)] = dumps(stale)
+    store[key_for(stale.id)] = dumps(stale)
 
     fresh = _capacity()
-    _run(b.add_request(fresh))
-    assert list(b.store) == [key_for(fresh.id)]
+    _run(m.add(fresh))
+    assert list(store) == [key_for(fresh.id)]
 
 
 def test_tier_limits_are_config_until_an_admin_changes_them():

@@ -295,7 +295,7 @@ class Seam:
             reason=reason,
             wanted={"token_cap": int(token_cap)},
         )
-        return await self._backend.add_request(req)
+        return await self._backend.requests.add(req)
 
     async def request_key(
         self,
@@ -326,12 +326,12 @@ class Seam:
             reason=reason,
             wanted={"purpose": purpose, "tier": tier or TIER_SERVICE},
         )
-        return await self._backend.add_request(req)
+        return await self._backend.requests.add(req)
 
     @require_member
     async def project_requests(self, identity: Identity, project: str) -> list:
         """Requests against one project, newest first."""
-        reqs = await self._backend.list_requests(project)
+        reqs = await self._backend.requests.find_all(project)
         return sorted(reqs, key=lambda r: r.created_at or "", reverse=True)
 
     async def tiers(self, identity: Identity) -> list[dict]:
@@ -361,7 +361,7 @@ class Seam:
 
         Shown where they asked, so an answer finds them without an email.
         """
-        mine = [r for r in await self._backend.list_requests() if r.requester == identity.uid]
+        mine = [r for r in await self._backend.requests.find_all() if r.requester == identity.uid]
         return sorted(mine, key=lambda r: r.created_at or "", reverse=True)
 
     async def pending_requests(self, identity: Identity) -> list:
@@ -372,7 +372,7 @@ class Seam:
         """
         if not identity.is_site_admin:
             raise AuthzError("The request queue is limited to site admins.")
-        pending = [r for r in await self._backend.list_requests() if r.state == _access.STATE_PENDING]
+        pending = [r for r in await self._backend.requests.find_all() if r.state == _access.STATE_PENDING]
         return sorted(pending, key=lambda r: r.created_at or "")
 
     async def decide_request(
@@ -390,7 +390,7 @@ class Seam:
         PMC to do anything -- there is nothing for them to exercise, and a
         grant that needs a second step is a grant that sits unapplied.
         """
-        req = await self._backend.find_request(request_id)
+        req = await self._backend.requests.find(request_id)
         if req is None:
             raise AuthzError("No such request.")
         req.decide(
@@ -401,7 +401,7 @@ class Seam:
         )
         if approve and req.kind == _access.KIND_CAPACITY:
             await self._backend.update_team_entitlement(req.project, token_cap=int(req.granted.get("token_cap") or 0))
-        return await self._backend.save_request(req)
+        return await self._backend.requests.save(req)
 
     @require_member
     async def project_usage(self, identity: Identity, project: str) -> list[dict]:
@@ -504,7 +504,7 @@ class Seam:
                 "token_cap": int(r.granted.get("token_cap") or 0),
                 "expires_at": r.expires_at(),
             }
-            for r in await self._backend.list_requests()
+            for r in await self._backend.requests.find_all()
             if r.requester == identity.uid and r.is_actionable()
         ]
 
@@ -524,7 +524,7 @@ class Seam:
         the form carries. A form that could name its own tier would make the
         approval decorative.
         """
-        req = await self._backend.find_request(request_id)
+        req = await self._backend.requests.find(request_id)
         if req is None or req.requester != identity.uid:
             # Same message either way: whether a request exists is not
             # something a stranger should be able to probe for.
@@ -549,7 +549,7 @@ class Seam:
         # on a failed creation and leaves the person with nothing and no way
         # to retry.
         req.consume()
-        await self._backend.save_request(req)
+        await self._backend.requests.save(req)
         return created
 
     async def my_allowance(self, identity: Identity):

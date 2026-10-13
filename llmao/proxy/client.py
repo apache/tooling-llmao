@@ -371,6 +371,7 @@ class LiteLLMBackend:
         self._transport = transport or LiteLLMTransport(cfg)
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
         self._memory = MemoryStore(self._transport)
+        self.requests = AccessRequestManager(self._memory)
         self._team_ids: dict[str, str] = {}  # project → team_id
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
@@ -1195,9 +1196,18 @@ class LiteLLMBackend:
         self.invalidate_allowance()
         return await self.tier_entitlement(tier)
 
-    # ---- requests ------------------------------------------------------
 
-    async def add_request(self, req: Any) -> Any:
+class AccessRequestManager:
+    """Where access requests are kept: one MemoryStore row each.
+
+    Handed the store. The requests themselves -- what one is, and what may
+    be done to it -- are llmao/access_requests.py; this only keeps them.
+    """
+
+    def __init__(self, memory: MemoryStore):
+        self._memory = memory
+
+    async def add(self, req: Any) -> Any:
         """Store a new request, or persist a decision on an existing one.
 
         One row per request, so answering one cannot lose another.
@@ -1209,7 +1219,7 @@ class LiteLLMBackend:
         # request is already saved; failing to tidy is no reason to say it
         # was not.
         try:
-            stored = await self.list_requests()
+            stored = await self.find_all()
             kept = _access.prune(stored)
             for old in stored:
                 if old not in kept:
@@ -1219,9 +1229,9 @@ class LiteLLMBackend:
         return req
 
     # Same operation; named for what the caller means.
-    save_request = add_request
+    save = add
 
-    async def list_requests(self, project: str | None = None) -> list[Any]:
+    async def find_all(self, project: str | None = None) -> list[Any]:
         """Requests for one project, or every one."""
         out = []
         for row in await self._memory.find(_access.KEY_PREFIX):
@@ -1230,7 +1240,7 @@ class LiteLLMBackend:
                 out.append(req)
         return out
 
-    async def find_request(self, request_id: str) -> Any | None:
+    async def find(self, request_id: str) -> Any | None:
         return _access.loads(await self._memory.get(_access.key_for(request_id)))
 
 
