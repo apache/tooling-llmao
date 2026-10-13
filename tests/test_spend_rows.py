@@ -27,7 +27,7 @@ import datetime as dt
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment
-from llmao.proxy.client import LiteLLMBackend, TeamManager
+from llmao.proxy.client import TeamManager, UsageManager
 from tests.fake_transport import FakeTransport
 
 NOON = dt.datetime(2026, 10, 12, 12, 0, tzinfo=dt.UTC)
@@ -57,8 +57,25 @@ def _day(date, groups):
     }
 
 
-def _backend(days, *, now=NOON, page_size=1000):
-    """A real backend over a stand-in for LiteLLM.
+class _Teams:
+    """Stands in for TeamManager: knows whose team is whose, and nothing else."""
+
+    async def projects(self, team_ids):
+        return {tid: project for project, tid in TEAMS.items()}
+
+
+class _Tiers:
+    """Stands in for TierManager: one allowance, whatever the tier."""
+
+    def __init__(self, window):
+        self.window = window
+
+    async def limits(self, tier):
+        return {"token_cap": 1_000_000, "token_window_days": self.window}
+
+
+def _usage(days, *, now=NOON, page_size=1000, window=7):
+    """A real UsageManager over a stand-in for LiteLLM.
 
     The stand-in honours the date range it is asked for, because which days
     get asked for is half of what is under test.
@@ -87,8 +104,7 @@ def _backend(days, *, now=NOON, page_size=1000):
             FleetDeployment(model_name="claude-opus-5", name="claude-opus-5", self_hosted=False),
         ],
     )
-    b = LiteLLMBackend(edict(), fleet, transport=FakeTransport(answer))
-    b.teams._team_ids = dict(TEAMS)
+    b = UsageManager(FakeTransport(answer), fleet, _Teams(), _Tiers(window))
     b._DAILY_PAGE_SIZE = page_size
     b._now = lambda: now
     return b
@@ -133,7 +149,7 @@ WEEK = [
 
 
 def test_rows_fold_by_user_project_model_and_key():
-    rows = _run(_backend(WEEK)._spend_rows())
+    rows = _run(_usage(WEEK)._spend_rows())
     # six entries over two days, five distinct (user, project, model, key) combinations
     assert len(rows) == 5
     folded = [r for r in rows if r["token_id"] == "tok1" and r["model"] == "gemma4-26b"]
@@ -155,25 +171,25 @@ def test_prompt_and_completion_are_summed_when_total_is_absent():
             },
         )
     ]
-    rows = _run(_backend(days)._spend_rows())
+    rows = _run(_usage(days)._spend_rows())
     assert rows[0]["total_tokens"] == 51000
 
 
 def test_usage_filters_by_project():
-    b = _backend(WEEK)
-    tooling = _run(b.usage("tooling"))
+    b = _usage(WEEK)
+    tooling = _run(b.rows("tooling"))
     assert {r["project"] for r in tooling} == {"tooling"}
     assert sum(r["total_tokens"] for r in tooling) == 150 + 7 + 900 + 40
 
 
 def test_usage_with_none_returns_every_project():
-    b = _backend(WEEK)
-    assert {r["project"] for r in _run(b.usage(None))} == {"tooling", "mahout"}
+    b = _usage(WEEK)
+    assert {r["project"] for r in _run(b.rows(None))} == {"tooling", "mahout"}
 
 
 def test_key_usage_groups_by_key_for_one_person():
-    b = _backend(WEEK)
-    got = _run(b.key_usage("akm"))
+    b = _usage(WEEK)
+    got = _run(b.by_key("akm"))
     assert got == {"tok1": 150 + 40, "tok2": 7, "tok3": 300}
     assert "tok4" not in got, "another person's key must not appear"
 
@@ -185,7 +201,7 @@ def test_cost_basis_distinguishes_capacity_from_money():
     utilisation; a commercial row's is an amount payable. A page that sums
     them without checking produces a figure that means nothing.
     """
-    rows = _run(_backend(WEEK)._spend_rows())
+    rows = _run(_usage(WEEK)._spend_rows())
     selfhosted = [r for r in rows if r["model"] == "gemma4-26b"]
     commercial = [r for r in rows if r["model"] == "claude-opus-5"]
     assert all(r["cost_basis"] == "derived_capacity" for r in selfhosted)
@@ -214,7 +230,7 @@ def test_a_key_llmao_did_not_issue_is_kept():
     Dropping it would make the project figures add up while the fleet total
     quietly disagreed, which is the harder bug to find.
     """
-    rows = _run(_backend([_day(TODAY, {"gemma4-26b": {"stray": _entry(500)}})])._spend_rows())
+    rows = _run(_usage([_day(TODAY, {"gemma4-26b": {"stray": _entry(500)}})])._spend_rows())
     assert len(rows) == 1
     assert rows[0]["total_tokens"] == 500
     assert rows[0]["project"] is None
@@ -223,24 +239,21 @@ def test_a_key_llmao_did_not_issue_is_kept():
 
 def test_a_team_not_yet_listed_is_looked_up():
     """A project created since the last listing must not show as no project."""
-    b = _backend([_day(TODAY, {"gemma4-26b": {"t": _entry(5, user="akm", project="tooling")}})])
-    b.teams._team_ids = {}
-
-    async def listing():
-        b.teams._team_ids.update(TEAMS)
-        return []
-
-    b.teams.rows = listing
-    assert _run(b._spend_rows())[0]["project"] == "tooling"
+    listing = {"teams": [{"team_alias": "tooling", "team_id": "team-tooling"}]}
+    teams = TeamManager(edict(), FakeTransport(lambda call: listing))
+    assert _run(teams.projects({"team-tooling"})) == {"team-tooling": "tooling"}
+    # ...and once it is known, it is not asked about again
+    _run(teams.projects({"team-tooling"}))
+    assert [c.path for c in teams._transport.calls] == ["team/list"]
 
 
 def test_second_read_is_cached():
     """A page refresh must not cost another read."""
-    b = _backend(WEEK)
+    b = _usage(WEEK)
     _run(b._spend_rows())
     _run(b._spend_rows())
     assert len(_asked(b)) == 1
-    b.invalidate_spend()
+    b.invalidate()
     _run(b._spend_rows())
     assert len(_asked(b)) == 2
 
@@ -258,7 +271,7 @@ def test_malformed_entries_do_not_abort_the_read():
         ),
         "a string where a day should be",
     ]
-    rows = _run(_backend(days)._spend_rows())
+    rows = _run(_usage(days)._spend_rows())
     assert [r["total_tokens"] for r in rows] == [10]
 
 
@@ -267,7 +280,7 @@ def test_every_page_is_read():
     days = [
         _day(f"2026-10-{d:02d}", {"gemma4-26b": {"t": _entry(1, user="akm", project="tooling")}}) for d in (10, 11, 12)
     ]
-    b = _backend(days, page_size=2)
+    b = _usage(days, page_size=2)
     rows = _run(b._spend_rows())
     assert rows[0]["total_tokens"] == 3
     assert [p.page for _, p in _asked(b)] == [1, 2]
@@ -283,7 +296,7 @@ def test_every_page_is_read():
 
 
 def test_the_first_read_asks_for_exactly_the_week():
-    b = _backend(WEEK)
+    b = _usage(WEEK)
     _run(b._spend_rows())
     assert _asked(b) == [
         ("user/daily/activity", {"start_date": "2026-10-06", "end_date": TODAY, "page": 1, "page_size": 1000})
@@ -292,9 +305,9 @@ def test_the_first_read_asks_for_exactly_the_week():
 
 def test_a_closed_day_is_not_read_again():
     """History does not change. Only today is worth asking about twice."""
-    b = _backend(WEEK)
+    b = _usage(WEEK)
     _run(b._spend_rows())
-    b.invalidate_spend()
+    b.invalidate()
     rows = _run(b._spend_rows())
     assert _asked(b)[-1][1].start_date == TODAY
     # ...and yesterday's figures are still in the answer
@@ -303,22 +316,22 @@ def test_a_closed_day_is_not_read_again():
 
 def test_yesterday_stays_open_for_an_hour_after_midnight():
     """A request begun at 23:59 is filed under yesterday when it finishes."""
-    b = _backend(WEEK, now=dt.datetime(2026, 10, 12, 0, 30, tzinfo=dt.UTC))
+    b = _usage(WEEK, now=dt.datetime(2026, 10, 12, 0, 30, tzinfo=dt.UTC))
     _run(b._spend_rows())
-    b.invalidate_spend()
+    b.invalidate()
     _run(b._spend_rows())
     assert _asked(b)[-1][1].start_date == YESTERDAY
 
     b._now = lambda: dt.datetime(2026, 10, 12, 1, 30, tzinfo=dt.UTC)
-    b.invalidate_spend()
+    b.invalidate()
     _run(b._spend_rows())  # read once more after the hour, which closes it
-    b.invalidate_spend()
+    b.invalidate()
     _run(b._spend_rows())
     assert _asked(b)[-1][1].start_date == TODAY
 
 
 def test_a_day_that_leaves_the_window_is_dropped():
-    b = _backend(WEEK)
+    b = _usage(WEEK)
     _run(b._spend_rows())
     b._now = lambda: NOON + dt.timedelta(days=7)
     rows = _run(b._spend_rows())
@@ -331,25 +344,15 @@ def test_a_day_that_leaves_the_window_is_dropped():
 # ---------------------------------------------------------------------------
 
 
-def _allowance_backend(days, *, window=7):
-    b = _backend(days)
-
-    async def tier_entitlement(tier):
-        return {"token_cap": 1_000_000, "token_window_days": window}
-
-    b.tier_entitlement = tier_entitlement
-    return b
-
-
 def test_allowance_buckets_are_one_persons_tokens_by_day():
-    a = _run(_allowance_backend(WEEK).allowance("akm"))
+    a = _run(_usage(WEEK).allowance("akm"))
     assert a.buckets == {TODAY: 100 + 7 + 40, YESTERDAY: 50 + 300}
     assert a.cap == 1_000_000
 
 
 def test_allowance_costs_no_read_of_its_own():
     """It was a second scan of the log, per person. Now it is the same rows."""
-    b = _allowance_backend(WEEK)
+    b = _usage(WEEK)
     _run(b._spend_rows())
     _run(b.allowance("akm"))
     _run(b.allowance("gstein"))
@@ -357,7 +360,7 @@ def test_allowance_costs_no_read_of_its_own():
 
 
 def test_a_longer_allowance_window_reads_the_extra_days():
-    b = _allowance_backend(WEEK, window=10)
+    b = _usage(WEEK, window=10)
     _run(b._spend_rows())
     _run(b.allowance("akm"))
     assert _asked(b)[-1][1].start_date == "2026-10-03"

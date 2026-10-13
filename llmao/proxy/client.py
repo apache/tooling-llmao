@@ -374,15 +374,7 @@ class LiteLLMBackend:
         self.requests = AccessRequestManager(self._memory)
         self.tiers = TierManager(cfg, self._memory)
         self.teams = TeamManager(cfg, self._transport)
-        # ISO date → usage rows for that UTC day, from LiteLLM's daily
-        # aggregate. Spend and allowances are both derived from this.
-        self._daily: dict[str, list[dict]] = {}
-        # Days that can no longer change: kept, never refetched.
-        self._closed_days: set[str] = set()
-        # Monotonic stamp of the last read of the days still open.
-        self._daily_at: float | None = None
-        # The longest window anyone has asked for; older days are dropped.
-        self._daily_span = 0
+        self.metering = UsageManager(self._transport, fleet, self.teams, self.tiers)
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -420,7 +412,7 @@ class LiteLLMBackend:
         # again, so reading them here means no visitor waits for them. Not
         # worth refusing to start over: a cold cache is only slow.
         try:
-            await self._daily_rows(self._SPEND_DAYS)
+            await self.metering.warm()
         except BackendUnavailableError as e:
             _LOGGER.warning("could not warm usage: %s", e)
 
@@ -451,6 +443,23 @@ class LiteLLMBackend:
 
     async def update_team_entitlement(self, project: str, **limits: float | int | None) -> TeamInfo:
         return await self.teams.update_entitlement(project, **limits)
+
+    # ---- usage: UsageManager, below -------------------------------------
+
+    async def usage(self, project: str | None) -> list[dict]:
+        return await self.metering.rows(project)
+
+    async def key_usage(self, user: str) -> dict[str, int]:
+        return await self.metering.by_key(user)
+
+    async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
+        return await self.metering.allowance(user, tier=tier)
+
+    def invalidate_spend(self) -> None:
+        self.metering.invalidate()
+
+    def invalidate_allowance(self, user: str | None = None) -> None:
+        self.metering.invalidate()
 
     async def update_key_entitlement(
         self,
@@ -601,6 +610,34 @@ class LiteLLMBackend:
         resp = await self._request("POST", "key/delete", json={"keys": [token_id]})
         self._raise_http(resp)
 
+
+class UsageManager:
+    """Who used what: this week's tokens and cost, and each person's allowance.
+
+    Handed the transport, and the three things it has to ask: the fleet (is
+    this model's cost an estimate?), the teams (whose project is this?) and
+    the tiers (what is the allowance?).
+    """
+
+    def __init__(self, transport: Any, fleet: Any, teams: Any, tiers: Any):
+        self._transport = transport
+        self.fleet = fleet
+        self.teams = teams
+        self.tiers = tiers
+        # ISO date → usage rows for that UTC day, from LiteLLM's daily
+        # aggregate. Spend and allowances are both derived from this.
+        self._daily: dict[str, list[dict]] = {}
+        # Days that can no longer change: kept, never refetched.
+        self._closed_days: set[str] = set()
+        # Monotonic stamp of the last read of the days still open.
+        self._daily_at: float | None = None
+        # The longest window anyone has asked for; older days are dropped.
+        self._daily_span = 0
+
+    async def warm(self) -> None:
+        """Read the week now, so that no visitor waits for the six days that are history."""
+        await self._daily_rows(self._SPEND_DAYS)
+
     # Usage is read from LiteLLM's daily aggregate, never from the raw log.
     #
     # /spend/logs was the first choice and the wrong one. It filters by date
@@ -627,7 +664,7 @@ class LiteLLMBackend:
 
     _DAILY_PAGE_SIZE = 1000
 
-    async def usage(self, project: str | None) -> list[dict]:
+    async def rows(self, project: str | None) -> list[dict]:
         """Spend rows for a project, or across all projects when None.
 
         One row per (user, model) pair over the current week, carrying tokens
@@ -646,7 +683,7 @@ class LiteLLMBackend:
             return rows
         return [r for r in rows if r.get("project") == project]
 
-    async def key_usage(self, user: str) -> dict[str, int]:
+    async def by_key(self, user: str) -> dict[str, int]:
         """Tokens drawn per key this week, for one person.
 
         Same underlying query as usage(), grouped by key instead. The
@@ -750,7 +787,7 @@ class LiteLLMBackend:
         out: dict[str, list[dict]] = {}
         page = 1
         while True:
-            resp = await self._request(
+            resp = await self._transport.request(
                 "GET",
                 "user/daily/activity",
                 params={
@@ -760,7 +797,7 @@ class LiteLLMBackend:
                     "page_size": self._DAILY_PAGE_SIZE,
                 },
             )
-            self._raise_http(resp)
+            self._transport.raise_http(resp)
             body = resp.json()
             if not isinstance(body, dict):
                 break
@@ -802,7 +839,7 @@ class LiteLLMBackend:
             page += 1
         return out
 
-    def invalidate_spend(self) -> None:
+    def invalidate(self) -> None:
         """Have the next read ask again. Closed days are history and stay."""
         self._daily_at = None
 
@@ -835,7 +872,7 @@ class LiteLLMBackend:
         if not user:
             raise BackendUnavailableError("allowance requires a user")
 
-        limits = await self.tier_entitlement(tier)
+        limits = await self.tiers.limits(tier)
         cap = int(limits.get("token_cap") or 0)
         window = int(limits.get("token_window_days") or 7)
         if cap <= 0:
@@ -850,15 +887,6 @@ class LiteLLMBackend:
             if spent:
                 buckets[day] = spent
         return RollingAllowance(cap=cap, window_days=window, buckets=buckets)
-
-    def invalidate_allowance(self, user: str | None = None) -> None:
-        """Have the next allowance read ask again.
-
-        Called after a tier change. The cap and window are re-read on every
-        check, so this is only so that a figure an admin has just acted on is
-        not a minute old when they look at it.
-        """
-        self._daily_at = None
 
 
 class TeamManager:
