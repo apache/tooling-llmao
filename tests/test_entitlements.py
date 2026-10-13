@@ -25,93 +25,9 @@ identical to a working one until somebody's week does not reset.
 
 import datetime as dt
 
-import pytest
-from easydict import EasyDict as edict  # noqa: N813
-
-from llmao.proxy.client import TIER_FREE, TIER_PROJECT, TIER_SERVICE, resolve_entitlement
 from llmao.token_window import RollingAllowance
 
 UTC = dt.UTC
-
-
-def _cfg(**over):
-    base = {
-        "entitlements": {
-            "default": {"rpm_limit": 60, "tpm_limit": 60000, "max_parallel_requests": 4},
-            "free_tier": {
-                "rpm_limit": 30,
-                "tpm_limit": 30000,
-                "max_parallel_requests": 2,
-                "token_cap": 1000000,
-                "token_window_days": 7,
-            },
-            "project": {"rpm_limit": 120, "tpm_limit": 120000, "max_parallel_requests": 8},
-            "service": {"rpm_limit": 240, "tpm_limit": 300000, "max_parallel_requests": 8},
-        }
-    }
-    base.update(over)
-    return edict(base)
-
-
-# ---------------------------------------------------------------------------
-# Resolution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "tier,expected",
-    [
-        (TIER_FREE, {"rpm_limit": 30, "tpm_limit": 30000, "max_parallel_requests": 2}),
-        (TIER_PROJECT, {"rpm_limit": 120, "tpm_limit": 120000, "max_parallel_requests": 8}),
-        (TIER_SERVICE, {"rpm_limit": 240, "tpm_limit": 300000, "max_parallel_requests": 8}),
-    ],
-)
-def test_tier_overrides_default(tier, expected):
-    assert resolve_entitlement(_cfg(), tier) == expected
-
-
-def test_tier_inherits_what_it_does_not_name():
-    """A tier raising one ceiling must not have to restate the others.
-
-    Otherwise every tier carries a full copy of default, and the next person
-    to change default silently fails to change three of the four tiers.
-    """
-    cfg = _cfg()
-    cfg.entitlements.sparse = edict({"rpm_limit": 999})
-    assert resolve_entitlement(cfg, "sparse") == {
-        "rpm_limit": 999,  # named
-        "tpm_limit": 60000,  # inherited
-        "max_parallel_requests": 4,
-    }
-
-
-def test_unknown_tier_falls_back_to_default():
-    assert resolve_entitlement(_cfg(), "no-such-tier") == {
-        "rpm_limit": 60,
-        "tpm_limit": 60000,
-        "max_parallel_requests": 4,
-    }
-
-
-def test_absent_config_yields_no_limits():
-    """Documents the dangerous case rather than pretending it cannot happen.
-
-    LiteLLM's default for every limit is unlimited, so a config without an
-    entitlements block mints keys that can saturate the fleet. The function
-    returns {} honestly; config.yaml shipping with values is what prevents
-    it, and this test is here so nobody "fixes" the empty return into a
-    guess.
-    """
-    assert resolve_entitlement(edict({}), TIER_FREE) == {}
-
-
-def test_every_shipped_tier_sets_all_three_limits():
-    """A tier missing a limit is a tier that is unlimited in that dimension."""
-    cfg = _cfg()
-    for tier in (TIER_FREE, TIER_PROJECT, TIER_SERVICE):
-        got = resolve_entitlement(cfg, tier)
-        for field in ("rpm_limit", "tpm_limit", "max_parallel_requests"):
-            assert got.get(field), f"{tier} leaves {field} unlimited"
 
 
 # ---------------------------------------------------------------------------

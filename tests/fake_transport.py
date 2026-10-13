@@ -58,3 +58,29 @@ class FakeTransport:
 
     async def aclose(self) -> None:
         return None
+
+
+def fake_memory(*, down: bool = False):
+    """A FakeTransport that behaves like LiteLLM's /v1/memory, and what it holds.
+
+    Returns (transport, store). `store` is the rows, key to value, for a
+    test to seed or to look at. Any call that is not to /v1/memory fails.
+    """
+    store = {}
+
+    def answer(call):
+        assert call.path == "v1/memory" or call.path.startswith("v1/memory/"), f"unexpected call: {call}"
+        key = call.path.removeprefix("v1/memory").lstrip("/")
+        if call.method == "GET" and not key:
+            hits = [{"key": k, "value": v} for k, v in store.items() if k.startswith(call.params.key_prefix)]
+            return {"memories": hits, "total": len(hits)}
+        if call.method == "GET":
+            return {"key": key, "value": store[key]} if key in store else (404, {})
+        if call.method == "PUT":
+            store[key] = call.json.value
+            return {"key": key, "value": store[key]}
+        if call.method == "DELETE":
+            return {"deleted": True} if store.pop(key, None) is not None else (404, {})
+        raise AssertionError(f"unexpected call: {call}")
+
+    return FakeTransport(answer, down=down), store
