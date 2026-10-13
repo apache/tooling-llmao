@@ -375,6 +375,7 @@ class LiteLLMBackend:
         self.tiers = TierManager(cfg, self._memory)
         self.teams = TeamManager(cfg, self._transport)
         self.metering = UsageManager(self._transport, fleet, self.teams, self.tiers)
+        self.keys = KeyManager(cfg, self._transport, self.teams)
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -386,22 +387,13 @@ class LiteLLMBackend:
         GET /health probes every model, so it is not used here.
         """
         try:
-            resp = await self._request("GET", "health/readiness/details")
-            self._raise_http(resp)
+            resp = await self._transport.request("GET", "health/readiness/details")
+            self._transport.raise_http(resp)
             body = resp.json()
         except BackendUnavailableError:
             return None
         version = body.get("litellm_version") if isinstance(body, dict) else None
         return str(version) if version else None
-
-    # Shorthand for the transport, from when the HTTP plumbing lived here.
-    # Everything below still calls these; they go as each concern moves out
-    # into a class of its own that is handed the transport directly.
-    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        return await self._transport.request(method, path, **kwargs)
-
-    def _raise_http(self, resp: httpx.Response) -> None:
-        self._transport.raise_http(resp)
 
     async def warm(self) -> None:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
@@ -461,7 +453,34 @@ class LiteLLMBackend:
     def invalidate_allowance(self, user: str | None = None) -> None:
         self.metering.invalidate()
 
-    async def update_key_entitlement(
+    # ---- keys: KeyManager, below ----------------------------------------
+
+    async def list_keys(self, *, user: str | None = None, project: str | None = None, size: int = 100) -> list[KeyInfo]:
+        return await self.keys.find(user=user, project=project, size=size)
+
+    async def create_key(self, **wanted: Any) -> CreatedKey:
+        return await self.keys.create(**wanted)
+
+    async def delete_key(self, token_id: str) -> None:
+        await self.keys.delete(token_id)
+
+    async def update_key_entitlement(self, token_id: str, **limits: int | None) -> None:
+        await self.keys.update_entitlement(token_id, **limits)
+
+
+class KeyManager:
+    """LiteLLM's virtual keys: listing, minting, revoking, and what each may do.
+
+    Handed the config, the transport and the teams -- every key is minted
+    into its project's team.
+    """
+
+    def __init__(self, cfg: Any, transport: Any, teams: Any):
+        self._cfg = cfg
+        self._transport = transport
+        self.teams = teams
+
+    async def update_entitlement(
         self,
         token_id: str,
         *,
@@ -498,11 +517,11 @@ class LiteLLMBackend:
         if len(payload) == 1:
             raise BackendUnavailableError("update_key_entitlement: nothing to change")
 
-        resp = await self._request("POST", "key/update", json=payload)
-        self._raise_http(resp)
+        resp = await self._transport.request("POST", "key/update", json=payload)
+        self._transport.raise_http(resp)
         _LOGGER.info("key/update %s %s", token_id[:12], sorted(payload))
 
-    async def list_keys(
+    async def find(
         self,
         *,
         user: str | None = None,
@@ -521,8 +540,8 @@ class LiteLLMBackend:
             if not team_id:
                 return []
             params["team_id"] = team_id
-        resp = await self._request("GET", "key/list", params=params)
-        self._raise_http(resp)
+        resp = await self._transport.request("GET", "key/list", params=params)
+        self._transport.raise_http(resp)
         body = resp.json()
         keys = body.get("keys") if isinstance(body, dict) else body
         if not keys:
@@ -532,7 +551,7 @@ class LiteLLMBackend:
         except ValueError as e:
             raise BackendUnavailableError(str(e)) from e
 
-    async def create_key(
+    async def create(
         self,
         *,
         project: str,
@@ -575,8 +594,8 @@ class LiteLLMBackend:
         }
         if user:
             payload["user_id"] = user
-        resp = await self._request("POST", "key/generate", json=payload)
-        self._raise_http(resp)
+        resp = await self._transport.request("POST", "key/generate", json=payload)
+        self._transport.raise_http(resp)
         body = resp.json()
         secret = body.get("key") or body.get("token")
         if not secret:
@@ -606,9 +625,9 @@ class LiteLLMBackend:
             raise BackendUnavailableError(str(e)) from e
         return CreatedKey(secret=str(secret), info=info)
 
-    async def delete_key(self, token_id: str) -> None:
-        resp = await self._request("POST", "key/delete", json={"keys": [token_id]})
-        self._raise_http(resp)
+    async def delete(self, token_id: str) -> None:
+        resp = await self._transport.request("POST", "key/delete", json={"keys": [token_id]})
+        self._transport.raise_http(resp)
 
 
 class UsageManager:
