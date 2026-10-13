@@ -27,7 +27,7 @@ import datetime as dt
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment
-from llmao.proxy.client import LiteLLMBackend
+from llmao.proxy.client import LiteLLMBackend, TeamManager
 from tests.fake_transport import FakeTransport
 
 NOON = dt.datetime(2026, 10, 12, 12, 0, tzinfo=dt.UTC)
@@ -88,7 +88,7 @@ def _backend(days, *, now=NOON, page_size=1000):
         ],
     )
     b = LiteLLMBackend(edict(), fleet, transport=FakeTransport(answer))
-    b._team_ids = dict(TEAMS)
+    b.teams._team_ids = dict(TEAMS)
     b._DAILY_PAGE_SIZE = page_size
     b._now = lambda: now
     return b
@@ -224,13 +224,13 @@ def test_a_key_llmao_did_not_issue_is_kept():
 def test_a_team_not_yet_listed_is_looked_up():
     """A project created since the last listing must not show as no project."""
     b = _backend([_day(TODAY, {"gemma4-26b": {"t": _entry(5, user="akm", project="tooling")}})])
-    b._team_ids = {}
+    b.teams._team_ids = {}
 
     async def listing():
-        b._team_ids.update(TEAMS)
+        b.teams._team_ids.update(TEAMS)
         return []
 
-    b._team_list_rows = listing
+    b.teams.rows = listing
     assert _run(b._spend_rows())[0]["project"] == "tooling"
 
 
@@ -375,7 +375,7 @@ def test_a_longer_allowance_window_reads_the_extra_days():
 
 def _backfill_backend(default_cap=20_000_000):
     cfg = edict(budgets=edict(default_team_token_cap=default_cap))
-    return LiteLLMBackend(cfg, None, transport=FakeTransport())
+    return TeamManager(cfg, FakeTransport())
 
 
 def _sent(b):
@@ -385,7 +385,7 @@ def _sent(b):
 
 def test_backfill_sets_a_cap_on_teams_without_one():
     b = _backfill_backend()
-    _run(b._backfill_token_caps([{"team_alias": "tooling", "team_id": "t1", "metadata": {"grantor": "Free Tier"}}]))
+    _run(b.backfill_token_caps([{"team_alias": "tooling", "team_id": "t1", "metadata": {"grantor": "Free Tier"}}]))
     assert len(_sent(b)) == 1
     path, body = _sent(b)[0]
     assert path == "team/update"
@@ -402,7 +402,7 @@ def test_backfill_leaves_an_existing_cap_alone():
     """
     b = _backfill_backend()
     _run(
-        b._backfill_token_caps(
+        b.backfill_token_caps(
             [
                 {"team_alias": "tooling", "team_id": "t1", "metadata": {"token_cap": 5}},
                 {"team_alias": "comdev", "team_id": "t2", "metadata": {"token_cap": 0}},
@@ -416,16 +416,16 @@ def test_backfill_is_idempotent_across_restarts():
     """It runs at every startup; the second boot must be a no-op."""
     b = _backfill_backend()
     rows = [{"team_alias": "tooling", "team_id": "t1", "metadata": {}}]
-    _run(b._backfill_token_caps(rows))
+    _run(b.backfill_token_caps(rows))
     assert len(_sent(b)) == 1
     rows[0]["metadata"] = _sent(b)[0][1]["metadata"]
-    _run(b._backfill_token_caps(rows))
+    _run(b.backfill_token_caps(rows))
     assert len(_sent(b)) == 1
 
 
 def test_backfill_does_nothing_without_a_configured_default():
     b = _backfill_backend(default_cap=0)
-    _run(b._backfill_token_caps([{"team_alias": "t", "team_id": "t1", "metadata": {}}]))
+    _run(b.backfill_token_caps([{"team_alias": "t", "team_id": "t1", "metadata": {}}]))
     assert _sent(b) == []
 
 
@@ -433,7 +433,7 @@ def test_backfill_skips_malformed_rows_without_stopping():
     """One bad row must not cost every other project its allocation."""
     b = _backfill_backend()
     _run(
-        b._backfill_token_caps(
+        b.backfill_token_caps(
             [
                 "not a dict",
                 {"team_alias": None, "team_id": "t0", "metadata": {}},

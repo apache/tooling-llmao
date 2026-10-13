@@ -373,7 +373,7 @@ class LiteLLMBackend:
         self._memory = MemoryStore(self._transport)
         self.requests = AccessRequestManager(self._memory)
         self.tiers = TierManager(cfg, self._memory)
-        self._team_ids: dict[str, str] = {}  # project → team_id
+        self.teams = TeamManager(cfg, self._transport)
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
         self._daily: dict[str, list[dict]] = {}
@@ -383,8 +383,6 @@ class LiteLLMBackend:
         self._daily_at: float | None = None
         # The longest window anyone has asked for; older days are dropped.
         self._daily_span = 0
-        # (monotonic stamp, team/list rows).
-        self._team_rows_cache: tuple[float, list[dict[str, Any]]] | None = None
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -415,8 +413,8 @@ class LiteLLMBackend:
 
     async def warm(self) -> None:
         """Load project→team_id from LiteLLM. Fail-fast if the proxy is unreachable."""
-        rows = await self._team_list_rows(fresh=True)
-        await self._backfill_token_caps(rows)
+        rows = await self.teams.rows(fresh=True)
+        await self.teams.backfill_token_caps(rows)
         await self.deployments.ensure_commercial()
         # Six of the week's seven days are history and are never asked for
         # again, so reading them here means no visitor waits for them. Not
@@ -442,6 +440,17 @@ class LiteLLMBackend:
         # for up to a minute and concludes the control did not work.
         self.invalidate_allowance()
         return result
+
+    # ---- teams: TeamManager, below --------------------------------------
+
+    async def team_info(self, project: str) -> TeamInfo | None:
+        return await self.teams.info(project)
+
+    async def ensure_team(self, project: str) -> TeamInfo:
+        return await self.teams.ensure(project)
+
+    async def update_team_entitlement(self, project: str, **limits: float | int | None) -> TeamInfo:
+        return await self.teams.update_entitlement(project, **limits)
 
     async def update_key_entitlement(
         self,
@@ -499,9 +508,7 @@ class LiteLLMBackend:
         if user:
             params["user_id"] = user
         if project:
-            if project not in self._team_ids:
-                await self._team_list_rows()
-            team_id = self._team_ids.get(project)
+            team_id = await self.teams.team_id(project)
             if not team_id:
                 return []
             params["team_id"] = team_id
@@ -529,7 +536,7 @@ class LiteLLMBackend:
         project = (project or "").strip()
         if not project:
             raise BackendUnavailableError("create_key requires project")
-        team = await self.ensure_team(project)
+        team = await self.teams.ensure(project)
         team_id = team.team_id
         purpose = (purpose or "").strip()
         meta = dict(metadata or {})
@@ -666,9 +673,7 @@ class LiteLLMBackend:
         # rather than when the day is stored, so a day that closed before its
         # team was known is not left without a project for good.
         seen = {r["team_id"] for rows in daily.values() for r in rows if r["team_id"]}
-        if seen - set(self._team_ids.values()):
-            await self._team_list_rows()
-        project_of = {tid: project for project, tid in self._team_ids.items()}
+        project_of = await self.teams.projects(seen)
 
         by_key: dict[tuple, dict] = {}
         for rows in daily.values():
@@ -855,6 +860,42 @@ class LiteLLMBackend:
         """
         self._daily_at = None
 
+
+class TeamManager:
+    """LiteLLM's teams, one per project: which is which, and what each may spend.
+
+    Handed the config and the transport. It keeps the listing for a minute,
+    and the project -> team id map for good: an id never changes, and teams
+    are only ever added.
+    """
+
+    def __init__(self, cfg: Any, transport: Any):
+        self._cfg = cfg
+        self._transport = transport
+        self._team_ids: dict[str, str] = {}  # project → team_id
+        # (monotonic stamp, team/list rows).
+        self._team_rows_cache: tuple[float, list[dict[str, Any]]] | None = None
+
+    def __len__(self) -> int:
+        """How many projects have a team that we know of."""
+        return len(self._team_ids)
+
+    async def team_id(self, project: str) -> str | None:
+        """The project's team id, or None if it has no team. Looks once if unknown."""
+        if project not in self._team_ids:
+            await self.rows()
+        return self._team_ids.get(project)
+
+    async def projects(self, team_ids) -> dict[str, str]:
+        """{team id: project}, for telling whose usage a row is.
+
+        A team made since the last listing will not be known yet, so if any
+        of `team_ids` is a stranger the listing is consulted first.
+        """
+        if set(team_ids) - set(self._team_ids.values()):
+            await self.rows()
+        return {tid: project for project, tid in self._team_ids.items()}
+
     def _ingest_team_list(self, teams: list[Any]) -> list[dict[str, Any]]:
         """Update project→team_id cache from team/list rows; return dict rows."""
         rows: list[dict[str, Any]] = []
@@ -880,7 +921,7 @@ class LiteLLMBackend:
     # has just changed shows while they are still looking at the page.
     _TEAM_TTL_S = 60
 
-    async def _team_list_rows(self, *, fresh: bool = False) -> list[dict[str, Any]]:
+    async def rows(self, *, fresh: bool = False) -> list[dict[str, Any]]:
         if not fresh and self._team_rows_cache is not None:
             at, rows = self._team_rows_cache
             if (time.monotonic() - at) < self._TEAM_TTL_S:
@@ -890,8 +931,8 @@ class LiteLLMBackend:
         return rows
 
     async def _team_list_rows_uncached(self) -> list[dict[str, Any]]:
-        resp = await self._request("GET", "team/list")
-        self._raise_http(resp)
+        resp = await self._transport.request("GET", "team/list")
+        self._transport.raise_http(resp)
         body = resp.json()
         teams = body if isinstance(body, list) else body.get("teams") or body.get("data") or []
         if not isinstance(teams, list):
@@ -917,7 +958,7 @@ class LiteLLMBackend:
             metadata=meta,
         )
 
-    async def _backfill_token_caps(self, rows: list[dict[str, Any]]) -> None:
+    async def backfill_token_caps(self, rows: list[dict[str, Any]]) -> None:
         """Give every team without a token allocation the configured default.
 
         Projects come from LDAP. Nobody sets a project up, so there is no
@@ -957,12 +998,12 @@ class LiteLLMBackend:
 
             merged = {**meta, "token_cap": default, "token_window_days": 7}
             try:
-                resp = await self._request(
+                resp = await self._transport.request(
                     "POST",
                     "team/update",
                     json={"team_id": str(team_id), "metadata": merged},
                 )
-                self._raise_http(resp)
+                self._transport.raise_http(resp)
             except BackendUnavailableError:
                 _LOGGER.warning("token cap backfill failed for %s", alias)
                 continue
@@ -976,24 +1017,24 @@ class LiteLLMBackend:
                 ", ".join(sorted(patched)),
             )
 
-    async def ensure_team_id(self, project: str) -> str:
+    async def ensure_id(self, project: str) -> str:
         """Map LDAP project (team_alias) → LiteLLM team_id; create team if needed."""
-        info = await self.ensure_team(project)
+        info = await self.ensure(project)
         return info.team_id
 
-    async def ensure_team(self, project: str) -> TeamInfo:
+    async def ensure(self, project: str) -> TeamInfo:
         """Ensure a LiteLLM team exists for the project; return live budget facts."""
         project = (project or "").strip()
         if not project:
             raise BackendUnavailableError("project is required")
 
-        existing = await self.team_info(project)
+        existing = await self.info(project)
         if existing is not None:
             return existing
 
         budget_usd = float(self._cfg.budgets.default_team_budget_usd)
         duration = resolve_budget_duration(None, self._cfg)
-        resp = await self._request(
+        resp = await self._transport.request(
             "POST",
             "team/new",
             json={
@@ -1014,10 +1055,10 @@ class LiteLLMBackend:
             },
         )
         if resp.status_code >= 400:
-            again = await self.team_info(project)
+            again = await self.info(project)
             if again is not None:
                 return again
-            self._raise_http(resp)
+            self._transport.raise_http(resp)
 
         body = resp.json() if resp.content else {}
         if not isinstance(body, dict):
@@ -1026,7 +1067,7 @@ class LiteLLMBackend:
         if not team_id:
             raise BackendUnavailableError("LiteLLM team/new returned no team_id")
         self._team_ids[project] = str(team_id)
-        live = await self.team_info(project)
+        live = await self.info(project)
         if live is not None:
             return live
         return self._team_info_from_dict(
@@ -1038,7 +1079,7 @@ class LiteLLMBackend:
             team_id=str(team_id),
         )
 
-    async def update_team_entitlement(
+    async def update_entitlement(
         self,
         project: str,
         *,
@@ -1061,7 +1102,7 @@ class LiteLLMBackend:
         accrues at a derived price and will never reach a ceiling, so the rate
         limits are what actually constrain a project's draw on the fleet.
         """
-        team_id = await self.ensure_team_id(project)
+        team_id = await self.ensure_id(project)
         payload: dict[str, Any] = {"team_id": team_id}
         if max_budget_usd is not None:
             payload["max_budget"] = float(max_budget_usd)
@@ -1069,7 +1110,7 @@ class LiteLLMBackend:
             # Capacity lives in metadata, not a LiteLLM field: LiteLLM meters
             # dollars, and merging rather than replacing keeps grantor and
             # anything else already there.
-            existing = await self.team_info(project)
+            existing = await self.info(project)
             meta = dict(existing.metadata or {}) if existing else {}
             meta["token_cap"] = int(token_cap)
             payload["metadata"] = meta
@@ -1083,15 +1124,15 @@ class LiteLLMBackend:
         if len(payload) == 1:
             raise BackendUnavailableError("update_team_entitlement: nothing to change")
 
-        resp = await self._request("POST", "team/update", json=payload)
-        self._raise_http(resp)
+        resp = await self._transport.request("POST", "team/update", json=payload)
+        self._transport.raise_http(resp)
         _LOGGER.info("team/update %s %s", project, sorted(payload))
-        live = await self.team_info(project)
+        live = await self.info(project)
         if live is None:
             raise BackendUnavailableError(f"team {project} vanished after update")
         return live
 
-    async def team_info(self, project: str) -> TeamInfo | None:
+    async def info(self, project: str) -> TeamInfo | None:
         """Live team spend/budget. Cache holds ids only; spend is never cached.
 
         Cache hit → team/info. Cache miss → team/list (fills cache + returns
@@ -1103,12 +1144,12 @@ class LiteLLMBackend:
 
         if project in self._team_ids:
             team_id = self._team_ids[project]
-            resp = await self._request(
+            resp = await self._transport.request(
                 "GET",
                 "team/info",
                 params={"team_id": team_id},
             )
-            self._raise_http(resp)
+            self._transport.raise_http(resp)
             body = resp.json()
             info = body.get("team_info") or body
             if not isinstance(info, dict):

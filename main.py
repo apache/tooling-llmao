@@ -135,7 +135,7 @@ def create_app():
         await backend.warm()
         _LOGGER.info(
             "LiteLLM team cache warmed (%d project→team_id mappings)",
-            len(backend._team_ids),
+            len(backend.teams),
         )
 
     @app.after_serving
