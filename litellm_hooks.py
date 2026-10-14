@@ -22,7 +22,11 @@ llmao/proxy/: that package is our client for LiteLLM's admin API, this is
 code LiteLLM loads and calls. Wired up in litellm.yaml:
 
     litellm_settings:
-      callbacks: ["llmao.litellm_hooks.empty_completion_guard"]
+      callbacks: ["litellm_hooks.empty_completion_guard"]
+
+LiteLLM looks for this file in the directory that holds litellm.yaml, and
+imports it by name if it is not there. It sits beside main.py because, like
+main.py, it is what a process loads; llmao/ is the library.
 
 THE FAILURE
 

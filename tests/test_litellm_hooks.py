@@ -28,7 +28,7 @@ import types
 
 import pytest
 
-from llmao.litellm_hooks import empty_completion_guard, explain
+from litellm_hooks import empty_completion_guard, explain
 
 
 def _response(finish_reason, content=None, reasoning=None, tool_calls=None, model="qwen3.8-27b"):
