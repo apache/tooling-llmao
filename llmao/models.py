@@ -154,7 +154,7 @@ def ux_models(
     *,
     cfg: Any = None,
     reveal_supply: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[edict]:
     """Shape rows for the Models page (table + detail modal).
 
     When ``reveal_supply`` is False (normal committers), omit fields that
@@ -162,8 +162,6 @@ def ux_models(
 
     Free-text is collapsed to one line for HTML data-* attributes (EZT
     HTML-escapes quotes; embedded newlines still break attributes).
-
-    TODO: return EasyDict rows (dotted access) instead of plain dicts.
     """
     rows = []
     for m in public_models(path, cfg=cfg):
@@ -173,21 +171,21 @@ def ux_models(
         display = _oneline(m.get("display_name")) or name
         ctx = m.get("context_window")
         rows.append(
-            {
-                "model_name": name,
-                "display_name": display,
-                "context_window": ctx if ctx is not None else "—",
-                "license": _oneline(m.get("license")) or "—",
-                "modality": _oneline(m.get("modality")),
-                "supports_thinking": ezt.boolean(m.get("supports_thinking")),
-                "thinks_by_default": ezt.boolean(m.get("thinks_by_default")),
-                "openness": _oneline(m.get("openness")),
-                "notes": _oneline(m.get("notes")),
-                "reveal_supply": reveal_supply,
+            edict(
+                model_name=name,
+                display_name=display,
+                context_window=ctx if ctx is not None else "—",
+                license=_oneline(m.get("license")) or "—",
+                modality=_oneline(m.get("modality")),
+                supports_thinking=ezt.boolean(m.get("supports_thinking")),
+                thinks_by_default=ezt.boolean(m.get("thinks_by_default")),
+                openness=_oneline(m.get("openness")),
+                notes=_oneline(m.get("notes")),
+                reveal_supply=reveal_supply,
                 # Admin-only supply fields (empty strings when redacted)
-                "weights_distribution": (_oneline(m.get("weights_distribution")) if reveal_supply else ""),
-                "training_data_provenance": (_oneline(m.get("training_data_provenance")) if reveal_supply else ""),
-                "provenance_record": (_oneline(m.get("provenance_record")) if reveal_supply else ""),
-            }
+                weights_distribution=(_oneline(m.get("weights_distribution")) if reveal_supply else ""),
+                training_data_provenance=(_oneline(m.get("training_data_provenance")) if reveal_supply else ""),
+                provenance_record=(_oneline(m.get("provenance_record")) if reveal_supply else ""),
+            )
         )
     return rows

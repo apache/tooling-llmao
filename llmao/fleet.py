@@ -659,7 +659,7 @@ class Fleet:
         self.after_probe = after_probe
         self.config_fetch_at: dict[str, float] = {}
         # Fleet-key GETs for IPs not in fleet.hosts. Process memory only.
-        self.unknown_config_fetches: dict[str, dict[str, float | int]] = {}
+        self.unknown_config_fetches: dict[str, edict] = {}
         # Admin labels (Approved, Reboot requested), keyed by normalized host IP.
         # In-memory only: cleared on process restart, and they never affect the
         # computed lifecycle -- the page reads them for display. See admin_label.
@@ -810,7 +810,7 @@ class Fleet:
         rec = self.unknown_config_fetches.get(host)
         if rec is None:
             return ""
-        line = f"seen {_ago(rec['last_seen'])} · {int(rec['count'])} requests"
+        line = f"seen {_ago(rec.last_seen)} · {int(rec.count)} requests"
         names = self.approved_models.get(normalize_peer_ip(host))
         if names:
             line += " · " + ", ".join(names)
@@ -862,15 +862,15 @@ class Fleet:
             return
         rec = self.unknown_config_fetches.get(host)
         if rec is None:
-            self.unknown_config_fetches[host] = {"first_seen": stamp, "last_seen": stamp, "count": 1}
+            self.unknown_config_fetches[host] = edict(first_seen=stamp, last_seen=stamp, count=1)
         else:
-            rec["last_seen"] = stamp
-            rec["count"] = int(rec["count"]) + 1
+            rec.last_seen = stamp
+            rec.count = int(rec.count) + 1
         extra = len(self.unknown_config_fetches) - 50
         if extra > 0:
             oldest = sorted(
                 self.unknown_config_fetches,
-                key=lambda ip: float(self.unknown_config_fetches[ip]["last_seen"]),
+                key=lambda ip: float(self.unknown_config_fetches[ip].last_seen),
             )
             for ip in oldest[:extra]:
                 del self.unknown_config_fetches[ip]

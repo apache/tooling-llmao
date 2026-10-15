@@ -267,7 +267,7 @@ async def basic_info(title: str = "llmao") -> edict:
                 + list(getattr(client_session, "projects", None) or [])
             )
         )
-        basic.projects = [edict({"name": p}) for p in projects]
+        basic.projects = [edict(name=p) for p in projects]
         basic.projects_label = ", ".join(projects) if projects else None
         committees = sorted(getattr(client_session, "committees", None) or [])
         basic.committees = committees
@@ -280,7 +280,7 @@ async def basic_info(title: str = "llmao") -> edict:
             admin_names = projects
         else:
             admin_names = committees
-        basic.admin_projects = [edict({"name": p}) for p in admin_names]
+        basic.admin_projects = [edict(name=p) for p in admin_names]
     else:
         basic.uid = None
         basic.name = None
@@ -312,24 +312,22 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
         budget_s = f"${budget:.4f}" if budget is not None else "—"
         rows.append(
             edict(
-                {
-                    "token_id": k.token_id,
-                    "purpose": k.purpose or "—",
-                    # A pretend project is not one to the reader: the column
-                    # is left empty and the template says what it is instead.
-                    "project": "" if k.project in PRETEND_PROJECTS else k.project,
-                    "no_project": PRETEND_PROJECTS.get(k.project, ""),
-                    "kind_label": "Automation" if k.is_automation else "Personal",
-                    "is_automation": ezt.boolean(k.is_automation),
-                    "created_by": k.created_by or "—",
-                    "spend": f"${k.spend:.6f}",
-                    "max_budget": budget_s,
-                    "used_h": (_tokens_h(used_by_token[k.token_id]) if k.token_id in used_by_token else "—"),
-                    "last_used": k.last_used or "—",
-                    "created_at": k.created_at or "—",
-                    "blocked": k.blocked,
-                    "after_path": after_path,
-                }
+                token_id=k.token_id,
+                purpose=k.purpose or "—",
+                # A pretend project is not one to the reader: the column
+                # is left empty and the template says what it is instead.
+                project="" if k.project in PRETEND_PROJECTS else k.project,
+                no_project=PRETEND_PROJECTS.get(k.project, ""),
+                kind_label="Automation" if k.is_automation else "Personal",
+                is_automation=ezt.boolean(k.is_automation),
+                created_by=k.created_by or "—",
+                spend=f"${k.spend:.6f}",
+                max_budget=budget_s,
+                used_h=(_tokens_h(used_by_token[k.token_id]) if k.token_id in used_by_token else "—"),
+                last_used=k.last_used or "—",
+                created_at=k.created_at or "—",
+                blocked=k.blocked,
+                after_path=after_path,
             )
         )
     return rows
@@ -653,7 +651,7 @@ def attention_items(fleet) -> list:
     items: list[edict] = []
     for host, _rec in sorted(
         fleet.unknown_config_fetches.items(),
-        key=lambda item: item[1]["last_seen"],
+        key=lambda item: item[1].last_seen,
         reverse=True,
     ):
         items.append(
@@ -1103,17 +1101,15 @@ def _project_list_rows(rows) -> list:
             pct_label = f"{r.pct_used:.0f}%"
         out.append(
             edict(
-                {
-                    "name": r.project,
-                    "href": f"/projects/{r.project}",
-                    "is_steward": ezt.boolean(r.is_steward),
-                    "spend": _money(r.spend),
-                    "max_budget": _money(r.max_budget),
-                    "remaining": _money(r.remaining),
-                    "pct_label": pct_label,
-                    "budget_duration": r.budget_duration,
-                    "grantor": r.grantor,
-                }
+                name=r.project,
+                href=f"/projects/{r.project}",
+                is_steward=ezt.boolean(r.is_steward),
+                spend=_money(r.spend),
+                max_budget=_money(r.max_budget),
+                remaining=_money(r.remaining),
+                pct_label=pct_label,
+                budget_duration=r.budget_duration,
+                grantor=r.grantor,
             )
         )
     return out
@@ -1160,8 +1156,8 @@ async def project_overview(result, project: str):
     except BackendUnavailableError:
         rows = []
 
-    tokens = sum(r["tokens"] for r in rows)
-    spend = sum(r["spend"] for r in rows)
+    tokens = sum(r.tokens for r in rows)
+    spend = sum(r.spend for r in rows)
 
     result.tokens_h = _tokens_h(tokens)
     result.cap_h = _tokens_h(cap) if cap else None
@@ -1186,13 +1182,11 @@ async def project_overview(result, project: str):
 
     result.members = [
         edict(
-            {
-                "name": r["name"],
-                "is_service": ezt.boolean(r["is_service"]),
-                "tokens_h": _tokens_h(r["tokens"]),
-                "spend_h": f"${r['spend']:,.2f}",
-                "keys": r["keys"],
-            }
+            name=r.name,
+            is_service=ezt.boolean(r.is_service),
+            tokens_h=_tokens_h(r.tokens),
+            spend_h=f"${r.spend:,.2f}",
+            keys=r.key_count,
         )
         for r in rows
     ]
@@ -1214,16 +1208,14 @@ def _see_other(path: str):
 async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_create_another: str) -> None:
     """Render the created-key fragment and stash it as a raw HTML flash."""
     data = edict(
-        {
-            "secret": created.secret,
-            "purpose": created.info.purpose or "—",
-            "project": created.info.project,
-            "kind_label": kind_label,
-            "is_automation": ezt.boolean(created.info.is_automation),
-            "created_by": created.info.created_by or "",
-            "keys_back": keys_back,
-            "keys_create_another": keys_create_another,
-        }
+        secret=created.secret,
+        purpose=created.info.purpose or "—",
+        project=created.info.project,
+        kind_label=kind_label,
+        is_automation=ezt.boolean(created.info.is_automation),
+        created_by=created.info.created_by or "",
+        keys_back=keys_back,
+        keys_create_another=keys_create_another,
     )
     html = _render("flash_key_created.ezt", data)
     await quart.flash(html, "raw")
@@ -1272,17 +1264,15 @@ async def keys_list(result):
     try:
         result.approvals = [
             edict(
-                {
-                    "id": a["id"],
-                    "purpose": a["purpose"],
-                    "tier": a["tier"],
-                    "project": a["project"],
-                    # What this key will be allowed to do, said plainly. The
-                    # person about to create it has one question -- is this
-                    # what I asked for -- and the parameters are the answer.
-                    "limits_h": (f"{_tokens_h(a['token_cap'])} tokens/week" if a["token_cap"] else "tier defaults"),
-                    "expires_h": (_when_h(a["expires_at"].date()) if a.get("expires_at") else ""),
-                }
+                id=a.id,
+                purpose=a.purpose,
+                tier=a.tier,
+                project=a.project,
+                # What this key will be allowed to do, said plainly. The
+                # person about to create it has one question -- is this
+                # what I asked for -- and the parameters are the answer.
+                limits_h=(f"{_tokens_h(a.token_cap)} tokens/week" if a.token_cap else "tier defaults"),
+                expires_h=(_when_h(a.expires_at.date()) if a.expires_at else ""),
             )
             for a in APP.seam.actionable_key_approvals(mine)
         ]
@@ -1304,26 +1294,26 @@ def _allowance_row(a):
     """
     pct = min(100, int(a.used() / a.cap * 100)) if a.cap else 0
     returns = a.returns()
-    row = {
-        "cap_h": _tokens_h(a.cap),
-        "used_h": _tokens_h(a.used()),
-        "remaining_h": _tokens_h(a.remaining()),
-        "window_days": a.window_days,
-        "pct": pct,
-        "exhausted": ezt.boolean(a.exhausted()),
+    row = edict(
+        cap_h=_tokens_h(a.cap),
+        used_h=_tokens_h(a.used()),
+        remaining_h=_tokens_h(a.remaining()),
+        window_days=a.window_days,
+        pct=pct,
+        exhausted=ezt.boolean(a.exhausted()),
         # Warn before the wall rather than at it. Discovering a limit by
         # hitting it mid-job is the experience worth designing away.
-        "nearly": ezt.boolean(pct >= 80),
+        nearly=ezt.boolean(pct >= 80),
         # A capacity estimate at the fleet rate, so self-hosted work can be
         # compared with commercial spend. Not a bill.
-        "capacity_h": f"${a.used() / 1_000_000 * CAPACITY_USD_PER_MTOK:,.2f}",
-        "next_return": None,
-        "next_return_amount_h": None,
-    }
+        capacity_h=f"${a.used() / 1_000_000 * CAPACITY_USD_PER_MTOK:,.2f}",
+        next_return=None,
+        next_return_amount_h=None,
+    )
     if returns:
         day, amount = returns[0]
-        row["next_return"] = _when_h(day)
-        row["next_return_amount_h"] = _tokens_h(amount)
+        row.next_return = _when_h(day)
+        row.next_return_amount_h = _tokens_h(amount)
     return row
 
 
@@ -1456,32 +1446,30 @@ def _request_rows(reqs) -> list:
         exp = r.expires_at()
         out.append(
             edict(
-                {
-                    "id": r.id,
-                    "kind": r.kind,
-                    "what": what,
-                    "requester": r.requester,
-                    "project": r.project or "",
-                    "reason": r.reason,
-                    "wanted_h": wanted,
-                    "granted_h": granted,
-                    "tier": r.wanted.get("tier") or "",
-                    "state": r.state,
-                    "is_pending": ezt.boolean(r.state == "pending"),
-                    "is_approved": ezt.boolean(r.state == "approved"),
-                    "is_denied": ezt.boolean(r.state == "denied"),
-                    "is_capacity": ezt.boolean(r.kind == "capacity"),
-                    "actionable": ezt.boolean(r.is_actionable()),
-                    # Only worth showing the ask when it differs. "30M, asked
-                    # 30M" is noise on every approved-as-requested row.
-                    "was_adjusted": ezt.boolean(bool(r.granted) and r.granted != r.wanted),
-                    "decision_reason": r.decision_reason,
-                    "decided_by": r.decided_by,
-                    # The question a requester actually has: how long have I
-                    # got to act on this.
-                    "expires_h": _when_h(exp.date()) if exp else "",
-                    "created_at": (r.created_at or "")[:10],
-                }
+                id=r.id,
+                kind=r.kind,
+                what=what,
+                requester=r.requester,
+                project=r.project or "",
+                reason=r.reason,
+                wanted_h=wanted,
+                granted_h=granted,
+                tier=r.wanted.get("tier") or "",
+                state=r.state,
+                is_pending=ezt.boolean(r.state == "pending"),
+                is_approved=ezt.boolean(r.state == "approved"),
+                is_denied=ezt.boolean(r.state == "denied"),
+                is_capacity=ezt.boolean(r.kind == "capacity"),
+                actionable=ezt.boolean(r.is_actionable()),
+                # Only worth showing the ask when it differs. "30M, asked
+                # 30M" is noise on every approved-as-requested row.
+                was_adjusted=ezt.boolean(bool(r.granted) and r.granted != r.wanted),
+                decision_reason=r.decision_reason,
+                decided_by=r.decided_by,
+                # The question a requester actually has: how long have I
+                # got to act on this.
+                expires_h=_when_h(exp.date()) if exp else "",
+                created_at=(r.created_at or "")[:10],
             )
         )
     return out
@@ -1507,19 +1495,17 @@ async def admin_tiers(result):
     ident = await current_identity(APP.cfg)
     result.tiers = [
         edict(
-            {
-                "tier": t["tier"],
-                "label": t["tier"].replace("_", " "),
-                "rpm_limit": t.get("rpm_limit") or "",
-                "tpm_limit": t.get("tpm_limit") or "",
-                "max_parallel_requests": t.get("max_parallel_requests") or "",
-                # Only the free tier meters tokens. A project key draws on the
-                # project's allocation and a service key on its own, so a cap
-                # here would be a third ceiling nobody asked for.
-                "has_cap": ezt.boolean(t.get("token_cap") is not None),
-                "token_cap": t.get("token_cap") or "",
-                "token_window_days": t.get("token_window_days") or "",
-            }
+            tier=t["tier"],
+            label=t["tier"].replace("_", " "),
+            rpm_limit=t.get("rpm_limit") or "",
+            tpm_limit=t.get("tpm_limit") or "",
+            max_parallel_requests=t.get("max_parallel_requests") or "",
+            # Only the free tier meters tokens. A project key draws on the
+            # project's allocation and a service key on its own, so a cap
+            # here would be a third ceiling nobody asked for.
+            has_cap=ezt.boolean(t.get("token_cap") is not None),
+            token_cap=t.get("token_cap") or "",
+            token_window_days=t.get("token_window_days") or "",
         )
         for t in await APP.seam.tiers(ident)
     ]

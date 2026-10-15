@@ -30,6 +30,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from easydict import EasyDict as edict  # noqa: N813
+
 from . import access_requests as _access
 from .proxy.client import (
     GRANTOR_FREE_TIER,
@@ -477,7 +479,7 @@ class Seam:
         return await self._backend.requests.save(req)
 
     @require_member
-    async def project_usage(self, identity: Identity, project: str) -> list[dict]:
+    async def project_usage(self, identity: Identity, project: str) -> list[edict]:
         """Per-principal draw for one project, service keys separated out.
 
         Member-gated: a project's internal breakdown is not public, and the
@@ -501,28 +503,28 @@ class Seam:
             owner[k.token_id] = (name, is_service)
             key_count[name] = key_count.get(name, 0) + 1
 
-        acc: dict[str, dict] = {}
+        acc: dict[str, edict] = {}
         for r in rows:
             token = r.get("token_id")
             name, is_service = owner.get(token, (r.get("user") or "unknown", False))
             e = acc.setdefault(
                 name,
-                {
-                    "name": name,
-                    "is_service": is_service,
-                    "tokens": 0,
-                    "spend": 0.0,
-                    "keys": key_count.get(name, 0),
-                },
+                edict(
+                    name=name,
+                    is_service=is_service,
+                    tokens=0,
+                    spend=0.0,
+                    key_count=key_count.get(name, 0),
+                ),
             )
-            e["tokens"] += int(r.get("total_tokens") or 0)
+            e.tokens += int(r.get("total_tokens") or 0)
             # Only commercial rows carry real money. A capacity estimate in a
             # column headed dollars is how the two get added together later.
             if r.get("cost_basis") != "derived_capacity":
-                e["spend"] += float(r.get("total_cost_usd") or 0.0)
+                e.spend += float(r.get("total_cost_usd") or 0.0)
 
         # Largest first: the row a PMC is looking for is the one at the top.
-        return sorted(acc.values(), key=lambda e: -e["tokens"])
+        return sorted(acc.values(), key=lambda e: -e.tokens)
 
     async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
         return await self._backend.keys.find(user=identity.uid, size=100)
@@ -542,7 +544,7 @@ class Seam:
             return {}
 
     @staticmethod
-    def actionable_key_approvals(requests: list) -> list[dict]:
+    def actionable_key_approvals(requests: list) -> list[edict]:
         """Approvals from an already-fetched list.
 
         Same filter as my_key_approvals, without the read. My Keys needs both
@@ -550,33 +552,33 @@ class Seam:
         derives both.
         """
         return [
-            {
-                "id": r.id,
-                "purpose": r.granted.get("purpose") or r.wanted.get("purpose") or "",
-                "tier": r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
-                "project": r.project or "",
-                "token_cap": int(r.granted.get("token_cap") or 0),
-                "expires_at": r.expires_at(),
-            }
+            edict(
+                id=r.id,
+                purpose=r.granted.get("purpose") or r.wanted.get("purpose") or "",
+                tier=r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
+                project=r.project or "",
+                token_cap=int(r.granted.get("token_cap") or 0),
+                expires_at=r.expires_at(),
+            )
             for r in requests
             if r.is_actionable()
         ]
 
-    async def my_key_approvals(self, identity: Identity) -> list[dict]:
+    async def my_key_approvals(self, identity: Identity) -> list[edict]:
         """Approved key requests this person can still exercise.
 
         Expired and consumed approvals are filtered here rather than in the
         template, so the page cannot offer a button that would fail.
         """
         return [
-            {
-                "id": r.id,
-                "purpose": r.granted.get("purpose") or r.wanted.get("purpose") or "",
-                "tier": r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
-                "project": r.project or "",
-                "token_cap": int(r.granted.get("token_cap") or 0),
-                "expires_at": r.expires_at(),
-            }
+            edict(
+                id=r.id,
+                purpose=r.granted.get("purpose") or r.wanted.get("purpose") or "",
+                tier=r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
+                project=r.project or "",
+                token_cap=int(r.granted.get("token_cap") or 0),
+                expires_at=r.expires_at(),
+            )
             for r in await self._backend.requests.find_all()
             if r.requester == identity.uid and r.is_actionable()
         ]
@@ -635,7 +637,7 @@ class Seam:
         """
         return await self._backend.metering.allowance(identity.uid)
 
-    async def my_project_usage(self, identity: Identity) -> list[dict]:
+    async def my_project_usage(self, identity: Identity) -> list[edict]:
         """Per-project draw for the projects this committer belongs to.
 
         Tokens and dollars are kept as separate fields deliberately. Tokens on
@@ -676,13 +678,13 @@ class Seam:
                 pass
 
             out.append(
-                {
-                    "name": project,
-                    "tokens_h": _tokens_short(tokens),
-                    "cap_h": _tokens_short(cap) if cap else "—",
-                    "spend_h": f"${spend:,.2f}",
-                    "budget_h": f"${budget:,.0f}" if budget else "—",
-                }
+                edict(
+                    name=project,
+                    tokens_h=_tokens_short(tokens),
+                    cap_h=_tokens_short(cap) if cap else "—",
+                    spend_h=f"${spend:,.2f}",
+                    budget_h=f"${budget:,.0f}" if budget else "—",
+                )
             )
         return out
 

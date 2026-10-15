@@ -633,7 +633,7 @@ class UsageManager:
         self.tiers = tiers
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
-        self._daily: dict[str, list[dict]] = {}
+        self._daily: dict[str, list[edict]] = {}
         # Days that can no longer change: kept, never refetched.
         self._closed_days: set[str] = set()
         # Monotonic stamp of the last read of the days still open.
@@ -705,7 +705,7 @@ class UsageManager:
                 out[token] = out.get(token, 0) + int(r.get("total_tokens") or 0)
         return out
 
-    async def _spend_rows(self) -> list[dict]:
+    async def _spend_rows(self) -> list[edict]:
         """This week's usage, one row per (user, project, model, key).
 
         The daily rows carry a date as well; it is folded away here so that
@@ -716,32 +716,32 @@ class UsageManager:
         # Rows name a team by id; every page groups by project. Resolved here
         # rather than when the day is stored, so a day that closed before its
         # team was known is not left without a project for good.
-        seen = {r["team_id"] for rows in daily.values() for r in rows if r["team_id"]}
+        seen = {r.team_id for rows in daily.values() for r in rows if r.team_id}
         project_of = await self.teams.projects(seen)
 
-        by_key: dict[tuple, dict] = {}
+        by_key: dict[tuple, edict] = {}
         for rows in daily.values():
             for row in rows:
-                project = project_of.get(row["team_id"])
-                k = (row["user"], project, row["model"], row["token_id"])
+                project = project_of.get(row.team_id)
+                k = (row.user, project, row.model, row.token_id)
                 acc = by_key.get(k)
                 if acc is None:
-                    acc = by_key[k] = {
-                        "user": row["user"],
-                        "project": project,
-                        "model": row["model"],
-                        "token_id": row["token_id"],
-                        "total_tokens": 0,
-                        "total_cost_usd": 0.0,
-                        "cost_basis": self.fleet.cost_basis(row["model"]) if self.fleet else None,
-                        "requests": 0,
-                    }
-                acc["total_tokens"] += row["total_tokens"]
-                acc["total_cost_usd"] += row["total_cost_usd"]
-                acc["requests"] += row["requests"]
+                    acc = by_key[k] = edict(
+                        user=row.user,
+                        project=project,
+                        model=row.model,
+                        token_id=row.token_id,
+                        total_tokens=0,
+                        total_cost_usd=0.0,
+                        cost_basis=self.fleet.cost_basis(row.model) if self.fleet else None,
+                        requests=0,
+                    )
+                acc.total_tokens += row.total_tokens
+                acc.total_cost_usd += row.total_cost_usd
+                acc.requests += row.requests
         return list(by_key.values())
 
-    async def _daily_rows(self, days: int) -> dict[str, list[dict]]:
+    async def _daily_rows(self, days: int) -> dict[str, list[edict]]:
         """Usage rows for each of the last `days` UTC days, today included.
 
         Closed days come from memory. The fetch covers the earliest day still
@@ -784,14 +784,14 @@ class UsageManager:
     def _now(self) -> _dt.datetime:
         return _dt.datetime.now(_dt.UTC)
 
-    async def _fetch_daily(self, start: _dt.date, end: _dt.date) -> dict[str, list[dict]]:
+    async def _fetch_daily(self, start: _dt.date, end: _dt.date) -> dict[str, list[edict]]:
         """One read of LiteLLM's daily aggregate, as rows grouped by date.
 
         The answer nests day -> model group -> key. The model GROUP is the
         route name llmao registered, which is the name the fleet knows it
         by; the `models` breakdown beside it names the provider's model.
         """
-        out: dict[str, list[dict]] = {}
+        out: dict[str, list[edict]] = {}
         page = 1
         while True:
             resp = await self._transport.request(
@@ -826,18 +826,18 @@ class UsageManager:
                         if total is None:
                             total = (metrics.get("prompt_tokens") or 0) + (metrics.get("completion_tokens") or 0)
                         try:
-                            row = {
+                            row = edict(
                                 # The key's owner and team. A key llmao did
                                 # not issue has neither, and is kept rather
                                 # than dropped -- it still consumed the fleet.
-                                "user": meta.get("user_id"),
-                                "team_id": str(meta["team_id"]) if meta.get("team_id") else None,
-                                "model": model,
-                                "token_id": token,
-                                "total_tokens": int(total or 0),
-                                "total_cost_usd": float(metrics.get("spend") or 0.0),
-                                "requests": int(metrics.get("api_requests") or 0),
-                            }
+                                user=meta.get("user_id"),
+                                team_id=str(meta["team_id"]) if meta.get("team_id") else None,
+                                model=model,
+                                token_id=token,
+                                total_tokens=int(total or 0),
+                                total_cost_usd=float(metrics.get("spend") or 0.0),
+                                requests=int(metrics.get("api_requests") or 0),
+                            )
                         except (TypeError, ValueError):
                             continue
                         rows.append(row)
@@ -892,7 +892,7 @@ class UsageManager:
         free = await self.teams.team_id(PROJECT_FREE_TIER)
         buckets: dict[str, int] = {}
         for day, rows in (await self._daily_rows(window)).items():
-            spent = sum(r["total_tokens"] for r in rows if r["team_id"] == free and r["user"] == user)
+            spent = sum(r.total_tokens for r in rows if r.team_id == free and r.user == user)
             if spent:
                 buckets[day] = spent
         return RollingAllowance(cap=cap, window_days=window, buckets=buckets)
