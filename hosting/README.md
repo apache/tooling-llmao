@@ -1,7 +1,7 @@
 # GPU-box hosting
 
-Artifacts that run **on** a GPU instance (Vast.ai now; RunPod next). They
-are not part of the asfquart process.
+Artifacts that run **on** a GPU instance (Vast.ai and RunPod). They are
+not part of the asfquart process.
 
 **Design (why):** [`docs/vllm-fleet-design.md`](../docs/vllm-fleet-design.md).
 
@@ -20,7 +20,9 @@ write Supervisor units; there is no long-lived Python launcher.
 | `install_set.py` | Shared by every provider: GET JSON, write a `vllm-*.conf` per server, `supervisorctl update` (or not, with `--no-reload`) |
 | `vast/provision.sh` | Vast on-create: set `LLMAO_HOST`, curl the installer from GitHub, run it |
 | `vast/README.md` | Vast.ai runbook |
-| `runpod/README.md` | RunPod runbook (image not built yet) |
+| `runpod/Dockerfile` | RunPod image: stock vLLM plus supervisord and `runpod/provision.sh` |
+| `runpod/provision.sh` | RunPod entrypoint: provision once (retrying), then `exec supervisord` |
+| `runpod/README.md` | RunPod runbook |
 
 ## Box environment
 
@@ -32,19 +34,22 @@ Required:
   and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
 - `LLMAO_HOST` — the box's public IP, sent as `X-LLMAO-Host`. Each provider's
   `provision.sh` sets it from that provider's own variable (Vast:
-  `PUBLIC_IPADDR`), so `install_set.py` knows no provider's names
+  `PUBLIC_IPADDR`; RunPod: `RUNPOD_PUBLIC_IP`), so `install_set.py` knows
+  no provider's names
 - `PROVISIONING_SCRIPT` — Vast only: raw URL of `provision.sh`
 
 ## Boot
 
 ```text
 Vast:   PROVISIONING_SCRIPT → provision.sh → curl install_set.py → GET JSON → supervisor units → vllm serve
-RunPod: image entrypoint → COPY'd installer → GET JSON → supervisor units → vllm serve
+RunPod: image entrypoint provision.sh → curl install_set.py → GET JSON → units on the volume → exec supervisord → vllm serve
+        (once provisioned, a boot skips straight to exec supervisord)
 ```
 
-Vast still curls `install_set.py` from `refs/heads/main`. Pin that URL to a
-**commit SHA** before treating instance-create as production-safe. RunPod
-pins by **image digest**.
+Both curl `install_set.py` from `refs/heads/main`. Pin that URL to a
+**commit SHA** before treating instance-create as production-safe: a broken
+`main` would stop every new box from provisioning. The RunPod image itself
+is pinned by its tag or digest in the template.
 
 ### Vast `PROVISIONING_SCRIPT` vs `install_set.py`
 
@@ -66,7 +71,8 @@ throwaway instance proves execute is shebang (`./provisioning.sh`) rather
 than `bash /provisioning.sh`. Docs and the saved `.sh` name assume bash.
 `install_set.py` has no shebang today (ASF license first).
 
-RunPod’s image COPY’s the installer; it does not use `provision.sh`.
+RunPod has its own `runpod/provision.sh`, baked into the image as the
+entrypoint; see [`runpod/README.md`](runpod/README.md).
 
 ## Fit check
 

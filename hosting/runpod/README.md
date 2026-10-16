@@ -1,80 +1,111 @@
-# RunPod runbook (knowledge; image not built yet)
+# RunPod runbook
 
-RunPod templates pull a **Docker image**. Vast uses a stock vLLM template
-and curls `install_set.py` at create. Same control plane, different
-artifact.
+RunPod pods run **our** image: stock vLLM plus supervisord and
+[`provision.sh`](provision.sh) as the entrypoint. The installer is the shared
+[`../install_set.py`](../install_set.py), fetched on first boot rather than
+baked in, so changing it needs no new image.
 
-Nothing in this directory is a running image yet. Registry location is a
-placeholder until Infra says where to push. The notes below are what the
-image and `fleet.hosts` row must satisfy.
+Not yet run on a real pod. What is untested is listed at the end.
 
-## Same as Vast
+## Image
 
-- `GET /vllm/config` by **client IP**, Bearer `FLEET_KEY`.
-- JSON listen ports only. The box never sees the public mapping.
-- Template env: `FLEET_KEY`, `ASFQUART_URL=https://llm.apache.org`,
-  `DATA_DIRECTORY` (typically `/workspace`). TLS verify is on; there is
-  no skip flag.
-- **Supervisord** runs one `vllm serve` per `models.yaml` row (several listens
-  in one pod). That is the usual shape for a GPU *pod*, not a one-process
-  web container, and it matches Vast.
-- Weights and logs live on the volume (`$DATA_DIRECTORY/hf-cache`,
-  `.../logs`), not in the image.
-- Pre-pull fit check: `models.yaml` `vram_gb` / `disk_gb` against the card and
-  `statvfs`. That is **not** vLLM: vLLM only sizes KV after the weights
-  are on disk (`torch` / HIP `mem_get_info`). NVIDIA probe today is
-  `nvidia-smi`; missing probe is not a failure. AMD (`rocm-smi`) when we
-  have a ROCm image. VRAM sums over the pod's servers; disk counts once per
-  distinct model.
-- The same installer divides the card between the pod's servers; see
-  [`../README.md`](../README.md) (sizing).
+```bash
+docker build -t <registry>/llmao-vllm-box:<tag> hosting/runpod
+docker push <registry>/llmao-vllm-box:<tag>
+```
 
-## Different from Vast
+The registry is still to be settled with Infra. Rebuild only when
+`provision.sh` or the vLLM version in the `Dockerfile` changes. The vLLM
+version is pinned (`v0.25.1`), not `:latest`, so every pod created from the
+template runs the same engine.
 
-| | Vast | RunPod |
-|--|------|--------|
-| Image | stock `vastai/vllm` (or similar) | **our** image (`IMAGE_REGISTRY_PLACEHOLDER/llmao-vllm-box`) |
-| Installer | curl `install_set.py` from GitHub **main** | **COPY** in the image (boot must not depend on GitHub) |
-| Pin | later: curl a **commit SHA** | image **digest** |
-| Public port | Vast API HostPort (`vast_client`) | see Ports below |
+## Template
 
-Pin the Vast curl before create-instance is treated as production-safe: a
-broken `main` would brick every new box. The image digest is the same
-kind of pin for RunPod.
+- **Image:** `<registry>/llmao-vllm-box:<tag>`
+- **Start command: empty.** The image's entrypoint is `provision.sh`; anything
+  here arrives as its arguments, which it ignores with a warning.
+- **Volume** mounted at `/workspace`, large enough for the HF cache.
+- **Public IP** required: `provision.sh` refuses to start without
+  `RUNPOD_PUBLIC_IP`, because it is how the box says which host it is.
+- **Expose** every listen port the box's `fleet.hosts` rows use (RunPod
+  allows at most 10 HTTP ports); see Ports below.
+- **Environment:**
 
-## Ports (open; 4th host-row slot is a stopgap)
+  ```bash
+  FLEET_KEY=<shared-secret>
+  ASFQUART_URL=https://llm.apache.org
+  # Optional:
+  # DATA_DIRECTORY=/workspace            (default)
+  # LLMAO_INSTALLER_URL=<raw URL>        pin install_set.py to a commit SHA
+  ```
 
-`fleet.hosts` already accepts `[model, listen, name|null, public]`. That
-was added so a RunPod box could get an `api_base` at all: RunPod does not
-expose a Vast-style HostPort to us today, and it **reassigns** the TCP
-public port on every pod recreate.
+Add the pod's `RUNPOD_PUBLIC_IP` to `fleet.hosts` in `config.yaml`. Order does
+not matter: a pod created before its row retries until llmao knows it.
 
-We do **not** want operators editing that fourth number forever. Once
-self-deploy is formalized (create from template, then read the mapping),
-prefer one of:
+## Boot
 
-1. **HTTP proxy (stable URL).** Template exposes `N/http`. Public origin
-   is `https://<podId>-<listen>.proxy.runpod.net`. The listen port is in
-   the hostname, so recreate does not need a new fourth slot. Only use
-   this as `api_base` after we prove LiteLLM and long generations survive
-   that proxy (timeouts, TLS, HTTP/1.1).
-2. **Direct TCP + API.** Template exposes `N/tcp`. Public port changes.
-   RunPod **REST v2** `GET /pods/{id}` → `portMappings` can fill
-   `public_port` the way `vast_client` fills HostPort. GraphQL exists but
-   is deprecated (~early 2027); new code should be REST.
+On every start, [`provision.sh`](provision.sh):
 
-Until one of those is wired, keep the fourth slot. It may go away.
+1. If `$DATA_DIRECTORY/.llmao/provisioned` is missing: clears
+   `.llmao/conf.d`, fetches `install_set.py`, and runs it with `--no-reload`
+   to write one Supervisor unit per server into `.llmao/conf.d`. On any
+   failure it retries, waiting 15s and doubling to at most 5 min. It writes
+   `provisioned` only after the units are in place.
+2. Writes `/etc/supervisor/supervisord.conf` (socket and pidfile under
+   `/run/llmao`), including `.llmao/conf.d/*.conf`.
+3. `exec supervisord -n`: supervisord is PID 1 and restarts any `vllm serve`
+   that dies, without touching the others.
 
-The template must still **expose every listen port** the set uses (max 10
-HTTP ports on RunPod). Control plane JSON stays listen-only.
+A restart keeps only the volume, so everything that must survive is there:
+the units, the marker, the installer that ran, weights (`hf-cache`) and logs.
+Once provisioned, a boot fetches nothing: not GitHub, not `/vllm/config`.
 
-## Image sketch (next, not this note)
+Retrying covers a "will not fit" refusal too. It will not succeed until
+`models.yaml` or `fleet.hosts` changes, and the pod log says why on each try.
 
-`FROM vllm/vllm-openai:…` (pin a digest later), install supervisord,
-COPY the shared installer, `CMD`/`ENTRYPOINT` that fetches config, writes
-units, `exec supervisord -n`. No baked weights.
+## Changing a pod's set
 
-## Smoke (once a pod exists)
+The set is frozen at provisioning. To change it:
+
+```bash
+rm /workspace/.llmao/provisioned
+```
+
+then restart the pod. The next boot clears the old units and provisions
+afresh. Stopping the servers first is not needed: a restart stops them.
+
+## Ports (open)
+
+`fleet.hosts` accepts `[model, listen, name|null, public]`. The fourth slot
+exists because RunPod does not give us a Vast-style HostPort lookup, and it
+**reassigns** the public TCP port on every pod recreate. Operators should not
+have to keep editing that number. Once creating pods is automated, prefer one
+of:
+
+1. **HTTP proxy (stable URL).** Expose `N/http`; the public origin is
+   `https://<podId>-<listen>.proxy.runpod.net`. Recreate does not change it.
+   Use it as `api_base` only after proving LiteLLM and long generations
+   survive that proxy (timeouts, TLS, HTTP/1.1).
+2. **Direct TCP + API.** Expose `N/tcp`; RunPod REST v2 `GET /pods/{id}` →
+   `portMappings` can fill `public_port` the way `vast_client` fills HostPort.
+   GraphQL is deprecated; new code should use REST.
+
+Until one of those is wired, keep the fourth slot.
+
+## Smoke
 
 1. `supervisorctl status`
 2. `curl -sS -H "Authorization: Bearer <api_key>" http://127.0.0.1:<listen>/v1/models`
+3. `$DATA_DIRECTORY/logs/<name>.log`: `Model loading took … GiB` (compare with
+   `vram_gb`). The boot itself logs to the pod's container log, prefixed
+   `llmao-provision:`.
+
+## Untested until the first pod
+
+- The image has not been built. The `Dockerfile` assumes the vLLM image runs
+  as root and has `curl` and `python3`, as its upstream Dockerfile shows.
+- That the IP the pod reaches llm.apache.org **from** matches
+  `RUNPOD_PUBLIC_IP`. llmao looks the box up by `X-LLMAO-Host`, so it need not,
+  but a proxy that strips headers would break the lookup.
+- RunPod's handling of a container whose start command is empty when the
+  image sets its own `ENTRYPOINT`.

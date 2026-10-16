@@ -232,6 +232,6 @@ certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, fleet, proxy/ (LiteLLM client)
 hosting/install_set.py   GPU-box installer, shared by every provider
 hosting/vast/            provision.sh (Vast on-create)
-hosting/runpod/          RunPod template notes (image not built yet)
+hosting/runpod/          Dockerfile + provision.sh (RunPod entrypoint)
 tests/                   offline seam, fleet, hosting installer
 ```
