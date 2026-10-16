@@ -461,3 +461,62 @@ def test_main_requires_llmao_host(monkeypatch, tmp_path):
             inst.main([])
     finally:
         httpd.shutdown()
+
+
+def _reprovision(monkeypatch, tmp_path, *, fits=True):
+    """A box whose last install left two units, one of them no longer in the set."""
+    httpd = _config_server({})
+    reloads = _box_env(monkeypatch, tmp_path, httpd)
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    for name in ("vllm-model-a", "vllm-dropped"):
+        (conf / f"{name}.conf").write_text(f"[program:{name}]\n")
+    (conf / "jupyter.conf").write_text("[program:jupyter]\n")
+    events = []
+    monkeypatch.setattr(inst, "supervisorctl", lambda *args: events.append(args))
+
+    def check_fit(specs, *, data_dir):
+        events.append(("check_fit",))
+        return [] if fits else ["needs 34GB of VRAM, 12GB free"]
+
+    monkeypatch.setattr(inst, "check_fit", check_fit)
+    return httpd, reloads, events, conf
+
+
+def test_reprovision_stops_our_servers_before_measuring_the_card(monkeypatch, tmp_path):
+    httpd, reloads, events, conf = _reprovision(monkeypatch, tmp_path)
+    try:
+        assert inst.main([]) == 0
+    finally:
+        httpd.shutdown()
+    # Ours only, by name, and before the fit check reads free memory.
+    assert events == [("stop", "vllm-dropped", "vllm-model-a"), ("check_fit",)]
+    assert sorted(p.name for p in conf.iterdir()) == ["jupyter.conf", "vllm-model-a.conf", "vllm-model-b.conf"]
+    assert reloads == [True]
+
+
+def test_a_refused_reprovision_leaves_the_box_serving(monkeypatch, tmp_path):
+    httpd, reloads, events, conf = _reprovision(monkeypatch, tmp_path, fits=False)
+    try:
+        assert inst.main([]) == 1
+    finally:
+        httpd.shutdown()
+    assert events == [
+        ("stop", "vllm-dropped", "vllm-model-a"),
+        ("check_fit",),
+        ("start", "vllm-dropped", "vllm-model-a"),
+    ]
+    assert sorted(p.name for p in conf.iterdir()) == ["jupyter.conf", "vllm-dropped.conf", "vllm-model-a.conf"]
+    assert reloads == []
+
+
+def test_no_reload_touches_no_supervisord(monkeypatch, tmp_path):
+    """RunPod: supervisord is not running yet. Stale units still go."""
+    httpd, reloads, events, conf = _reprovision(monkeypatch, tmp_path)
+    try:
+        assert inst.main(["--no-reload"]) == 0
+    finally:
+        httpd.shutdown()
+    assert events == [("check_fit",)]
+    assert "vllm-dropped.conf" not in {p.name for p in conf.iterdir()}
+    assert reloads == []

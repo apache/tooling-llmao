@@ -372,6 +372,21 @@ def write_units(specs: list[dict[str, Any]], conf_dir: Path) -> list[Path]:
     return written
 
 
+def existing_programs(conf_dir: Path) -> list[str]:
+    """The vLLM programs an earlier install wrote here. Ours, by name; nothing else supervisord runs."""
+    return sorted(path.stem for path in conf_dir.glob("vllm-*.conf"))
+
+
+def supervisorctl(*args: str) -> None:
+    """One supervisorctl call, its failure reported and not raised.
+
+    Stopping a program that is not running, or starting one already up, is
+    an error to supervisorctl and not to us.
+    """
+    if subprocess.run(["supervisorctl", *args], check=False).returncode != 0:
+        print(f"install_set: supervisorctl {' '.join(args)} reported an error", file=sys.stderr)
+
+
 def supervisorctl_update() -> None:
     subprocess.check_call(["supervisorctl", "reread"])
     subprocess.check_call(["supervisorctl", "update"])
@@ -397,11 +412,30 @@ def main(argv: list[str] | None = None) -> int:
     # its own -- there is no reporting channel back to llmao yet.
     data_dir = os.environ.get("DATA_DIRECTORY", "/workspace")
     specs = servers_from_config(data)
+
+    # A re-provision finds the last install's servers running: on a reboot
+    # supervisord starts them alongside this. They hold the GPU memory the fit
+    # check is about to read, so a box of two servers refused its own set and
+    # kept serving the old units. Stop them first -- ours only, by name.
+    # `supervisorctl stop all` would stop the provider's own services too,
+    # the terminal included. With --no-reload supervisord is not running.
+    old = existing_programs(CONF_DIR)
+    live = bool(old) and not args.no_reload
+    if live:
+        supervisorctl("stop", *old)
+
     problems = check_fit(specs, data_dir=data_dir)
     if problems:
         for line in problems:
             print(f"install_set: will not fit -- {line}", file=sys.stderr)
+        # Leave the box serving what it served, not serving nothing.
+        if live:
+            supervisorctl("start", *old)
         return 1
+
+    # A server dropped from the set must not be left for supervisord to run.
+    for name in old:
+        (CONF_DIR / f"{name}.conf").unlink(missing_ok=True)
 
     total = total_vram_gb()
     for spec in apportion(specs, total, free_vram_gb()):
