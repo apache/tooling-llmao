@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""GPU-free tests for hosting/vast/install_set.py (no vLLM, no supervisord)."""
+"""GPU-free tests for hosting/install_set.py (no vLLM, no supervisord)."""
 
 import http.server
 import json
@@ -25,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-VAST = Path(__file__).resolve().parents[1] / "hosting" / "vast"
-sys.path.insert(0, str(VAST))
+HOSTING = Path(__file__).resolve().parents[1] / "hosting"
+sys.path.insert(0, str(HOSTING))
 
 import install_set as inst  # noqa: E402
 
@@ -137,7 +137,7 @@ def test_fetch_json():
     assert data["servers"][0]["name"] == "model-a"
 
 
-def test_fetch_sends_public_ip_header():
+def test_fetch_sends_host_header():
     body = json.dumps(SAMPLE).encode()
     seen = {}
 
@@ -159,7 +159,7 @@ def test_fetch_sends_public_ip_header():
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/vllm/config"
-    data = inst.fetch_config(url, "fleet-secret", public_ip="98.142.241.142")
+    data = inst.fetch_config(url, "fleet-secret", host="98.142.241.142")
     httpd.shutdown()
     assert seen["host"] == "98.142.241.142"
     assert data["servers"][0]["name"] == "model-a"
@@ -384,3 +384,71 @@ def test_apportion_budgets_from_free_memory_as_a_fraction_of_total():
     other = _sized("o", vram=9, mml=40960)
     inst.apportion([pinned, other], 128.0, 100.0)
     assert other["gpu_memory_utilization"] == pytest.approx((90 - 32) / 128, abs=0.001)
+
+
+def _config_server(seen: dict):
+    """A /vllm/config that records the host the box claimed to be."""
+    body = json.dumps(SAMPLE).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["host"] = self.headers.get("X-LLMAO-Host")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def _box_env(monkeypatch, tmp_path, httpd):
+    monkeypatch.setenv("FLEET_KEY", "fleet-secret")
+    monkeypatch.setenv("ASFQUART_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
+    monkeypatch.setenv("LLMAO_HOST", "198.51.100.8")
+    monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
+    monkeypatch.setattr(inst, "CONF_DIR", tmp_path / "conf.d")
+    _smi(monkeypatch, missing=True)
+    reloads = []
+    monkeypatch.setattr(inst, "supervisorctl_update", lambda: reloads.append(True))
+    return reloads
+
+
+def test_main_claims_llmao_host_and_reloads_supervisord(monkeypatch, tmp_path):
+    seen = {}
+    httpd = _config_server(seen)
+    reloads = _box_env(monkeypatch, tmp_path, httpd)
+    try:
+        assert inst.main([]) == 0
+    finally:
+        httpd.shutdown()
+    assert seen["host"] == "198.51.100.8"
+    assert sorted(p.name for p in (tmp_path / "conf.d").iterdir()) == ["vllm-model-a.conf", "vllm-model-b.conf"]
+    assert reloads == [True]
+
+
+def test_main_no_reload_writes_units_and_leaves_supervisord_alone(monkeypatch, tmp_path):
+    """Where supervisord is not running yet, it reads the units when it starts."""
+    httpd = _config_server({})
+    reloads = _box_env(monkeypatch, tmp_path, httpd)
+    try:
+        assert inst.main(["--no-reload"]) == 0
+    finally:
+        httpd.shutdown()
+    assert len(list((tmp_path / "conf.d").iterdir())) == 2
+    assert reloads == []
+
+
+def test_main_requires_llmao_host(monkeypatch, tmp_path):
+    httpd = _config_server({})
+    _box_env(monkeypatch, tmp_path, httpd)
+    monkeypatch.delenv("LLMAO_HOST")
+    try:
+        with pytest.raises(SystemExit, match="LLMAO_HOST"):
+            inst.main([])
+    finally:
+        httpd.shutdown()

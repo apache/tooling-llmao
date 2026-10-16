@@ -7,7 +7,7 @@ are not part of the asfquart process.
 
 **Control plane (all providers):** asfquart serves `GET /vllm/config`
 as JSON from `config.yaml` `fleet.hosts` plus `models.yaml`. Bearer fleet
-key (template). Vast boxes send `X-LLMAO-Host: $PUBLIC_IPADDR` (the TCP
+key (template). Boxes send `X-LLMAO-Host: $LLMAO_HOST` (the TCP
 peer is often a transparent proxy).
 
 Provider-specific: how that JSON becomes running vLLM. Both providers
@@ -17,8 +17,8 @@ write Supervisor units; there is no long-lived Python launcher.
 
 | Path | Role |
 |------|------|
-| `vast/provision.sh` | Vast on-create (curl installer from GitHub) |
-| `vast/install_set.py` | GET JSON, write `/etc/supervisor/conf.d/vllm-*.conf`, `supervisorctl update` |
+| `install_set.py` | Shared by every provider: GET JSON, write a `vllm-*.conf` per server, `supervisorctl update` (or not, with `--no-reload`) |
+| `vast/provision.sh` | Vast on-create: set `LLMAO_HOST`, curl the installer from GitHub, run it |
 | `vast/README.md` | Vast.ai runbook |
 | `runpod/README.md` | RunPod runbook (image not built yet) |
 
@@ -30,7 +30,9 @@ Required:
 - `ASFQUART_URL` — origin only, `https://llm.apache.org`
 - `DATA_DIRECTORY` — volume workspace (typically `/workspace`). HF cache
   and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
-- `PUBLIC_IPADDR` — Vast sets this; `install_set.py` requires it (`X-LLMAO-Host`)
+- `LLMAO_HOST` — the box's public IP, sent as `X-LLMAO-Host`. Each provider's
+  `provision.sh` sets it from that provider's own variable (Vast:
+  `PUBLIC_IPADDR`), so `install_set.py` knows no provider's names
 - `PROVISIONING_SCRIPT` — Vast only: raw URL of `provision.sh`
 
 ## Boot

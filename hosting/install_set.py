@@ -15,17 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Vast box-start: fetch set JSON, write Supervisor units, exit.
+"""Box-start: fetch set JSON, write Supervisor units, exit.
 
-Not a process manager. supervisord owns vllm serve. Other providers GET
-the same /vllm/config JSON and emit their own artifacts.
+Not a process manager. supervisord owns vllm serve. Shared by every
+provider; each provider's provision.sh sets the environment and runs this.
 
-Sends X-LLMAO-Host from PUBLIC_IPADDR so lookup works when the TCP peer is
-Vast's transparent proxy (no X-Forwarded-For).
+Sends X-LLMAO-Host from LLMAO_HOST, the box's public IP as its provider
+reports it, so lookup works when the TCP peer is a transparent proxy (no
+X-Forwarded-For). The provider's own variable is mapped to LLMAO_HOST by
+its provision.sh, so this file knows no provider's names.
+
+Run with --no-reload where supervisord is not yet running: the units are
+written, and supervisord reads them when it starts.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -65,15 +71,15 @@ def fetch_config(
     url: str,
     fleet_key: str,
     *,
-    public_ip: str | None = None,
+    host: str | None = None,
     timeout_s: float = 30.0,
 ) -> dict[str, Any]:
     scheme = urllib.parse.urlparse(url).scheme
     if scheme not in ("http", "https"):
         raise SystemExit(f"config url must be http(s), got {scheme!r}")
     headers = {"Authorization": f"Bearer {fleet_key}", "Accept": "application/json"}
-    if public_ip:
-        headers[HOST_HEADER] = public_ip
+    if host:
+        headers[HOST_HEADER] = host
     req = urllib.request.Request(
         url,
         headers=headers,
@@ -365,12 +371,19 @@ def supervisorctl_update() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    del argv
+    parser = argparse.ArgumentParser(description="Fetch this box's set and write a Supervisor unit per server.")
+    parser.add_argument(
+        "--no-reload",
+        action="store_true",
+        help="write the units only; supervisord is not running yet and will read them when it starts",
+    )
+    args = parser.parse_args(argv)
+
     fleet_key = require_env("FLEET_KEY")
     asfquart_url = require_env("ASFQUART_URL")
-    public_ip = require_env("PUBLIC_IPADDR")
+    host = require_env("LLMAO_HOST")
     url = config_url(asfquart_url)
-    data = fetch_config(url, fleet_key, public_ip=public_ip)
+    data = fetch_config(url, fleet_key, host=host)
 
     # Refuse before writing units rather than after a long weights pull. The
     # provisioning log is where this is read, so the message has to stand on
@@ -389,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         if total and gmu is not None:
             print(f"install_set: {spec['name']} gets {gmu} of the card ({gmu * total:.1f}GB)", file=sys.stderr)
     write_units(specs, CONF_DIR)
-    if os.environ.get("INSTALL_SET_DRY_RUN", "").strip() in ("1", "true"):
+    if args.no_reload:
         return 0
     supervisorctl_update()
     return 0

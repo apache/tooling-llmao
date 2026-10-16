@@ -230,7 +230,8 @@ litellm.yaml.example     → litellm.yaml (do not include models.yaml; store_mod
 models.yaml              admin definitions (committed; no secrets)
 certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, fleet, proxy/ (LiteLLM client)
-hosting/vast/            provision.sh + install_set.py
+hosting/install_set.py   GPU-box installer, shared by every provider
+hosting/vast/            provision.sh (Vast on-create)
 hosting/runpod/          RunPod template notes (image not built yet)
 tests/                   offline seam, fleet, hosting installer
 ```

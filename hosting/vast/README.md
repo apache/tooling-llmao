@@ -3,8 +3,9 @@
 Custom **template** (on-start, env), Vast’s **stock vLLM container**. Do not
 maintain a derived image for Vast.
 
-`provision.sh` curls `install_set.py`, which fetches host JSON
-(`X-LLMAO-Host: $PUBLIC_IPADDR`) and writes one Supervisor program per model.
+`provision.sh` sets `LLMAO_HOST` from `PUBLIC_IPADDR` and curls the shared
+[`../install_set.py`](../install_set.py), which fetches host JSON
+(`X-LLMAO-Host: $LLMAO_HOST`) and writes one Supervisor program per model.
 supervisord runs `vllm serve`. There is no Python process manager.
 
 Vast instances often reach `llm.apache.org` through a transparent HTTP proxy:
@@ -27,7 +28,7 @@ That value must match a `fleet.hosts` key. There is no `?host=` query.
   ```bash
   FLEET_KEY=<shared-secret>   # bake into the template
   ASFQUART_URL=https://llm.apache.org
-  # PUBLIC_IPADDR is set by Vast; install_set.py requires it
+  # PUBLIC_IPADDR is set by Vast; provision.sh requires it and passes it on as LLMAO_HOST
   ```
 
   Put the instance public IP under `fleet.hosts` in `config.yaml`. Do not set
