@@ -50,7 +50,7 @@ from llmao.model_status import (
     model_status,
     self_hosted_lifecycle,
 )
-from llmao.models import load_models, validate_models, vllm_recipe, warn_deprecated
+from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
 from llmao.providers import ProviderDeployment, provider_deployments, validate_providers
 from llmao.vast_client import fetch_port_map
 
@@ -316,9 +316,13 @@ class VllmServer:
         vram_gb: float | None = None,
         disk_gb: float | None = None,
         public_port: int | None = None,
+        served_name: str | None = None,
     ):
         self.model_name = model_name
         self.name = name
+        # What vLLM answers to (--served-model-name), and so what LiteLLM must
+        # ask for. Not `name`, which only labels this server.
+        self.served_name = served_name or model_name
         self.host = host
         self.listen_port = int(listen_port)
         self.public_port = int(public_port) if public_port is not None else None
@@ -398,6 +402,7 @@ class VllmServer:
             max_model_len=int(maxlen) if maxlen is not None else None,
             vram_gb=float(vram) if vram is not None else None,
             disk_gb=float(disk) if disk is not None else None,
+            served_name=served_model_name(model),
         )
 
     @property
@@ -478,6 +483,7 @@ class VllmServer:
         out: dict[str, Any] = {
             "name": self.name,
             "model": self.hf_model,
+            "served_model_name": self.served_name,
             "host": self.host,
             "port": self.listen_port,
             "api_key": self.api_key,

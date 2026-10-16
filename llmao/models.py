@@ -67,6 +67,17 @@ def vllm_recipe(model: Any) -> Any:
     return (info.get("vllm") if hasattr(info, "get") else None) or None
 
 
+def served_model_name(model: Any) -> str:
+    """The name vLLM must answer to: litellm_params.model after its provider prefix.
+
+    LiteLLM strips "hosted_vllm/" and sends the rest as the request's model,
+    so a box serving under any other name -- vLLM's default is the Hugging
+    Face id -- answers every request with 404. Taken from the one field
+    LiteLLM reads, so the two cannot drift apart.
+    """
+    return str(model.litellm_params.model).partition("/")[2] or str(model.litellm_params.model)
+
+
 # Keys models.yaml no longer reads. Where a model is served, and with what
 # credentials, belongs to a deployment: fleet.hosts for our boxes, config.yaml
 # providers for anyone we pay. (section, key, where it went)

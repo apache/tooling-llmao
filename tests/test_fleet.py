@@ -37,7 +37,7 @@ from llmao.fleet import (
     validate_fleet,
 )
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
-from llmao.models import load_models
+from llmao.models import load_models, vllm_recipe
 from llmao.proxy.deployments import _norm_base
 from llmao.vllm_api_key import derive_vllm_api_key
 
@@ -606,3 +606,24 @@ def test_unpinned_port_still_follows_the_provider_map():
     assert srv.public_port_pinned is False
     fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})
     assert srv.public_port == 12711
+
+
+def test_a_box_serves_the_name_litellm_asks_for():
+    """vLLM's default name is the Hugging Face id; LiteLLM asks for ours.
+
+    Three boxes served Qwen/Qwen3-8B while LiteLLM asked for qwen3-8b-bf16:
+    /health passed and every request was a 404.
+    """
+    models = load_models(EXAMPLE)
+    hosts = {}
+    for i, model in enumerate(m for m in models if vllm_recipe(m) is not None):
+        hosts[f"10.0.0.{i + 1}"] = [[model.model_name, 8001]]
+    cfg = _cfg(hosts)
+    validate_fleet(cfg, models=models)
+    by_name = {m.model_name: m for m in models}
+    for host, rows in hosts.items():
+        (server,) = config_for_host(host, models=models, cfg=cfg)["servers"]
+        # LiteLLM sends litellm_params.model with its provider prefix removed.
+        asked = str(by_name[rows[0][0]].litellm_params.model).split("/", 1)[1]
+        assert server["served_model_name"] == asked
+        assert server["served_model_name"] != server["model"]

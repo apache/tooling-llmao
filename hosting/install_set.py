@@ -126,9 +126,11 @@ def parse_server(raw: dict[str, Any]) -> dict[str, Any]:
     mml = raw.get("max_model_len")
     vram = raw.get("vram_gb")
     disk = raw.get("disk_gb")
+    served = raw.get("served_model_name")
     return {
         "name": str(raw["name"]),
         "model": str(raw["model"]),
+        "served_model_name": str(served) if served else None,
         "port": int(raw["port"]),
         "api_key": str(raw["api_key"]),
         "gpu_memory_utilization": float(gmu) if gmu is not None else None,
@@ -306,6 +308,11 @@ def build_argv(spec: dict[str, Any]) -> list[str]:
         "--port",
         str(spec["port"]),
     ]
+    # The name LiteLLM asks for. Without it vLLM answers only to the Hugging
+    # Face id, and every request through LiteLLM is a 404 while /health still
+    # passes. Absent only from a control plane older than the field.
+    if spec.get("served_model_name"):
+        cmd.extend(["--served-model-name", spec["served_model_name"]])
     if spec.get("gpu_memory_utilization") is not None:
         cmd.extend(["--gpu-memory-utilization", str(spec["gpu_memory_utilization"])])
     if spec.get("max_model_len") is not None:

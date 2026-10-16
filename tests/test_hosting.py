@@ -53,6 +53,15 @@ SAMPLE = {
 }
 
 
+def test_vllm_answers_to_the_name_litellm_asks_for(monkeypatch):
+    monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
+    spec = inst.parse_server({**SAMPLE["servers"][1], "served_model_name": "qwen3-8b-bf16"})
+    argv = inst.build_argv(spec)
+    assert argv[argv.index("--served-model-name") + 1] == "qwen3-8b-bf16"
+    # From a control plane older than the field: vLLM's default, as before.
+    assert "--served-model-name" not in inst.build_argv(inst.parse_server(SAMPLE["servers"][1]))
+
+
 def test_build_argv(monkeypatch):
     monkeypatch.setenv("VLLM_BIN", "vllm")
     # re-import uses module-level VLLM_BIN captured at load; call with patched attr
