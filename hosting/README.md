@@ -93,7 +93,7 @@ context it cannot hold. A model that declares `kv_bytes_per_token` has that
 counted; one that does not is checked on its weights alone. (qwen3-8b's 9GB
 of weights fit a 12GB card; the 2.8GB of KV cache for its 40960-token
 context did not, and vLLM would not start.) The total is checked against
-the share the servers will get, 0.9 of what is free, as the sizing below
+the share the servers will get (see the budget below), as the sizing below
 divides it.
 
 ## Several GPUs
@@ -118,7 +118,13 @@ refuse where a first install would not.
 Left alone, each `vllm serve` takes 0.9 of the card (of each card, with
 several GPUs) and a second server cannot start. `install_set.py` divides the memory instead (`apportion`):
 
-- The budget is 0.9 of what is **free** at install time.
+- The budget is what is **free** at install time, less a reserve: 10% of
+  it, or 2 GB, whichever is more, per card. vLLM's flag covers its own
+  allocations; the CUDA context, the buffers GPUs use to talk to each
+  other, and CUDA graph capture come out of what it leaves, and that is
+  roughly fixed in size. 10% of an 80 GB card is plenty; 10% of a 12 GB
+  card was not (two RTX 3060s splitting qwen3-8b ran out at startup with
+  1.2 GB left each). The 2 GB is a judgement, not a measurement.
 - Each server gets its `vram_gb`, plus a share of the remainder in
   proportion to its `max_model_len`. An equal split if any server has none.
 - The result is passed as `--gpu-memory-utilization`, a fraction of the

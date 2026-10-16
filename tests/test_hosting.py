@@ -569,11 +569,28 @@ def test_a_server_spans_every_gpu(monkeypatch):
 
 def test_apportion_is_per_card():
     """Each card holds 1/cards of every server's weights; the rest is shared out."""
-    big = {**inst.parse_server(QWEN_8B), "vram_gb": 9.0}
+    big = {**inst.parse_server(QWEN_8B), "vram_gb": 6.0}
     small = {**inst.parse_server(QWEN_8B), "name": "small", "vram_gb": 1.0}
-    # One 12GB card: 10.8GB usable, 10GB of it weights, 0.4GB more each.
+    # One 12GB card: 10GB usable after the 2GB reserve, 7GB of it weights.
     one = inst.apportion([dict(big), dict(small)], 12.0, cards=1)
-    assert [s["gpu_memory_utilization"] for s in one] == [0.783, 0.116]
-    # Two: 5GB of weights per card, 2.9GB more each on top of its half.
+    assert [s["gpu_memory_utilization"] for s in one] == [0.625, 0.208]
+    # Two: 3.5GB of weights per card, so 6.5GB to share instead of 3.
     two = inst.apportion([dict(big), dict(small)], 12.0, cards=2)
-    assert [s["gpu_memory_utilization"] for s in two] == [0.616, 0.283]
+    assert [s["gpu_memory_utilization"] for s in two] == [0.52, 0.312]
+
+
+def test_a_small_card_keeps_its_reserve():
+    """Two 11.63GiB RTX 3060s, one qwen3-8b: at 0.9 each card had 1.2GB left
+    for CUDA, NCCL and graph capture, and vLLM ran out at startup."""
+    total = 11910 / 1024
+    (spec,) = inst.apportion([inst.parse_server(QWEN_8B)], total, total, cards=2)
+    gmu = spec["gpu_memory_utilization"]
+    assert (1 - gmu) * total >= inst.GPU_RESERVE_GB - 0.01
+    # And what it claims still holds its half of the weights and of the KV cache.
+    assert gmu * total - 9 / 2 >= inst.kv_gb(spec) / 2
+
+
+def test_a_large_card_keeps_ten_percent():
+    """The reserve is a floor: on an 80GB card 10% is already more than 2GB."""
+    assert inst.usable_gb(80.0) == pytest.approx(72.0)
+    assert inst.usable_gb(12.0) == pytest.approx(10.0)

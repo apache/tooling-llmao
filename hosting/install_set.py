@@ -50,6 +50,13 @@ VLLM_BIN = os.environ.get("VLLM_BIN", "/usr/local/bin/vllm")
 # The share of the free GPU memory the servers on a box divide between them.
 # vLLM's own default for one server, applied to what is free.
 GPU_USABLE_FRACTION = 0.9
+# But never less than this left over, per card. vLLM's flag budgets its own
+# allocations; the CUDA context, the buffers GPUs use to talk to each other,
+# and CUDA graph capture come out of what it leaves. That is roughly fixed in
+# size, not a fraction: 10% of an 80GB card is plenty, 10% of a 12GB card was
+# not -- two 12GB RTX 3060s splitting qwen3-8b ran out at startup with
+# 1.2GB left each. A judgement, not a measurement; see capacity planning.
+GPU_RESERVE_GB = 2.0
 MEMINFO = Path("/proc/meminfo")
 
 
@@ -222,6 +229,11 @@ def total_vram_gb() -> float | None:
     return min(cards) if cards else None
 
 
+def usable_gb(free_gb: float) -> float:
+    """What the servers on a card may claim between them: what is free, less the reserve."""
+    return free_gb - max(free_gb * (1 - GPU_USABLE_FRACTION), GPU_RESERVE_GB)
+
+
 def kv_gb(spec: dict[str, Any]) -> float:
     """KV cache for one request at max_model_len, in GB; 0 when the model does not say.
 
@@ -253,7 +265,7 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
 
     Per card: every server spans every GPU, so each card holds 1/cards of
     each server's weights and KV cache. Against the share the servers will
-    actually get, GPU_USABLE_FRACTION of what is free, as apportion divides it.
+    actually get, usable_gb of what is free, as apportion divides it.
 
     Silent when nvidia-smi is unavailable or a model declares no vram_gb --
     an unknown is not a failure, and refusing to start on a missing optional
@@ -266,14 +278,14 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
     weights = sum(s["vram_gb"] for s in sized) / cards
     kv = sum(kv_gb(s) for s in sized) / cards
     free = free_vram_gb()
-    if sized and free is not None and weights + kv > free * GPU_USABLE_FRACTION:
+    if sized and free is not None and weights + kv > usable_gb(free):
         names = ", ".join(s["name"] for s in sized)
         each = " each" if cards > 1 else ""
         across = f" across {cards} GPUs" if cards > 1 else ""
         problems.append(
             f"VRAM: {names} need {weights + kv:.1f}GB per card{across} "
             f"({weights:.1f}GB weights, {kv:.1f}GB KV cache at max_model_len), "
-            f"{free * GPU_USABLE_FRACTION:.1f}GB usable of {free:.1f}GB free{each}."
+            f"{usable_gb(free):.1f}GB usable of {free:.1f}GB free{each}."
         )
 
     # Once per model, not per server: two servers of the same model share
@@ -304,7 +316,7 @@ def apportion(
     of full-context slots. Without a ``max_model_len`` on every one of them
     the split is equal. A fraction set in models.yaml is kept and deducted.
 
-    The servers share GPU_USABLE_FRACTION of ``free_gb``, what is free right
+    The servers share usable_gb of ``free_gb``, what is free right
     now, not of the card's size. On a unified-memory machine the operating
     system lives in the same memory, and MemAvailable already leaves it out.
     vLLM's flag is a fraction of the total, so the result is still expressed
@@ -325,7 +337,7 @@ def apportion(
     if not todo or any(not s.get("vram_gb") for s in todo):
         return specs
     pinned = sum(s["gpu_memory_utilization"] for s in specs if s.get("gpu_memory_utilization") is not None)
-    usable = (free_gb or total_gb) * GPU_USABLE_FRACTION - pinned * total_gb
+    usable = usable_gb(free_gb or total_gb) - pinned * total_gb
     leftover = usable - sum(s["vram_gb"] / cards for s in todo)
     if leftover <= 0:
         return specs
