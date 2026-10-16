@@ -225,3 +225,50 @@ def test_health_on_a_shared_api_base_is_per_model():
     asyncio.run(_manager(fleet, health, cfg=ACCOUNTS).check_health_skew())
     assert grok.litellm_healthy is True
     assert gemma.litellm_healthy is False
+
+
+def _unplaced():
+    """A box whose public port is not known this pass, after an earlier pass knew it."""
+    box = _server(host="10.0.0.5", listen_port=8001, public_port=None)
+    box.state = HEALTHY
+    fleet = Fleet(None, [box], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    (dep,) = fleet.deployments
+    dep.in_litellm = True
+    dep.litellm_healthy = True
+    dep.litellm_health_at = 1000.0
+    return fleet, dep
+
+
+def test_an_unknown_address_is_not_missing_from_litellm():
+    fleet, dep = _unplaced()
+    info = {
+        "data": [
+            # Its own deployment, on the public port nobody knows this pass.
+            {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.5:41234/v1"}},
+            # Somebody else's: a host the fleet does not have.
+            {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.99:8001/v1"}},
+        ]
+    }
+    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_config_skew())
+    assert dep.in_litellm is True
+    assert [(x.host, x.port) for x in fleet.extra_litellm] == [("10.0.0.99", 8001)]
+
+
+def test_an_unknown_address_is_not_found_on_its_listen_port():
+    """Off-box the listen port is unreachable; finding it there proves nothing."""
+    fleet, dep = _unplaced()
+    dep.in_litellm = False
+    info = {"data": [{"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.5:8001/v1"}}]}
+    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_config_skew())
+    assert dep.in_litellm is False
+
+
+def test_an_unknown_address_keeps_its_last_litellm_health():
+    """Wiping it would leave the deployment unjudged for four hours."""
+    fleet, dep = _unplaced()
+    be = _manager(fleet, {"healthy_endpoints": [], "unhealthy_endpoints": []}, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_health_skew())
+    assert dep.litellm_healthy is True
+    assert dep.litellm_health_at == 1000.0

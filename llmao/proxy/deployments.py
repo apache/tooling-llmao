@@ -284,6 +284,14 @@ class DeploymentManager:
         # provider deployment is its api_base and model name together.
         ours = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base and d.provider is None}
         bought = {(_norm_base(d.api_base), d.model_name) for d in self.fleet.deployments if d.provider is not None}
+        # Servers whose address is not known this pass: no public port yet, or
+        # the provider's lookup failed. A LiteLLM deployment on the same host
+        # and model may well be theirs, so it is not called an extra.
+        unplaced = {
+            (normalize_peer_ip(d.vllm.host), d.model_name)
+            for d in self.fleet.deployments
+            if d.provider is None and d.vllm is not None and not d.api_base
+        }
         now = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
@@ -292,17 +300,26 @@ class DeploymentManager:
                 dep.config_mismatch = False
                 self._store_skew(dep, now)
                 continue
-            names = by_base.get(base, []) if base else []
+            if base is None:
+                # No address is not evidence that LiteLLM lacks it: the last
+                # answer stands. Not even a deployment on the listen port says
+                # otherwise -- off-box that port is unreachable, so it is not the
+                # deployment this server needs.
+                self._store_skew(dep, now)
+                continue
             present = any(
                 dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name)
                 for _norm, host, port, model_name in routes
             )
+            names = by_base.get(base, [])
             dep.in_litellm = bool(names) or present
             dep.config_mismatch = any(name != dep.model_name for name in names)
             self._store_skew(dep, now)
         extra: list[ExtraLiteLLM] = []
         for norm, host, port, model_name in routes:
             if norm in ours or (norm, model_name) in bought:
+                continue
+            if (normalize_peer_ip(host), model_name) in unplaced:
                 continue
             view = deployment_status(
                 DeploymentSnapshot(model_name=model_name, self_hosted=False, litellm_only=True),
@@ -339,12 +356,16 @@ class DeploymentManager:
         stamp = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
+            if base is None:
+                # Nothing to match LiteLLM's answer to. The last result stands
+                # rather than being wiped for the four hours until the next check.
+                continue
             if dep.provider is not None:
                 litellm_up = (base, dep.litellm_model) in healthy
                 litellm_down = (base, dep.litellm_model) in unhealthy
             else:
-                litellm_up = bool(base) and base in healthy_bases
-                litellm_down = bool(base) and base in unhealthy_bases
+                litellm_up = base in healthy_bases
+                litellm_down = base in unhealthy_bases
             if litellm_up:
                 dep.litellm_healthy = True
                 dep.litellm_health_at = stamp
