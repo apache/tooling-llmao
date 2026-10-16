@@ -91,13 +91,13 @@ $PM run --rm --entrypoint sh localhost/llmao-box-check -c '
 Expect all three files mode `-rwxr-xr-x` and the supervisor version from
 `requirements.txt`.
 
-**The boot script refuses a pod with no public IP:**
+**The boot script refuses to run outside a pod (no `RUNPOD_POD_ID`):**
 
 ```bash
 $PM run --rm -e FLEET_KEY=x -e ASFQUART_URL=https://x.example localhost/llmao-box-check
 ```
 
-Expect `RUNPOD_PUBLIC_IP is unset` and a non-zero exit.
+Expect `RUNPOD_POD_ID is unset` and a non-zero exit.
 
 **A provisioned boot runs supervisord as PID 1, fetching nothing.** A fake
 volume that is already provisioned, with one stand-in server:
@@ -109,7 +109,7 @@ date > "$W/.llmao/provisioned"
 printf '[program:vllm-sleeper]\ncommand=sleep 600\nautorestart=true\n' > "$W/.llmao/conf.d/vllm-sleeper.conf"
 
 $PM run -d --name llmao-boot -v "$W:/workspace" \
-  -e FLEET_KEY=x -e ASFQUART_URL=https://x.example -e RUNPOD_PUBLIC_IP=198.51.100.8 \
+  -e FLEET_KEY=x -e ASFQUART_URL=https://x.example -e RUNPOD_POD_ID=podid0example \
   localhost/llmao-box-check
 sleep 5
 $PM logs llmao-boot | head -3              # "already provisioned; fetching nothing"

@@ -33,10 +33,11 @@ Required:
 - `ASFQUART_URL` — origin only, `https://llm.apache.org`
 - `DATA_DIRECTORY` — volume workspace (typically `/workspace`). HF cache
   and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
-- `LLMAO_HOST` — the box's public IP, sent as `X-LLMAO-Host`. Each provider's
-  `provision.sh` sets it from that provider's own variable (Vast:
-  `PUBLIC_IPADDR`; RunPod: `RUNPOD_PUBLIC_IP`), so `install_set.py` knows
-  no provider's names
+- `LLMAO_HOST` — the box's name in `fleet.hosts`, sent as `X-LLMAO-Host`.
+  Each provider's `provision.sh` sets it from that provider's own variable,
+  so `install_set.py` knows no provider's names. Vast: the public IP,
+  `PUBLIC_IPADDR`. RunPod: the pod id, `RUNPOD_POD_ID`, since a pod need
+  not have a public IP of its own
 - `PROVISIONING_SCRIPT` — Vast only: raw URL of `provision.sh`
 
 ## Boot

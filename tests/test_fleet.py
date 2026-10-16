@@ -88,6 +88,16 @@ def test_unknown_host():
         config_for_host("10.0.0.9", models=models, cfg=cfg)
 
 
+def test_a_runpod_host_is_keyed_by_pod_id():
+    """A RunPod box names itself by pod id, so fleet.hosts holds one as a key."""
+    cfg = _cfg({"podid0example": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    validate_fleet(cfg, models=models)
+    payload = config_for_host("podid0example", models=models, cfg=cfg)
+    assert payload["host"] == "podid0example"
+    assert [s["port"] for s in payload["servers"]] == [8001]
+
+
 def _approvable(cfg, models):
     fleet = Fleet(cfg=cfg, servers=[], models={m.model_name: m for m in models})
     return fleet

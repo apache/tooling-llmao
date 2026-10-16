@@ -46,11 +46,14 @@ fi
 
 : "${FLEET_KEY:?FLEET_KEY must be set by the RunPod template}"
 : "${ASFQUART_URL:?ASFQUART_URL must be set by the RunPod template}"
-: "${RUNPOD_PUBLIC_IP:?RUNPOD_PUBLIC_IP is unset: the pod has no public IP, so it cannot say which host it is}"
+: "${RUNPOD_POD_ID:?RUNPOD_POD_ID is unset: RunPod sets it in every pod, so this is not running on one}"
 
 export DATA_DIRECTORY="${DATA_DIRECTORY:-/workspace}"
 # The installer is shared between providers and knows none of their names.
-export LLMAO_HOST="$RUNPOD_PUBLIC_IP"
+# A RunPod box is named by its pod id, not an IP: a pod whose ports are HTTP
+# only has no public IP at all, and pods can share one. fleet.hosts keys a
+# RunPod row by the same id.
+export LLMAO_HOST="$RUNPOD_POD_ID"
 
 INSTALLER_URL="${LLMAO_INSTALLER_URL:-https://raw.githubusercontent.com/apache/tooling-llmao/refs/heads/main/hosting/install_set.py}"
 STATE="$DATA_DIRECTORY/.llmao"

@@ -45,8 +45,6 @@ will hit and a check that builds the image on a small stand-in base.
 - **Start command: empty.** The image's entrypoint is `provision.sh`; anything
   here arrives as its arguments, which it ignores with a warning.
 - **Volume** mounted at `/workspace`, large enough for the HF cache.
-- **Public IP** required: `provision.sh` refuses to start without
-  `RUNPOD_PUBLIC_IP`, because it is how the box says which host it is.
 - **Expose** every listen port the box's `fleet.hosts` rows use (RunPod
   allows at most 10 HTTP ports); see Ports below.
 - **Environment:**
@@ -59,8 +57,23 @@ will hit and a check that builds the image on a small stand-in base.
   # LLMAO_INSTALLER_URL=<raw URL>        pin install_set.py to a commit SHA
   ```
 
-Add the pod's `RUNPOD_PUBLIC_IP` to `fleet.hosts` in `config.yaml`. Order does
-not matter: a pod created before its row retries until llmao knows it.
+Add the pod to `fleet.hosts` in `config.yaml`, keyed by its **pod id**
+(`RUNPOD_POD_ID`, shown in the console and as `id` in the API):
+
+```yaml
+fleet:
+  hosts:
+    "<pod id>": [[qwen3.8-27b, 8001]]
+```
+
+Not by IP: a pod whose ports are HTTP-only has no public IP, and pods can
+share one. Order does not matter: a pod created before its row retries until
+llmao knows it.
+
+**llmao cannot reach a pod-id host yet.** The pod provisions and serves, but
+the fleet still treats the key as an address, so its health probes fail and
+it is never registered with LiteLLM. Building its address from the pod id
+(`https://<podId>-<listen>.proxy.runpod.net`) is the next step.
 
 ## Boot
 
@@ -122,14 +135,11 @@ Until one of those is wired, keep the fourth slot.
 
 ## Untested until the first pod
 
-- The image has not been built. The first run of the workflow is the first
-  build. The `Dockerfile` assumes the vLLM image runs as root and has `curl`
-  and `python3`, as its upstream Dockerfile shows.
-- RunPod can pull the image anonymously only if the ghcr package is public.
-  New packages start private; making it public may need an org admin. Until
-  then the template needs registry credentials.
-- That the IP the pod reaches llm.apache.org **from** matches
-  `RUNPOD_PUBLIC_IP`. llmao looks the box up by `X-LLMAO-Host`, so it need not,
-  but a proxy that strips headers would break the lookup.
+- That the vLLM image runs as root and has `curl` and `python3`, as its
+  upstream Dockerfile shows. The image builds and RunPod pulls it (the ghcr
+  package is public), but no pod has provisioned from it yet.
+- That `X-LLMAO-Host` reaches `/vllm/config` intact from a pod. llmao looks
+  the box up by that header alone; a proxy that stripped it would break the
+  lookup.
 - RunPod's handling of a container whose start command is empty when the
   image sets its own `ENTRYPOINT`.

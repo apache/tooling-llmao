@@ -36,7 +36,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "hosting" / "runpod" / "provision
 FAKE_INSTALLER = """\
 import os, sys
 assert sys.argv[1:] == ["--no-reload"], sys.argv
-assert os.environ["LLMAO_HOST"] == "198.51.100.8"
+assert os.environ["LLMAO_HOST"] == "podid0example"
 conf = os.environ["SUPERVISOR_CONF_DIR"]
 open(os.path.join(conf, "vllm-model-a.conf"), "w").write("[program:vllm-model-a]\\n")
 """
@@ -73,7 +73,7 @@ def box(tmp_path):
         "STUB_DIR": str(stubs),
         "FLEET_KEY": "fleet-secret",
         "ASFQUART_URL": "https://llm.example.org",
-        "RUNPOD_PUBLIC_IP": "198.51.100.8",
+        "RUNPOD_POD_ID": "podid0example",
         "DATA_DIRECTORY": str(workspace),
         "LLMAO_SUPERVISORD_CONF": str(tmp_path / "etc" / "supervisord.conf"),
         "LLMAO_RUN_DIR": str(tmp_path / "run"),
@@ -143,11 +143,11 @@ def test_a_failing_installer_is_retried_and_leaves_no_marker_until_it_works(box)
     assert (workspace / ".llmao" / "provisioned").exists()
 
 
-def test_no_public_ip_refuses_to_start(box):
+def test_no_pod_id_refuses_to_start(box):
     boot, stubs, workspace, _ = box
-    result = boot(RUNPOD_PUBLIC_IP="")
+    result = boot(RUNPOD_POD_ID="")
     assert result.returncode != 0
-    assert "RUNPOD_PUBLIC_IP" in result.stderr
+    assert "RUNPOD_POD_ID" in result.stderr
     assert not (workspace / ".llmao" / "provisioned").exists()
     assert _calls(stubs) == 0
 
