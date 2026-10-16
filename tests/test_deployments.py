@@ -79,6 +79,25 @@ def test_sync_selfhost_posts_new_when_serving():
     assert fleet.deployments[0].in_litellm is True
 
 
+def test_one_failing_deployment_does_not_stop_the_rest(caplog):
+    """The first deployment raised; every one after it was never registered."""
+    broken = _server(model_name="gone", name="gone", host="10.0.0.9")
+    fine = [_server(host="10.0.0.1"), _server(host="10.0.0.2")]
+    for s in (broken, *fine):
+        s.state = HEALTHY
+    # "gone" is not in models.yaml, so its body cannot be built.
+    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    fleet = Fleet(None, [broken, *fine], models=models)
+    be = _manager(fleet, {"data": []})
+    with caplog.at_level("ERROR", logger="llmao.proxy.deployments"):
+        asyncio.run(be.sync_selfhost())
+    posted = [c.json["litellm_params"]["api_base"] for c in be._transport.calls if c.path == "model/new"]
+    assert posted == ["http://10.0.0.1:8001/v1", "http://10.0.0.2:8001/v1"]
+    assert [d.in_litellm for d in fleet.deployments] == [False, True, True]
+    # Says which deployment, so the log points at the cause.
+    assert "add_deployment failed for gone@http://10.0.0.9:8001/v1" in caplog.text
+
+
 def test_sync_selfhost_deletes_when_down():
     s = _server()
     s.state = UNHEALTHY

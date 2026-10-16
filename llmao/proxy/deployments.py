@@ -239,6 +239,18 @@ class DeploymentManager:
         dep.in_litellm = False
         _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.api_base, found)
 
+    async def _each(self, action, dep) -> None:
+        """Run `action` on one deployment; a failure is logged and goes no further.
+
+        The callers walk every deployment. Unguarded, the first one to raise
+        ended the walk, and every deployment after it was never registered:
+        vLLM up and Healthy, nothing in LiteLLM, the same on every pass.
+        """
+        try:
+            await action(dep)
+        except Exception:
+            _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.api_base)
+
     async def ensure_providers(self) -> None:
         """At startup: POST /model/new for each config.yaml providers deployment."""
         for dep in self.fleet.deployments:
@@ -246,7 +258,7 @@ class DeploymentManager:
                 continue
             if dep.in_litellm:
                 continue
-            await self.add_deployment(dep)
+            await self._each(self.add_deployment, dep)
 
     async def sync_selfhost(self) -> None:
         """After vLLM probes: register serving backends, drop down ones."""
@@ -255,9 +267,9 @@ class DeploymentManager:
                 continue
             srv = dep.vllm
             if srv.state == HEALTHY and dep.api_base and not dep.in_litellm:
-                await self.add_deployment(dep)
+                await self._each(self.add_deployment, dep)
             elif srv.state in (UNHEALTHY, STALLED) and dep.in_litellm:
-                await self.delete_deployment(dep)
+                await self._each(self.delete_deployment, dep)
 
     async def check_config_skew(self) -> None:
         resp = await self._transport.request("GET", "model/info")
