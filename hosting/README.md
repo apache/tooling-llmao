@@ -123,8 +123,10 @@ What this does not handle:
 - **Sizing happens once, at install.** Adding a server to a box means
   re-running the install so the existing servers restart with smaller shares.
 - **Re-running on a live box.** With the servers still up there is little
-  free memory, so the fit check may refuse and no fraction is set. Stop the
-  servers first.
+  free memory, so the fit check may refuse and no fraction is set.
+  Re-provision instead, which starts from a restart: Vast in
+  [`vast/README.md`](vast/README.md#re-provisioning-a-box), RunPod in
+  [`runpod/README.md`](runpod/README.md#changing-a-pods-set).
 - **Servers that load at the same time.** vLLM charges each one for the
   drop in free memory while it loads, which includes the other's weights.
   Two 15 GiB servers on a GB10 each ended with 17 GiB of KV cache where

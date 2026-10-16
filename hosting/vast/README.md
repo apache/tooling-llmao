@@ -50,9 +50,30 @@ the card's memory between them and prints each server's fraction; see
 [`../README.md`](../README.md) (sizing) for the rule and its limits. Two
 servers of the same model need the disk for one copy of the weights.
 
-To change the set on a running box, stop the servers and re-run the
-provisioning script. A re-run with the old servers still up finds no free
-memory.
+To change the set on a running box, re-provision it; see below.
+
+## Re-provisioning a box
+
+Needed whenever what the box was told has changed: its rows in
+`fleet.hosts`, a model's recipe in `models.yaml`, or what llmao puts in
+`/vllm/config` (for example `served_model_name`).
+
+Vast runs `PROVISIONING_SCRIPT` once, and records that it has in two places
+at the root of the container: the file `/.provisioning_complete` and the
+directory `/.provisioner_state/`. While either is there, a reboot provisions
+nothing. To provision again, remove both:
+
+```bash
+rm -r /.provision*
+```
+
+then reboot the instance from the Vast console. On boot it finds no marker
+and provisions again: it fetches the installer and this box's config, and
+writes new Supervisor units.
+
+**Do not `supervisorctl stop all`.** Vast's image runs its own services under
+the same supervisord, including the Jupyter terminal you are typing in; it
+stops that too, and leaves you no shell to finish with.
 
 ## Smoke
 
