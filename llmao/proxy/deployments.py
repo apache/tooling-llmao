@@ -292,6 +292,7 @@ class DeploymentManager:
             for d in self.fleet.deployments
             if d.provider is None and d.vllm is not None and not d.api_base
         }
+        servers = [d.vllm for d in self.fleet.deployments if d.provider is None and d.vllm is not None]
         now = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
@@ -314,12 +315,18 @@ class DeploymentManager:
             names = by_base.get(base, [])
             dep.in_litellm = bool(names) or present
             dep.config_mismatch = any(name != dep.model_name for name in names)
+            dep.at_listen_port = any(
+                dep.vllm.on_listen_port(host, port, model_name) for _norm, host, port, model_name in routes
+            )
             self._store_skew(dep, now)
         extra: list[ExtraLiteLLM] = []
         for norm, host, port, model_name in routes:
             if norm in ours or (norm, model_name) in bought:
                 continue
             if (normalize_peer_ip(host), model_name) in unplaced:
+                continue
+            # Reported on its server, as "in LiteLLM at the listen port".
+            if any(srv.on_listen_port(host, port, model_name) for srv in servers):
                 continue
             view = deployment_status(
                 DeploymentSnapshot(model_name=model_name, self_hosted=False, litellm_only=True),

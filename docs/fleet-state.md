@@ -219,9 +219,12 @@ value is a badge id; the cell and the log line use the short phrase.
 | vLLM signal up, LiteLLM `/health` lists the endpoint down | `vLLM up, LiteLLM down` |
 | vLLM signal down, LiteLLM `/health` lists the endpoint up | `vLLM down, LiteLLM up` |
 | Same `api_base`, different model name | `config and LiteLLM disagree` |
+| LiteLLM has the server at its listen port, not its public one | `in LiteLLM at the listen port` |
 
 Loading with no route is not a badge. A different port is a different route,
-not a mismatch. The mismatch flag stays on the deployment across the health pass.
+not a mismatch -- except the server's own listen port, which gets its own badge:
+off-box that port is unreachable, so the server is registered at its public
+port as well, and the listen-port entry is left for an admin to remove. The mismatch flag stays on the deployment across the health pass.
 
 A LiteLLM `model/info` route whose `api_base` matches no deployment is
 `in LiteLLM, not in config`. It is stored on `Fleet.extra_litellm` as host,

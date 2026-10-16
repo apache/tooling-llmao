@@ -448,16 +448,23 @@ class VllmServer:
         return f"{self.root_url}/v1"
 
     def same_deployment(self, host: str, port: int | None, model_name: str) -> bool:
-        """True when this LiteLLM deployment is this server.
+        """True when this LiteLLM deployment is this server, reachable: on its public port."""
+        if port is None or port != self.public_port or model_name != self.model_name:
+            return False
+        return normalize_peer_ip(host) == normalize_peer_ip(self.host)
 
-        The row's port may be the public port or the listen port. Those are
-        one process. A mismatch is not a second deployment.
+    def on_listen_port(self, host: str, port: int | None, model_name: str) -> bool:
+        """True when this LiteLLM deployment is this server, but at its listen port.
+
+        The same process, so not a stranger. But off-box the listen port is
+        unreachable -- the provider publishes it on another -- so LiteLLM
+        cannot use it, and it does not stand in for the deployment the server
+        needs. Where the two ports are one (local), the deployment is simply
+        the right one.
         """
-        if port is None or model_name != self.model_name:
+        if port is None or port != self.listen_port or port == self.public_port:
             return False
-        if normalize_peer_ip(host) != normalize_peer_ip(self.host):
-            return False
-        return port == self.public_port or port == self.listen_port
+        return model_name == self.model_name and normalize_peer_ip(host) == normalize_peer_ip(self.host)
 
     @property
     def oversized(self) -> bool:
@@ -595,6 +602,8 @@ class FleetDeployment:
         self.skew: list[str] = []
         # Set by the config skew pass when LiteLLM has this api_base under another model_name.
         self.config_mismatch = False
+        # Set by the config skew pass when LiteLLM has this server at its listen port.
+        self.at_listen_port = False
 
     @classmethod
     def from_vllm(cls, srv: VllmServer) -> FleetDeployment:
@@ -1174,6 +1183,7 @@ def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> Deployment
         context_window=srv.observed_max_model_len or srv.max_model_len,
         kv_cache_tokens=srv.kv_cache_tokens,
         config_mismatch=mismatch,
+        at_listen_port=dep.at_listen_port,
         config_served_at=srv.config_served_at,
         reached=srv.reached,
     )

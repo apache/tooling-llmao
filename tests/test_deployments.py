@@ -22,7 +22,7 @@ import asyncio
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, Fleet, FleetDeployment
-from llmao.model_status import HEALTHY, UNHEALTHY
+from llmao.model_status import HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
 from llmao.providers import ProviderDeployment
 from llmao.proxy.deployments import DeploymentManager
 from tests.fake_transport import FakeTransport
@@ -121,18 +121,58 @@ def _info(host: str, port: int, *, model_id: str | None = None):
     return {"data": [row]}
 
 
-def test_sync_selfhost_does_not_repost_the_same_deployment():
-    """Listen port and Vast HostPort are one deployment. Either row means it is registered."""
-    s = _server(host="80.188.223.202", listen_port=10100, public_port=12711)
+def _listen_and_public():
+    """A Vast-style server: listens on 10100, published on 12711."""
+    s = _server(host="10.0.0.7", listen_port=10100, public_port=12711)
     s.state = HEALTHY
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
-    for port in (12711, 10100):
-        fleet = Fleet(None, [s], models=models)
-        fleet.deployments[0].in_litellm = False
-        be = _manager(fleet, _info("80.188.223.202", port))
-        asyncio.run(be.sync_selfhost())
-        assert "model/new" not in _paths(be)
-        assert fleet.deployments[0].in_litellm is True
+    return Fleet(None, [s], models=models)
+
+
+def test_sync_selfhost_does_not_repost_the_same_deployment():
+    fleet = _listen_and_public()
+    be = _manager(fleet, _info("10.0.0.7", 12711))
+    asyncio.run(be.sync_selfhost())
+    assert "model/new" not in _paths(be)
+    assert fleet.deployments[0].in_litellm is True
+
+
+def test_a_deployment_at_the_listen_port_does_not_stand_in_for_the_reachable_one():
+    """Off-box the listen port is unreachable, so the server is registered properly."""
+    fleet = _listen_and_public()
+    be = _manager(fleet, _info("10.0.0.7", 10100))
+    asyncio.run(be.sync_selfhost())
+    posted = [c.json["litellm_params"]["api_base"] for c in be._transport.calls if c.path == "model/new"]
+    assert posted == ["http://10.0.0.7:12711/v1"]
+
+
+def test_a_deployment_at_the_listen_port_is_reported_on_its_server():
+    fleet = _listen_and_public()
+    (dep,) = fleet.deployments
+    info = {
+        "data": [
+            {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.7:12711/v1"}},
+            {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.7:10100/v1"}},
+        ]
+    }
+    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_config_skew())
+    assert dep.in_litellm is True
+    assert dep.at_listen_port is True
+    assert SKEW_AT_LISTEN_PORT in dep.skew
+    # Once, on its server; not again as a stranger.
+    assert fleet.extra_litellm == []
+
+
+def test_where_the_ports_are_one_the_deployment_is_simply_right():
+    """Local: no provider in between, the listen port is the public one."""
+    s = _server(host="127.0.0.1", listen_port=8001, public_port=8001)
+    s.state = HEALTHY
+    fleet = Fleet(None, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    be = _manager(fleet, _info("127.0.0.1", 8001), cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_config_skew())
+    assert fleet.deployments[0].in_litellm is True
+    assert fleet.deployments[0].at_listen_port is False
 
 
 def test_other_port_is_not_this_deployment():

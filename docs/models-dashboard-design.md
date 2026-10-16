@@ -176,8 +176,9 @@ Much of today's "skew" is just lifecycle ("vLLM isn't up yet, so there's no Lite
 | vLLM down, LiteLLM up | The vLLM signal is down and LiteLLM still reports the endpoint healthy. |
 | In LiteLLM, not in config | A LiteLLM `model/info` route whose `api_base` matches no deployment. Stored beside the fleet table as host, port, and model name (one host can serve several ports; one host:port can report more than one model name). The runner flags every such route on each config pass. Flagging only past a grace period after Approve is still future behavior. |
 | Config/LiteLLM mismatch | The deployment's `api_base` is in `model/info` with a different model name ("config and LiteLLM disagree"). A matching name clears it. The flag is kept across the health pass. A different port is a different route, not this badge. |
+| In LiteLLM at the listen port | `model/info` has the server at its listen port where that differs from its public port. Off-box the listen port is unreachable, so this does not count as the server being in LiteLLM: it is registered at its public port as well, and the listen-port entry is left for an admin to remove. Reported on the server, not again as "in LiteLLM, not in config". |
 
-The runner emits these five badges and nothing else (O4).
+The runner emits these six badges and nothing else (O4).
 
 ## 9. Roll-up: user-facing status
 
@@ -210,7 +211,7 @@ A planned-maintenance "drained" state is a possible later addition so maintenanc
 
 ## 12. Implementation plan
 
-**Pass 1: status logic (no UI).** Shipped in `llmao/model_status.py` as `deployment_status` (per deployment: computed lifecycle, vLLM/LiteLLM signal freshness, the five skew badges, `counted`, and the `reached` loading detail) and `model_status` (per model: roll-up label, privacy tier, context and concurrency). The admin labels (Approved, Reboot requested) are in-memory annotations on `Fleet`, orthogonal to this module. The first fixture (`test_model_status.py::test_fleet_fixture_rollup_is_degraded`) mirrors the current fleet: 3 Healthy (one skewed), 3 Loading, 1 Unhealthy, plus an Unknown fleet-key fetch, rolling up to Degraded.
+**Pass 1: status logic (no UI).** Shipped in `llmao/model_status.py` as `deployment_status` (per deployment: computed lifecycle, vLLM/LiteLLM signal freshness, the six skew badges, `counted`, and the `reached` loading detail) and `model_status` (per model: roll-up label, privacy tier, context and concurrency). The admin labels (Approved, Reboot requested) are in-memory annotations on `Fleet`, orthogonal to this module. The first fixture (`test_model_status.py::test_fleet_fixture_rollup_is_degraded`) mirrors the current fleet: 3 Healthy (one skewed), 3 Loading, 1 Unhealthy, plus an Unknown fleet-key fetch, rolling up to Degraded.
 
 **Pass 2: template.** The combined Models page: user view, admin view with attention strip and Deployments drill-down, and the admin-label set/clear wired to `Fleet.admin_label` / `Fleet.set_admin_label`. The Fleet tab is removed.
 
