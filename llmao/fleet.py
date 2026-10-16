@@ -684,6 +684,11 @@ class Fleet:
         # Awaitable after each vLLM probe tick (DeploymentManager.sync_selfhost).
         # Wired from create_app so this module does not import the LiteLLM client.
         self.after_probe = after_probe
+        # Set when the first lifecycle pass is over: public ports looked up,
+        # every server probed, registrations synced. Whatever compares the
+        # fleet with LiteLLM waits for it; before then no Vast server has an
+        # address, and a comparison reads every one of them as missing.
+        self.ready = asyncio.Event()
         self.config_fetch_at: dict[str, float] = {}
         # Fleet-key GETs for IPs not in fleet.hosts. Process memory only.
         self.unknown_config_fetches: dict[str, edict] = {}
@@ -1127,6 +1132,9 @@ class Fleet:
                         await self.after_probe()
             except Exception:
                 _LOGGER.exception("fleet lifecycle probe failed")
+            # Even after a failed pass: waiting on a fleet that never answers
+            # would stop the comparisons for good, and they report the failure.
+            self.ready.set()
             await asyncio.sleep(interval)
 
 

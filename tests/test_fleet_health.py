@@ -590,3 +590,48 @@ def test_probe_all_scrapes_from_root_not_api_base():
     assert s.kv_cache_tokens == 855836
     assert s.observed_max_model_len == 131072
     assert calls == [f"{root}/health", f"{root}/metrics", f"{root}/v1/models"]
+
+
+def test_the_fleet_is_ready_after_its_first_pass_even_a_failed_one():
+    """A comparison that waited on a fleet whose first pass failed would never run."""
+    fleet = Fleet(edict(fleet=edict(FLEET_KNOBS)), [])
+
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("Vast API unreachable")
+
+    fleet.refresh_public_ports = fail
+    fleet.probe_all = fail
+
+    async def scenario():
+        task = asyncio.create_task(fleet.run_lifecycle())
+        try:
+            await asyncio.wait_for(fleet.ready.wait(), timeout=5)
+        finally:
+            task.cancel()
+
+    assert fleet.ready.is_set() is False
+    asyncio.run(scenario())
+    assert fleet.ready.is_set()
+
+
+def test_litellm_is_not_compared_with_the_fleet_before_its_first_pass():
+    from llmao.proxy.client import LiteLLMBackend
+
+    fleet = Fleet(edict(fleet=edict(FLEET_KNOBS)), [])
+    fake = FakeTransport(lambda call: {"data": []} if call.path == "model/info" else {})
+    backend = LiteLLMBackend(edict(fleet=edict(FLEET_KNOBS)), fleet, transport=fake)
+
+    async def scenario():
+        task = asyncio.create_task(backend.run_skew())
+        try:
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert fake.calls == []
+            fleet.ready.set()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert [c.path for c in fake.calls][:2] == ["model/info", "health"]
+        finally:
+            task.cancel()
+
+    asyncio.run(scenario())

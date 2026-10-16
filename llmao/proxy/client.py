@@ -395,6 +395,11 @@ class LiteLLMBackend:
         health_s = float(self._cfg.fleet.litellm_health_interval_s)
         last_health = 0.0
         first = True
+        # Not before the fleet's first pass. Started together, this ran first:
+        # no Vast server had its public port yet, so every one of their LiteLLM
+        # deployments read as "not in config", and the 4-hour health check
+        # that runs on the first pass had nothing to match its answers to.
+        await self.deployments.fleet.ready.wait()
         while True:
             try:
                 await self.deployments.check_config_skew()
