@@ -387,11 +387,25 @@ def _ini_escape(value: str) -> str:
     return value.replace("%", "%%")
 
 
-def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str, data_dir: str) -> str:
+def program_ini(spec: dict[str, Any], *, hf_home: str, vllm_cache: str, log_dir: str, data_dir: str) -> str:
     name = program_name(spec["name"])
     command = shlex.join(build_argv(spec))
     log = str(Path(log_dir) / f"{spec['name']}.log")
-    env = f'HF_HOME="{_ini_escape(hf_home)}",VLLM_API_KEY="{_ini_escape(spec["api_key"])}"'
+    # The startup plan: vLLM records the KV cache size that fit once its CUDA
+    # graphs were captured, and later boots use it rather than estimating.
+    # The estimate can miss the graphs entirely (it did on 2x12GB cards), so
+    # a server may fail its first boot; supervisord's restart then reads the
+    # plan. It lives in VLLM_CACHE_ROOT, on the volume so it survives restarts.
+    # expandable_segments is what PyTorch's own out-of-memory error advises.
+    env = ",".join(
+        [
+            f'HF_HOME="{_ini_escape(hf_home)}"',
+            f'VLLM_CACHE_ROOT="{_ini_escape(vllm_cache)}"',
+            'VLLM_ENABLE_STARTUP_PLAN="1"',
+            'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
+            f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"',
+        ]
+    )
     return (
         f"[program:{name}]\n"
         f"command={_ini_escape(command)}\n"
@@ -408,8 +422,11 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, log_dir: str, data_dir: s
 def write_units(specs: list[dict[str, Any]], conf_dir: Path) -> list[Path]:
     data_dir = Path(require_env("DATA_DIRECTORY"))
     hf_home = data_dir / "hf-cache"
+    # Where the Vast vLLM template already keeps it.
+    vllm_cache = data_dir / ".vllm_cache"
     log_dir = data_dir / "logs"
     hf_home.mkdir(parents=True, exist_ok=True)
+    vllm_cache.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     conf_dir.mkdir(parents=True, exist_ok=True)
     written = []
@@ -419,6 +436,7 @@ def write_units(specs: list[dict[str, Any]], conf_dir: Path) -> list[Path]:
             program_ini(
                 spec,
                 hf_home=str(hf_home),
+                vllm_cache=str(vllm_cache),
                 log_dir=str(log_dir),
                 data_dir=str(data_dir),
             )

@@ -125,6 +125,16 @@ several GPUs) and a second server cannot start. `install_set.py` divides the mem
   roughly fixed in size. 10% of an 80 GB card is plenty; 10% of a 12 GB
   card was not (two RTX 3060s splitting qwen3-8b ran out at startup with
   1.2 GB left each). The 2 GB is a judgement, not a measurement.
+- Within its budget vLLM sizes the KV cache from an estimate of the CUDA
+  graphs, and the estimate can miss them entirely (the same box: 1.7 GB of
+  graphs, estimated at none, out of memory after capture). So each server
+  runs with vLLM's **startup plan** (`VLLM_ENABLE_STARTUP_PLAN=1`): once the
+  graphs are captured, vLLM records the KV cache size that fits its budget
+  under `$DATA_DIRECTORY/.vllm_cache/startup_plan/`, and every later boot
+  uses it instead of estimating. A server on a tight card may therefore fail
+  its first boot; supervisord restarts it and the second boot reads the
+  plan. vLLM measures again by itself when the model, flags, vLLM version
+  or GPU change.
 - Each server gets its `vram_gb`, plus a share of the remainder in
   proportion to its `max_model_len`. An equal split if any server has none.
 - The result is passed as `--gpu-memory-utilization`, a fraction of the

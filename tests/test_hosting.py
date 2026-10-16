@@ -111,6 +111,10 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     assert 'VLLM_API_KEY="sk-aaa"' in text
     assert "autorestart=true" in text
     assert f'HF_HOME="{tmp_path / "hf-cache"}"' in text
+    assert f'VLLM_CACHE_ROOT="{tmp_path / ".vllm_cache"}"' in text
+    assert 'VLLM_ENABLE_STARTUP_PLAN="1"' in text
+    assert 'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"' in text
+    assert (tmp_path / ".vllm_cache").is_dir()
     assert f"directory={tmp_path}" in text
     assert written[0].stat().st_mode & 0o777 == 0o600
 
