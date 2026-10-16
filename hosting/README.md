@@ -23,6 +23,7 @@ write Supervisor units; there is no long-lived Python launcher.
 | `runpod/Dockerfile` | RunPod image: stock vLLM plus vendored supervisor (`runpod/bin/`, `runpod/requirements.txt`) and `runpod/provision.sh`; built and pushed to ghcr by `.github/workflows/runpod-image.yml` |
 | `runpod/provision.sh` | RunPod entrypoint: provision once (retrying), then `exec supervisord` |
 | `runpod/README.md` | RunPod runbook |
+| `runpod/podman.md` | Checking the RunPod image locally with Podman, before pushing |
 
 ## Box environment
 

@@ -34,6 +34,10 @@ fails if one appears.
 `bin/supervisord` and `bin/supervisorctl` run the vendored copy, so both
 commands work as they would from a package.
 
+To check a change before pushing it, on a machine with Podman and no Docker
+daemon: [podman.md](podman.md). It covers the rootless-Podman problems you
+will hit and a check that builds the image on a small stand-in base.
+
 ## Template
 
 - **Image:** `ghcr.io/apache/tooling-llmao/llmao-vllm-box@sha256:<digest>`,
