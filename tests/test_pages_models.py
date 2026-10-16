@@ -45,6 +45,7 @@ from llmao.model_status import (
     UNHEALTHY,
     UNKNOWN,
 )
+from llmao.providers import ProviderDeployment
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -161,12 +162,8 @@ def test_unavailable_self_hosted_has_no_concurrency():
 
 def test_commercial_is_external_and_has_no_concurrency():
     pages = _app()
-    dep = FleetDeployment.from_commercial(
-        edict(
-            model_name="claude",
-            model_info=edict(),
-            litellm_params=edict(api_base="https://api.example"),
-        )
+    dep = FleetDeployment.from_provider(
+        ProviderDeployment("example", "claude", "anthropic/claude", "https://api.example")
     )
     dep.in_litellm = True
     dep.litellm_healthy = True
@@ -553,12 +550,8 @@ def test_mixed_card_and_unavailable_card():
     pages = _app()
     box = _server("gemma")
     fleet = _fleet(box)
-    commercial = FleetDeployment.from_commercial(
-        edict(
-            model_name="gemma",
-            model_info=edict(),
-            litellm_params=edict(api_base="https://api.example"),
-        )
+    commercial = FleetDeployment.from_provider(
+        ProviderDeployment("example", "gemma", "example/gemma", "https://api.example")
     )
     fleet.deployments.append(commercial)
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("missing")])

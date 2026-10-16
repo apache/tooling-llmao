@@ -50,7 +50,8 @@ from llmao.model_status import (
     model_status,
     self_hosted_lifecycle,
 )
-from llmao.models import load_models, provider_api_base, validate_models, vllm_recipe
+from llmao.models import load_models, validate_models, vllm_recipe, warn_deprecated
+from llmao.providers import ProviderDeployment, provider_deployments, validate_providers
 from llmao.vast_client import fetch_port_map
 
 _LOGGER = logging.getLogger(__name__)
@@ -211,6 +212,8 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
 
     models = models if models is not None else load_models(cfg=cfg)
     validate_models(models)
+    warn_deprecated(models)
+    validate_providers(cfg, models)
     known = {str(model.model_name) for model in models}
     by_name = {str(model.model_name): model for model in models}
     for host, rows in hosts.items():
@@ -542,12 +545,22 @@ COST_BASIS_CAPACITY = "derived_capacity"
 # group contains, and nothing that names the group has to be told.
 ACCESS_GROUP_SELF_HOSTED = "llmao:self-hosted"
 
+# LiteLLM's routing order: among a model name's healthy deployments it uses
+# only those with the lowest order. Our boxes come first; a provider we pay
+# serves only once none of them can -- llmao has removed them, or LiteLLM has
+# put them in cooldown. A busy box still takes the request: busy is not down.
+# Every deployment carries one, because LiteLLM drops a deployment with no
+# order as soon as any other deployment of the name has one.
+ORDER_SELF_HOSTED = 1
+ORDER_SPEND = 2
+
 
 class FleetDeployment:
     """One intended LiteLLM deployment (definitions + api_base).
 
-    Self-hosted: wraps a VllmServer (public port may be unset). Commercial:
-    static api_base from models.yaml. Skew/health live here, not on VllmServer.
+    Self-hosted: wraps a VllmServer (public port may be unset). Provider: one
+    line of config.yaml providers, with the provider's own model string.
+    Skew/health live here, not on VllmServer.
     """
 
     def __init__(
@@ -558,12 +571,18 @@ class FleetDeployment:
         self_hosted: bool,
         api_base: str | None = None,
         vllm: VllmServer | None = None,
+        provider: str | None = None,
+        litellm_model: str | None = None,
     ):
         self.model_name = model_name
         self.name = name
         self.self_hosted = self_hosted
         self._api_base = api_base
         self.vllm = vllm
+        # A provider deployment's account (config.yaml providers.<name>) and
+        # the provider's model, as LiteLLM names it. None on our boxes.
+        self.provider = provider
+        self.litellm_model = litellm_model
         self.in_litellm = False
         self.litellm_healthy: bool | None = None
         self.litellm_health_at: float | None = None
@@ -581,14 +600,16 @@ class FleetDeployment:
         )
 
     @classmethod
-    def from_commercial(cls, model: Any) -> FleetDeployment:
-        params = model.litellm_params
-        base = str(params.get("api_base") or "").strip()
+    def from_provider(cls, pd: ProviderDeployment) -> FleetDeployment:
         return cls(
-            model_name=str(model.model_name),
-            name=str(model.model_name),
+            model_name=pd.model_name,
+            # Unique where the model name is not: grok-4 can come from xAI
+            # and from OpenRouter.
+            name=f"{pd.model_name}@{pd.provider}",
             self_hosted=False,
-            api_base=base or None,
+            api_base=pd.api_base,
+            provider=pd.provider,
+            litellm_model=pd.litellm_model,
         )
 
     @property
@@ -697,9 +718,7 @@ class Fleet:
                     srv.public_port = srv.listen_port
                 servers.append(srv)
         deployments = [FleetDeployment.from_vllm(s) for s in servers]
-        for model in models:
-            if provider_api_base(model):
-                deployments.append(FleetDeployment.from_commercial(model))
+        deployments.extend(FleetDeployment.from_provider(pd) for pd in provider_deployments(cfg))
         return cls(cfg, servers, deployments, models=by_name)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:

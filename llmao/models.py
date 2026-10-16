@@ -17,18 +17,23 @@
 
 """Load admin model definitions (models.yaml).
 
-UX, vLLM recipes, and the template for POST /model/new. LiteLLM does not
-include this file. Fail-fast if missing.
+UX, vLLM recipes, and the template for registering our own boxes with
+LiteLLM (POST /model/new). Not where a model is served: that is each
+deployment's (fleet.hosts, config.yaml providers). LiteLLM does not include
+this file. Fail-fast if missing.
 """
 
 from __future__ import annotations
 
+import logging
 import pathlib
 from typing import Any
 
 import ezt
 import yaml
 from easydict import EasyDict as edict  # noqa: N813
+
+_LOGGER = logging.getLogger(__name__)
 
 # Default path: repo / install root (next to main.py).
 DEFAULT_MODELS_PATH = pathlib.Path(__file__).resolve().parent.parent / "models.yaml"
@@ -62,17 +67,32 @@ def vllm_recipe(model: Any) -> Any:
     return (info.get("vllm") if hasattr(info, "get") else None) or None
 
 
-def provider_api_base(model: Any) -> str:
-    """Where a provider serves this model, or "" if it names no provider."""
-    params = model.get("litellm_params") if hasattr(model, "get") else None
-    return str((params.get("api_base") if hasattr(params, "get") else None) or "").strip()
+# Keys models.yaml no longer reads. Where a model is served, and with what
+# credentials, belongs to a deployment: fleet.hosts for our boxes, config.yaml
+# providers for anyone we pay. (section, key, where it went)
+DEPRECATED_KEYS = (
+    ("litellm_params", "api_base", "a provider's endpoint is config.yaml providers.<name>.api_base"),
+    ("litellm_params", "api_key", "a provider's key is config.yaml providers.<name>.api_key"),
+    ("model_info", "provider", "the provider is a deployment's: fleet.hosts or config.yaml providers"),
+    ("model_info", "self_hosted", "where a model runs is a deployment's: fleet.hosts or config.yaml providers"),
+)
+
+
+def warn_deprecated(models: list) -> None:
+    """Log each deprecated key. They are ignored, not refused. Call at startup."""
+    for model in models:
+        for section, key, instead in DEPRECATED_KEYS:
+            if key in (model.get(section) or {}):
+                _LOGGER.warning("models.yaml: %s: %s.%s is ignored; %s", model.model_name, section, key, instead)
 
 
 def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -> None:
-    """Fail-fast. Each model is a vLLM recipe or a provider's api_base, one or the other.
+    """Fail-fast on what a model must carry.
 
-    Whether a model is self-hosted is not written down. It follows from
-    where each of its deployments runs.
+    A model says what it is, and how to run it on our boxes if we can. It
+    does not say where it is served: that is each deployment's, from
+    fleet.hosts or config.yaml providers. A model with neither simply has
+    no deployments.
     """
     seen: set[str] = set()
     for model in models:
@@ -82,25 +102,16 @@ def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -
         if name in seen:
             raise ValueError(f"{path}: duplicate model_name {name}")
         seen.add(name)
-        if "litellm_params" not in model:
-            raise ValueError(f"{name}: litellm_params is required")
         if "model_info" not in model:
             raise ValueError(f"{name}: model_info is required")
         recipe = vllm_recipe(model)
-        base = provider_api_base(model)
-        if recipe is None and not base:
-            raise ValueError(
-                f"{name}: needs model_info.vllm (to run on our boxes) or litellm_params.api_base (a provider)"
-            )
-        if recipe is not None and base:
-            # litellm_params is one block, and the two want different things
-            # in it: hosted_vllm/<name> for our boxes, the provider's own
-            # model for theirs.
-            raise ValueError(
-                f"{name}: has both model_info.vllm and litellm_params.api_base; give the provider's a name of its own"
-            )
-        if recipe is not None and ("model" not in recipe or not recipe.model):
+        if recipe is None:
+            continue
+        if "model" not in recipe or not recipe.model:
             raise ValueError(f"{name}: model_info.vllm.model is required")
+        # The template for registering one of our boxes: hosted_vllm/<name>.
+        if not (model.get("litellm_params") or {}).get("model"):
+            raise ValueError(f"{name}: litellm_params.model is required to serve it from our boxes")
 
 
 def public_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:

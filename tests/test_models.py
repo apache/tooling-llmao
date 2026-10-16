@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -31,11 +32,11 @@ from llmao.models import (
     model_available_for,
     model_in_service,
     models_path_from_cfg,
-    provider_api_base,
     public_models,
     ux_models,
     validate_models,
     vllm_recipe,
+    warn_deprecated,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -90,34 +91,47 @@ def test_ux_models_redacts_supply_path_for_non_admins():
         assert "\n" not in f["notes"]
 
 
-def test_a_model_is_a_recipe_for_our_boxes_or_a_providers_endpoint():
-    """One or the other. Nothing in the file says "self-hosted"."""
-    row = edict(
-        {
-            "model_name": "paid-model",
-            "litellm_params": {"model": "openai/gpt-4"},
-            "model_info": {"license": "proprietary"},
-        }
-    )
-    with pytest.raises(ValueError, match="to run on our boxes"):
-        validate_models([row])
-    row.litellm_params.api_base = "https://api.openai.com/v1"
+def test_a_model_need_not_say_where_it_is_served():
+    """Who serves a model is each deployment's, so a model may carry no recipe."""
+    row = edict({"model_name": "grok-4", "model_info": {"license": "proprietary"}})
     validate_models([row])
-    assert provider_api_base(row) == "https://api.openai.com/v1"
     assert vllm_recipe(row) is None
 
     ours = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
     validate_models([ours])
     assert vllm_recipe(ours).model
-    assert provider_api_base(ours) == ""
 
 
-def test_one_name_cannot_be_both():
-    """The two want different things in litellm_params, so each has its own name."""
+def test_a_recipe_needs_the_template_for_our_boxes():
     row = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
-    row.litellm_params.api_base = "https://api.example.com/v1"
-    with pytest.raises(ValueError, match="has both"):
+    row.pop("litellm_params")
+    with pytest.raises(ValueError, match=re.escape("litellm_params.model is required")):
         validate_models([row])
+
+
+def test_deprecated_keys_are_warned_and_not_refused(caplog):
+    row = edict(
+        {
+            "model_name": "old-style",
+            "litellm_params": {"model": "xai/grok-4", "api_base": "https://api.x.ai/v1", "api_key": "secret"},
+            "model_info": {"provider": "xai", "self_hosted": False},
+        }
+    )
+    validate_models([row])
+    with caplog.at_level("WARNING", logger="llmao.models"):
+        warn_deprecated([row])
+    text = caplog.text
+    for key in ("litellm_params.api_base", "litellm_params.api_key", "model_info.provider", "model_info.self_hosted"):
+        assert f"old-style: {key} is ignored" in text
+    # Says where the value went, and never repeats the value itself.
+    assert "config.yaml providers" in text
+    assert "secret" not in text
+
+
+def test_the_committed_models_yaml_uses_no_deprecated_key(caplog):
+    with caplog.at_level("WARNING", logger="llmao.models"):
+        warn_deprecated(load_models(EXAMPLE))
+    assert caplog.text == ""
 
 
 def test_model_in_service():

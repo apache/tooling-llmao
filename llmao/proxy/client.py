@@ -371,7 +371,7 @@ class LiteLLMBackend:
         rows = await self.teams.rows(fresh=True)
         await self.teams.backfill_token_caps(rows)
         await self.teams.ensure_pretend_projects()
-        await self.deployments.ensure_commercial()
+        await self.deployments.ensure_providers()
         # Six of the week's seven days are history and are never asked for
         # again, so reading them here means no visitor waits for them. Not
         # worth refusing to start over: a cold cache is only slow.

@@ -10,21 +10,23 @@
 # tool use). Existing DB rows keep the old prefix until deleted and re-pushed.
 #
 # Editing this file does not change a live deployment until llmao posts
-# again (reload llmao, not LiteLLM). Commercial: POST at llmao startup.
+# again (reload llmao, not LiteLLM). Provider: POST at llmao startup.
 # Self-host: POST when vLLM is SERVING; delete when down.
 #
 # Consumers:
 #   /models UX          display fields (litellm_params stripped)
 #   GET /vllm/config    vLLM recipe for the box
-#   POST /model/new     litellm_params + instance api_base
+#   POST /model/new     litellm_params + instance api_base (our boxes only)
 #
-# Each model is one of two kinds, told apart by what it carries (fail-fast
-# if it has neither, or both):
-#   model_info.vllm            a recipe for our own boxes. Which boxes is
-#                              fleet.hosts; api_base is added per instance.
-#   litellm_params.api_base    a provider's endpoint. Commercial.
-# Whether a model is self-hosted is not written here. It follows from where
-# each of its deployments runs.
+# This file says what a model is, and how to run it on our boxes if we can
+# (model_info.vllm). It does not say where the model is served: that belongs
+# to each deployment, so one model can be served several ways at once.
+#   fleet.hosts                 our boxes; api_base is added per instance
+#   config.yaml providers       accounts we pay (xAI, OpenRouter), each listing
+#                               the models it serves, with its own key
+# A model with neither has no deployments. litellm_params.api_base,
+# litellm_params.api_key, model_info.provider and model_info.self_hosted are
+# no longer read; startup logs a warning naming any that remain.
 #
 # On --max-num-batched-tokens, which every self-hosted entry sets:
 # vLLM defaults it to 2048, and that default admitted only 2-3 concurrent
@@ -87,7 +89,6 @@ models:
           - --tool-call-parser
           - gemma4
       display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
-      provider: self-host
       # The CONTRACT with callers. Every instance serving this model_name must
       # honour it; where a pool is uneven, advertise the minimum across it.
       context_window: 131072
@@ -175,7 +176,6 @@ models:
           - --tool-call-parser
           - qwen3_coder
       display_name: "Qwen3.8 27B (self-hosted, multimodal)"
-      provider: self-host
       # The contract with callers. Every instance serving this model_name
       # must honour it; advertise the minimum across an uneven pool, or
       # identical requests behave differently depending on where they land.
@@ -262,7 +262,6 @@ models:
           - --tool-call-parser
           - hermes
       display_name: "Qwen3 8B (self-hosted, fast)"
-      provider: self-host
       context_window: 40960
       license: Apache-2.0
       openness: open-weight
@@ -329,7 +328,6 @@ models:
           - --tool-call-parser
           - hermes
       display_name: "Qwen3 8B BF16 (self-hosted, fast)"
-      provider: self-host
       context_window: 40960
       license: Apache-2.0
       openness: open-weight

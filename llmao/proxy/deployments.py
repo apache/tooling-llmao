@@ -29,7 +29,14 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-from llmao.fleet import LEGACY_SERVERS, ExtraLiteLLM, normalize_peer_ip, snapshot_for_status
+from llmao.fleet import (
+    LEGACY_SERVERS,
+    ORDER_SELF_HOSTED,
+    ORDER_SPEND,
+    ExtraLiteLLM,
+    normalize_peer_ip,
+    snapshot_for_status,
+)
 from llmao.model_status import (
     HEALTHY,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
@@ -39,6 +46,7 @@ from llmao.model_status import (
     DeploymentSnapshot,
     deployment_status,
 )
+from llmao.providers import provider_api_key
 from llmao.proxy.errors import BackendUnavailableError
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,7 +65,11 @@ class DeploymentManager:
         self._transport = transport
 
     def deployment_body(self, dep, *, api_key: str | None = None) -> dict:
-        """POST /model/new payload from models.yaml + this deployment's api_base.
+        """POST /model/new payload for one deployment.
+
+        Our boxes: models.yaml litellm_params as the template, plus this
+        server's api_base and key. A provider: all of it from config.yaml
+        providers, since models.yaml says nothing about who serves a model.
 
         `api_key` overrides the deployment's own. Callers that can probe the
         box pass what it actually accepts; see _working_api_key.
@@ -65,12 +77,21 @@ class DeploymentManager:
         entry = self.fleet.models.get(dep.model_name)
         if entry is None:
             raise BackendUnavailableError(f"models.yaml missing {dep.model_name}; cannot POST /model/new")
-        params = dict(entry.litellm_params)
         if not dep.api_base:
             raise BackendUnavailableError(f"{dep.name}: no api_base for /model/new")
-        params["api_base"] = dep.api_base
-        if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
-            params["api_key"] = api_key or dep.vllm.api_key
+        if dep.provider is not None:
+            params = {
+                "model": dep.litellm_model,
+                "api_base": dep.api_base,
+                "api_key": provider_api_key(self._cfg, dep.provider),
+                "order": ORDER_SPEND,
+            }
+        else:
+            params = dict(entry.litellm_params)
+            params["api_base"] = dep.api_base
+            if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
+                params["api_key"] = api_key or dep.vllm.api_key
+            params["order"] = ORDER_SELF_HOSTED
 
         info: dict[str, Any] = {
             "self_hosted": dep.self_hosted,
@@ -169,12 +190,15 @@ class DeploymentManager:
         return srv.api_key or None
 
     async def _deployment_present(self, dep) -> bool:
+        routes = _routes_from_model_info(await self._model_info_rows())
+        if dep.provider is not None:
+            # Registered at every startup, so a restart must find the last one
+            # rather than add a second copy.
+            want = (_norm_base(dep.api_base), dep.model_name)
+            return any((norm, model_name) == want for norm, _host, _port, model_name in routes)
         if not dep.self_hosted or dep.vllm is None:
             return False
-        for _norm, host, port, model_name in _routes_from_model_info(await self._model_info_rows()):
-            if dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name):
-                return True
-        return False
+        return any(dep.vllm.same_deployment(host, port, model_name) for _norm, host, port, model_name in routes)
 
     async def add_deployment(self, dep) -> None:
         """POST /model/new for this deployment. No serving check.
@@ -215,10 +239,10 @@ class DeploymentManager:
         dep.in_litellm = False
         _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.api_base, found)
 
-    async def ensure_commercial(self) -> None:
-        """At startup: POST /model/new for each commercial models.yaml deployment."""
+    async def ensure_providers(self) -> None:
+        """At startup: POST /model/new for each config.yaml providers deployment."""
         for dep in self.fleet.deployments:
-            if dep.self_hosted or not dep.api_base:
+            if dep.provider is None or not dep.api_base:
                 continue
             if dep.in_litellm:
                 continue
@@ -242,10 +266,20 @@ class DeploymentManager:
         by_base: dict[str, list[str]] = {}
         for norm, _host, _port, model_name in routes:
             by_base.setdefault(norm, []).append(model_name)
-        intended = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base}
+        pairs = {(norm, model_name) for norm, _host, _port, model_name in routes}
+        # One of our boxes serves one model, so its api_base identifies it. A
+        # provider's api_base is shared by every model on the account, so a
+        # provider deployment is its api_base and model name together.
+        ours = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base and d.provider is None}
+        bought = {(_norm_base(d.api_base), d.model_name) for d in self.fleet.deployments if d.provider is not None}
         now = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
+            if dep.provider is not None:
+                dep.in_litellm = (base, dep.model_name) in pairs
+                dep.config_mismatch = False
+                self._store_skew(dep, now)
+                continue
             names = by_base.get(base, []) if base else []
             present = any(
                 dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name)
@@ -256,7 +290,7 @@ class DeploymentManager:
             self._store_skew(dep, now)
         extra: list[ExtraLiteLLM] = []
         for norm, host, port, model_name in routes:
-            if norm in intended:
+            if norm in ours or (norm, model_name) in bought:
                 continue
             view = deployment_status(
                 DeploymentSnapshot(model_name=model_name, self_hosted=False, litellm_only=True),
@@ -276,21 +310,29 @@ class DeploymentManager:
         resp = await self._transport.request("GET", "health")
         self._transport.raise_http(resp)
         body = resp.json() if resp.content else {}
+        # Each endpoint as (api_base, LiteLLM model). Our boxes match on the
+        # base alone; a provider's base is shared, so it matches on both.
         healthy = {
-            _norm_base(x.get("api_base"))
+            (_norm_base(x.get("api_base")), x.get("model"))
             for x in (body.get("healthy_endpoints") or [])
             if isinstance(x, dict) and x.get("api_base")
         }
         unhealthy = {
-            _norm_base(x.get("api_base"))
+            (_norm_base(x.get("api_base")), x.get("model"))
             for x in (body.get("unhealthy_endpoints") or [])
             if isinstance(x, dict) and x.get("api_base")
         }
+        healthy_bases = {base for base, _model in healthy}
+        unhealthy_bases = {base for base, _model in unhealthy}
         stamp = time.time()
         for dep in self.fleet.deployments:
             base = _norm_base(dep.api_base) if dep.api_base else None
-            litellm_up = bool(base) and base in healthy
-            litellm_down = bool(base) and base in unhealthy
+            if dep.provider is not None:
+                litellm_up = (base, dep.litellm_model) in healthy
+                litellm_down = (base, dep.litellm_model) in unhealthy
+            else:
+                litellm_up = bool(base) and base in healthy_bases
+                litellm_down = bool(base) and base in unhealthy_bases
             if litellm_up:
                 dep.litellm_healthy = True
                 dep.litellm_health_at = stamp

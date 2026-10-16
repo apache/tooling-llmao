@@ -15,11 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""FleetDeployment: commercial + vLLM intended backends."""
+"""FleetDeployment: our boxes (fleet.hosts) and providers (config.yaml providers)."""
 
+import re
+
+import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import Fleet
+from llmao.fleet import Fleet, validate_fleet
 from llmao.models import load_models
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS, _cfg
 from tests.test_fleet_health import _server
@@ -35,15 +38,11 @@ def test_from_cfg_one_deployment_per_vllm():
     assert dep.api_base == "http://127.0.0.1:8001/v1"
 
 
-def test_commercial_deployment_from_definitions():
-    models = list(load_models(EXAMPLE))
-    models.append(
-        edict(
-            model_name="paid-chat",
-            litellm_params=edict(model="openai/gpt-4", api_base="https://api.openai.com/v1"),
-            model_info=edict(license="proprietary"),
-        )
-    )
+GROK = edict(model_name="grok-4", model_info=edict(license="proprietary"))
+
+
+def _with_providers(providers):
+    models = [*load_models(EXAMPLE), GROK]
     cfg = edict(
         {
             "fleet": {
@@ -52,16 +51,67 @@ def test_commercial_deployment_from_definitions():
                 **FLEET_KNOBS,
             },
             "models_path": str(EXAMPLE),
+            "providers": providers,
         }
     )
+    return cfg, models
+
+
+def _accounts():
+    return {
+        "xai": {"api_key": "xai-test", "api_base": "https://api.x.ai/v1", "models": {"grok-4": "xai/grok-4"}},
+        "openrouter": {
+            "api_key": "sk-or-test",
+            "api_base": "https://openrouter.ai/api/v1",
+            "models": {"grok-4": "openrouter/x-ai/grok-4", "gemma4-26b": "openrouter/google/gemma-4-26b-a4b-it"},
+        },
+    }
+
+
+def test_where_a_model_is_served_comes_from_its_deployments():
+    """grok-4 from two providers; gemma4 from our box and from one of them."""
+    cfg, models = _with_providers(_accounts())
+    validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    names = [d.model_name for d in fleet.deployments]
-    assert "gemma4-26b" in names
-    assert "paid-chat" in names
-    paid = next(d for d in fleet.deployments if d.model_name == "paid-chat")
-    assert paid.self_hosted is False
-    assert paid.vllm is None
-    assert paid.api_base == "https://api.openai.com/v1"
+    by_name = {d.name: d for d in fleet.deployments}
+    assert set(by_name) == {"gemma4-26b", "grok-4@xai", "grok-4@openrouter", "gemma4-26b@openrouter"}
+
+    ours = by_name["gemma4-26b"]
+    assert ours.self_hosted and ours.vllm is not None and ours.provider is None
+
+    bought = by_name["gemma4-26b@openrouter"]
+    assert bought.self_hosted is False
+    assert bought.vllm is None
+    assert bought.provider == "openrouter"
+    assert bought.litellm_model == "openrouter/google/gemma-4-26b-a4b-it"
+    assert bought.api_base == "https://openrouter.ai/api/v1"
+    # Served both ways, so its dollars are not all an estimate.
+    assert fleet.cost_basis("gemma4-26b") is None
+
+
+def test_no_providers_section_means_no_provider_deployments():
+    cfg, models = _with_providers(None)
+    del cfg["providers"]
+    validate_fleet(cfg, models=models)
+    assert all(d.provider is None for d in Fleet.from_cfg(cfg, models=models).deployments)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda p: p.xai.pop("api_key"), "providers.xai.api_key is required"),
+        (lambda p: p.xai.update(api_key="CHANGE_ME_XAI"), "providers.xai.api_key is required"),
+        (lambda p: p.xai.update(api_base="api.x.ai"), "providers.xai.api_base must be an http"),
+        (lambda p: p.xai.update(models=["grok-4"]), "providers.xai.models must be a mapping"),
+        (lambda p: p.xai.models.update(missing="xai/x"), "missing is not in models.yaml"),
+        (lambda p: p.xai.models.update({"grok-4": ""}), "needs the provider's model"),
+    ],
+)
+def test_providers_are_validated_at_startup(change, message):
+    cfg, models = _with_providers(_accounts())
+    change(cfg.providers)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        validate_fleet(cfg, models=models)
 
 
 def test_auto_deployments_from_servers_ctor():

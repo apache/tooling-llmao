@@ -124,6 +124,27 @@ site_admins: []
 # Not included by litellm.yaml. Relative to app root.
 models_path: models.yaml
 
+# Accounts we pay to serve models. Each line under `models` is one
+# deployment: a model_name from models.yaml, and the provider's model as
+# LiteLLM names it. The same model can be listed under several providers, and
+# can run on our own boxes (fleet.hosts) as well. Our boxes always come first:
+# LiteLLM sends a request to a provider only when none of ours can take it.
+#
+# The key lives here and nowhere else. A developer with no hosting account can
+# list a personal one and serve models with no fleet.hosts at all.
+# providers:
+#   xai:
+#     api_key: CHANGE_ME_XAI_API_KEY
+#     api_base: https://api.x.ai/v1
+#     models:
+#       grok-4: xai/grok-4
+#   openrouter:
+#     api_key: CHANGE_ME_OPENROUTER_API_KEY
+#     api_base: https://openrouter.ai/api/v1
+#     models:
+#       grok-4: openrouter/x-ai/grok-4
+#       gemma4-26b: openrouter/google/gemma-4-26b-a4b-it
+
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
 # GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
 # Placement is keyed by the box public IP (request.remote_addr / X-Forwarded-For).

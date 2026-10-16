@@ -44,8 +44,12 @@ httpx**) to provision teams and mint or revoke virtual keys—see design
 template). LiteLLM does **not** include it. `store_model_in_db: true` in
 `litellm.yaml` `general_settings` (Puppet may also set the env). Deployments
 are pushed by llmao. Self-host prefix is `hosted_vllm/`.
-A model carries a vLLM recipe (our boxes) or a static `api_base` (a provider),
-never both; self-hosted is a property of a deployment. Governance fields live under
+A model carries a vLLM recipe if we can run it ourselves, and says nothing
+about where it is served: that is each deployment's. Our boxes come from
+`fleet.hosts`; providers we pay (xAI, OpenRouter) from `config.yaml`
+`providers`, each listing the models it serves and holding its own key. One
+model can be served several ways at once; LiteLLM's `order` puts our boxes
+first and a provider only behind them. Governance fields live under
 `model_info`. Standalone asfquart watches `config.yaml` (`runx` extra_files);
 production Puppet restarts the service after a change.
 
