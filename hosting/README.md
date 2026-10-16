@@ -85,8 +85,29 @@ image. Silent if the probe is missing.
 
 VRAM is summed over every server on the box, because each loads its own
 copy of the weights. Disk is counted once per distinct model: two servers
-of the same model share one copy under the HF cache. `vram_gb` is weights
-only, so a box that passes with nothing to spare still has no KV cache.
+of the same model share one copy under the HF cache.
+
+Each server needs its weights (`vram_gb`) **and** the KV cache for one
+request at its `max_model_len`: vLLM refuses to start rather than take a
+context it cannot hold. A model that declares `kv_bytes_per_token` has that
+counted; one that does not is checked on its weights alone. (qwen3-8b's 9GB
+of weights fit a 12GB card; the 2.8GB of KV cache for its 40960-token
+context did not, and vLLM would not start.) The total is checked against
+the share the servers will get, 0.9 of what is free, as the sizing below
+divides it.
+
+## Several GPUs
+
+vLLM uses only the first GPU unless told otherwise. The installer counts the
+box's GPUs and runs every server across all of them
+(`--tensor-parallel-size`), so each card holds an equal share of each
+server's weights and KV cache. The fit check and the sizing below are then
+per card, against the card with least free memory. A unified-memory machine
+(GB10) is one GPU.
+
+The model must divide evenly across the cards (its attention heads by the GPU
+count); vLLM says so at startup if it does not. Cards talk over PCIe unless
+the box has NVLink, which costs some speed.
 
 The disk check compares the full requirement with free space even when the
 weights are already on the volume, so a re-run on a nearly full box can
@@ -94,8 +115,8 @@ refuse where a first install would not.
 
 ## Sizing servers that share a card
 
-Left alone, each `vllm serve` takes 0.9 of the card and a second server
-cannot start. `install_set.py` divides the memory instead (`apportion`):
+Left alone, each `vllm serve` takes 0.9 of the card (of each card, with
+several GPUs) and a second server cannot start. `install_set.py` divides the memory instead (`apportion`):
 
 - The budget is 0.9 of what is **free** at install time.
 - Each server gets its `vram_gb`, plus a share of the remainder in

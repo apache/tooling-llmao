@@ -520,3 +520,60 @@ def test_no_reload_touches_no_supervisord(monkeypatch, tmp_path):
     assert events == [("check_fit",)]
     assert "vllm-dropped.conf" not in {p.name for p in conf.iterdir()}
     assert reloads == []
+
+
+QWEN_8B = {
+    "name": "qwen3-8b",
+    "model": "Qwen/Qwen3-8B-FP8",
+    "port": 8001,
+    "api_key": "sk-x",
+    "vram_gb": 9,
+    "max_model_len": 40960,
+    "kv_bytes_per_token": 73728,
+}
+
+
+def test_kv_cache_at_max_model_len():
+    # What vLLM said it needed for qwen3-8b at 40960 tokens.
+    assert inst.kv_gb(inst.parse_server(QWEN_8B)) == pytest.approx(2.8125)
+    assert inst.kv_gb(inst.parse_server({**QWEN_8B, "kv_bytes_per_token": None})) == 0.0
+
+
+def test_one_12gb_card_refuses_qwen3_8b_and_says_it_is_the_context(monkeypatch, tmp_path):
+    """The weights fit; the KV cache for the context did not, and vLLM would not start."""
+    _smi(monkeypatch, "11900\n")
+    (problem,) = inst.check_fit([inst.parse_server(QWEN_8B)], data_dir=str(tmp_path))
+    assert "11.8GB per card" in problem
+    assert "2.8GB KV cache" in problem
+
+
+def test_two_12gb_cards_hold_it_split_between_them(monkeypatch, tmp_path):
+    _smi(monkeypatch, "11900\n11900\n")
+    assert inst.gpu_count() == 2
+    assert inst.check_fit([inst.parse_server(QWEN_8B)], data_dir=str(tmp_path)) == []
+
+
+def test_the_smallest_card_decides(monkeypatch):
+    _smi(monkeypatch, "11900\n4000\n")
+    assert inst.free_vram_gb() == pytest.approx(4000 / 1024)
+
+
+def test_a_server_spans_every_gpu(monkeypatch):
+    monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
+    spec = inst.parse_server(QWEN_8B)
+    assert "--tensor-parallel-size" not in inst.build_argv(spec)
+    spec["tensor_parallel_size"] = 2
+    argv = inst.build_argv(spec)
+    assert argv[argv.index("--tensor-parallel-size") + 1] == "2"
+
+
+def test_apportion_is_per_card():
+    """Each card holds 1/cards of every server's weights; the rest is shared out."""
+    big = {**inst.parse_server(QWEN_8B), "vram_gb": 9.0}
+    small = {**inst.parse_server(QWEN_8B), "name": "small", "vram_gb": 1.0}
+    # One 12GB card: 10.8GB usable, 10GB of it weights, 0.4GB more each.
+    one = inst.apportion([dict(big), dict(small)], 12.0, cards=1)
+    assert [s["gpu_memory_utilization"] for s in one] == [0.783, 0.116]
+    # Two: 5GB of weights per card, 2.9GB more each on top of its half.
+    two = inst.apportion([dict(big), dict(small)], 12.0, cards=2)
+    assert [s["gpu_memory_utilization"] for s in two] == [0.616, 0.283]

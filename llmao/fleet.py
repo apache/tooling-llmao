@@ -317,12 +317,17 @@ class VllmServer:
         disk_gb: float | None = None,
         public_port: int | None = None,
         served_name: str | None = None,
+        kv_bytes_per_token: int | None = None,
     ):
         self.model_name = model_name
         self.name = name
         # What vLLM answers to (--served-model-name), and so what LiteLLM must
         # ask for. Not `name`, which only labels this server.
         self.served_name = served_name or model_name
+        # KV cache per token of context, from the model's architecture. With
+        # max_model_len it is memory the box needs before serving anything;
+        # sent so the box's fit check can count it. None: not declared.
+        self.kv_bytes_per_token = kv_bytes_per_token
         self.host = host
         self.listen_port = int(listen_port)
         self.public_port = int(public_port) if public_port is not None else None
@@ -385,6 +390,7 @@ class VllmServer:
         maxlen = vllm.get("max_model_len")
         vram = vllm.get("vram_gb")
         disk = vllm.get("disk_gb")
+        kv = vllm.get("kv_bytes_per_token")
         return cls(
             model_name=model_name,
             name=name,
@@ -403,6 +409,7 @@ class VllmServer:
             vram_gb=float(vram) if vram is not None else None,
             disk_gb=float(disk) if disk is not None else None,
             served_name=served_model_name(model),
+            kv_bytes_per_token=int(kv) if kv is not None else None,
         )
 
     @property
@@ -504,6 +511,8 @@ class VllmServer:
             out["vram_gb"] = self.vram_gb
         if self.disk_gb is not None:
             out["disk_gb"] = self.disk_gb
+        if self.kv_bytes_per_token is not None:
+            out["kv_bytes_per_token"] = self.kv_bytes_per_token
         return out
 
     def record_probe(

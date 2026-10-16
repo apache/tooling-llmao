@@ -240,6 +240,13 @@ models:
         # ceiling, not a choice. vLLM refuses higher, and
         # VLLM_ALLOW_LONG_MAX_MODEL_LEN produces NaN on this RoPE model.
         max_model_len: 40960
+        # KV cache per token: keys and values, 36 layers, 8 KV heads of 128,
+        # one byte each at --kv-cache-dtype fp8 (2 x 36 x 8 x 128 x 1). At
+        # 40960 tokens that is 2.81 GiB, exactly what vLLM said it needed when
+        # it refused to start on a 12GB card with the weights already loaded.
+        # The fit check adds it to vram_gb; without it the weights fit and
+        # the context did not.
+        kv_bytes_per_token: 73728
         args:
           - --kv-cache-dtype
           - fp8
@@ -310,6 +317,8 @@ models:
         disk_gb: 20
         # Architectural ceiling; see qwen3-8b.
         max_model_len: 40960
+        # Same architecture and the same FP8 KV cache as qwen3-8b.
+        kv_bytes_per_token: 73728
         args:
           - --dtype
           - bfloat16

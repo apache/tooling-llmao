@@ -627,3 +627,12 @@ def test_a_box_serves_the_name_litellm_asks_for():
         asked = str(by_name[rows[0][0]].litellm_params.model).split("/", 1)[1]
         assert server["served_model_name"] == asked
         assert server["served_model_name"] != server["model"]
+
+
+def test_the_box_is_told_the_kv_cache_its_context_needs():
+    models = load_models(EXAMPLE)
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8001]]})
+    validate_fleet(cfg, models=models)
+    (server,) = config_for_host("10.0.0.1", models=models, cfg=cfg)["servers"]
+    assert server["kv_bytes_per_token"] == 73728
+    assert server["max_model_len"] == 40960

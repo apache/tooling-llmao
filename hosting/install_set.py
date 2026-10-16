@@ -126,6 +126,7 @@ def parse_server(raw: dict[str, Any]) -> dict[str, Any]:
     mml = raw.get("max_model_len")
     vram = raw.get("vram_gb")
     disk = raw.get("disk_gb")
+    kv = raw.get("kv_bytes_per_token")
     served = raw.get("served_model_name")
     return {
         "name": str(raw["name"]),
@@ -137,6 +138,7 @@ def parse_server(raw: dict[str, Any]) -> dict[str, Any]:
         "max_model_len": int(mml) if mml is not None else None,
         "vram_gb": float(vram) if vram is not None else None,
         "disk_gb": float(disk) if disk is not None else None,
+        "kv_bytes_per_token": int(kv) if kv is not None else None,
         "args": normalize_args(raw.get("args")),
     }
 
@@ -164,8 +166,8 @@ def _meminfo_gb(key: str) -> float | None:
     return None
 
 
-def _gpu0_gb(field: str, meminfo_key: str) -> float | None:
-    """One nvidia-smi memory field for GPU 0 in GB, or None if it is unavailable.
+def _gpus_gb(field: str, meminfo_key: str) -> list[float] | None:
+    """One nvidia-smi memory field for every GPU in GB, or None if it is unavailable.
 
     Capacity is read from the card rather than declared in models.yaml: a
     hand-typed figure is wrong the first time a provider supplies a different
@@ -173,7 +175,8 @@ def _gpu0_gb(field: str, meminfo_key: str) -> float | None:
 
     A unified-memory machine (GB10) has no VRAM of its own: nvidia-smi is
     there and answers "[N/A]". The GPU draws on system memory, so that is
-    what ``meminfo_key`` reads. No nvidia-smi at all is still an unknown.
+    what ``meminfo_key`` reads, as one GPU. No nvidia-smi at all is still an
+    unknown.
     """
     try:
         out = (
@@ -192,19 +195,44 @@ def _gpu0_gb(field: str, meminfo_key: str) -> float | None:
     if not out:
         return None
     try:
-        return int(out[0].strip()) / 1024.0
+        return [int(line.strip()) / 1024.0 for line in out]
     except ValueError:
-        return _meminfo_gb(meminfo_key)
+        unified = _meminfo_gb(meminfo_key)
+        return [unified] if unified is not None else None
+
+
+def gpu_count() -> int:
+    """GPUs on this box; 1 when they cannot be counted."""
+    return len(_gpus_gb("memory.total", "MemTotal") or [None])
 
 
 def free_vram_gb() -> float | None:
-    """Free VRAM on GPU 0, or None if nvidia-smi is unavailable."""
-    return _gpu0_gb("memory.free", "MemAvailable")
+    """Free VRAM on the card with least of it, or None if nvidia-smi is unavailable.
+
+    Every server spans every GPU, an equal share on each, so the card with
+    least room is the one that decides.
+    """
+    cards = _gpus_gb("memory.free", "MemAvailable")
+    return min(cards) if cards else None
 
 
 def total_vram_gb() -> float | None:
-    """Total VRAM on GPU 0, or None if nvidia-smi is unavailable."""
-    return _gpu0_gb("memory.total", "MemTotal")
+    """VRAM of the smallest card, or None if nvidia-smi is unavailable."""
+    cards = _gpus_gb("memory.total", "MemTotal")
+    return min(cards) if cards else None
+
+
+def kv_gb(spec: dict[str, Any]) -> float:
+    """KV cache for one request at max_model_len, in GB; 0 when the model does not say.
+
+    vLLM refuses to start rather than take a context it cannot hold, so this
+    is memory a server needs before it serves anything. Two servers seen to
+    fail without it: 9GB of qwen3-8b weights fit a 12GB card, the 2.8GB of
+    KV cache for its 40960-token context did not.
+    """
+    if not spec.get("kv_bytes_per_token") or not spec.get("max_model_len"):
+        return 0.0
+    return spec["kv_bytes_per_token"] * spec["max_model_len"] / 1024.0**3
 
 
 def free_disk_gb(path: str) -> float | None:
@@ -223,19 +251,29 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
     mention memory. Requirements come from models.yaml; capacity is read from
     the box.
 
+    Per card: every server spans every GPU, so each card holds 1/cards of
+    each server's weights and KV cache. Against the share the servers will
+    actually get, GPU_USABLE_FRACTION of what is free, as apportion divides it.
+
     Silent when nvidia-smi is unavailable or a model declares no vram_gb --
     an unknown is not a failure, and refusing to start on a missing optional
     field would be worse than the problem.
     """
     problems: list[str] = []
 
-    want_vram = sum(s["vram_gb"] for s in specs if s.get("vram_gb"))
-    have_vram = free_vram_gb()
-    if want_vram and have_vram is not None and want_vram > have_vram:
-        names = ", ".join(s["name"] for s in specs if s.get("vram_gb"))
+    cards = gpu_count()
+    sized = [s for s in specs if s.get("vram_gb")]
+    weights = sum(s["vram_gb"] for s in sized) / cards
+    kv = sum(kv_gb(s) for s in sized) / cards
+    free = free_vram_gb()
+    if sized and free is not None and weights + kv > free * GPU_USABLE_FRACTION:
+        names = ", ".join(s["name"] for s in sized)
+        each = " each" if cards > 1 else ""
+        across = f" across {cards} GPUs" if cards > 1 else ""
         problems.append(
-            f"VRAM: {names} need {want_vram:.1f}GB, {have_vram:.1f}GB free. "
-            f"Weights alone -- KV cache comes out of what is left."
+            f"VRAM: {names} need {weights + kv:.1f}GB per card{across} "
+            f"({weights:.1f}GB weights, {kv:.1f}GB KV cache at max_model_len), "
+            f"{free * GPU_USABLE_FRACTION:.1f}GB usable of {free:.1f}GB free{each}."
         )
 
     # Once per model, not per server: two servers of the same model share
@@ -253,7 +291,7 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
 
 
 def apportion(
-    specs: list[dict[str, Any]], total_gb: float | None, free_gb: float | None = None
+    specs: list[dict[str, Any]], total_gb: float | None, free_gb: float | None = None, *, cards: int = 1
 ) -> list[dict[str, Any]]:
     """Divide the card between the servers on this box.
 
@@ -272,6 +310,10 @@ def apportion(
     vLLM's flag is a fraction of the total, so the result is still expressed
     against ``total_gb``. Without ``free_gb`` the whole card counts as free.
 
+    With several GPUs every server spans all of them, so the sums are per
+    card: 1/cards of each server's weights, against one card's total and
+    free. vLLM's flag is a fraction of each card.
+
     Fills in ``gpu_memory_utilization`` in place and returns the specs.
     Changes nothing when the card or a server's ``vram_gb`` is unknown, or
     when the weights alone do not fit -- vLLM's default then applies, and
@@ -284,7 +326,7 @@ def apportion(
         return specs
     pinned = sum(s["gpu_memory_utilization"] for s in specs if s.get("gpu_memory_utilization") is not None)
     usable = (free_gb or total_gb) * GPU_USABLE_FRACTION - pinned * total_gb
-    leftover = usable - sum(s["vram_gb"] for s in todo)
+    leftover = usable - sum(s["vram_gb"] / cards for s in todo)
     if leftover <= 0:
         return specs
     if all(s.get("max_model_len") for s in todo):
@@ -292,7 +334,7 @@ def apportion(
     else:
         weights = [1.0] * len(todo)
     for spec, weight in zip(todo, weights, strict=True):
-        gb = spec["vram_gb"] + leftover * weight / sum(weights)
+        gb = spec["vram_gb"] / cards + leftover * weight / sum(weights)
         # Rounded down so the fractions never add up to more than the budget.
         spec["gpu_memory_utilization"] = int(gb / total_gb * 1000 + 1e-6) / 1000
     return specs
@@ -313,6 +355,9 @@ def build_argv(spec: dict[str, Any]) -> list[str]:
     # passes. Absent only from a control plane older than the field.
     if spec.get("served_model_name"):
         cmd.extend(["--served-model-name", spec["served_model_name"]])
+    # Split across every GPU on the box; vLLM otherwise uses only the first.
+    if (spec.get("tensor_parallel_size") or 1) > 1:
+        cmd.extend(["--tensor-parallel-size", str(spec["tensor_parallel_size"])])
     if spec.get("gpu_memory_utilization") is not None:
         cmd.extend(["--gpu-memory-utilization", str(spec["gpu_memory_utilization"])])
     if spec.get("max_model_len") is not None:
@@ -437,11 +482,15 @@ def main(argv: list[str] | None = None) -> int:
     for name in old:
         (CONF_DIR / f"{name}.conf").unlink(missing_ok=True)
 
+    cards = gpu_count()
+    for spec in specs:
+        spec["tensor_parallel_size"] = cards
     total = total_vram_gb()
-    for spec in apportion(specs, total, free_vram_gb()):
+    for spec in apportion(specs, total, free_vram_gb(), cards=cards):
         gmu = spec["gpu_memory_utilization"]
         if total and gmu is not None:
-            print(f"install_set: {spec['name']} gets {gmu} of the card ({gmu * total:.1f}GB)", file=sys.stderr)
+            card = f"each of {cards} cards" if cards > 1 else "the card"
+            print(f"install_set: {spec['name']} gets {gmu} of {card} ({gmu * total:.1f}GB)", file=sys.stderr)
     write_units(specs, CONF_DIR)
     if args.no_reload:
         return 0
