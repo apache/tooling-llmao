@@ -150,3 +150,18 @@ def test_no_public_ip_refuses_to_start(box):
     assert "RUNPOD_PUBLIC_IP" in result.stderr
     assert not (workspace / ".llmao" / "provisioned").exists()
     assert _calls(stubs) == 0
+
+
+def test_the_image_adds_nothing_that_needs_the_base_unpacked():
+    """The final stage is COPY --link only. A RUN there makes every build
+    unpack the whole vLLM image on the runner; see the Dockerfile."""
+    dockerfile = (SCRIPT.parent / "Dockerfile").read_text()
+    lines = [ln.strip() for ln in dockerfile.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    final = lines[max(i for i, ln in enumerate(lines) if ln.upper().startswith("FROM ")) :]
+    assert final[0].startswith("FROM vllm/vllm-openai:")
+    assert "@sha256:" in final[0]
+    for ln in final[1:]:
+        word = ln.split()[0].upper()
+        assert word in ("COPY", "ENTRYPOINT", "ENV", "LABEL"), ln
+        if word == "COPY":
+            assert "--link" in ln.split(), ln

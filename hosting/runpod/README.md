@@ -1,6 +1,6 @@
 # RunPod runbook
 
-RunPod pods run **our** image: stock vLLM plus supervisord and
+RunPod pods run **our** image: stock vLLM plus a vendored supervisor and
 [`provision.sh`](provision.sh) as the entrypoint. The installer is the shared
 [`../install_set.py`](../install_set.py), fetched on first boot rather than
 baked in, so changing it needs no new image.
@@ -9,19 +9,35 @@ Not yet run on a real pod. What is untested is listed at the end.
 
 ## Image
 
-```bash
-docker build -t <registry>/llmao-vllm-box:<tag> hosting/runpod
-docker push <registry>/llmao-vllm-box:<tag>
-```
+[`.github/workflows/runpod-image.yml`](../../.github/workflows/runpod-image.yml)
+builds it on every push to `main` that touches `hosting/runpod/`, and pushes
+it to `ghcr.io/apache/tooling-llmao/llmao-vllm-box`, tagged with the commit.
+The run's summary gives the digest-pinned reference, `...@sha256:<digest>`.
 
-The registry is still to be settled with Infra. Rebuild only when
-`provision.sh` or the vLLM version in the `Dockerfile` changes. The vLLM
-version is pinned (`v0.25.1`), not `:latest`, so every pod created from the
-template runs the same engine.
+**A new image changes nothing on its own.** An admin pastes that reference
+into the RunPod template; pods created after that run it. Use the digest
+reference, not a tag, so the template names exactly one image.
+
+Rebuilt only when `provision.sh`, `bin/`, `requirements.txt` or the
+`Dockerfile` changes. The installer is fetched at boot and needs no rebuild.
+
+The vLLM base is pinned by digest (`v0.25.1`), never `:latest`, so every pod
+runs the same engine. Changing it is a deliberate edit to the `Dockerfile`.
+
+Why builds are cheap: the final stage is `COPY --link` only, with supervisor
+installed in a small Python stage and copied across. BuildKit adds our few
+hundred KB without unpacking the vLLM image, and the registry stores the base
+layers once, so each rebuild pushes only our layer. The first push copies the
+base into ghcr, once. A `RUN` in the final stage would undo this; a test
+fails if one appears.
+
+`bin/supervisord` and `bin/supervisorctl` run the vendored copy, so both
+commands work as they would from a package.
 
 ## Template
 
-- **Image:** `<registry>/llmao-vllm-box:<tag>`
+- **Image:** `ghcr.io/apache/tooling-llmao/llmao-vllm-box@sha256:<digest>`,
+  from the latest workflow run's summary
 - **Start command: empty.** The image's entrypoint is `provision.sh`; anything
   here arrives as its arguments, which it ignores with a warning.
 - **Volume** mounted at `/workspace`, large enough for the HF cache.
@@ -102,8 +118,12 @@ Until one of those is wired, keep the fourth slot.
 
 ## Untested until the first pod
 
-- The image has not been built. The `Dockerfile` assumes the vLLM image runs
-  as root and has `curl` and `python3`, as its upstream Dockerfile shows.
+- The image has not been built. The first run of the workflow is the first
+  build. The `Dockerfile` assumes the vLLM image runs as root and has `curl`
+  and `python3`, as its upstream Dockerfile shows.
+- RunPod can pull the image anonymously only if the ghcr package is public.
+  New packages start private; making it public may need an org admin. Until
+  then the template needs registry credentials.
 - That the IP the pod reaches llm.apache.org **from** matches
   `RUNPOD_PUBLIC_IP`. llmao looks the box up by `X-LLMAO-Host`, so it need not,
   but a proxy that strips headers would break the lookup.

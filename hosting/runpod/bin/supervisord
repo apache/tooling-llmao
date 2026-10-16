@@ -1,0 +1,6 @@
+#!/bin/sh
+# supervisor is vendored into /opt/llmao/vendor rather than installed into the
+# base image; see the Dockerfile.
+PYTHONPATH="/opt/llmao/vendor${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec python3 -m supervisor.supervisord "$@"

@@ -20,7 +20,7 @@ write Supervisor units; there is no long-lived Python launcher.
 | `install_set.py` | Shared by every provider: GET JSON, write a `vllm-*.conf` per server, `supervisorctl update` (or not, with `--no-reload`) |
 | `vast/provision.sh` | Vast on-create: set `LLMAO_HOST`, curl the installer from GitHub, run it |
 | `vast/README.md` | Vast.ai runbook |
-| `runpod/Dockerfile` | RunPod image: stock vLLM plus supervisord and `runpod/provision.sh` |
+| `runpod/Dockerfile` | RunPod image: stock vLLM plus vendored supervisor (`runpod/bin/`, `runpod/requirements.txt`) and `runpod/provision.sh`; built and pushed to ghcr by `.github/workflows/runpod-image.yml` |
 | `runpod/provision.sh` | RunPod entrypoint: provision once (retrying), then `exec supervisord` |
 | `runpod/README.md` | RunPod runbook |
 
@@ -49,7 +49,7 @@ RunPod: image entrypoint provision.sh → curl install_set.py → GET JSON → u
 Both curl `install_set.py` from `refs/heads/main`. Pin that URL to a
 **commit SHA** before treating instance-create as production-safe: a broken
 `main` would stop every new box from provisioning. The RunPod image itself
-is pinned by its tag or digest in the template.
+is pinned by its digest in the template.
 
 ### Vast `PROVISIONING_SCRIPT` vs `install_set.py`
 

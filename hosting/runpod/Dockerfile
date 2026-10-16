@@ -19,22 +19,33 @@
 #
 # Deliberately thin. The installer is NOT here: provision.sh fetches it on
 # first boot, so a change to it needs no new image. Nor are weights; they
-# go to the volume. This image changes only when provision.sh or the vLLM
-# version does.
+# go to the volume. This image changes only when provision.sh, supervisor
+# or the vLLM version does.
 #
-#   docker build -t <registry>/llmao-vllm-box:<tag> hosting/runpod
+# The final stage is COPY --link only, with no RUN. That is what keeps a
+# build cheap: BuildKit never has to unpack the many-GB vLLM image to add a
+# few hundred KB on top, so the runner needs neither the disk nor the time.
+# A RUN in the final stage would undo that. Anything that needs a shell
+# belongs in the vendor stage.
+#
+#   docker buildx build --push -t <registry>/llmao-vllm-box:<tag> hosting/runpod
 
-# A pinned version, not :latest -- every pod created from the template
-# would otherwise get whatever vLLM was newest that day.
-FROM vllm/vllm-openai:v0.25.1
+# supervisor is pure Python with no dependencies, so it is installed here,
+# in a small image, and copied across. Hash-pinned in requirements.txt.
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS vendor
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-deps --require-hashes --target /vendor -r /tmp/requirements.txt
 
-# supervisord is the one thing the stock image lacks: it restarts a vLLM
-# server that dies without disturbing the others on the box.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends supervisor \
- && rm -rf /var/lib/apt/lists/*
+# Pinned by digest, not :latest -- every pod created from the template would
+# otherwise get whatever vLLM was newest that day. This is v0.25.1.
+FROM vllm/vllm-openai:v0.25.1@sha256:e4f88a835143cd22aee2397a26ec6bb80b3a4a6fe0c882bcbc63822904766089
 
-COPY provision.sh /opt/llmao/provision.sh
+# supervisord restarts a vLLM server that dies without disturbing the others
+# on the box. bin/ holds `supervisord` and `supervisorctl` commands that run
+# the vendored copy, so both work as they would from a package.
+COPY --link --from=vendor /vendor /opt/llmao/vendor
+COPY --link --chmod=0755 bin/ /usr/local/bin/
+COPY --link --chmod=0755 provision.sh /opt/llmao/provision.sh
 
 # Replaces the stock ENTRYPOINT ["vllm", "serve"]. The template's start
 # command must be left empty: anything there arrives as arguments to this.
