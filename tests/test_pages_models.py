@@ -419,6 +419,9 @@ def test_drill_down_renders_add_and_remove_actions():
     assert out.count("/do-add-deployment") == 1
     assert 'name="host" value="10.0.0.2"' in out
     assert 'aria-label="Add 10.0.0.2:8001"' in out
+    # The yellow badge says why, and Add says what it does.
+    assert "Not in LiteLLM yet, so no traffic. llmao adds it on its next pass; Add does it now." in out
+    assert 'title="Register this server in LiteLLM now, so it gets traffic"' in out
 
     # Exactly one enabled Stop tracking (the unhealthy box still in LiteLLM) posts the row.
     assert out.count("/do-remove-deployment") == 1
@@ -434,6 +437,24 @@ def test_drill_down_renders_add_and_remove_actions():
     # The attention strip keeps them, disabled, with the reason as text.
     out = _render(rows, attention=pages.attention_items(fleet), admin=True)
     assert "vLLM is not serving yet" in out
+
+
+def test_serving_but_not_in_litellm_says_why():
+    pages = _app()
+    failed = _server("gemma", host="10.0.0.2")
+    unplaced = _server("gemma", host="10.0.0.3")
+    unplaced.public_port = None
+    fleet = _fleet(failed, unplaced)
+    for dep in fleet.deployments:
+        dep.in_litellm = False
+    fleet.deployments[0].litellm_error = "LiteLLM said no"
+    fleet.deployments[0].litellm_error_at = time.time() - 120
+    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
+    out = _render(rows, admin=True)
+    assert "Adding it failed 2m ago: LiteLLM said no" in out
+    assert "Added once its public address is known." in out
+    # No address, no Add: there is nothing it could register.
+    assert out.count("/do-add-deployment") == 1
 
 
 def test_two_ports_on_one_host_are_two_deployments():

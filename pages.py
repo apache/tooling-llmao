@@ -535,6 +535,14 @@ def _deployment_reason(dep) -> str:
         if srv.reached:
             return "vLLM up, model loading"
         return "vLLM not listening yet"
+    if srv.state == HEALTHY and not dep.in_litellm:
+        # The yellow badge: serving, but LiteLLM sends it nothing.
+        if dep.litellm_error:
+            failed = f"Adding it failed {dep.litellm_error_display} ago: {dep.litellm_error}"
+            return f"Not in LiteLLM, so no traffic. {failed}"
+        if not dep.api_base:
+            return "Not in LiteLLM, so no traffic. Added once its public address is known."
+        return "Not in LiteLLM yet, so no traffic. llmao adds it on its next pass; Add does it now."
     return ""
 
 
@@ -546,6 +554,7 @@ def _action(**kwargs):
     kwargs["is_remove"] = ezt.boolean(kind == "remove")
     kwargs.setdefault("port", "")
     kwargs.setdefault("confirm", "")
+    kwargs.setdefault("title", "")
     kwargs.setdefault("aria", f"{kwargs.get('label', '')} {kwargs.get('host', '')}".strip())
     return edict(**kwargs)
 
@@ -617,6 +626,7 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
                 name=dep.name,
                 port=port,
                 aria=f"Add {ident}",
+                title="Register this server in LiteLLM now, so it gets traffic",
                 label_value="",
                 approved="",
                 post="/do-add-deployment",

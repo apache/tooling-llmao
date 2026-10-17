@@ -46,7 +46,7 @@
             [if-any attention.actions.port]
             <input type="hidden" name="port" value="[attention.actions.port]">
             [end]
-            <button type="submit" class="btn btn-sm btn-outline-secondary ms-1"
+            <button type="submit" class="btn btn-sm btn-outline-secondary ms-1"[if-any attention.actions.title] title="[attention.actions.title]"[end]
                     aria-label="[attention.actions.aria]">[attention.actions.label]</button>
           </form>
           [else]
@@ -170,7 +170,7 @@
             <input type="hidden" name="host" value="[models.deployments.primary.host]">
             <input type="hidden" name="name" value="[models.deployments.primary.name]">
             <input type="hidden" name="port" value="[models.deployments.primary.port]">
-            <button type="submit" class="btn btn-sm btn-outline-primary"
+            <button type="submit" class="btn btn-sm btn-outline-primary"[if-any models.deployments.primary.title] title="[models.deployments.primary.title]"[end]
                     aria-label="[models.deployments.primary.aria]">[models.deployments.primary.label]</button>
           </form>
           [end]

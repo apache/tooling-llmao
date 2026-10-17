@@ -613,6 +613,10 @@ class FleetDeployment:
         self.config_mismatch = False
         # Set by the config skew pass when LiteLLM has this server at its listen port.
         self.at_listen_port = False
+        # The last registration (or removal) call to LiteLLM that failed, and
+        # when; cleared by the next one that succeeds.
+        self.litellm_error = ""
+        self.litellm_error_at: float | None = None
 
     @classmethod
     def from_vllm(cls, srv: VllmServer) -> FleetDeployment:
@@ -670,6 +674,13 @@ class FleetDeployment:
         if self.litellm_health_at is None:
             return "—"
         return _ago(self.litellm_health_at)
+
+    @property
+    def litellm_error_display(self) -> str:
+        """Human-readable 'litellm_error_at'; a dash when unknown."""
+        if self.litellm_error_at is None:
+            return "—"
+        return _ago(self.litellm_error_at)
 
 
 @dataclass(frozen=True)
@@ -1210,6 +1221,8 @@ def add_refusal(dep) -> str | None:
         return "already in LiteLLM"
     if dep.vllm.state != HEALTHY:
         return "vLLM is not serving yet"
+    if not dep.api_base:
+        return "its public address is not known yet"
     return None
 
 

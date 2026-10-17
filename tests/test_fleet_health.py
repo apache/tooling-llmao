@@ -155,6 +155,12 @@ def test_add_refusal_until_serving():
     assert add_refusal(dep) == "already in LiteLLM"
 
 
+def test_add_refusal_without_a_public_address():
+    dep = FleetDeployment.from_vllm(_server(public_port=None))
+    dep.vllm.state = HEALTHY
+    assert add_refusal(dep) == "its public address is not known yet"
+
+
 class _LiteLLM:
     """What the stand-in LiteLLM says. A test changes these as it goes."""
 

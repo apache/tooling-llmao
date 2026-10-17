@@ -228,6 +228,24 @@ def test_ensure_providers_registers_each_one_once():
     assert all(d.in_litellm for d in deps)
 
 
+def test_a_failed_registration_is_kept_for_the_page_until_one_succeeds():
+    fleet, (dep,) = _bought(XAI)
+    be = _manager(fleet, cfg=ACCOUNTS)
+
+    async def refused(_dep):
+        raise RuntimeError("LiteLLM said no")
+
+    async def accepted(_dep):
+        pass
+
+    asyncio.run(be._each(refused, dep))
+    assert dep.litellm_error == "LiteLLM said no"
+    assert dep.litellm_error_at is not None
+    asyncio.run(be._each(accepted, dep))
+    assert dep.litellm_error == ""
+    assert dep.litellm_error_at is None
+
+
 def test_a_restart_finds_the_registration_already_there():
     """LiteLLM keeps a second copy if asked, so presence is checked first."""
     fleet, (dep,) = _bought(XAI)

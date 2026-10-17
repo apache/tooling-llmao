@@ -248,8 +248,14 @@ class DeploymentManager:
         """
         try:
             await action(dep)
-        except Exception:
+        except Exception as e:
             _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.api_base)
+            # Kept for /models, which otherwise shows only that it is missing.
+            dep.litellm_error = str(e) or type(e).__name__
+            dep.litellm_error_at = time.time()
+        else:
+            dep.litellm_error = ""
+            dep.litellm_error_at = None
 
     async def ensure_providers(self) -> None:
         """At startup: POST /model/new for each config.yaml providers deployment."""
