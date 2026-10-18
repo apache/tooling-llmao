@@ -109,7 +109,7 @@ A **host** is a GPU box public IP. Its value is a list of `[model, port]` or
 `[model, port, name]` rows. That **port is the container listen port**
 (`vllm serve --port` / box JSON). Vast's proxy publishes a different public
 HostPort; llmao records that as `VllmServer.public_port`.
-Without `fleet.vast`, public equals listen. Optional **name** lets two
+Without `providers.vast`, public equals listen. Optional **name** lets two
 processes share a models.yaml row (e.g. two qwen3 on one box).
 
 asfquart owns placement. `models.yaml` is how to serve, not where. Changing
@@ -311,7 +311,7 @@ Add into LiteLLM is on the existing row and waits until that vLLM is serving
 ## 11. Leftover implementation
 
 1. Smoke remaining box issues.
-2. Vast public HostPort — **done** (`vast_client` when `fleet.vast.api_key` is set).
+2. Vast public HostPort — **done** (`vast_client` when `providers.vast.api_key` is set).
 3. `/model/new` / `/model/delete` — **done**. Delete id via `model_info.asf_api_base`
    (`models.yaml` params; LiteLLM encrypts `litellm_params` on readback).
 4. Config revision on `/vllm/config`, reported back by the box, so a stale

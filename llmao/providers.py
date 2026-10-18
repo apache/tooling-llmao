@@ -15,10 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Model-API provider accounts: config.yaml ``providers``.
+"""Provider accounts: config.yaml ``providers``.
 
-A provider is an account we pay to serve models: xAI, OpenRouter. Each one
-lists the models it serves for us, and each line is one deployment::
+Two kinds of account we pay. A model provider sells tokens: xAI, OpenRouter.
+A GPU host rents us the boxes our own vLLM servers run on: Vast, RunPod. A GPU
+host is known by name (llmao has an API client for each, in GPU_HOSTS) and
+carries only its api_key; llmao reads its API for port mappings and prices::
+
+    providers:
+      vast:
+        api_key: ...
+
+A model provider lists the models it serves for us, and each line is one
+deployment::
 
     providers:
       openrouter:
@@ -39,9 +48,16 @@ without a hosting account can list a personal one and nothing shared changes.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
+
+_LOGGER = logging.getLogger(__name__)
+
+# The GPU hosts llmao has an API client for. An account under one of these
+# names rents boxes; any other name is a model provider.
+GPU_HOSTS = ("vast", "runpod")
 
 
 @dataclass(frozen=True)
@@ -61,10 +77,25 @@ def provider_api_key(cfg: Any, name: str) -> str:
     return str(entry.get("api_key") or "").strip()
 
 
+def gpu_host_api_key(cfg: Any, name: str) -> str:
+    """The API key for a GPU host account, or "" when there is none.
+
+    Read from providers.<name>.api_key, else from fleet.<name>.api_key, where
+    the Vast key used to live (validate_providers warns about that).
+    """
+    key = provider_api_key(cfg, name)
+    if key:
+        return key
+    old = ((cfg.get("fleet") or {}).get(name)) or {}
+    return str(old.get("api_key") or "").strip() if isinstance(old, dict) else ""
+
+
 def provider_deployments(cfg: Any) -> list[ProviderDeployment]:
     """Every deployment listed under config.yaml providers. Assumes validate_providers ran."""
     out = []
     for name, entry in (cfg.get("providers") or {}).items():
+        if name in GPU_HOSTS:
+            continue
         api_base = str(entry.api_base).strip()
         for model_name, litellm_model in entry.models.items():
             out.append(ProviderDeployment(str(name), str(model_name), str(litellm_model).strip(), api_base))
@@ -78,6 +109,16 @@ def validate_providers(cfg: Any, models: list) -> None:
     where a mapping belongs: a string, a list, or nothing at all.
     """
     providers = cfg.get("providers")
+    fleet = cfg.get("fleet") or {}
+    for name in GPU_HOSTS:
+        if name not in fleet:
+            continue
+        if isinstance(providers, dict) and name in providers:
+            raise ValueError(f"config.yaml: the {name} key is in both fleet.{name} and providers.{name}; keep one")
+        old = fleet[name]
+        if not isinstance(old, dict) or not str(old.get("api_key") or "").strip():
+            raise ValueError(f"config.yaml: fleet.{name}.api_key is required")
+        _LOGGER.warning("config.yaml: fleet.%s.api_key is deprecated; move it to providers.%s.api_key", name, name)
     if providers is None:
         return
     if not isinstance(providers, dict):
@@ -90,6 +131,12 @@ def validate_providers(cfg: Any, models: list) -> None:
         key = str(entry.get("api_key") or "").strip()
         if not key or key.startswith("CHANGE_ME"):
             raise ValueError(f"{where}.api_key is required")
+        if name in GPU_HOSTS:
+            # A GPU host rents boxes; it serves no model by itself.
+            extra = sorted(k for k in entry if k != "api_key")
+            if extra:
+                raise ValueError(f"{where} is a GPU host and takes only api_key, not {', '.join(extra)}")
+            continue
         base = urlparse(str(entry.get("api_base") or "").strip())
         if base.scheme not in ("http", "https") or not base.netloc:
             raise ValueError(f"{where}.api_base must be an http(s) URL")

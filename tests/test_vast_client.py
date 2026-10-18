@@ -18,6 +18,7 @@
 """Vast show-instances → listen/public port map (no live API)."""
 
 import asyncio
+import logging
 
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
@@ -121,6 +122,51 @@ def test_apply_port_map_missing_host_stays_awaiting():
     assert s.state == AWAITING
 
 
+def _vast_cfg(*, providers=None, fleet_vast=None, host="127.0.0.1"):
+    fleet = {"hosts": {host: [["gemma4-26b", 8001]]}, "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS}
+    if fleet_vast is not None:
+        fleet["vast"] = fleet_vast
+    cfg = {"fleet": fleet, "models_path": str(EXAMPLE)}
+    if providers is not None:
+        cfg["providers"] = providers
+    return edict(cfg)
+
+
+def test_the_vast_key_lives_under_providers():
+    cfg = _vast_cfg(providers={"vast": {"api_key": "abc"}})
+    validate_fleet(cfg, models=load_models(EXAMPLE))
+    fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
+    # With a Vast key the public port is Vast's to say, not the listen port.
+    assert fleet.servers[0].public_port is None
+    assert fleet.deployments[0].provider is None
+
+
+def test_a_gpu_host_takes_only_its_key():
+    cfg = _vast_cfg(providers={"runpod": {"api_key": "abc", "models": {"gemma4-26b": "x"}}})
+    with pytest.raises(ValueError, match=r"providers\.runpod is a GPU host and takes only api_key, not models"):
+        validate_fleet(cfg, models=load_models(EXAMPLE))
+
+
+def test_a_gpu_host_needs_its_key():
+    cfg = _vast_cfg(providers={"runpod": {}})
+    with pytest.raises(ValueError, match=r"providers\.runpod\.api_key is required"):
+        validate_fleet(cfg, models=load_models(EXAMPLE))
+
+
+def test_the_old_place_still_works_with_a_warning(caplog):
+    cfg = _vast_cfg(fleet_vast={"api_key": "abc"})
+    with caplog.at_level(logging.WARNING, logger="llmao.providers"):
+        validate_fleet(cfg, models=load_models(EXAMPLE))
+    assert "fleet.vast.api_key is deprecated; move it to providers.vast.api_key" in caplog.text
+    assert Fleet.from_cfg(cfg, models=load_models(EXAMPLE)).servers[0].public_port is None
+
+
+def test_the_key_in_both_places_is_refused():
+    cfg = _vast_cfg(providers={"vast": {"api_key": "abc"}}, fleet_vast={"api_key": "abc"})
+    with pytest.raises(ValueError, match="keep one"):
+        validate_fleet(cfg, models=load_models(EXAMPLE))
+
+
 def test_validate_fleet_requires_vast_api_key():
     cfg = edict(
         {
@@ -155,9 +201,9 @@ def test_refresh_uses_dotted_api_key():
             "fleet": {
                 "hosts": {"203.0.113.10": [["gemma4-26b", 8001]]},
                 "vllm_api_salt": "test-vllm-salt",
-                "vast": {"api_key": "secret"},
                 **FLEET_KNOBS,
             },
+            "providers": {"vast": {"api_key": "secret"}},
             "models_path": str(EXAMPLE),
         }
     )

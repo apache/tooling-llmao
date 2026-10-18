@@ -51,7 +51,7 @@ from llmao.model_status import (
     self_hosted_lifecycle,
 )
 from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
-from llmao.providers import ProviderDeployment, provider_deployments, validate_providers
+from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
 from llmao.vast_client import fetch_port_map
 
 _LOGGER = logging.getLogger(__name__)
@@ -202,14 +202,6 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             raise ValueError(f"config.yaml: fleet.{key} must be a number") from e
         if val <= 0:
             raise ValueError(f"config.yaml: fleet.{key} must be > 0")
-    if "vast" in cfg.fleet:
-        try:
-            key = str(cfg.fleet.vast.api_key or "").strip()
-        except (AttributeError, KeyError) as e:
-            raise ValueError("config.yaml: fleet.vast.api_key is required") from e
-        if not key:
-            raise ValueError("config.yaml: fleet.vast.api_key is required")
-
     models = models if models is not None else load_models(cfg=cfg)
     validate_models(models)
     warn_deprecated(models)
@@ -738,7 +730,7 @@ class Fleet:
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
         models = models if models is not None else load_models(cfg=cfg)
         by_name = {model.model_name: model for model in models}
-        local = "vast" not in cfg.fleet
+        local = not gpu_host_api_key(cfg, "vast")
         servers = []
         for host, rows in cfg.fleet.hosts.items():
             host = str(host).strip()
@@ -1037,9 +1029,10 @@ class Fleet:
                 await client.aclose()
 
     async def refresh_public_ports(self, client: httpx.AsyncClient) -> None:
-        if "vast" not in self.cfg.fleet:
+        key = gpu_host_api_key(self.cfg, "vast")
+        if not key:
             return
-        mapping = await fetch_port_map(self.cfg.fleet.vast.api_key, client=client)
+        mapping = await fetch_port_map(key, client=client)
         # Servers must exist before the map is applied, or a newly approved
         # listen port never receives its HostPort and probe_all skips it.
         self._materialize_approved_hosts()

@@ -132,7 +132,14 @@ models_path: models.yaml
 #
 # The key lives here and nowhere else. A developer with no hosting account can
 # list a personal one and serve models with no fleet.hosts at all.
+# Accounts we pay. vast and runpod are GPU hosts: they rent the boxes, and
+# take only api_key (llmao reads their APIs for port mappings and prices).
+# Any other name is a model provider, which lists the models it serves.
 # providers:
+#   vast:
+#     api_key: CHANGE_ME_VAST_API_KEY
+#   runpod:
+#     api_key: CHANGE_ME_RUNPOD_API_KEY
 #   xai:
 #     api_key: CHANGE_ME_XAI_API_KEY
 #     api_base: https://api.x.ai/v1
@@ -171,13 +178,12 @@ fleet:
   # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
   litellm_health_interval_s: 14400
   # Host row port is the container listen port (vLLM --port / box JSON).
-  # Without fleet.vast, the public port equals the listen port (local).
+  # Without providers.vast, the public port equals the listen port (local).
   # fleet.hosts is loaded once at process start. Standalone (runx) watches
   # config.yaml and reloads. Production: Puppet restart after a change.
-  # Production: set fleet.vast.api_key (gitignored config.yaml). Lifecycle
-  # fetches Vast HostPorts; never send those to the box.
-  # vast:
-  #   api_key: CHANGE_ME_VAST_API_KEY
+  # Production: set providers.vast.api_key (gitignored config.yaml). Lifecycle
+  # fetches Vast HostPorts; never send those to the box. fleet.vast.api_key
+  # still works, with a deprecation warning at startup.
   hosts:
     127.0.0.1:
       - [gemma4-26b, 8001]

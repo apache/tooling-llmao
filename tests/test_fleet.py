@@ -239,7 +239,7 @@ def test_probe_hits_both_vllm_ports_and_skips_the_rest():
             ]
         }
     )
-    cfg.fleet.vast = edict(api_key="vast-test")
+    cfg.providers = edict(vast=edict(api_key="vast-test"))
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
@@ -271,7 +271,7 @@ def test_missing_hostport_stays_awaiting_while_sibling_is_healthy():
             ]
         }
     )
-    cfg.fleet.vast = edict(api_key="vast-test")
+    cfg.providers = edict(vast=edict(api_key="vast-test"))
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
@@ -293,7 +293,7 @@ def test_missing_hostport_stays_awaiting_while_sibling_is_healthy():
 
 def test_approved_siblings_are_probed_without_another_fetch():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    cfg.fleet.vast = edict(api_key="vast-test")
+    cfg.providers = edict(vast=edict(api_key="vast-test"))
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
@@ -377,7 +377,7 @@ def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
         validate_fleet(missing, models=models)
     cfg = _cfg(hosts)
     cfg.fleet.selfhost_api_key = "sk-shared"
-    cfg.fleet.vast = edict(api_key="vast-test")
+    cfg.providers = edict(vast=edict(api_key="vast-test"))
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
     fleet.apply_port_map({"80.188.223.202": {"10100": 40000, "22": 19022}})

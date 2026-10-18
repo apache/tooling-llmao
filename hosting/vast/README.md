@@ -19,8 +19,9 @@ That value must match a `fleet.hosts` key. There is no `?host=` query.
 - Map **container** ports used by the set (example inventory: 8001, 8003).
   Those are `fleet.hosts` listen ports and what `GET /vllm/config` returns.
   Vast remaps them to public HostPorts; llmao does not send the public
-  port to the box. With `fleet.vast.api_key`, `fleet-lifecycle` fills
-  `public_port` from one show-instances GET each tick.
+  port to the box. With `providers.vast.api_key` in config.yaml,
+  `fleet-lifecycle` fills `public_port` from one show-instances GET each
+  tick.
 - Disk: large enough for HF cache under `$DATA_DIRECTORY/hf-cache`
   (`DATA_DIRECTORY` is typically `/workspace`).
 - Environment:
