@@ -711,10 +711,10 @@ class UsageManager:
         summary: three pages want three groupings of the same query, and
         three queries would be three chances to disagree.
 
-        `cost_basis` is carried through so a caller can tell an estimate from
-        an amount payable. It comes from the fleet: a model served from our
-        own boxes is derived_capacity; anything else has no tag and its cost
-        is real.
+        `cost_basis` is carried through so a caller can tell our own boxes
+        from an amount payable. It comes from the fleet: a model served from
+        our own boxes is derived_capacity, and LiteLLM records it at $0.00;
+        anything else has no tag and its cost is real.
         """
         rows = await self._spend_rows()
         if project is None:
@@ -1234,9 +1234,9 @@ class TeamManager:
         value alone rather than clearing it, which matters because a partial
         update that silently zeroed the others would uncap the project.
 
-        max_budget_usd binds only on commercial models. Self-hosted spend
-        accrues at a derived price and will never reach a ceiling, so the rate
-        limits are what actually constrain a project's draw on the fleet.
+        max_budget_usd binds only on commercial models. Self-hosted requests
+        are recorded at $0.00 and never reach a ceiling, so the rate limits
+        are what actually constrain a project's draw on the fleet.
         """
         team_id = await self.ensure_id(project)
         payload: dict[str, Any] = {"team_id": team_id}

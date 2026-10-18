@@ -65,6 +65,19 @@ def test_deployment_body_from_models():
     assert body["model_info"]["access_groups"] == ["llmao:self-hosted"]
 
 
+def test_a_self_hosted_deployment_carries_no_price():
+    """A price would count against team budgets; self-hosted use must never block."""
+    s = _server()
+    model = edict(
+        litellm_params=edict(model="hosted_vllm/gemma4-26b"),
+        pricing=edict(input_cost_per_token=1e-07, output_cost_per_token=1e-06),
+    )
+    fleet = Fleet(None, [s], models={"gemma4-26b": model})
+    body = _manager(fleet).deployment_body(fleet.deployments[0])
+    sent = {**body["litellm_params"], **body["model_info"]}
+    assert not {"input_cost_per_token", "output_cost_per_token", "cost_basis"} & set(sent)
+
+
 def test_sync_selfhost_posts_new_when_serving():
     s = _server()
     s.state = HEALTHY

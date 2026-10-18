@@ -660,9 +660,9 @@ class Seam:
                 if row.get("user") not in (None, identity.uid):
                     continue
                 tokens += int(row.get("total_tokens") or 0)
-                # Only commercial rows carry real money. Self-hosted spend is
-                # priced from measured throughput for reporting, and adding it
-                # here would put capacity into a column labelled dollars.
+                # Only commercial rows carry real money. Self-hosted rows are
+                # $0.00 in LiteLLM; skipping them keeps this a column of
+                # dollars actually spent, whatever they are recorded at.
                 if row.get("cost_basis") != "derived_capacity":
                     spend += float(row.get("total_cost_usd") or 0.0)
             # The project's own ceilings, so a personal figure has context.

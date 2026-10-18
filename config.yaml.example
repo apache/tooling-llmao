@@ -46,8 +46,8 @@ budgets:
 # Entitlements: what a key may do, as distinct from what it may spend.
 #
 # A budget is a dollar ceiling and only binds where dollars are real --
-# commercial providers. Self-hosted models have no marginal cost, so their
-# spend accrues at a derived price for reporting and never exhausts anything.
+# commercial providers. Self-hosted models have no marginal cost, so LiteLLM
+# records their requests at $0.00 and they never exhaust anything.
 # Rate limits are therefore the ONLY control on self-hosted capacity, and a
 # key minted without them can saturate the fleet with nothing to stop it.
 #

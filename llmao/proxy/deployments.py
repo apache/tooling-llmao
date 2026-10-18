@@ -104,41 +104,11 @@ class DeploymentManager:
             # boxes and nothing that costs money.
             info["access_groups"] = sorted(dep.access_groups)
 
-        # Price self-hosted tokens so usage reporting shows something other
-        # than 0.00. LiteLLM has no cost-map entry for these models, so every
-        # completion prices at nothing and a project's draw is invisible.
-        #
-        # The price is derived per model in models.yaml from measured
-        # throughput: hourly rental over tokens per second, input and output
-        # separately because prefill runs at thousands per second and decode
-        # at tens. On this fleet that is a 12-27x ratio, close to what
-        # commercial providers charge.
-        #
-        # It follows the card rather than being one fleet-wide figure, because
-        # a faster box costs more per hour and should cost more per token --
-        # otherwise a model's price stops tracking what serving it costs.
-        #
-        # IT IS NOT A MARGINAL COST. The boxes are rented continuously, so a
-        # token costs the same whether or not anyone asks for it, and the
-        # figure above assumes a box decoding flat out. At 25% utilisation the
-        # real cost is four times this; at 5%, twenty times. Read it as a unit
-        # of fair share that happens to carry a dollar sign -- useful for
-        # spotting a runaway job and comparing one project's draw against
-        # another's, and wrong the moment anyone treats it as money the
-        # Foundation could have kept.
-        #
-        # The UI shows it alongside a token count so the distinction survives
-        # contact with a reader.
-        if dep.self_hosted:
-            pricing = getattr(entry, "pricing", None)
-            if pricing is not None:
-                for name in ("input_cost_per_token", "output_cost_per_token"):
-                    val = getattr(pricing, name, None)
-                    if val is not None:
-                        info[name] = float(val)
-                # Marks the row as capacity rather than money, so a report can
-                # keep the two apart instead of adding them together.
-                info["cost_basis"] = dep.cost_basis
+        # No price. LiteLLM has no cost-map entry for our own models, so a
+        # self-hosted request is recorded at $0.00, and that is kept on
+        # purpose: a price here would count against team budgets, and
+        # self-hosted use must never block. What a box really costs is its
+        # rental, which the capacity report sets against the tokens it served.
 
         return {
             "model_name": dep.model_name,
