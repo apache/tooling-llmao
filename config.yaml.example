@@ -104,7 +104,6 @@ entitlements:
     tpm_limit: 300000
     max_parallel_requests: 8
 
-# uids that may view any project's activity (plus asfquart isRoot)
 # How often to sample each box's queue depth, in seconds. 0 turns it off.
 #
 # The spend log records what RAN and cannot record what WAITED -- queue depth
@@ -117,6 +116,8 @@ entitlements:
 # 17,000 lines a day; jq answers every question we currently have of it.
 contention_interval_s: 15
 
+# uids that may view any project's activity, and reach /admin and the
+# Deployments on /models (plus asfquart isRoot).
 site_admins: []
 
 
@@ -124,17 +125,16 @@ site_admins: []
 # Not included by litellm.yaml. Relative to app root.
 models_path: models.yaml
 
-# Accounts we pay to serve models. Each line under `models` is one
+# Accounts we pay. vast and runpod are GPU hosts: they rent the boxes, and
+# take only api_key (llmao reads their APIs for port mappings and prices).
+# Any other name is a model provider. Each line under its `models` is one
 # deployment: a model_name from models.yaml, and the provider's model as
 # LiteLLM names it. The same model can be listed under several providers, and
 # can run on our own boxes (fleet.hosts) as well. Our boxes always come first:
 # LiteLLM sends a request to a provider only when none of ours can take it.
 #
-# The key lives here and nowhere else. A developer with no hosting account can
+# The keys live here and nowhere else. A developer with no hosting account can
 # list a personal one and serve models with no fleet.hosts at all.
-# Accounts we pay. vast and runpod are GPU hosts: they rent the boxes, and
-# take only api_key (llmao reads their APIs for port mappings and prices).
-# Any other name is a model provider, which lists the models it serves.
 # providers:
 #   vast:
 #     api_key: CHANGE_ME_VAST_API_KEY
