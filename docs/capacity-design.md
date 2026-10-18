@@ -22,7 +22,7 @@ hand, and this page is not it.
 | Step | What | State |
 |---|---|---|
 | 1 | Vast and RunPod keys under `providers:` | done |
-| 2 | Hourly rollups, stored | in progress |
+| 2 | Hourly rollups, stored | done |
 | 3 | Rental prices from the Vast and RunPod APIs | planned |
 | 4 | Provider spend from LiteLLM's daily activity | planned |
 | 5 | The page | planned |
@@ -40,7 +40,7 @@ Four parts, each knowing one thing:
 
 | Part | Knows | Runs |
 |---|---|---|
-| **Sampler** (`llmao/sampler.py`) | which boxes are serving; fetching and parsing vLLM's `/metrics` | every `sample_interval_s` (15s) |
+| **Sampler** (`llmao/sampler.py`) | which boxes are serving; fetching and parsing vLLM's `/metrics` | every `sample_interval_s` |
 | **Rollup** (`HourlyRollup`) | turning readings into one row per server per clock hour | no; fed by the sampler |
 | **Writer** (`CapacityWriter`) | when an hour is finished; handing it to the store | about every minute |
 | **Store** (`CapacityStore`) | the `/v1/memory` key layout; write, read, prune | no; used by the writer, pruner and page |
@@ -91,7 +91,8 @@ a Stopwatch. If the 90-day view proves too slow even for two admins, rows
 older than a week can be merged into one per server per day, about 5,000
 rows for 90 days. Not built until the timings say so.
 
-Rows older than `capacity_retention_days` (90) are deleted daily. Each day
+Rows older than `capacity_retention_days` (required; config.yaml.example
+suggests 90) are deleted daily. Each day
 past retention is swept seven times, so a few days with llmao down still
 get cleared.
 

@@ -104,17 +104,17 @@ entitlements:
     tpm_limit: 300000
     max_parallel_requests: 8
 
-# How often to sample each box's queue depth, in seconds. 0 turns it off.
+# Capacity planning (docs/capacity-design.md). Both required.
 #
-# The spend log records what RAN and cannot record what WAITED -- queue depth
-# only exists while it is happening. Without this, the question of whether
-# free-tier and project work ever actually contend for a GPU is unanswerable
-# after the fact.
-#
-# One HTTP GET per self-hosted box per interval, one JSON line per box on the
-# llmao.contention logger. At three boxes and fifteen seconds that is about
-# 17,000 lines a day; jq answers every question we currently have of it.
-contention_interval_s: 15
+# Seconds between readings of every self-hosted box's /metrics. Never off:
+# queue depth exists only while it is happening -- the spend log records
+# what RAN, not what WAITED -- so an unsampled stretch is lost for good.
+# One HTTP GET per box per interval. (Formerly contention_interval_s, still
+# read with a warning.)
+sample_interval_s: 15
+# Days of hourly rows kept in LiteLLM's memory store. 90 days at twenty
+# boxes is about 43,000 rows.
+capacity_retention_days: 90
 
 # uids that may view any project's activity, and reach /admin and the
 # Deployments on /models (plus asfquart isRoot).

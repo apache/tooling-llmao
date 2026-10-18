@@ -339,7 +339,8 @@ class LiteLLMBackend:
         self._cfg = cfg
         self._transport = transport or LiteLLMTransport(cfg)
         self.deployments = DeploymentManager(cfg, fleet, self._transport)
-        memory = MemoryStore(self._transport)
+        # Public: other parts of llmao keep their own rows there too.
+        self.memory = memory = MemoryStore(self._transport)
         self.requests = AccessRequestManager(memory)
         self.skew = SkewManager(memory)
         self.log = LogManager(memory)

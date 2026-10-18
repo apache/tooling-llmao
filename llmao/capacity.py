@@ -82,6 +82,24 @@ class Sample:
     buckets: dict[float, float] = field(default_factory=dict)
 
 
+def retention_days(cfg: Any) -> int:
+    """config.yaml capacity_retention_days: how long hourly rows are kept. Call at startup.
+
+    Required, like every other setting with an operational effect: a
+    missing value is a startup error, not a quiet default.
+    """
+    if "capacity_retention_days" not in cfg:
+        raise ValueError("config.yaml: capacity_retention_days is required")
+    raw = cfg.capacity_retention_days
+    try:
+        days = int(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError("config.yaml: capacity_retention_days must be a whole number of days") from e
+    if days <= 0:
+        raise ValueError("config.yaml: capacity_retention_days must be > 0")
+    return days
+
+
 def _growth(now: float, before: float) -> float:
     """How far a counter moved between two readings. A drop is a restart, counted from zero."""
     return now - before if now >= before else now

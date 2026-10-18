@@ -68,16 +68,20 @@ def create_app():
     from llmao.auth import make_token_handler
 
     # Fail-fast: models.yaml is required (same presumption as config.yaml).
-    from llmao.contention import ContentionSampler
+    from llmao.capacity import CapacityPruner, CapacityStore, CapacityWriter, HourlyRollup, retention_days
     from llmao.fleet import Fleet, validate_fleet
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
     from llmao.models import load_models
     from llmao.proxy.client import LiteLLMBackend
+    from llmao.sampler import MetricsSampler, sample_interval
     from llmao.seam import Seam
 
     definitions = load_models(cfg=app.cfg)
     validate_fleet(app.cfg, models=definitions)
+    # Required, and checked before anything starts.
+    interval = sample_interval(app.cfg)
+    keep_days = retention_days(app.cfg)
     fleet = Fleet.from_cfg(app.cfg, models=definitions)
 
     backend = LiteLLMBackend(app.cfg, fleet)
@@ -87,25 +91,15 @@ def create_app():
     app.add_runner(backend.run_skew, name="litellm-skew")
     app.add_runner(backend.watch_outside_edits, name="litellm-outside-edits")
 
-    # Sample queue depth on each box.
-    #
-    # The spend log records what RAN; it cannot record what waited. Queue
-    # depth is only visible while it is happening, so it has to be sampled or
-    # it is gone.
-    #
-    # That matters because the question the pilot exists to answer is whether
-    # free-tier and project work ever actually contend for a GPU. If nothing
-    # ever waits, the allowances are rationing a resource that is not scarce,
-    # and the honest conclusion is to stop rationing rather than to tune the
-    # numbers.
-    #
-    # Cheap: one HTTP GET per box per interval, one log line each.
-    interval = int(getattr(app.cfg, "contention_interval_s", 0) or 15)
-    if interval > 0:
-        app.add_runner(
-            ContentionSampler(fleet, interval_s=interval).run,
-            name="contention-sampler",
-        )
+    # Capacity: what each box did, hour by hour (docs/capacity-design.md).
+    # The sampler reads every box's /metrics and feeds the rollup; the writer
+    # stores finished hours in LiteLLM, apart from the sampler so a slow
+    # LiteLLM cannot stall the readings; the pruner drops old days.
+    rollup = HourlyRollup(interval_s=interval)
+    app.capacity = CapacityStore(backend.memory)
+    app.add_runner(MetricsSampler(fleet, rollup, interval_s=interval).run, name="metrics-sampler")
+    app.add_runner(CapacityWriter(rollup, app.capacity).run, name="capacity-writer")
+    app.add_runner(CapacityPruner(app.capacity, keep_days).run, name="capacity-prune")
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
     app.seam = seam
