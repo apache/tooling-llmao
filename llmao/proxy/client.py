@@ -372,6 +372,7 @@ class LiteLLMBackend:
         await self.teams.backfill_token_caps(rows)
         await self.teams.ensure_pretend_projects()
         await self.deployments.ensure_providers()
+        await self.check_cost_map_schedule()
         # Six of the week's seven days are history and are never asked for
         # again, so reading them here means no visitor waits for them. Not
         # worth refusing to start over: a cold cache is only slow.
@@ -379,6 +380,31 @@ class LiteLLMBackend:
             await self.metering.warm()
         except BackendUnavailableError as e:
             _LOGGER.warning("could not warm usage: %s", e)
+
+    async def check_cost_map_schedule(self) -> None:
+        """Log an ERROR when LiteLLM does not refresh its price list on a schedule.
+
+        LiteLLM prices every request to a paid provider from that list, which
+        it fetches from GitHub at startup and otherwise keeps. The schedule
+        (POST /schedule/model_cost_map_reload?hours=24) is kept in LiteLLM's
+        database, not in any file of ours, so a rebuilt database silently
+        drops it, and provider spend is then priced from an ageing list.
+        Startup carries on either way: the prices are an estimate regardless.
+        """
+        try:
+            resp = await self._transport.request("GET", "schedule/model_cost_map_reload/status")
+            self._transport.raise_http(resp)
+            body = resp.json()
+        except BackendUnavailableError as e:
+            _LOGGER.warning("could not read LiteLLM's price list reload schedule: %s", e)
+            return
+        if not (isinstance(body, dict) and body.get("scheduled")):
+            _LOGGER.error(
+                "LiteLLM does not reload its price list on a schedule, so provider spend is priced "
+                "from the list it fetched at startup. Set it: POST /schedule/model_cost_map_reload?hours=24"
+            )
+            return
+        _LOGGER.info("LiteLLM reloads its price list every %s hours", body.get("interval_hours"))
 
     # ---- the two things that run for as long as the service does --------
     #
