@@ -30,7 +30,7 @@ from llmao.proxy.client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None):
+def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, requests=(), approvals=(), recent=()):
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
@@ -49,8 +49,15 @@ def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None):
         work=work,
         repo="https://github.com/apache/tooling-llmao",
         commit="deadbeef",
-        pending_count=None,
+        pending_count=len(requests) or None,
+        requests=list(requests),
+        approvals=list(approvals),
+        approval_count=len(approvals) or None,
+        recent=list(recent),
+        recent_days=14,
+        recent_mine=ezt.boolean(False),
         skew=list(skew),
+        skew_count=len(skew) or None,
         litellm_running=running,
         litellm_expected=expected,
         litellm_matches=ezt.boolean(bool(running) and running == expected),
@@ -72,7 +79,7 @@ def test_admin_drops_models_and_shows_a_version_match():
 
 def test_admin_shows_a_version_mismatch_and_unavailable():
     out = _render(running="1.0.0", expected="1.102.2")
-    assert "Running 1.0.0. The pin is 1.102.2." in out
+    assert "Running 1.0.0; the pin is 1.102.2." in out
     missing = _render(running=None, expected="1.102.2")
     assert "Unavailable." in missing
 
@@ -152,8 +159,9 @@ def test_admin_shows_work_needed():
     assert "limits differ from the service tier" in out
     assert "since 2026-10-12 09:00 UTC" in out
     assert "/do-acknowledge" not in out
-    assert "<form" not in out[out.index("Work needed") : out.index("list-group-item-action")]
-    assert "Work needed" not in _render(running=pin, expected=pin)
+    section = out[out.index('id="work"') : out.index('id="requests"')]
+    assert "<form" not in section
+    assert 'id="work"' not in _render(running=pin, expected=pin)
 
 
 def test_work_with_a_way_to_do_it_has_a_button_that_does_it():
@@ -224,3 +232,73 @@ def test_work_needed_is_one_line_saying_where_to_go():
     assert "3 things need doing." in out
     assert 'href="/keys">Go to My Keys</a>' in out
     assert "3 things need doing." not in _render(running=pin, expected=pin)
+
+
+def _pending(**over):
+    row = edict(
+        id="r1",
+        what="key",
+        requester="jdoe",
+        project="",
+        reason="for the hadoop CI",
+        wanted_h="hadoop CI",
+        tier="service",
+        is_capacity=ezt.boolean(False),
+        means='Lets jdoe create one service key, "hadoop CI". Nothing is created until they do; they have 14 days.',
+        created_at="2026-10-19",
+    )
+    row.update(over)
+    return row
+
+
+def test_the_count_waiting_is_said_outright_not_hidden_in_a_badge():
+    pin = pinned_litellm_version()
+    out = _render(running=pin, expected=pin, requests=[_pending(), _pending(id="r2")])
+    assert "2 requests awaiting a decision" in out
+    assert 'class="card h-100 admin-tile admin-tile-hot"' in out
+    one = _render(running=pin, expected=pin, requests=[_pending()])
+    assert "1 request awaiting a decision" in one
+    none = _render(running=pin, expected=pin)
+    assert "Nothing waiting." in none
+    assert "admin-tile-hot" not in none
+
+
+def test_each_request_says_what_approving_it_does():
+    pin = pinned_litellm_version()
+    out = _render(running=pin, expected=pin, requests=[_pending()])
+    assert "If you approve:" in out
+    assert "Lets jdoe create one service key" in out
+    assert 'name="request_id" value="r1"' in out
+
+
+def test_approvals_not_yet_used_say_who_may_do_what_until_when():
+    pin = pinned_litellm_version()
+    row = edict(
+        requester="jdoe",
+        ask='one service key, "hadoop CI"',
+        decided_by="admin1",
+        decided_on="2026-10-19",
+        expires_h="on 2026-11-02",
+        soon=ezt.boolean(False),
+    )
+    out = _render(running=pin, expected=pin, approvals=[row])
+    assert "may create one service key" in out
+    assert "approved by admin1 on 2026-10-19" in out
+    assert "lapses on 2026-11-02" in out
+    assert "None outstanding." in _render(running=pin, expected=pin)
+
+
+def test_recent_work_reads_as_sentences_with_who_and_when():
+    pin = pinned_litellm_version()
+    row = edict(
+        at="2026-10-19T14:02:11",
+        by="admin1",
+        sentence="Restricted free-tier to our own boxes.",
+        icon="bi-shield-lock",
+        ago="5m ago",
+    )
+    out = _render(running=pin, expected=pin, recent=[row])
+    assert "Restricted free-tier to our own boxes." in out
+    assert "admin1 &middot;" in out
+    assert "5m ago" in out
+    assert "Nothing in the last 14 days." in _render(running=pin, expected=pin)

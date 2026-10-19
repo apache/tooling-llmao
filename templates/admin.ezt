@@ -1,21 +1,59 @@
 [include "header.ezt"]
-<div class="container py-4">
+<div class="container py-4 admin-page">
   <div class="mt-2">[include "flashes.ezt"]</div>
 
-  <h1 class="h3 mb-3">Admin</h1>
-  <p class="text-muted small">
-    Everything that needs a site admin, in one place.
-  </p>
+  <h1 class="h3 mb-1">Admin</h1>
+  <p class="text-muted small mb-3">Everything that needs a site admin, in one place.</p>
+
+  <div class="row row-cols-2 row-cols-lg-4 g-3 mb-4">
+    <div class="col">
+      <a href="#requests" class="card h-100 admin-tile[if-any pending_count] admin-tile-hot[end]">
+        <div class="card-body">
+          <div class="admin-tile-figure">[if-any pending_count][pending_count][else]0[end]</div>
+          <div class="admin-tile-label"><i class="bi bi-inbox" aria-hidden="true"></i> Awaiting your decision</div>
+        </div>
+      </a>
+    </div>
+    <div class="col">
+      <a href="#approvals" class="card h-100 admin-tile[if-any approval_count] admin-tile-warm[end]">
+        <div class="card-body">
+          <div class="admin-tile-figure">[if-any approval_count][approval_count][else]0[end]</div>
+          <div class="admin-tile-label"><i class="bi bi-key" aria-hidden="true"></i> Approvals not yet used</div>
+        </div>
+      </a>
+    </div>
+    <div class="col">
+      <a href="#work" class="card h-100 admin-tile[if-any skew_count] admin-tile-warm[end]">
+        <div class="card-body">
+          <div class="admin-tile-figure">[if-any skew_count][skew_count][else]0[end]</div>
+          <div class="admin-tile-label"><i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Work needed</div>
+        </div>
+      </a>
+    </div>
+    <div class="col">
+      <a href="#litellm" class="card h-100 admin-tile[if-any litellm_matches][else] admin-tile-warm[end]">
+        <div class="card-body">
+          <div class="admin-tile-figure admin-tile-figure-text">
+            [if-any litellm_running][litellm_running][else]down[end]
+          </div>
+          <div class="admin-tile-label">
+            <i class="bi [if-any litellm_matches]bi-check-circle text-success[else]bi-exclamation-triangle[end]" aria-hidden="true"></i>
+            LiteLLM [if-any litellm_matches]matches the pin[else][if-any litellm_running]differs from the pin[else]unavailable[end][end]
+          </div>
+        </div>
+      </a>
+    </div>
+  </div>
 
   [if-any skew]
-  <div class="card border-warning mb-3">
-    <div class="card-header fw-semibold">Work needed</div>
-    <ul class="list-group list-group-flush">
+  <section id="work" class="mb-4">
+    <h2 class="h5 mb-2">Work needed <span class="badge text-bg-warning align-middle">[skew_count]</span></h2>
+    <div class="list-group">
       [for skew]
-      <li class="list-group-item small d-flex justify-content-between align-items-start">
+      <div class="list-group-item d-flex justify-content-between align-items-start">
         <div>
-          <span class="fw-semibold">[skew.what]</span>
-          <span class="text-muted">[if-any skew.since]&middot; since [skew.since][end]</span>
+          <div class="fw-semibold">[skew.what]</div>
+          [if-any skew.since]<div class="small text-muted">since [skew.since]</div>[end]
         </div>
         [if-any skew.action]
         <form method="post" action="[skew.action]" class="mb-0 ms-3">
@@ -23,61 +61,165 @@
           <button type="submit" class="btn btn-warning btn-sm">[skew.action_label]</button>
         </form>
         [end]
+      </div>
+      [end]
+    </div>
+    <p class="small text-muted mt-1 mb-0">Each stays until it is put right.</p>
+  </section>
+  [end]
+
+  <section id="requests" class="mb-4">
+    <h2 class="h5 mb-2">
+      [if-any pending_count]
+      [pending_count] [is pending_count "1"]request[else]requests[end] awaiting a decision
+      [else]
+      Requests
+      [end]
+    </h2>
+    [if-any requests]
+    [for requests]
+    <div class="card mb-3 admin-request">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+          <div>
+            <span class="fw-semibold">[requests.requester]</span>
+            <span class="badge text-bg-secondary ms-1">[requests.what]</span>
+            [if-any requests.project]<span class="text-muted small ms-1">[requests.project]</span>[end]
+            <div class="small text-muted">asked [requests.created_at]</div>
+          </div>
+          <div class="text-end">
+            <div class="fw-semibold font-monospace">[requests.wanted_h]</div>
+            [if-any requests.tier]<div class="small text-muted">[requests.tier] tier</div>[end]
+          </div>
+        </div>
+
+        [if-any requests.reason]
+        <p class="small mt-2 mb-0 fst-italic">&ldquo;[requests.reason]&rdquo;</p>
+        [end]
+
+        <div class="admin-means small mt-3">
+          <i class="bi bi-info-circle" aria-hidden="true"></i>
+          <strong>If you approve:</strong> [requests.means]
+        </div>
+
+        <form method="post" action="/do-decide-request" class="mt-3">
+          <input type="hidden" name="request_id" value="[requests.id]">
+          <div class="row g-2 align-items-center">
+            [if-any requests.is_capacity]
+            <div class="col-auto">
+              <input class="form-control form-control-sm" type="text"
+                     name="granted_token_cap" placeholder="approve this instead"
+                     aria-label="Approve a different allocation" style="width:12rem">
+            </div>
+            [end]
+            <div class="col">
+              <input class="form-control form-control-sm" type="text" name="reason"
+                     placeholder="Why &mdash; required if you change the number or deny"
+                     aria-label="Reason">
+            </div>
+            <div class="col-auto">
+              <button class="btn btn-success btn-sm" type="submit" name="decision" value="approve">
+                <i class="bi bi-check-lg" aria-hidden="true"></i> Approve
+              </button>
+              <button class="btn btn-outline-danger btn-sm" type="submit" name="decision" value="deny">Deny</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+    [end]
+    [else]
+    <p class="text-muted small"><i class="bi bi-check2-all text-success" aria-hidden="true"></i> Nothing waiting.</p>
+    [end]
+  </section>
+
+  <section id="approvals" class="mb-4">
+    <h2 class="h5 mb-1">Approvals not yet used</h2>
+    <p class="small text-muted mb-2">
+      Each is a right to create one key, granted and not yet exercised. It lapses on its date.
+    </p>
+    [if-any approvals]
+    <div class="list-group">
+      [for approvals]
+      <div class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div>
+          <i class="bi bi-key text-secondary me-1" aria-hidden="true"></i>
+          <span class="fw-semibold">[approvals.requester]</span> may create [approvals.ask]
+          <div class="small text-muted">approved by [approvals.decided_by] on [approvals.decided_on]</div>
+        </div>
+        <span class="badge [if-any approvals.soon]text-bg-warning[else]text-bg-light border[end]">lapses [approvals.expires_h]</span>
+      </div>
+      [end]
+    </div>
+    [else]
+    <p class="text-muted small">None outstanding.</p>
+    [end]
+  </section>
+
+  <section id="recent" class="mb-4">
+    <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2 mb-2">
+      <h2 class="h5 mb-0">Recent work <span class="small text-muted fw-normal">last [recent_days] days</span></h2>
+      <div class="btn-group btn-group-sm" role="group" aria-label="Whose work">
+        <a href="/admin#recent" class="btn [if-any recent_mine]btn-outline-secondary[else]btn-secondary[end]">Everyone</a>
+        <a href="/admin?who=me#recent" class="btn [if-any recent_mine]btn-secondary[else]btn-outline-secondary[end]">Just me</a>
+      </div>
+    </div>
+    [if-any recent]
+    <ul class="list-unstyled admin-timeline mb-0">
+      [for recent]
+      <li class="admin-timeline-item">
+        <i class="bi [recent.icon] admin-timeline-icon" aria-hidden="true"></i>
+        <div>
+          <div>[recent.sentence]</div>
+          <div class="small text-muted">[recent.by] &middot; <span title="[recent.at] UTC">[recent.ago]</span></div>
+        </div>
       </li>
       [end]
     </ul>
-    <div class="card-footer small text-muted">
-      Each of these stays until it is put right.
-    </div>
-  </div>
-  [end]
+    [else]
+    <p class="text-muted small">Nothing in the last [recent_days] days.</p>
+    [end]
+  </section>
 
-  <div class="list-group">
-    <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-start"
-       href="/admin/requests">
-      <div>
-        <div class="fw-semibold">Requests</div>
-        <div class="small text-muted">
-          Capacity bumps and key requests awaiting a decision.
-        </div>
+  <section class="mb-4">
+    <h2 class="h5 mb-2">Settings and lists</h2>
+    <div class="row row-cols-1 row-cols-md-2 g-3">
+      <div class="col">
+        <a class="card h-100 admin-link" href="/admin/tiers">
+          <div class="card-body">
+            <div class="fw-semibold"><i class="bi bi-sliders me-1" aria-hidden="true"></i> Tiers</div>
+            <div class="small text-muted">Allowances and rate limits per tier. Applies to every key on the tier.</div>
+          </div>
+        </a>
       </div>
-      [if-any pending_count]
-      <span class="badge text-bg-danger rounded-pill">[pending_count]</span>
-      [end]
-    </a>
-    <a class="list-group-item list-group-item-action" href="/admin/tiers">
-      <div class="fw-semibold">Tiers</div>
-      <div class="small text-muted">
-        Allowances and rate limits per tier. Applies to every key on the tier.
+      <div class="col">
+        <a class="card h-100 admin-link" href="/keys/other">
+          <div class="card-body">
+            <div class="fw-semibold"><i class="bi bi-robot me-1" aria-hidden="true"></i> Service keys</div>
+            <div class="small text-muted">Every key with no human at the keyboard, and when it was last used.</div>
+          </div>
+        </a>
       </div>
-    </a>
-    <a class="list-group-item list-group-item-action" href="/admin/at-limit">
-      <div class="fw-semibold">At the limit</div>
-      <div class="small text-muted">
-        Keys at or near their allowance, oldest first.
-      </div>
-    </a>
-    <a class="list-group-item list-group-item-action" href="/keys/other">
-      <div class="fw-semibold">Service keys</div>
-      <div class="small text-muted">
-        Every key with no human at the keyboard, and when it was last used.
-      </div>
-    </a>
-  </div>
-
-  <div class="card mt-4">
-    <div class="card-body py-2 small">
-      <div class="fw-semibold">LiteLLM</div>
-      [if-any litellm_running]
-      [if-any litellm_matches]
-      [litellm_running], matches the pin.
-      [else]
-      Running [litellm_running]. The pin is [litellm_expected].
-      [end]
-      [else]
-      Unavailable.
-      [end]
     </div>
-  </div>
+  </section>
+
+  <section id="litellm">
+    <div class="card">
+      <div class="card-body py-2 small d-flex align-items-center gap-2">
+        <i class="bi bi-hdd-stack" aria-hidden="true"></i>
+        <span class="fw-semibold">LiteLLM</span>
+        [if-any litellm_running]
+        [if-any litellm_matches]
+        <span>[litellm_running], matches the pin.</span>
+        [else]
+        <span>Running [litellm_running]; the pin is [litellm_expected].</span>
+        [end]
+        [else]
+        <span>Unavailable.</span>
+        [end]
+        <span class="text-muted ms-auto">Read from LiteLLM as this page loaded. Each deployment's health is on <a href="/models">Models</a>.</span>
+      </div>
+    </div>
+  </section>
 </div>
 [include "footer.ezt"]

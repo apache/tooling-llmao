@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 import io
 import logging
@@ -39,6 +40,7 @@ from cmarkgfm.cmark import Options
 from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao.access_requests import APPROVAL_TTL_DAYS
 from llmao.auth import current_identity
 from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
 from llmao.model_status import (
@@ -60,7 +62,14 @@ from llmao.model_status import (
     deployment_status,
 )
 from llmao.models import load_models, model_available_for, model_in_service, ux_models, vllm_recipe
-from llmao.proxy.client import PRETEND_PROJECTS, BackendUnavailableError, KeyInfo, pinned_litellm_version
+from llmao.proxy.client import (
+    PRETEND_PROJECTS,
+    TIER_FREE,
+    TIERS,
+    BackendUnavailableError,
+    KeyInfo,
+    pinned_litellm_version,
+)
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.
@@ -1391,27 +1400,39 @@ async def usage_moved():
 @APP.use_template(TEMPLATES / "admin.ezt")
 @page(title="Admin")
 async def admin_index(result):
-    """One door for everything a site admin does.
+    """Everything that needs a site admin, on one page.
 
-    The pages that only make sense together, and none of which a committer
-    should have to scroll past in the nav. Models stays in the top nav.
+    What is waiting comes first and says how much is waiting: requests to
+    decide, approvals nobody has used yet, and Work needed. Then what admins
+    have done lately, then the settings pages. Each section is read on its
+    own, so one source being down leaves the rest of the page.
     """
     if not result.is_site_admin:
         raise AuthzError("Admin is limited to site admins.")
-    # ezt's [if-any] tests truthiness but still requires the name to exist,
-    # so an empty queue is None rather than 0 -- a badge reading "0" is worse
-    # than no badge.
+    ident = await current_identity(APP.cfg)
+    mine = quart.request.args.get("who") == "me"
+
     try:
-        pending = await APP.seam.pending_requests(await current_identity(APP.cfg))
-    except (AuthzError, BackendUnavailableError):
-        pending = []
+        stored = await APP.backend.requests.find_all()
+    except BackendUnavailableError:
+        stored = []
+    pending = sorted((r for r in stored if r.state == "pending"), key=lambda r: r.created_at or "")
+    result.requests = _request_rows(pending)
     result.pending_count = len(pending) or None
-    # The page is still worth having when this cannot be read.
+    result.approvals = _open_approval_rows(stored)
+    result.approval_count = len(result.approvals) or None
+
     try:
-        skew = await APP.seam.work_needed(await current_identity(APP.cfg))
+        skew = await APP.seam.work_needed(ident)
     except (AuthzError, BackendUnavailableError):
         skew = []
     result.skew = _skew_rows(skew)
+    result.skew_count = len(result.skew) or None
+
+    result.recent = await _recent_work(stored, only=ident.uid if mine else None)
+    result.recent_days = RECENT_DAYS
+    result.recent_mine = ezt.boolean(mine)
+
     try:
         result.litellm_running = await APP.seam.proxy_version()
     except BackendUnavailableError:
@@ -1421,6 +1442,139 @@ async def admin_index(result):
         bool(result.litellm_running) and result.litellm_running == result.litellm_expected
     )
     return result
+
+
+# How far back Recent work reaches.
+RECENT_DAYS = 14
+
+# Bootstrap icon for each kind of recent work.
+_WORK_ICONS = {
+    "approved": "bi-check-circle",
+    "denied": "bi-x-circle",
+    "used": "bi-key",
+    "service_key": "bi-robot",
+    "tier": "bi-sliders",
+    "add_deployment": "bi-plus-circle",
+    "remove_deployment": "bi-dash-circle",
+    "approve_box": "bi-hdd-network",
+    "admin_label": "bi-flag",
+    "restrict_project": "bi-shield-lock",
+    "revoke_key": "bi-slash-circle",
+}
+
+
+def _key_ask(r) -> str:
+    """What a key request asks for, in words: 'one service key for tooling, "hadoop CI"'."""
+    want = {**r.wanted, **(r.granted or {})}
+    tier = want.get("tier") or "service"
+    kind = "personal free-tier key" if tier == TIER_FREE else f"{tier.replace('_', ' ')} key"
+    where = f" for {r.project}" if r.project else ""
+    purpose = f', "{want["purpose"]}"' if want.get("purpose") else ""
+    return f"one {kind}{where}{purpose}"
+
+
+def _approval_means(r) -> str:
+    """What saying yes to a pending request does, in words."""
+    if r.kind == "capacity":
+        return f"Sets {r.project}'s weekly allocation to {_tokens_h(r.wanted.get('token_cap') or 0)} tokens, at once."
+    return (
+        f"Lets {r.requester} create {_key_ask(r)}. Nothing is created until they do; "
+        f"they have {APPROVAL_TTL_DAYS} days."
+    )
+
+
+def _open_approval_rows(stored) -> list:
+    """Key approvals granted and not yet used: the rights still outstanding."""
+    rows = []
+    for r in stored:
+        if r.kind != "key" or not r.is_actionable():
+            continue
+        exp = r.expires_at()
+        days_left = (exp.date() - dt.datetime.now(dt.UTC).date()).days if exp else None
+        rows.append(
+            edict(
+                requester=r.requester,
+                ask=_key_ask(r),
+                decided_by=r.decided_by,
+                decided_on=(r.decided_at or "")[:10],
+                expires_h=_when_h(exp.date()) if exp else "",
+                soon=ezt.boolean(days_left is not None and days_left <= 3),
+            )
+        )
+    return sorted(rows, key=lambda row: row.expires_h)
+
+
+def _ago_h(stamp: str) -> str:
+    """'5m ago', '3h ago', '2d ago' from an ISO stamp; '' if unreadable."""
+    try:
+        at = dt.datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return ""
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=dt.UTC)
+    secs = max(0, int((dt.datetime.now(dt.UTC) - at).total_seconds()))
+    if secs < 3600:
+        return f"{max(1, secs // 60)}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
+def _work(at: str, by: str, kind: str, sentence: str) -> edict:
+    return edict(at=at or "", by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=_ago_h(at))
+
+
+async def _recent_work(stored, *, only: str | None = None) -> list:
+    """What admins did lately, newest first, from every record that keeps it.
+
+    Request decisions and approvals used come from the requests; service
+    keys from their creator on the key; tier changes from the tier; the
+    rest from the action log. Each source is read on its own, so one being
+    down thins the list rather than emptying the page.
+    """
+    since = (dt.datetime.now(dt.UTC) - dt.timedelta(days=RECENT_DAYS)).isoformat(timespec="seconds")
+    work = []
+    for r in stored:
+        what = "capacity" if r.kind == "capacity" else _key_ask(r)
+        subject = r.project if r.kind == "capacity" else r.requester
+        if r.decided_at:
+            if r.state == "denied":
+                work.append(_work(r.decided_at, r.decided_by, "denied", f"Denied {subject}'s request for {what}."))
+            elif r.kind == "capacity":
+                cap = _tokens_h((r.granted or r.wanted).get("token_cap") or 0)
+                work.append(
+                    _work(r.decided_at, r.decided_by, "approved", f"Raised {r.project}'s weekly allocation to {cap}.")
+                )
+            else:
+                work.append(_work(r.decided_at, r.decided_by, "approved", f"Approved {r.requester} to create {what}."))
+        if r.consumed_at:
+            work.append(
+                _work(r.consumed_at, r.requester, "used", f"{r.requester} used their approval and created {what}.")
+            )
+    try:
+        for k in await APP.backend.keys.find(size=200):
+            if k.is_automation and k.created_by and k.created_at:
+                named = f' "{k.purpose}"' if k.purpose else ""
+                work.append(
+                    _work(k.created_at, k.created_by, "service_key", f"Created {k.project}'s service key{named}.")
+                )
+    except BackendUnavailableError:
+        pass
+    for tier in TIERS:
+        try:
+            change = await APP.backend.tiers.last_change(tier)
+        except BackendUnavailableError:
+            change = None
+        if change:
+            label = "free tier" if tier == TIER_FREE else f"{tier} tier"
+            work.append(_work(change.at, change.by, "tier", f"Changed the {label}'s limits."))
+    try:
+        for a in await APP.actions.recent(RECENT_DAYS):
+            work.append(_work(a.at, a.by, a.what, a.sentence))
+    except BackendUnavailableError:
+        pass
+    work = [w for w in work if w.at >= since and (only is None or w.by == only)]
+    return sorted(work, key=lambda w: w.at, reverse=True)
 
 
 def _stamp(at) -> str:
@@ -1492,6 +1646,7 @@ def _request_rows(reqs) -> list:
                 was_adjusted=ezt.boolean(bool(r.granted) and r.granted != r.wanted),
                 decision_reason=r.decision_reason,
                 decided_by=r.decided_by,
+                means=_approval_means(r) if r.state == "pending" else "",
                 # The question a requester actually has: how long have I
                 # got to act on this.
                 expires_h=_when_h(exp.date()) if exp else "",
@@ -1499,17 +1654,6 @@ def _request_rows(reqs) -> list:
             )
         )
     return out
-
-
-@APP.get("/admin/requests")
-@asfquart.auth.require
-@APP.use_template(TEMPLATES / "requests.ezt")
-@page(title="Requests")
-async def admin_requests(result):
-    """Everything awaiting a decision, oldest first."""
-    ident = await current_identity(APP.cfg)
-    result.requests = _request_rows(await APP.seam.pending_requests(ident))
-    return result
 
 
 @APP.get("/admin/tiers")
@@ -1633,17 +1777,30 @@ async def do_decide_request():
             granted = None
     try:
         ident = await current_identity(APP.cfg)
-        await APP.seam.decide_request(
+        req = await APP.seam.decide_request(
             ident,
             (form.get("request_id") or "").strip(),
             approve=(form.get("decision") == "approve"),
             reason=form.get("reason") or "",
             granted=granted,
         )
-        await flash_success("Decision recorded.")
+        await flash_success(_decided_h(req))
     except (AuthzError, BackendUnavailableError, ValueError) as e:
         await flash_danger(str(e))
-    return _see_other("/admin/requests")
+    return _see_other("/admin#requests")
+
+
+def _decided_h(r) -> str:
+    """What the admin just did, in words, so a yes to the wrong thing is caught at once."""
+    if r.state == "denied":
+        subject = r.project if r.kind == "capacity" else r.requester
+        return f"Denied {subject}'s request. They will see your reason."
+    if r.kind == "capacity":
+        cap = _tokens_h(r.granted.get("token_cap") or 0)
+        return f"Raised {r.project}'s weekly allocation to {cap}. It applies now."
+    exp = r.expires_at()
+    until = f" until {exp.date().isoformat()}" if exp else ""
+    return f"Approved: {r.requester} may create {_key_ask(r)}{until}."
 
 
 @APP.get("/keys/other")
