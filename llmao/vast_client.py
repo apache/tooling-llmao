@@ -15,9 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Vast.ai show-instances: map public IP + listen port to HostPort.
+"""Vast.ai show-instances: each box's public ports, and what it costs.
 
-httpx only (no vastai SDK). One GET, no pagination. Returns EasyDict.
+httpx only (no vastai SDK). One GET, no pagination; the fleet reads the
+body twice, for ports (port_map_from_body) and prices (price_map_from_body).
 """
 
 from __future__ import annotations
@@ -97,7 +98,28 @@ def port_map_from_body(body: Any) -> edict:
     return mapping
 
 
-async def fetch_port_map(api_key: str, *, client: httpx.AsyncClient) -> edict:
+def price_map_from_body(body: Any) -> edict:
+    """public_ipaddr → the box's rental price, dollars per hour (dph_total).
+
+    dph_total includes the instance's storage. Bandwidth is billed per GB,
+    apart from this, and is left out.
+    """
+    prices = edict()
+    for inst in (body.get("instances") or []) if isinstance(body, dict) else []:
+        if not isinstance(inst, dict):
+            continue
+        ip = _ip(inst.get("public_ipaddr"))
+        try:
+            price = float(inst.get("dph_total"))
+        except (TypeError, ValueError):
+            continue
+        if ip:
+            prices[ip] = price
+    return prices
+
+
+async def fetch_instances(api_key: str, *, client: httpx.AsyncClient) -> Any:
+    """The show-instances body, for port_map_from_body and price_map_from_body."""
     resp = await client.get(
         VAST_INSTANCES_URL,
         params={"limit": VAST_PAGE_LIMIT},
@@ -105,4 +127,4 @@ async def fetch_port_map(api_key: str, *, client: httpx.AsyncClient) -> edict:
         timeout=30.0,
     )
     resp.raise_for_status()
-    return port_map_from_body(resp.json())
+    return resp.json()

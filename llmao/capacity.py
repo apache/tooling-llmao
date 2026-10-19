@@ -133,7 +133,8 @@ class Hour:
     kv_peak: float = 0.0
     counters: dict[str, float] = field(default_factory=dict)
     buckets: dict[float, float] = field(default_factory=dict)
-    # The box's rental price, filled in when prices are read (a later step).
+    # This server's share of its box's rental, dollars per hour. None when
+    # no provider prices the box.
     usd_per_hour: float | None = None
 
     def add(self, sample: Sample, before: Sample | None) -> None:
@@ -201,7 +202,9 @@ class HourlyRollup:
         self._before: dict[str, Sample] = {}
         self._finished: list[Hour] = []
 
-    def record(self, server: str, model_name: str, sample: Sample) -> None:
+    def record(self, server: str, model_name: str, sample: Sample, *, usd_per_hour: float | None = None) -> None:
+        """Add one reading to its server's hour. `usd_per_hour` is the server's
+        share of its box's rental, when the box's provider prices it."""
         hour = hour_of(sample.ts)
         current = self._hours.get(server)
         if current is None or current.hour != hour:
@@ -209,6 +212,8 @@ class HourlyRollup:
                 self._finished.append(current)
             current = self._hours[server] = Hour(hour=hour, server=server, model_name=model_name)
         current.add(sample, self._before.get(server))
+        if usd_per_hour is not None:
+            current.usd_per_hour = round(usd_per_hour, 4)
         self._before[server] = sample
 
     def missed(self, server: str) -> None:

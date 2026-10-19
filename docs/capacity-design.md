@@ -23,7 +23,7 @@ hand, and this page is not it.
 |---|---|---|
 | 1 | Vast and RunPod keys under `providers:` | done |
 | 2 | Hourly rollups, stored | done |
-| 3 | Rental prices from the Vast and RunPod APIs | planned |
+| 3 | Rental prices from the Vast and RunPod APIs | done |
 | 4 | Provider spend from LiteLLM's daily activity | planned |
 | 5 | The page | planned |
 | 6 | "Add a box / remove a box" suggestions | after a few weeks of data |
@@ -67,7 +67,7 @@ One row per server per UTC clock hour, keyed by hour then server:
 | `kv_avg`, `kv_peak` | KV cache use, as a fraction |
 | `prompt_tokens`, `generation_tokens`, `requests`, `preemptions` | growth of vLLM's counters over the hour |
 | `queue_avg_s`, `queue_p95_s` | time requests spent queued, from vLLM's histogram |
-| `usd_per_hour` | the box's rental price (step 3; until then empty) |
+| `usd_per_hour` | this server's share of its box's rental price; empty if no provider prices the box |
 
 Counters are vLLM's totals since it started. A total that goes down means
 the server restarted, and the new total is counted from zero. A reading the
@@ -81,6 +81,14 @@ waited). It replaces the contention log lines the sampler used to write.
 The price is on each row because a box's rental price is fixed for as long
 as we hold it, and a returned box vanishes from its provider's API. Kept on
 the row, a returned box keeps its price in history.
+
+A row carries its server's **share** of the box: a box running two servers
+puts half its price on each, so adding rows up gives the real bill. Prices
+come from the providers, by the box's public IP: Vast's `dph_total` from the
+instance list the fleet already reads for ports, and RunPod's `costPerHr`
+from its pod list (`providers.runpod.api_key`), asked only while some server
+is unpriced. A box no provider prices has no price, never $0, so the report
+can tell "free" from "unknown".
 
 ### Size
 
@@ -108,8 +116,9 @@ get cleared.
 ## Cost
 
 - **Self-hosted:** rental dollars per hour (Vast `dph_total`, RunPod
-  `costPerHr`; `usd_per_hour` on a `fleet.hosts` entry overrides), set
-  against tokens served. LiteLLM records self-hosted requests at $0.00 on
+  `costPerHr`), set against tokens served. There is no hand-set price: every
+  box is on a provider that reports one. A box that is not would show as
+  unpriced, and a setting can be added when one exists. LiteLLM records self-hosted requests at $0.00 on
   purpose, since a price there would count against team budgets.
 - **Model providers:** LiteLLM prices each request from its model cost map,
   reloaded every 24 hours. Spend is fixed when a request is made, so it is

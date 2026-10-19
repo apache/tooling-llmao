@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from typing import Any
 
 import httpx
@@ -230,12 +231,17 @@ class MetricsSampler:
         """One reading of every box, all at once: twenty boxes in turn could
         outlast the interval."""
         targets = self.targets()
+        # A box's price is shared by the servers on it, so each server's
+        # hour carries its share and adding rows up gives the real bill.
+        # Every server on the box counts, reachable or not.
+        per_box = Counter(srv.host for srv in self._fleet.servers)
         readings = await asyncio.gather(*(self._read(client, server, url) for _srv, server, _model, url in targets))
         for (srv, server, model_name, _url), sample in zip(targets, readings, strict=True):
             if sample is None:
                 self._rollup.missed(server)
                 continue
-            self._rollup.record(server, model_name, sample)
+            share = srv.box_usd_per_hour / per_box[srv.host] if srv.box_usd_per_hour is not None else None
+            self._rollup.record(server, model_name, sample, usd_per_hour=share)
             # The KV cache size, for the /models drill-down and the oversized
             # check. Fixed at engine start, but taken from every reading: a
             # restarted vLLM may have sized it differently.

@@ -52,7 +52,8 @@ from llmao.model_status import (
 )
 from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
 from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
-from llmao.vast_client import fetch_port_map
+from llmao.runpod_client import fetch_pods, price_map_from_pods
+from llmao.vast_client import fetch_instances, port_map_from_body, price_map_from_body
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -349,6 +350,10 @@ class VllmServer:
         # errors, which is the sharpest failure mode in the stack. It has only
         # ever been visible by reading a vLLM startup log by hand.
         self.kv_cache_tokens: int | None = None
+        # What the whole box rents for, dollars per hour, from its provider
+        # (Vast dph_total, RunPod costPerHr). None when no provider prices it.
+        # Servers sharing a box share its price; the capacity rows split it.
+        self.box_usd_per_hour: float | None = None
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
         # Named by model_status. Awaiting contact until the box fetches its
@@ -1031,12 +1036,34 @@ class Fleet:
         key = gpu_host_api_key(self.cfg, "vast")
         if not key:
             return
-        mapping = await fetch_port_map(key, client=client)
+        body = await fetch_instances(key, client=client)
+        mapping = port_map_from_body(body)
         # Servers must exist before the map is applied, or a newly approved
         # listen port never receives its HostPort and probe_all skips it.
         self._materialize_approved_hosts()
         self.apply_port_map(mapping)
+        self.apply_prices(price_map_from_body(body))
         await self.adopt_vast_instances(mapping, client)
+
+    async def refresh_runpod_prices(self, client: httpx.AsyncClient) -> None:
+        """Price the RunPod boxes, while any server is still unpriced.
+
+        A rental's price is fixed for as long as it is held, so once every
+        server has one there is nothing to ask. Vast's prices come free with
+        its port lookup; RunPod's are a call of their own.
+        """
+        key = gpu_host_api_key(self.cfg, "runpod")
+        if not key or all(srv.box_usd_per_hour is not None for srv in self.servers):
+            return
+        self.apply_prices(price_map_from_pods(await fetch_pods(key, client=client)))
+
+    def apply_prices(self, prices: Any) -> None:
+        """Set each server's box price from a provider's public IP → dollars per hour."""
+        for srv in self.servers:
+            price = prices.get(srv.host)
+            if price is not None and srv.box_usd_per_hour != price:
+                _LOGGER.info("price: %s rents for $%.3f/hr", srv.host, price)
+                srv.box_usd_per_hour = price
 
     async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:
         """Probe Vast instances that are not in fleet.hosts.
@@ -1147,6 +1174,10 @@ class Fleet:
                         await self.refresh_public_ports(client)
                     except Exception:
                         _LOGGER.exception("vast port map failed")
+                    try:
+                        await self.refresh_runpod_prices(client)
+                    except Exception:
+                        _LOGGER.exception("runpod prices failed")
                     self._materialize_approved_hosts()
                     await self.probe_all(client=client)
                     if self.after_probe is not None:
