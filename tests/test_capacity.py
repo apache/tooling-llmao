@@ -34,6 +34,7 @@ from llmao.capacity import (
     days_to_read,
     hour_label,
     retention_days,
+    summarise_capacity,
     summarise_spend,
 )
 from llmao.proxy.client import MemoryStore
@@ -221,3 +222,77 @@ def test_providers_are_listed_by_spend_largest_first():
 
 def test_nothing_bought_is_nothing_to_show():
     assert summarise_spend([], today=SPEND_TODAY, period_days=30) == []
+
+
+# ---- the self-hosted report ----
+
+
+def _hour_row(
+    hour, server, model, *, usd=0.1, covered=3600, busy=0.5, waiting=0.0, kv=0.2, prompt=1000, gen=100, q95=None
+):
+    return edict(
+        hour=hour,
+        server=server,
+        model_name=model,
+        covered_s=covered,
+        busy_frac=busy,
+        waiting_frac=waiting,
+        waiting_peak=1 if waiting else 0,
+        kv_avg=kv / 2,
+        kv_peak=kv,
+        prompt_tokens=prompt,
+        generation_tokens=gen,
+        requests=10,
+        preemptions=0,
+        queue_avg_s=None,
+        queue_p95_s=q95,
+        usd_per_hour=usd,
+    )
+
+
+def test_a_model_is_costed_by_the_hour_and_weighed_by_what_was_sampled():
+    rows = [
+        _hour_row("2026-10-19T08", "203.0.113.10:8001", "qwen3-8b", usd=0.5, covered=900, busy=1.0, q95=0.3),
+        _hour_row("2026-10-19T09", "203.0.113.10:8001", "qwen3-8b", usd=0.5, covered=2700, busy=0.0, q95=2.5),
+        _hour_row("2026-10-18T09", "198.51.100.8:8001", "qwen3-8b", usd=0.25, kv=0.9),
+        _hour_row("2026-10-19T09", "192.0.2.4:8001", "gemma4-26b", usd=1.0),
+        # outside a 7-day period ending 2026-10-19
+        _hour_row("2026-10-12T09", "198.51.100.8:8001", "qwen3-8b", usd=99.0),
+    ]
+    report = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7)
+    _gemma, qwen = sorted(report.models, key=lambda m: m.model_name)
+    # A whole hour of rental for every hour sampled, however much of it was.
+    assert qwen.cost_usd == 1.25
+    # Over the three clock hours seen, as a rate per day.
+    assert qwen.cost_per_day == 1.25 / 3 * 24
+    assert qwen.hours == 3
+    # Busy over 900s + 2700s + 3600s sampled: (900*1.0 + 3600*0.5) / 7200.
+    assert qwen.busy == (900 * 1.0 + 3600 * 0.5) / 7200
+    assert qwen.kv_peak == 0.9
+    assert qwen.queue_p95_worst_s == 2.5
+    assert qwen.usd_per_mtok == 1.25 / (3 * 1100 / 1e6)
+    assert [(d.day, d.value) for d in qwen.daily_tokens] == [("2026-10-18", 1100), ("2026-10-19", 2200)]
+    assert [s.server for s in qwen.servers] == ["198.51.100.8:8001", "203.0.113.10:8001"]
+    # The costliest model first; the fleet's day is every model's.
+    assert [m.model_name for m in report.models] == ["qwen3-8b", "gemma4-26b"]
+    assert report.cost_usd == 2.25
+    assert report.hours_seen == 3
+    assert report.cost_per_day == 2.25 / 3 * 24
+
+
+def test_an_unpriced_hour_is_counted_as_unpriced_not_as_free():
+    rows = [
+        _hour_row("2026-10-19T08", "203.0.113.10:8001", "m", usd=None),
+        _hour_row("2026-10-19T09", "203.0.113.10:8001", "m", usd=0.5),
+    ]
+    (m,) = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7).models
+    assert m.unpriced_hours == 1
+    assert m.cost_usd == 0.5
+    # A cost per token would understate with an hour missing, so there is none.
+    assert m.usd_per_mtok is None
+
+
+def test_no_rows_is_an_empty_report():
+    report = summarise_capacity([], today=dt.date(2026, 10, 19), period_days=30)
+    assert report.models == []
+    assert report.cost_per_day == 0.0

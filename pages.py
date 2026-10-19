@@ -42,6 +42,7 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.access_requests import APPROVAL_TTL_DAYS
 from llmao.auth import current_identity
+from llmao.capacity import days_to_read, summarise_capacity, summarise_spend
 from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
 from llmao.model_status import (
     ADMIN_LABELS,
@@ -1654,6 +1655,146 @@ def _request_rows(reqs) -> list:
             )
         )
     return out
+
+
+# The periods /admin/capacity offers, in days.
+CAPACITY_PERIODS = (7, 30, 90)
+
+
+@APP.get("/admin/capacity")
+@asfquart.auth.require
+@APP.use_template(TEMPLATES / "capacity.ezt")
+@page(title="Capacity")
+async def admin_capacity(result):
+    """What the fleet did and cost, and what the providers we pay were paid.
+
+    For deciding whether to add a box or return one, and for budgeting.
+    Built from the hourly capacity rows and LiteLLM's daily activity; each
+    half is read on its own, so one being down leaves the other.
+    """
+    if not result.is_site_admin:
+        raise AuthzError("Capacity is limited to site admins.")
+    try:
+        days = int(quart.request.args.get("days") or 30)
+    except ValueError:
+        days = 30
+    if days not in CAPACITY_PERIODS:
+        days = 30
+    today = dt.datetime.now(dt.UTC).date()
+    result.period_days = days
+    result.periods = [edict(days=d, active=ezt.boolean(d == days)) for d in CAPACITY_PERIODS]
+
+    try:
+        rows = await APP.capacity.read(days)
+        result.capacity_down = ezt.boolean(False)
+    except BackendUnavailableError:
+        rows = []
+        result.capacity_down = ezt.boolean(True)
+    fleet = summarise_capacity(rows, today=today, period_days=days)
+    result.models = [_capacity_model_row(m) for m in fleet.models]
+    result.fleet_cost_per_day = _money(fleet.cost_per_day)
+    result.fleet_tokens_per_day = _tokens_h(int(fleet.tokens_per_day))
+    result.unpriced_hours = fleet.unpriced_hours or None
+
+    try:
+        spent = await APP.backend.metering.provider_spend(days_to_read(days, today))
+        result.spend_down = ezt.boolean(False)
+    except BackendUnavailableError:
+        spent = []
+        result.spend_down = ezt.boolean(True)
+    providers = summarise_spend(spent, today=today, period_days=days)
+    result.providers = [_spend_provider_row(p) for p in providers]
+    result.spend_month_to_date = _money(sum(p.month_to_date_usd for p in providers))
+    result.spend_projected = _money(sum(p.projected_month_usd for p in providers))
+    return result
+
+
+def _pct(fraction: float) -> int:
+    return max(0, min(100, round(fraction * 100)))
+
+
+def _bars(series: list, fmt) -> list:
+    """A day-by-day series as bar heights, tallest 100: [{height, title}].
+
+    A bar too small to see still gets a sliver, so a quiet day reads as
+    quiet rather than as missing.
+    """
+    top = max((p.value for p in series), default=0)
+    return [
+        edict(
+            height=max(2, round(p.value / top * 100)) if top else 2,
+            title=f"{p.day}: {fmt(p.value)}",
+        )
+        for p in series
+    ]
+
+
+def _capacity_model_row(m) -> edict:
+    # How long requests sat in vLLM's queue before it started on them. Each
+    # hourly row keeps the 95th percentile of that hour (95% of requests
+    # waited no longer); this is the worst such hour in the period, the one
+    # that says whether the model ever ran short of room.
+    #
+    # vLLM records queue time in a histogram whose smallest bucket is 0.3s,
+    # so it cannot tell 0.01s from 0.29s. A value of 0.3 therefore means
+    # "under 0.3s", which for a person reading the page is "no real wait".
+    # None means no request queued at all in the period.
+    worst = m.queue_p95_worst_s
+    if worst is None:
+        queue_p95 = "—"
+    elif worst <= 0.3:
+        queue_p95 = "<0.3s"
+    else:
+        queue_p95 = f"{worst:g}s"
+
+    return edict(
+        model_name=m.model_name,
+        cost_per_day=_money(m.cost_per_day),
+        tokens_per_day=_tokens_h(int(m.tokens_per_day)),
+        usd_per_mtok=_money(m.usd_per_mtok) if m.usd_per_mtok is not None else "—",
+        busy=_pct(m.busy),
+        busy_hot=ezt.boolean(m.busy >= 0.8),
+        waiting=_pct(m.waiting),
+        waiting_hot=ezt.boolean(m.waiting >= 0.05),
+        kv_peak=_pct(m.kv_peak),
+        kv_hot=ezt.boolean(m.kv_peak >= 0.9),
+        waiting_peak=m.waiting_peak,
+        preemptions=m.preemptions,
+        queue_p95=queue_p95,
+        prompt_tokens=_tokens_h(m.prompt_tokens),
+        generation_tokens=_tokens_h(m.generation_tokens),
+        requests=f"{m.requests:,}",
+        hours=m.hours,
+        unpriced_hours=m.unpriced_hours or None,
+        token_bars=_bars(m.daily_tokens, lambda v: f"{_tokens_h(int(v))} tokens"),
+        servers=[
+            edict(
+                server=srv.server,
+                usd_per_hour=f"${srv.usd_per_hour:.3f}/hr" if srv.usd_per_hour is not None else "unpriced",
+                busy=_pct(srv.busy),
+                waiting=_pct(srv.waiting),
+                kv_peak=_pct(srv.kv_peak),
+                tokens=_tokens_h(srv.tokens),
+            )
+            for srv in m.servers
+        ],
+    )
+
+
+def _spend_provider_row(p) -> edict:
+    projected = p.projected_month_usd
+    return edict(
+        provider=p.provider,
+        period=_money(p.period_usd),
+        today=_money(p.today_usd),
+        month_to_date=_money(p.month_to_date_usd),
+        projected=_money(projected),
+        # How far into the projected month the spend so far is.
+        month_pct=_pct(p.month_to_date_usd / projected) if projected else 0,
+        models=[edict(name=x.name, usd=_money(x.usd)) for x in p.models],
+        projects=[edict(name=x.name, usd=_money(x.usd)) for x in p.projects],
+        spend_bars=_bars([edict(day=d.day, value=d.usd) for d in p.daily], _money),
+    )
 
 
 @APP.get("/admin/tiers")

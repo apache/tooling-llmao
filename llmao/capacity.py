@@ -348,6 +348,95 @@ class CapacityPruner:
             await asyncio.sleep(DAY_S)
 
 
+# ---- the self-hosted report ----------------------------------------------
+#
+# Totals of the hourly rows, per model, for /admin/capacity.
+#
+# Cost counts each row as one hour of rental: the box is billed for the whole
+# hour whether or not llmao sampled all of it. Tokens, busy and waiting are
+# what was sampled; busy and waiting are weighted by how much of each hour
+# was. An hour with no row at all (llmao down throughout) is missing from
+# both, which is the gap the design accepts.
+
+
+def _weighted(rows: list, field_name: str) -> float:
+    """A fraction averaged over rows, weighted by how much of each hour was sampled."""
+    covered = sum(r.covered_s for r in rows)
+    return sum(r[field_name] * r.covered_s for r in rows) / covered if covered else 0.0
+
+
+def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict:
+    """The fleet and each model over the last `period_days` days, from hourly rows."""
+    start = (today - dt.timedelta(days=period_days - 1)).isoformat()
+    rows = [r for r in rows if (r.get("hour") or "")[:10] >= start]
+    models = []
+    for name in sorted({r.model_name for r in rows}):
+        mine = [r for r in rows if r.model_name == name]
+        priced = [r for r in mine if r.usd_per_hour is not None]
+        cost = sum(r.usd_per_hour for r in priced)
+        tokens = sum(r.prompt_tokens + r.generation_tokens for r in mine)
+        # Rates per day are taken over the clock hours seen, not the days: a
+        # day still in progress, or one llmao was down for part of, would
+        # otherwise count as a whole day and understate the rate.
+        hours_seen = len({r.hour for r in mine})
+        daily_tokens: dict[str, int] = defaultdict(int)
+        daily_cost: dict[str, float] = defaultdict(float)
+        for r in mine:
+            daily_tokens[r.hour[:10]] += r.prompt_tokens + r.generation_tokens
+            if r.usd_per_hour is not None:
+                daily_cost[r.hour[:10]] += r.usd_per_hour
+        servers = []
+        for server in sorted({r.server for r in mine}):
+            theirs = [r for r in mine if r.server == server]
+            servers.append(
+                edict(
+                    server=server,
+                    usd_per_hour=next((r.usd_per_hour for r in reversed(theirs) if r.usd_per_hour is not None), None),
+                    busy=_weighted(theirs, "busy_frac"),
+                    waiting=_weighted(theirs, "waiting_frac"),
+                    kv_peak=max(r.kv_peak for r in theirs),
+                    tokens=sum(r.prompt_tokens + r.generation_tokens for r in theirs),
+                )
+            )
+        queue = [r.queue_p95_s for r in mine if r.queue_p95_s is not None]
+        models.append(
+            edict(
+                model_name=name,
+                servers=servers,
+                hours=len(mine),
+                unpriced_hours=len(mine) - len(priced),
+                cost_usd=cost,
+                cost_per_day=cost / hours_seen * 24,
+                prompt_tokens=sum(r.prompt_tokens for r in mine),
+                generation_tokens=sum(r.generation_tokens for r in mine),
+                tokens_per_day=tokens / hours_seen * 24,
+                requests=sum(r.requests for r in mine),
+                busy=_weighted(mine, "busy_frac"),
+                waiting=_weighted(mine, "waiting_frac"),
+                waiting_peak=max(r.waiting_peak for r in mine),
+                kv_peak=max(r.kv_peak for r in mine),
+                preemptions=sum(r.preemptions for r in mine),
+                queue_p95_worst_s=max(queue) if queue else None,
+                # Rental set against what was served: what a million tokens
+                # cost at the use the boxes actually had. Only when every hour
+                # is priced, or it would understate.
+                usd_per_mtok=cost / (tokens / 1e6) if tokens and len(priced) == len(mine) else None,
+                daily_tokens=[edict(day=d, value=daily_tokens[d]) for d in sorted(daily_tokens)],
+                daily_cost=[edict(day=d, value=round(daily_cost[d], 2)) for d in sorted(daily_cost)],
+            )
+        )
+    hours_seen = len({r.hour for r in rows})
+    cost = sum(m.cost_usd for m in models)
+    return edict(
+        models=sorted(models, key=lambda m: -m.cost_usd),
+        cost_usd=cost,
+        cost_per_day=cost / hours_seen * 24 if hours_seen else 0.0,
+        tokens_per_day=sum(m.tokens_per_day for m in models),
+        unpriced_hours=sum(m.unpriced_hours for m in models),
+        hours_seen=hours_seen,
+    )
+
+
 # ---- provider spend -------------------------------------------------------
 #
 # Totals of what the model providers we pay were paid, over the rows

@@ -183,3 +183,51 @@ def test_one_source_down_thins_the_list_rather_than_failing_the_page(monkeypatch
     r = _key()
     r.decide(state=STATE_DENIED, by="admin1", reason="no")
     assert len(_recent(monkeypatch, [r], keys_down=True)) == 1
+
+
+def _model(**over):
+    m = edict(
+        model_name="qwen3-8b",
+        cost_per_day=1.0,
+        tokens_per_day=1000,
+        usd_per_mtok=None,
+        busy=0.85,
+        waiting=0.0,
+        kv_peak=0.2,
+        waiting_peak=0,
+        preemptions=0,
+        queue_p95_worst_s=None,
+        prompt_tokens=100,
+        generation_tokens=10,
+        requests=3,
+        hours=2,
+        unpriced_hours=0,
+        daily_tokens=[],
+        servers=[],
+    )
+    m.update(over)
+    return m
+
+
+def test_the_worst_queue_time_reads_as_a_person_would_say_it():
+    pages = _app()
+    assert pages._capacity_model_row(_model()).queue_p95 == "—"
+    # vLLM's smallest bucket: it cannot tell 0.01s from 0.29s.
+    assert pages._capacity_model_row(_model(queue_p95_worst_s=0.3)).queue_p95 == "<0.3s"
+    assert pages._capacity_model_row(_model(queue_p95_worst_s=2.5)).queue_p95 == "2.5s"
+
+
+def test_a_busy_model_is_marked_and_a_day_series_becomes_bar_heights():
+    pages = _app()
+    row = pages._capacity_model_row(
+        _model(
+            daily_tokens=[
+                edict(day="2026-10-18", value=50),
+                edict(day="2026-10-19", value=200),
+                edict(day="d", value=0),
+            ]
+        )
+    )
+    assert row.busy == 85 and bool(row.busy_hot)
+    assert [b.height for b in row.token_bars] == [25, 100, 2]
+    assert row.token_bars[1].title == "2026-10-19: 200 tokens"
