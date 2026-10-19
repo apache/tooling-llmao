@@ -55,7 +55,7 @@ its usage prices at zero.
 
 Limits of that sizing, all in `hosting/README.md`: it happens once, at install; re-running the install on a box whose servers are already up sees little free memory and sets no fraction; and servers that load at the same moment get less KV cache than their share.
 
-**Observed state:** the `/models` drill-down shows measured KV cache against the served context window, scraped from vLLM's `/metrics` on the transition into Healthy. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
+**Observed state:** the `/models` drill-down shows measured KV cache against the served context window, the cache size taken from each reading of vLLM's `/metrics` by the sampler, and the window from `/v1/models` on the transition into Healthy. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
 
 Remaining: long vLLM boot, config revision on the box, pending-assignment table, box smoke, and nothing restarting a GPU box automatically.
 

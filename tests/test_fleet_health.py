@@ -27,8 +27,7 @@ from llmao.fleet import (
     FleetDeployment,
     VllmServer,
     add_refusal,
-    fetch_observed,
-    parse_kv_cache_tokens,
+    fetch_max_model_len,
     parse_max_model_len,
 )
 from llmao.model_status import (
@@ -441,58 +440,6 @@ def test_never_healthy_box_goes_starting_then_down():
     assert s.state == STALLED
 
 
-_METRICS = """\
-# HELP vllm:num_requests_running Number of requests in model execution batches.
-# TYPE vllm:num_requests_running gauge
-vllm:num_requests_running{model_name="google/gemma-4-26B-A4B-it"} 0.0
-# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
-# TYPE vllm:cache_config_info gauge
-vllm:cache_config_info{block_size="16",cache_dtype="auto",enable_prefix_caching="True",gpu_memory_utilization="0.9",kv_cache_max_concurrency="6.52951355508556",kv_cache_memory_bytes="None",kv_cache_size_tokens="855836",num_cpu_blocks="None",num_gpu_blocks="33960"} 1.0
-"""
-
-
-def test_parse_kv_cache_tokens_prefers_the_reported_count():
-    """kv_cache_size_tokens is authoritative; the block product is not.
-
-    Real output from the A100 serving Gemma reports 855,836 tokens while
-    num_gpu_blocks * block_size gives 543,360 -- blocks do not map uniformly
-    to tokens for a model with heterogeneous head dimensions. Taking the
-    product would understate the cache by a third and falsely flag a
-    correctly-sized server as oversized.
-    """
-    assert parse_kv_cache_tokens(_METRICS) == 855836
-    assert 33960 * 16 == 543360  # what the wrong answer would have been
-
-
-def test_parse_kv_cache_tokens_falls_back_to_block_product():
-    """Builds that do not emit the token count still get an approximation."""
-    text = 'vllm:cache_config_info{block_size="16",num_gpu_blocks="1000"} 1.0'
-    assert parse_kv_cache_tokens(text) == 16000
-
-    text = 'vllm:cache_config_info{block_size="16",num_gpu_blocks="1000",kv_cache_size_tokens="None"} 1.0'
-    assert parse_kv_cache_tokens(text) == 16000
-
-
-def test_parse_kv_cache_tokens_absent():
-    """vLLM's metric names are not a stable API.
-
-    A missing or renamed metric degrades the display rather than breaking the
-    probe loop, so this returns None instead of raising.
-    """
-    assert parse_kv_cache_tokens("vllm:num_requests_running{} 0.0\n") is None
-    assert parse_kv_cache_tokens("") is None
-
-
-def test_parse_kv_cache_tokens_malformed():
-    for text in (
-        'vllm:cache_config_info{block_size="16"} 1.0',  # no block count
-        'vllm:cache_config_info{block_size="x",num_gpu_blocks="1"} 1.0',
-        "vllm:cache_config_info block_size=16 1.0",  # no braces
-        'vllm:cache_config_info{block_size="0",num_gpu_blocks="0"} 1.0',
-    ):
-        assert parse_kv_cache_tokens(text) is None, text
-
-
 def test_parse_max_model_len():
     body = {"data": [{"id": "gemma4-26b", "max_model_len": 131072}]}
     assert parse_max_model_len(body) == 131072
@@ -539,13 +486,12 @@ def test_oversized_falls_back_to_configured_length():
     assert s.oversized is True
 
 
-def test_fetch_observed_scrapes_from_the_root():
-    """fetch_observed takes the server root, not a /v1-suffixed api_base.
+def test_the_served_window_is_read_from_the_root():
+    """fetch_max_model_len takes the server root, not a /v1-suffixed api_base.
 
-    /metrics sits at the root and the model list at /v1/models. A /v1-
-    suffixed base would request root/v1/metrics and root/v1/v1/models,
-    404 both, and leave the fields None -- oversized detection quietly dead
-    while the rest of the suite stays green.
+    A /v1-suffixed base would ask for root/v1/v1/models, 404, and leave the
+    window unknown -- oversized detection quietly dead while the rest of the
+    suite stays green.
     """
     calls = []
     root = "http://10.0.0.1:8001"
@@ -553,25 +499,21 @@ def test_fetch_observed_scrapes_from_the_root():
     class _Client:
         async def get(self, url, headers=None):
             calls.append(url)
-            if url == f"{root}/metrics":
-                return _Resp(200, text=_METRICS)
             if url == f"{root}/v1/models":
                 return _Resp(200, body={"data": [{"max_model_len": 131072}]})
             return _Resp(404)
 
-    kv, mml = asyncio.run(fetch_observed(_Client(), root, "sk-x"))
-    assert kv == 855836
-    assert mml == 131072
-    assert calls == [f"{root}/metrics", f"{root}/v1/models"]
+    assert asyncio.run(fetch_max_model_len(_Client(), root, "sk-x")) == 131072
+    assert calls == [f"{root}/v1/models"]
 
 
 def test_probe_all_scrapes_from_root_not_api_base():
-    """The SERVING-transition scrape must be handed root_url, not api_base.
+    """The SERVING-transition read must be handed root_url, not api_base.
 
-    Catches the regression one layer up from fetch_observed: if probe_all
-    ever passes the /v1-suffixed base, both scrape requests 404 on every
-    transition, the KV column on the /models drill-down goes empty, and
-    oversized stays unknown without any other test failing.
+    Catches the regression one layer up from fetch_max_model_len: if
+    probe_all ever passes the /v1-suffixed base, the read 404s on every
+    transition and oversized stays unknown without any other test failing.
+    /metrics is the sampler's, so the fleet no longer asks for it.
     """
     s = _server()
     calls = []
@@ -582,8 +524,6 @@ def test_probe_all_scrapes_from_root_not_api_base():
             calls.append(url)
             if url.endswith("/health"):
                 return _Resp(200, text="OK")
-            if url.endswith("/metrics"):
-                return _Resp(200, text=_METRICS)
             if url.endswith("/v1/models"):
                 return _Resp(200, body={"data": [{"max_model_len": 131072}]})
             return _Resp(404)
@@ -593,9 +533,8 @@ def test_probe_all_scrapes_from_root_not_api_base():
     asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
 
     assert s.state == HEALTHY
-    assert s.kv_cache_tokens == 855836
     assert s.observed_max_model_len == 131072
-    assert calls == [f"{root}/health", f"{root}/metrics", f"{root}/v1/models"]
+    assert calls == [f"{root}/health", f"{root}/v1/models"]
 
 
 def test_the_fleet_is_ready_after_its_first_pass_even_a_failed_one():

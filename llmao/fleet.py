@@ -340,8 +340,9 @@ class VllmServer:
         # was ordered.
         self.vram_gb = vram_gb
         self.disk_gb = disk_gb
-        # Observed from the box, not configured. None until the server has
-        # been SERVING and a scrape has succeeded.
+        # Observed from the box, not configured. None until read: the KV
+        # cache size by the sampler from /metrics, the served window (and
+        # observed_at) by the fleet from /v1/models once SERVING.
         #
         # kv_cache_tokens is the figure that decides whether max_model_len is
         # safe: a serving length above the measured cache produces HANGS, not
@@ -1011,18 +1012,16 @@ class Fleet:
                     reached=reached,
                     in_litellm=bool(in_litellm_by_srv.get(srv, False)),
                 )
-                # Scrape on the edge into SERVING, and once more if an earlier
-                # attempt came back empty. Both values are fixed at engine
-                # init, so re-reading them every probe would be waste.
-                if srv.state == HEALTHY and (was != HEALTHY or srv.kv_cache_tokens is None):
+                # Read the served window on the edge into SERVING, and again
+                # if an earlier attempt came back empty. It is fixed at engine
+                # init, so re-reading it every probe would be waste. The KV
+                # cache size comes from the sampler.
+                if srv.state == HEALTHY and (was != HEALTHY or srv.observed_max_model_len is None):
                     root = srv.root_url
                     if root:
-                        kv, mml = await fetch_observed(client, root, srv.api_key)
-                        if kv is not None:
-                            srv.kv_cache_tokens = kv
+                        mml = await fetch_max_model_len(client, root, srv.api_key)
                         if mml is not None:
                             srv.observed_max_model_len = mml
-                        if kv is not None or mml is not None:
                             srv.observed_at = stamp
         finally:
             if own:
@@ -1235,60 +1234,6 @@ def remove_refusal(dep) -> str | None:
     return None
 
 
-def parse_kv_cache_tokens(metrics_text: str) -> int | None:
-    """KV cache size in tokens from vLLM's Prometheus output, or None.
-
-    vLLM reports cache geometry as labels on an Info-style metric:
-
-        vllm:cache_config_info{block_size="16",num_gpu_blocks="33960",
-                               kv_cache_size_tokens="855836",...} 1.0
-
-    Prefer kv_cache_size_tokens, which is the same number vLLM prints at
-    startup as "GPU KV cache size: N tokens".
-
-    Do NOT compute it as num_gpu_blocks * block_size. On the A100 serving
-    Gemma those give 543,360 against a reported 855,836 -- blocks do not map
-    uniformly to tokens for a model with heterogeneous head dimensions, and
-    the product understates by a third. Understating the cache would falsely
-    flag a correctly-sized server as oversized.
-
-    The product is kept only as a fallback for builds that do not emit the
-    token count, where an approximate figure beats none.
-
-    Returns None rather than raising when the metric is absent or shaped
-    differently -- vLLM's metric names are not a stable API, and a missing
-    figure should degrade the display rather than break the probe loop.
-    """
-    for line in metrics_text.splitlines():
-        if not line.startswith("vllm:cache_config_info"):
-            continue
-        start, end = line.find("{"), line.rfind("}")
-        if start < 0 or end < start:
-            continue
-        labels: dict[str, str] = {}
-        for part in line[start + 1 : end].split(","):
-            k, _, v = part.partition("=")
-            labels[k.strip()] = v.strip().strip('"')
-
-        direct = labels.get("kv_cache_size_tokens")
-        if direct and direct != "None":
-            try:
-                tokens = int(direct)
-            except ValueError:
-                tokens = 0
-            if tokens > 0:
-                return tokens
-
-        try:
-            blocks = int(labels["num_gpu_blocks"])
-            size = int(labels["block_size"])
-        except (KeyError, ValueError):
-            continue
-        if blocks > 0 and size > 0:
-            return blocks * size
-    return None
-
-
 def parse_max_model_len(models_json: Any) -> int | None:
     """Served context window from /v1/models, or None."""
     try:
@@ -1305,38 +1250,28 @@ def parse_max_model_len(models_json: Any) -> int | None:
     return None
 
 
-async def fetch_observed(client: httpx.AsyncClient, base: str, api_key: str) -> tuple[int | None, int | None]:
-    """Scrape (kv_cache_tokens, max_model_len) from a serving vLLM.
+async def fetch_max_model_len(client: httpx.AsyncClient, base: str, api_key: str) -> int | None:
+    """The served context window, from a serving vLLM's /v1/models, or None.
 
-    base is the server root, not api_base: /metrics sits at the root and the
-    model list at /v1/models, so a /v1-suffixed base would 404 the model list
-    and leave both fields unknown.
+    base is the server root, not api_base: a /v1-suffixed base would ask for
+    /v1/v1/models and 404. The window is fixed at engine init, so this is
+    called on the transition into SERVING, not every probe. /v1/models needs
+    the server's key.
 
-    Both are fixed at engine init, so this is called on the transition into
-    SERVING rather than on every probe -- polling an unchanging value every
-    45s would be waste.
+    The KV cache size, the other half of the oversized check, is read by the
+    sampler (llmao/sampler.py), the one reader of /metrics.
 
-    /metrics is unauthenticated on vLLM; /v1/models is not, so the key goes on
-    both rather than reasoning about which needs it.
-
-    Never raises: an unreachable or differently-shaped endpoint leaves the
-    fields None and the UX shows them as unknown.
+    Never raises: an unreachable or differently-shaped endpoint leaves it
+    unknown and the UX shows it as such.
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    kv = mml = None
-    try:
-        resp = await client.get(f"{base}/metrics", headers=headers)
-        if resp.status_code == 200:
-            kv = parse_kv_cache_tokens(resp.text)
-    except httpx.HTTPError:
-        pass
     try:
         resp = await client.get(f"{base}/v1/models", headers=headers)
         if resp.status_code == 200:
-            mml = parse_max_model_len(resp.json())
+            return parse_max_model_len(resp.json())
     except (httpx.HTTPError, ValueError):
         pass
-    return kv, mml
+    return None
 
 
 async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:

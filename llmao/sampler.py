@@ -92,6 +92,60 @@ def _labels(inner: str) -> dict[str, str]:
     return labels
 
 
+def parse_kv_cache_tokens(metrics_text: str) -> int | None:
+    """KV cache size in tokens from vLLM's Prometheus output, or None.
+
+    vLLM reports cache geometry as labels on an Info-style metric:
+
+        vllm:cache_config_info{block_size="16",num_gpu_blocks="33960",
+                               kv_cache_size_tokens="855836",...} 1.0
+
+    Prefer kv_cache_size_tokens, which is the same number vLLM prints at
+    startup as "GPU KV cache size: N tokens".
+
+    Do NOT compute it as num_gpu_blocks * block_size. On the A100 serving
+    Gemma those give 543,360 against a reported 855,836 -- blocks do not map
+    uniformly to tokens for a model with heterogeneous head dimensions, and
+    the product understates by a third. Understating the cache would falsely
+    flag a correctly-sized server as oversized.
+
+    The product is kept only as a fallback for builds that do not emit the
+    token count, where an approximate figure beats none.
+
+    Returns None rather than raising when the metric is absent or shaped
+    differently -- vLLM's metric names are not a stable API, and a missing
+    figure should degrade the display rather than break the probe loop.
+    """
+    for line in metrics_text.splitlines():
+        if not line.startswith("vllm:cache_config_info"):
+            continue
+        start, end = line.find("{"), line.rfind("}")
+        if start < 0 or end < start:
+            continue
+        labels: dict[str, str] = {}
+        for part in line[start + 1 : end].split(","):
+            k, _, v = part.partition("=")
+            labels[k.strip()] = v.strip().strip('"')
+
+        direct = labels.get("kv_cache_size_tokens")
+        if direct and direct != "None":
+            try:
+                tokens = int(direct)
+            except ValueError:
+                tokens = 0
+            if tokens > 0:
+                return tokens
+
+        try:
+            blocks = int(labels["num_gpu_blocks"])
+            size = int(labels["block_size"])
+        except (KeyError, ValueError):
+            continue
+        if blocks > 0 and size > 0:
+            return blocks * size
+    return None
+
+
 def parse_metrics(text: str, *, now: float | None = None) -> Sample:
     """What the rollup needs, from vLLM's Prometheus exposition text.
 
@@ -99,7 +153,7 @@ def parse_metrics(text: str, *, now: float | None = None) -> Sample:
     format. Anything unreadable is skipped, so a box answering with HTML or
     nothing gives an empty reading rather than an error.
     """
-    out = Sample(ts=now if now is not None else time.time())
+    out = Sample(ts=now if now is not None else time.time(), kv_cache_tokens=parse_kv_cache_tokens(text))
     for line in text.splitlines():
         if not line or line.startswith("#"):
             continue
@@ -143,8 +197,8 @@ class MetricsSampler:
         self._timeout = timeout_s
         self._down: set[str] = set()
 
-    def targets(self) -> list[tuple[str, str, str]]:
-        """(server, model_name, metrics URL) for each self-hosted server with an address.
+    def targets(self) -> list[tuple[Any, str, str, str]]:
+        """(VllmServer, server, model_name, metrics URL) for each self-hosted server with an address.
 
         A server is host:listen port, as everywhere else in llmao. The URL
         is its public address, the one LiteLLM uses.
@@ -155,7 +209,7 @@ class MetricsSampler:
             if not dep.self_hosted or srv is None or not dep.api_base:
                 continue
             root = dep.api_base.rstrip("/").removesuffix("/v1")
-            out.append((f"{srv.host}:{srv.listen_port}", dep.model_name, f"{root}/metrics"))
+            out.append((srv, f"{srv.host}:{srv.listen_port}", dep.model_name, f"{root}/metrics"))
         return out
 
     async def _read(self, client: httpx.AsyncClient, server: str, url: str) -> Sample | None:
@@ -176,12 +230,17 @@ class MetricsSampler:
         """One reading of every box, all at once: twenty boxes in turn could
         outlast the interval."""
         targets = self.targets()
-        readings = await asyncio.gather(*(self._read(client, server, url) for server, _model, url in targets))
-        for (server, model_name, _url), sample in zip(targets, readings, strict=True):
+        readings = await asyncio.gather(*(self._read(client, server, url) for _srv, server, _model, url in targets))
+        for (srv, server, model_name, _url), sample in zip(targets, readings, strict=True):
             if sample is None:
                 self._rollup.missed(server)
-            else:
-                self._rollup.record(server, model_name, sample)
+                continue
+            self._rollup.record(server, model_name, sample)
+            # The KV cache size, for the /models drill-down and the oversized
+            # check. Fixed at engine start, but taken from every reading: a
+            # restarted vLLM may have sized it differently.
+            if sample.kv_cache_tokens is not None:
+                srv.kv_cache_tokens = sample.kv_cache_tokens
 
     async def run(self) -> None:
         async with httpx.AsyncClient() as client:

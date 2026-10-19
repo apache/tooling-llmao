@@ -80,6 +80,9 @@ class Sample:
     counters: dict[str, float] = field(default_factory=dict)
     # Queue-time histogram: upper bound in seconds => cumulative count.
     buckets: dict[float, float] = field(default_factory=dict)
+    # The KV cache size in tokens, fixed at engine start. Not rolled up: the
+    # sampler hands it to the fleet for the oversized check.
+    kv_cache_tokens: int | None = None
 
 
 def retention_days(cfg: Any) -> int:
