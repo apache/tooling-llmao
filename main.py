@@ -74,6 +74,7 @@ def create_app():
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
     from llmao.models import load_models
     from llmao.proxy.client import LiteLLMBackend
+    from llmao.pruner import Pruner
     from llmao.sampler import MetricsSampler, sample_interval
     from llmao.seam import Seam
 
@@ -100,6 +101,16 @@ def create_app():
     app.add_runner(MetricsSampler(fleet, rollup, interval_s=interval).run, name="metrics-sampler")
     app.add_runner(CapacityWriter(rollup, app.capacity).run, name="capacity-writer")
     app.add_runner(CapacityPruner(app.capacity, keep_days).run, name="capacity-prune")
+
+    # Daily pruning of the other records kept in LiteLLM's memory store. Each
+    # line is one kind of record and its store's own rule; this list is the
+    # one place that says what is pruned.
+    pruner = Pruner(
+        [
+            ("requests", backend.requests.prune),
+        ]
+    )
+    app.add_runner(pruner.run, name="memory-prune")
     seam = Seam(app.cfg, backend)
     app.token_handler = make_token_handler(app.cfg)
     app.seam = seam

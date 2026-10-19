@@ -241,7 +241,7 @@ def test_prune_keeps_pending_and_drops_expired_approvals():
 
 
 def test_prune_caps_decided_history():
-    """Nothing else trims the store, and every listing carries all of it."""
+    """Every listing carries all of the store, so decided history is capped."""
     reqs = []
     for i in range(80):
         r = _capacity()
@@ -362,7 +362,7 @@ def test_a_decision_rewrites_one_row_and_no_other():
     assert len(store) == 2
 
 
-def test_a_lapsed_approval_is_deleted_on_the_next_write():
+def test_a_lapsed_approval_is_deleted_by_pruning_not_by_saving():
     m, store = _requests()
     stale = _key()
     stale.decide(state=STATE_APPROVED, by="admin")
@@ -372,4 +372,7 @@ def test_a_lapsed_approval_is_deleted_on_the_next_write():
 
     fresh = _capacity()
     _run(m.add(fresh))
+    # Saving writes one row and reads nothing.
+    assert set(store) == {key_for(stale.id), key_for(fresh.id)}
+    assert _run(m.prune()) == 1
     assert list(store) == [key_for(fresh.id)]

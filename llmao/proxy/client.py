@@ -1420,20 +1420,23 @@ class AccessRequestManager:
         One row per request, so answering one cannot lose another.
         """
         await self._memory.put(_access.key_for(req.id), _access.dumps(req))
-
-        # Nothing else trims the store, so do it while writing: a lapsed
-        # approval, or a decision older than the history we keep, goes. The
-        # request is already saved; failing to tidy is no reason to say it
-        # was not.
-        try:
-            stored = await self.find_all()
-            kept = _access.prune(stored)
-            for old in stored:
-                if old not in kept:
-                    await self._memory.delete(_access.key_for(old.id))
-        except BackendUnavailableError as e:
-            _LOGGER.warning("could not trim stored requests: %s", e)
         return req
+
+    async def prune(self) -> int:
+        """Delete lapsed approvals and decided history beyond what is kept.
+
+        The rule is access_requests.prune. Run by the daily pruner, not on
+        every write: saving a request is one row, and nobody waiting on a
+        page pays for a scan of all of them.
+        """
+        stored = await self.find_all()
+        kept = {r.id for r in _access.prune(stored)}
+        gone = 0
+        for old in stored:
+            if old.id not in kept:
+                await self._memory.delete(_access.key_for(old.id))
+                gone += 1
+        return gone
 
     # Same operation; named for what the caller means.
     save = add
@@ -1607,8 +1610,9 @@ class MemoryStore:
     async def find(self, prefix: str) -> list[dict[str, Any]]:
         """Every row whose key starts with `prefix`, in one page.
 
-        Outstanding requests are counted on one hand, and add_request trims
-        the decided ones, so a page is far more than there will ever be.
+        Up to 500 rows. Each caller keeps its prefix within that: requests
+        are counted on one hand and pruned daily, and capacity reads one day
+        at a time.
         """
         resp = await self._transport.request("GET", "v1/memory", params={"key_prefix": prefix, "page_size": 500})
         self._transport.raise_http(resp)

@@ -269,8 +269,9 @@ def prune(
 ) -> list[AccessRequest]:
     """Drop expired approvals and trim decided history.
 
-    Nothing else trims the store, and every listing carries all of it.
-    Pending requests are always kept; decided ones are capped at the most
+    Every listing carries all of the store, so it is trimmed daily (see
+    AccessRequestManager.prune and llmao/pruner.py). Pending requests are
+    always kept; decided ones are capped at the most
     recent `keep_decided`, which is plenty of audit trail for a pilot. The
     caller deletes whatever this leaves out.
     """
