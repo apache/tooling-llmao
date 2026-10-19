@@ -37,6 +37,9 @@ The writer is not part of the sampler's loop on purpose. Writing goes to
 LiteLLM; a slow or absent LiteLLM must not stall sampling, so finished hours
 wait in memory until it answers.
 
+Also here, at the end: the totals of provider spend (summarise_spend), the
+other half of the same report.
+
 An llmao restart loses the hour in progress. Each row says how much of its
 hour was sampled (covered_s), and the loss is accepted: the report is read
 for trends over weeks.
@@ -45,10 +48,12 @@ for trends over weeks.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import datetime as dt
 import json
 import logging
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -341,3 +346,58 @@ class CapacityPruner:
             except Exception:
                 _LOGGER.exception("capacity: pruning failed")
             await asyncio.sleep(DAY_S)
+
+
+# ---- provider spend -------------------------------------------------------
+#
+# Totals of what the model providers we pay were paid, over the rows
+# UsageManager.provider_spend returns, one per (day, provider, model,
+# project). Every figure is LiteLLM's price at the time of each request,
+# not the provider's bill: close enough to plan with, not to reconcile.
+
+
+def days_to_read(period_days: int, today: dt.date) -> int:
+    """How many days of rows a summary needs: the period, or the month so far if longer."""
+    return max(period_days, today.day)
+
+
+def _ranked(totals: dict[str, float]) -> list[edict]:
+    """[{name, usd}], largest first: the line someone is looking for is the top one."""
+    return [edict(name=name, usd=round(usd, 2)) for name, usd in sorted(totals.items(), key=lambda kv: -kv[1])]
+
+
+def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[edict]:
+    """One entry per provider, largest spend over the period first.
+
+    Each carries the period's total, today's, the month to date, and a
+    projection to month end at the month's daily average so far. Rows must
+    cover days_to_read(period_days, today) days.
+    """
+    start = (today - dt.timedelta(days=period_days - 1)).isoformat()
+    month = today.replace(day=1).isoformat()
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    out = []
+    for provider in sorted({r.provider for r in rows}):
+        mine = [r for r in rows if r.provider == provider]
+        period = [r for r in mine if r.day >= start]
+        to_date = sum(r.spend_usd for r in mine if r.day >= month)
+        by_model: dict[str, float] = defaultdict(float)
+        by_project: dict[str, float] = defaultdict(float)
+        daily: dict[str, float] = defaultdict(float)
+        for r in period:
+            by_model[r.model_name] += r.spend_usd
+            by_project[r.project or "(no project)"] += r.spend_usd
+            daily[r.day] += r.spend_usd
+        out.append(
+            edict(
+                provider=provider,
+                period_usd=round(sum(r.spend_usd for r in period), 2),
+                today_usd=round(sum(r.spend_usd for r in mine if r.day == today.isoformat()), 2),
+                month_to_date_usd=round(to_date, 2),
+                projected_month_usd=round(to_date / today.day * days_in_month, 2),
+                models=_ranked(by_model),
+                projects=_ranked(by_project),
+                daily=[edict(day=d, usd=round(daily[d], 2)) for d in sorted(daily)],
+            )
+        )
+    return sorted(out, key=lambda p: -p.period_usd)

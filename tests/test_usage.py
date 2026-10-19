@@ -25,6 +25,7 @@ import asyncio
 import datetime as dt
 
 from llmao.fleet import Fleet, FleetDeployment
+from llmao.providers import ProviderDeployment
 from llmao.proxy.client import PROJECT_FREE_TIER, UsageManager
 from tests.fake_transport import FakeTransport
 
@@ -47,12 +48,12 @@ def _entry(tokens=None, *, user=None, project=None, spend=0.0, requests=1, **met
     }
 
 
-def _day(date, groups):
-    """A day of the answer: {model group: {key: entry}}."""
-    return {
-        "date": date,
-        "breakdown": {"model_groups": {g: {"api_key_breakdown": keys} for g, keys in groups.items()}},
-    }
+def _day(date, groups, models=None):
+    """A day of the answer: {model group: {key: entry}}, and optionally {provider's model: {key: entry}}."""
+    breakdown = {"model_groups": {g: {"api_key_breakdown": keys} for g, keys in groups.items()}}
+    if models is not None:
+        breakdown["models"] = {m: {"api_key_breakdown": keys} for m, keys in models.items()}
+    return {"date": date, "breakdown": breakdown}
 
 
 class _Teams:
@@ -400,3 +401,56 @@ def test_a_longer_allowance_window_reads_the_extra_days():
     _run(b.allowance("alice"))
     assert _asked(b)[-1][1].start_date == "2026-10-03"
     assert len(_asked(b)) == 2
+
+
+def _bought_usage(days):
+    """A UsageManager whose fleet buys grok-4 from two providers."""
+    b = _usage(days)
+    b.fleet = Fleet(
+        None,
+        [],
+        deployments=[
+            FleetDeployment.from_provider(ProviderDeployment("xai", "grok-4", "xai/grok-4", "https://api.x.ai/v1")),
+            FleetDeployment.from_provider(
+                ProviderDeployment("openrouter", "grok-4", "openrouter/x-ai/grok-4", "https://openrouter.ai/api/v1")
+            ),
+        ],
+    )
+    return b
+
+
+def test_provider_spend_tells_one_provider_from_another_by_their_model_string():
+    """Both serve grok-4; only the provider's own model string says which was paid."""
+    days = [
+        _day(
+            TODAY,
+            {
+                "grok-4": {
+                    "k1": _entry(100, project="tooling", spend=1.5),
+                    "k2": _entry(50, project="mahout", spend=0.25),
+                }
+            },
+            models={
+                "xai/grok-4": {"k1": _entry(100, project="tooling", spend=1.5)},
+                "openrouter/x-ai/grok-4": {"k2": _entry(50, project="mahout", spend=0.25)},
+                # our own box: not a provider we pay
+                "hosted_vllm/gemma4-26b": {"k3": _entry(900, project="tooling")},
+            },
+        ),
+        _day(YESTERDAY, {}, models={"xai/grok-4": {"k1": _entry(10, project="tooling", spend=0.5)}}),
+    ]
+    rows = asyncio.run(_bought_usage(days).provider_spend(2))
+    got = sorted((r.day, r.provider, r.model_name, r.project, r.spend_usd, r.tokens) for r in rows)
+    assert got == [
+        (YESTERDAY, "xai", "grok-4", "tooling", 0.5, 10),
+        (TODAY, "openrouter", "grok-4", "mahout", 0.25, 50),
+        (TODAY, "xai", "grok-4", "tooling", 1.5, 100),
+    ]
+
+
+def test_with_no_provider_configured_there_is_no_spend_to_read():
+    calls = []
+    b = _usage([])
+    b._transport = type("T", (), {"request": lambda *a, **k: calls.append(a)})()
+    assert asyncio.run(b.provider_spend(30)) == []
+    assert calls == []

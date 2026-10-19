@@ -31,8 +31,10 @@ from llmao.capacity import (
     CapacityWriter,
     HourlyRollup,
     Sample,
+    days_to_read,
     hour_label,
     retention_days,
+    summarise_spend,
 )
 from llmao.proxy.client import MemoryStore
 from tests.fake_transport import fake_memory
@@ -172,3 +174,50 @@ def test_retention_is_required():
     for bad in (0, -1, "ninety"):
         with pytest.raises(ValueError, match="capacity_retention_days must be"):
             retention_days(edict(capacity_retention_days=bad))
+
+
+# ---- provider spend ----
+
+SPEND_TODAY = dt.date(2026, 10, 19)
+
+
+def _row(day, provider, model, project, usd):
+    return edict(day=day, provider=provider, model_name=model, project=project, spend_usd=usd, tokens=0, requests=0)
+
+
+def test_enough_days_are_read_for_the_month_to_date():
+    assert days_to_read(7, SPEND_TODAY) == 19
+    assert days_to_read(30, SPEND_TODAY) == 30
+    assert days_to_read(7, dt.date(2026, 10, 3)) == 7
+
+
+def test_a_provider_is_totalled_over_the_period_today_and_the_month():
+    rows = [
+        _row("2026-09-30", "xai", "grok-4", "tooling", 9.0),  # last month: not in the month to date
+        _row("2026-10-01", "xai", "grok-4", "tooling", 4.0),
+        _row("2026-10-12", "xai", "grok-4", "mahout", 2.0),  # in the month, outside a 7-day period
+        _row("2026-10-18", "xai", "grok-4", "tooling", 3.0),
+        _row("2026-10-19", "xai", "grok-4-mini", None, 1.0),
+    ]
+    (xai,) = summarise_spend(rows, today=SPEND_TODAY, period_days=7)
+    assert xai.provider == "xai"
+    assert xai.period_usd == 4.0
+    assert xai.today_usd == 1.0
+    assert xai.month_to_date_usd == 10.0
+    # 10 over 19 days, for a 31-day month
+    assert xai.projected_month_usd == round(10.0 / 19 * 31, 2)
+    assert [(m.name, m.usd) for m in xai.models] == [("grok-4", 3.0), ("grok-4-mini", 1.0)]
+    assert [(p.name, p.usd) for p in xai.projects] == [("tooling", 3.0), ("(no project)", 1.0)]
+    assert [(d.day, d.usd) for d in xai.daily] == [("2026-10-18", 3.0), ("2026-10-19", 1.0)]
+
+
+def test_providers_are_listed_by_spend_largest_first():
+    rows = [
+        _row("2026-10-19", "openrouter", "gemma4-26b", "tooling", 0.5),
+        _row("2026-10-19", "xai", "grok-4", "x", 2.0),
+    ]
+    assert [p.provider for p in summarise_spend(rows, today=SPEND_TODAY, period_days=7)] == ["xai", "openrouter"]
+
+
+def test_nothing_bought_is_nothing_to_show():
+    assert summarise_spend([], today=SPEND_TODAY, period_days=30) == []

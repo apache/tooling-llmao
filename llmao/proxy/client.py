@@ -652,6 +652,41 @@ class KeyManager:
         self._transport.raise_http(resp)
 
 
+def _key_rows(section: Any) -> list[edict]:
+    """One row per (model, key) from one breakdown of a day: {model: {api_key_breakdown: {key: entry}}}."""
+    rows = []
+    for model, group in (section or {}).items() if isinstance(section, dict) else ():
+        keys = group.get("api_key_breakdown") if isinstance(group, dict) else None
+        if not isinstance(keys, dict):
+            continue
+        for token, entry in keys.items():
+            if not isinstance(entry, dict):
+                continue
+            metrics = entry.get("metrics") or {}
+            meta = entry.get("metadata") or {}
+            total = metrics.get("total_tokens")
+            if total is None:
+                total = (metrics.get("prompt_tokens") or 0) + (metrics.get("completion_tokens") or 0)
+            try:
+                rows.append(
+                    edict(
+                        # The key's owner and team. A key llmao did not issue
+                        # has neither, and is kept rather than dropped -- it
+                        # still consumed the fleet.
+                        user=meta.get("user_id"),
+                        team_id=str(meta["team_id"]) if meta.get("team_id") else None,
+                        model=model,
+                        token_id=token,
+                        total_tokens=int(total or 0),
+                        total_cost_usd=float(metrics.get("spend") or 0.0),
+                        requests=int(metrics.get("api_requests") or 0),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+    return rows
+
+
 class UsageManager:
     """Who used what: this week's tokens and cost, and each person's allowance.
 
@@ -668,6 +703,10 @@ class UsageManager:
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
         self._daily: dict[str, list[edict]] = {}
+        # The same days, broken down by the provider's model string
+        # ("xai/grok-4") rather than our name for it, which is what tells
+        # one provider from another. Read in the same request.
+        self._daily_models: dict[str, list[edict]] = {}
         # Days that can no longer change: kept, never refetched.
         self._closed_days: set[str] = set()
         # Monotonic stamp of the last read of the days still open.
@@ -723,6 +762,48 @@ class UsageManager:
         if project is None:
             return rows
         return [r for r in rows if r.get("project") == project]
+
+    async def provider_spend(self, days: int) -> list[edict]:
+        """What each model provider we pay was paid, per day, model and project.
+
+        One row per (day, provider, model, project) over the last `days`
+        days, for every provider deployment in config.yaml providers. It is
+        LiteLLM's price at the time of each request (its cost map, reloaded
+        daily), not the provider's bill. Our own boxes are not here: LiteLLM
+        records them at $0.00, and their cost is their rental.
+        """
+        bought = {
+            dep.litellm_model: (dep.provider, dep.model_name)
+            for dep in (self.fleet.deployments if self.fleet else [])
+            if dep.provider is not None and dep.litellm_model
+        }
+        if not bought:
+            return []
+        await self._daily_rows(days)
+        today = self._now().date()
+        wanted = [(today - _dt.timedelta(days=i)).isoformat() for i in range(days)]
+        rows = [(day, r) for day in wanted for r in self._daily_models.get(day, []) if r.model in bought]
+        project_of = await self.teams.projects({r.team_id for _day, r in rows if r.team_id})
+        acc: dict[tuple, edict] = {}
+        for day, r in rows:
+            provider, model_name = bought[r.model]
+            project = project_of.get(r.team_id)
+            k = (day, provider, model_name, project)
+            row = acc.get(k)
+            if row is None:
+                row = acc[k] = edict(
+                    day=day,
+                    provider=provider,
+                    model_name=model_name,
+                    project=project,
+                    spend_usd=0.0,
+                    tokens=0,
+                    requests=0,
+                )
+            row.spend_usd += r.total_cost_usd
+            row.tokens += r.total_tokens
+            row.requests += r.requests
+        return list(acc.values())
 
     async def by_key(self, user: str) -> dict[str, int]:
         """Tokens drawn per key this week, for one person.
@@ -794,7 +875,7 @@ class UsageManager:
         fresh = self._daily_at is not None and (time.monotonic() - self._daily_at) < self._SPEND_TTL_S
         if not fresh or any(d not in self._daily for d in wanted):
             start = _dt.date.fromisoformat(min(open_days))
-            fetched = await self._fetch_daily(start, today)
+            fetched, fetched_models = await self._fetch_daily(start, today)
             grace = _dt.timedelta(seconds=self._DAY_CLOSE_GRACE_S)
             day = start
             while day <= today:
@@ -802,6 +883,7 @@ class UsageManager:
                 # A day with no traffic is absent from the answer, and that
                 # absence is the answer: store it empty rather than not at all.
                 self._daily[iso] = fetched.get(iso, [])
+                self._daily_models[iso] = fetched_models.get(iso, [])
                 day += _dt.timedelta(days=1)
                 ended = _dt.datetime.combine(day, _dt.time(), tzinfo=_dt.UTC)
                 if now >= ended + grace:
@@ -811,6 +893,7 @@ class UsageManager:
             oldest = (today - _dt.timedelta(days=self._daily_span - 1)).isoformat()
             for iso in [d for d in self._daily if d < oldest]:
                 del self._daily[iso]
+                self._daily_models.pop(iso, None)
                 self._closed_days.discard(iso)
 
         return {d: self._daily.get(d, []) for d in wanted}
@@ -818,14 +901,19 @@ class UsageManager:
     def _now(self) -> _dt.datetime:
         return _dt.datetime.now(_dt.UTC)
 
-    async def _fetch_daily(self, start: _dt.date, end: _dt.date) -> dict[str, list[edict]]:
-        """One read of LiteLLM's daily aggregate, as rows grouped by date.
+    async def _fetch_daily(
+        self, start: _dt.date, end: _dt.date
+    ) -> tuple[dict[str, list[edict]], dict[str, list[edict]]]:
+        """One read of LiteLLM's daily aggregate, as rows grouped by date, twice over.
 
-        The answer nests day -> model group -> key. The model GROUP is the
-        route name llmao registered, which is the name the fleet knows it
-        by; the `models` breakdown beside it names the provider's model.
+        The answer nests day -> model group -> key, and beside it day ->
+        model -> key. The model GROUP is the deployment name llmao
+        registered, the name the fleet knows it by; the MODEL is the
+        provider's own string ("xai/grok-4"), which says who served it.
+        Returned as (by group, by model).
         """
-        out: dict[str, list[edict]] = {}
+        groups_out: dict[str, list[edict]] = {}
+        models_out: dict[str, list[edict]] = {}
         page = 1
         while True:
             resp = await self._transport.request(
@@ -845,40 +933,14 @@ class UsageManager:
             for result in body.get("results") or []:
                 if not isinstance(result, dict) or not result.get("date"):
                     continue
-                rows = out.setdefault(str(result["date"])[:10], [])
-                groups = (result.get("breakdown") or {}).get("model_groups") or {}
-                for model, group in groups.items():
-                    keys = group.get("api_key_breakdown") if isinstance(group, dict) else None
-                    if not isinstance(keys, dict):
-                        continue
-                    for token, entry in keys.items():
-                        if not isinstance(entry, dict):
-                            continue
-                        metrics = entry.get("metrics") or {}
-                        meta = entry.get("metadata") or {}
-                        total = metrics.get("total_tokens")
-                        if total is None:
-                            total = (metrics.get("prompt_tokens") or 0) + (metrics.get("completion_tokens") or 0)
-                        try:
-                            row = edict(
-                                # The key's owner and team. A key llmao did
-                                # not issue has neither, and is kept rather
-                                # than dropped -- it still consumed the fleet.
-                                user=meta.get("user_id"),
-                                team_id=str(meta["team_id"]) if meta.get("team_id") else None,
-                                model=model,
-                                token_id=token,
-                                total_tokens=int(total or 0),
-                                total_cost_usd=float(metrics.get("spend") or 0.0),
-                                requests=int(metrics.get("api_requests") or 0),
-                            )
-                        except (TypeError, ValueError):
-                            continue
-                        rows.append(row)
+                day = str(result["date"])[:10]
+                breakdown = result.get("breakdown") or {}
+                groups_out.setdefault(day, []).extend(_key_rows(breakdown.get("model_groups")))
+                models_out.setdefault(day, []).extend(_key_rows(breakdown.get("models")))
             if not (body.get("metadata") or {}).get("has_more"):
                 break
             page += 1
-        return out
+        return groups_out, models_out
 
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
         """A principal's rolling allowance, derived from recorded usage.

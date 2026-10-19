@@ -24,7 +24,7 @@ hand, and this page is not it.
 | 1 | Vast and RunPod keys under `providers:` | done |
 | 2 | Hourly rollups, stored | done |
 | 3 | Rental prices from the Vast and RunPod APIs | done |
-| 4 | Provider spend from LiteLLM's daily activity | planned |
+| 4 | Provider spend from LiteLLM's daily activity | done |
 | 5 | The page | planned |
 | 6 | "Add a box / remove a box" suggestions | after a few weeks of data |
 
@@ -120,7 +120,13 @@ get cleared.
   box is on a provider that reports one. A box that is not would show as
   unpriced, and a setting can be added when one exists. LiteLLM records self-hosted requests at $0.00 on
   purpose, since a price there would count against team budgets.
-- **Model providers:** LiteLLM prices each request from its model cost map,
+- **Model providers:** read from LiteLLM's daily activity, broken down by the
+  provider's own model string (`xai/grok-4`, `openrouter/x-ai/grok-4`), which
+  is what tells one provider from another when both serve one model; mapped
+  back through `providers.<name>.models`. Totals per provider: the period,
+  today, the month to date, and a projection to month end at the month's
+  daily average so far, with the models and projects behind them.
+  LiteLLM prices each request from its model cost map,
   reloaded every 24 hours. Spend is fixed when a request is made, so it is
   LiteLLM's estimate at the time, not the provider's bill. Close enough for
   planning.
