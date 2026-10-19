@@ -116,6 +116,11 @@ sample_interval_s: 15
 # boxes is about 43,000 rows.
 capacity_retention_days: 90
 
+# Days of admin actions kept for /admin's Recent work (restricting a project,
+# approving or flagging a box, adding or dropping a deployment, revoking a
+# key). Required. Not an audit trail: pruned daily past this.
+action_retention_days: 90
+
 # uids that may view any project's activity, and reach /admin and the
 # Deployments on /models (plus asfquart isRoot).
 site_admins: []

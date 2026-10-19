@@ -138,7 +138,7 @@ def _run(coro):
 def test_tier_limits_are_config_until_an_admin_changes_them():
     t, store = _tiers()
     assert _run(t.limits("free_tier"))["token_cap"] == 1_000_000
-    got = _run(t.set_limits("free_tier", token_cap=250_000))
+    got = _run(t.set_limits("free_tier", token_cap=250_000, by="admin1"))
     assert got["token_cap"] == 250_000
     assert got["token_window_days"] == 7, "what was not changed still comes from config"
     assert list(store) == ["llmao:tiers"]
@@ -147,13 +147,27 @@ def test_tier_limits_are_config_until_an_admin_changes_them():
 def test_changing_one_tier_leaves_another_alone():
     """Every tier shares the one row."""
     t, store = _tiers()
-    _run(t.set_limits("free_tier", token_cap=250_000))
-    _run(t.set_limits("service", rpm_limit=10))
-    _run(t.set_limits("free_tier", token_window_days=3))
-    assert json.loads(store["llmao:tiers"]) == {
-        "free_tier": {"token_cap": 250_000, "token_window_days": 3},
-        "service": {"rpm_limit": 10},
+    _run(t.set_limits("free_tier", token_cap=250_000, by="admin1"))
+    _run(t.set_limits("service", rpm_limit=10, by="admin2"))
+    _run(t.set_limits("free_tier", token_window_days=3, by="admin2"))
+    held = json.loads(store["llmao:tiers"])
+    assert {k: v for k, v in held["free_tier"].items() if k != "changed_at"} == {
+        "token_cap": 250_000,
+        "token_window_days": 3,
+        "changed_by": "admin2",
     }
+    assert {k: v for k, v in held["service"].items() if k != "changed_at"} == {"rpm_limit": 10, "changed_by": "admin2"}
+
+
+def test_a_tier_says_who_changed_it_last_and_its_limits_do_not():
+    t, _ = _tiers()
+    assert _run(t.last_change("free_tier")) is None
+    _run(t.set_limits("free_tier", token_cap=250_000, by="admin1"))
+    change = _run(t.last_change("free_tier"))
+    assert change.by == "admin1"
+    assert change.at.startswith("20")
+    limits = _run(t.limits("free_tier"))
+    assert "changed_by" not in limits and "changed_at" not in limits
 
 
 def test_tier_limits_fall_back_to_config_when_litellm_is_down():
@@ -165,7 +179,7 @@ def test_a_new_keys_limits_include_what_an_admin_has_changed():
     """The Tiers page says a change applies to keys issued from then on."""
     t, _ = _tiers()
     assert _run(t.key_limits("service")) == {"rpm_limit": 60, "tpm_limit": 60000, "max_parallel_requests": 4}
-    _run(t.set_limits("service", rpm_limit=10, token_cap=5_000_000))
+    _run(t.set_limits("service", rpm_limit=10, token_cap=5_000_000, by="admin1"))
     limits = _run(t.key_limits("service"))
     assert limits == {"rpm_limit": 10, "tpm_limit": 60000, "max_parallel_requests": 4}
     assert "token_cap" not in limits, "LiteLLM holds rate limits on a key, not our token cap"

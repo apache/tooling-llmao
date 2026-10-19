@@ -968,6 +968,20 @@ def deployment_rows(fleet, *, admin: bool) -> list:
     return rows
 
 
+async def _done(ident, what: str, subject: str, sentence: str) -> None:
+    """Tell the admin what they just did, and keep it for /admin's Recent work.
+
+    The sentence is the record: what the admin is told is what other admins
+    later read. Failing to keep it does not undo the action, so it is
+    logged, not shown as an error.
+    """
+    await flash_success(sentence)
+    try:
+        await APP.actions.record(by=ident.uid, what=what, subject=subject, sentence=sentence)
+    except BackendUnavailableError as e:
+        _LOGGER.warning("could not keep the action %r: %s", sentence, e)
+
+
 @APP.post("/do-add-deployment")
 @asfquart.auth.require
 async def do_add_deployment():
@@ -994,7 +1008,8 @@ async def do_add_deployment():
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
-    await flash_success(f"Added {matches[0].name} on {_dep_ident(matches[0])}.")
+    ident_s = _dep_ident(matches[0])
+    await _done(ident, "add_deployment", ident_s, f"Added {matches[0].name} on {ident_s} to LiteLLM.")
     return _see_other("/models")
 
 
@@ -1024,7 +1039,8 @@ async def do_remove_deployment():
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
-    await flash_success(f"Stopped tracking {matches[0].name} on {_dep_ident(matches[0])}.")
+    ident_s = _dep_ident(matches[0])
+    await _done(ident, "remove_deployment", ident_s, f"Stopped tracking {matches[0].name} on {ident_s}.")
     return _see_other("/models")
 
 
@@ -1070,7 +1086,7 @@ async def do_approve_box():
     form = await quart.request.form
     ok, message = apply_box_approval(APP.fleet, form.get("host"), form.getlist("model"))
     if ok:
-        await flash_success(message)
+        await _done(ident, "approve_box", (form.get("host") or "").strip(), message)
     else:
         await flash_danger(message)
     return _see_other("/models")
@@ -1092,7 +1108,7 @@ async def do_set_admin_label():
     form = await quart.request.form
     ok, message = apply_admin_label(APP.fleet, form.get("host"), form.get("label"))
     if ok:
-        await flash_success(message)
+        await _done(ident, "admin_label", (form.get("host") or "").strip(), message)
     else:
         await flash_danger(message)
     return _see_other("/models")
@@ -1762,9 +1778,11 @@ async def do_create_other_key():
 async def do_restrict_project():
     """A site admin puts a pretend project back to our own boxes only."""
     form = await quart.request.form
+    project = (form.get("subject") or "").strip()
     try:
-        await APP.seam.restrict_pretend_project(await current_identity(APP.cfg), (form.get("subject") or "").strip())
-        await flash_success("Restricted to our own boxes.")
+        ident = await current_identity(APP.cfg)
+        await APP.seam.restrict_pretend_project(ident, project)
+        await _done(ident, "restrict_project", project, f"Restricted {project} to our own boxes.")
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
     return _see_other("/admin")
@@ -1795,8 +1813,14 @@ async def do_revoke_key():
     try:
         ident = await current_identity(APP.cfg)
         seam = APP.seam
-        await seam.revoke_key(ident, token_id)
-        await flash_success("Key revoked.")
+        key = await seam.revoke_key(ident, token_id)
+        if key.user == ident.uid:
+            # Someone tidying their own keys is not admin work.
+            await flash_success("Key revoked.")
+        else:
+            whose = f"{key.project}'s service key" if key.is_automation else f"{key.user}'s key"
+            named = f" '{key.purpose}'" if key.purpose else ""
+            await _done(ident, "revoke_key", key.project or key.user or "", f"Revoked {whose}{named}.")
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
     return _see_other(after_path)

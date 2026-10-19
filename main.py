@@ -31,6 +31,7 @@ and uses asfquart OAuth so redirect URIs work with localhost.apache.org.
 
 from __future__ import annotations
 
+import functools
 import logging
 import pathlib
 import sys
@@ -65,9 +66,9 @@ def create_app():
         force_login=True,
     )
 
-    from llmao.auth import make_token_handler
-
     # Fail-fast: models.yaml is required (same presumption as config.yaml).
+    from llmao import actions
+    from llmao.auth import make_token_handler
     from llmao.capacity import CapacityPruner, CapacityStore, CapacityWriter, HourlyRollup, retention_days
     from llmao.fleet import Fleet, validate_fleet
 
@@ -83,6 +84,7 @@ def create_app():
     # Required, and checked before anything starts.
     interval = sample_interval(app.cfg)
     keep_days = retention_days(app.cfg)
+    action_days = actions.retention_days(app.cfg)
     fleet = Fleet.from_cfg(app.cfg, models=definitions)
 
     backend = LiteLLMBackend(app.cfg, fleet)
@@ -105,9 +107,11 @@ def create_app():
     # Daily pruning of the other records kept in LiteLLM's memory store. Each
     # line is one kind of record and its store's own rule; this list is the
     # one place that says what is pruned.
+    app.actions = actions.ActionLog(backend.memory)
     pruner = Pruner(
         [
             ("requests", backend.requests.prune),
+            ("actions", functools.partial(app.actions.prune, keep_days=action_days)),
         ]
     )
     app.add_runner(pruner.run, name="memory-prune")

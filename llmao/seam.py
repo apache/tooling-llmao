@@ -366,7 +366,7 @@ class Seam:
         named = {k: v for k, v in limits.items() if v is not None}
         if not named:
             raise AuthzError("Nothing to change.")
-        return await self._backend.tiers.set_limits(tier, **named)
+        return await self._backend.tiers.set_limits(tier, by=identity.uid, **named)
 
     # ---- what people are told ------------------------------------------
 
@@ -728,7 +728,8 @@ class Seam:
             tier=TIER_SERVICE,
         )
 
-    async def revoke_key(self, identity: Identity, token_id: str) -> None:
+    async def revoke_key(self, identity: Identity, token_id: str) -> KeyInfo:
+        """Revoke a key the caller may revoke, and return the key that was revoked."""
         token_id = (token_id or "").strip()
         if not token_id:
             raise AuthzError("key id required")
@@ -744,13 +745,13 @@ class Seam:
         if match.user == identity.uid:
             await self._backend.keys.delete(token_id)
             _log_revocation(identity, match, "own key")
-            return
+            return match
         if match.is_automation:
             project = match.project
             if identity.is_site_admin:
                 await self._backend.keys.delete(token_id)
                 _log_revocation(identity, match, "site admin")
-                return
+                return match
             # Any PMC member, not only whoever created it. A service key
             # belongs to the project, and a credential the project owns and
             # cannot stop -- because the creator is away at 2am -- is the
@@ -758,7 +759,7 @@ class Seam:
             if project and identity.admin_of(project):
                 await self._backend.keys.delete(token_id)
                 _log_revocation(identity, match, f"PMC member of {project}")
-                return
+                return match
         raise AuthzError("not allowed to revoke this key")
 
     @require_admin

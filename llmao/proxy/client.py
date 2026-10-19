@@ -85,6 +85,8 @@ def pretend_project(tier: str) -> str:
 # LiteLLM fields these map to. Named here so the mapping is in one place
 # rather than spread across call sites.
 _LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "max_parallel_requests")
+# Everything a tier override may set: the key limits, and the token allowance.
+_TIER_FIELDS = (*_LIMIT_FIELDS, "token_cap", "token_window_days")
 
 # The dependency line is `litellm[proxy,extra-proxy]==1.102.2`. The extras are optional.
 _LITELLM_PIN = re.compile(r"""litellm(?:\[[^\]]+\])?==([^"'\s]+)""")
@@ -1304,7 +1306,8 @@ class TierManager:
     """What each tier of key is allowed: config, and what an admin has changed.
 
     Handed the config and the MemoryStore. The changes are one row there,
-    every tier in it.
+    every tier in it: each tier's changed limits, and who changed them last
+    and when (changed_by, changed_at).
     """
 
     _TIERS_KEY = "llmao:tiers"
@@ -1340,8 +1343,18 @@ class TierManager:
         except BackendUnavailableError:
             return effective
         if isinstance(stored, dict):
-            effective.update({k: v for k, v in stored.items() if v is not None})
+            effective.update({k: v for k, v in stored.items() if k in _TIER_FIELDS and v is not None})
         return effective
+
+    async def last_change(self, tier: str) -> edict | None:
+        """Who last changed this tier, and when. None if nobody has."""
+        try:
+            stored = (await self._overrides()).get(tier)
+        except BackendUnavailableError:
+            return None
+        if not isinstance(stored, dict) or not stored.get("changed_by"):
+            return None
+        return edict(by=stored["changed_by"], at=stored.get("changed_at") or "")
 
     async def key_limits(self, tier: str) -> dict[str, Any]:
         """The rate limits a key minted on this tier is given.
@@ -1361,6 +1374,7 @@ class TierManager:
         max_parallel_requests: int | None = None,
         token_cap: int | None = None,
         token_window_days: int | None = None,
+        by: str,
     ) -> dict[str, Any]:
         """Change a tier's ceilings for everyone on it. RAI admin only.
 
@@ -1398,9 +1412,10 @@ class TierManager:
 
         # Every tier shares the one row, so this is read, change, write.
         tiers = await self._overrides()
-        tiers[tier] = {**(tiers.get(tier) or {}), **changes}
+        stamp = _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
+        tiers[tier] = {**(tiers.get(tier) or {}), **changes, "changed_by": by, "changed_at": stamp}
         await self._memory.put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
-        _LOGGER.info("tier %s updated: %s", tier, sorted(changes))
+        _LOGGER.info("tier %s updated by %s: %s", tier, by, sorted(changes))
         return await self.limits(tier)
 
 
