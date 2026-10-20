@@ -77,6 +77,9 @@
                       aria-label="Copy [models.model_name] to the clipboard"
                       data-copy="[models.model_name]"><i class="bi bi-clipboard" aria-hidden="true"></i></button>
             </div>
+            [if-any models.good_for]
+            <div class="model-good-for small mt-1"><span class="text-muted">Good for:</span> [models.good_for]</div>
+            [end]
             [if-any models.privacy]
             <div class="model-privacy model-privacy-[models.privacy_key] mt-2">
               <i class="bi [models.privacy_icon]" aria-hidden="true"></i>

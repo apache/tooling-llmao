@@ -111,6 +111,7 @@ def _catalog(name: str, *, modality: str = "text+vision") -> dict:
     return {
         "model_name": name,
         "display_name": name.upper(),
+        "good_for": "",
         "context_window": "999,999",
         "license": "Apache-2.0",
         "modality": modality,
@@ -631,3 +632,16 @@ def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
     buf = io.StringIO()
     t.generate(buf, data)
     return buf.getvalue()
+
+
+def test_a_card_says_what_its_model_is_good_for():
+    pages = _app()
+    catalog = _catalog("qwen3-8b")
+    catalog["good_for"] = "Simple questions, quick edits, classification and other routine calls. Fast and cheap."
+    rows = pages.model_catalog_rows(_fleet(_server("qwen3-8b")), [catalog], admin=False)
+    out = _render(rows)
+    assert "Good for:</span> Simple questions, quick edits" in out
+    # No line at all when a model says nothing.
+    assert "Good for:" not in _render(
+        pages.model_catalog_rows(_fleet(_server("qwen3-8b")), [_catalog("qwen3-8b")], admin=False)
+    )

@@ -81,7 +81,10 @@ models:
           # rather than guessing from its name.
           - --tool-call-parser
           - gemma4
-      display_name: "Gemma 4 26B-A4B (self-hosted, multimodal)"
+      display_name: "Gemma 4 26B-A4B"
+      # What to choose it for, in a few words, for someone deciding. About
+      # the model, never where it runs: that is its deployments'.
+      good_for: "General work, images, and agents that use tools (Claude Code). The default when unsure."
       # The CONTRACT with callers. Every instance serving this model_name must
       # honour it; where a pool is uneven, advertise the minimum across it.
       context_window: 131072
@@ -161,7 +164,8 @@ models:
           # template emits, not its name.
           - --tool-call-parser
           - qwen3_coder
-      display_name: "Qwen3.8 27B (self-hosted, multimodal)"
+      display_name: "Qwen3.8 27B"
+      good_for: "Harder reasoning, code, and images. Wordy and slow to start answering, so not for interactive agents."
       # The contract with callers. Every instance serving this model_name
       # must honour it; advertise the minimum across an uneven pool, or
       # identical requests behave differently depending on where they land.
@@ -247,7 +251,8 @@ models:
           # each candidate parser against the model's real output offline.
           - --tool-call-parser
           - hermes
-      display_name: "Qwen3 8B (self-hosted, fast)"
+      display_name: "Qwen3 8B"
+      good_for: "Simple questions, quick edits, classification and other routine calls. Fast and cheap."
       context_window: 40960
       license: Apache-2.0
       openness: open-weight
@@ -313,7 +318,8 @@ models:
           - --enable-auto-tool-choice
           - --tool-call-parser
           - hermes
-      display_name: "Qwen3 8B BF16 (self-hosted, fast)"
+      display_name: "Qwen3 8B BF16"
+      good_for: "The same as Qwen3 8B: simple questions, quick edits and routine calls. Fast and cheap."
       context_window: 40960
       license: Apache-2.0
       openness: open-weight

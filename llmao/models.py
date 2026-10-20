@@ -196,6 +196,7 @@ def ux_models(
             edict(
                 model_name=name,
                 display_name=display,
+                good_for=_oneline(m.get("good_for")),
                 context_window=ctx if ctx is not None else "—",
                 license=_oneline(m.get("license")) or "—",
                 modality=_oneline(m.get("modality")),
