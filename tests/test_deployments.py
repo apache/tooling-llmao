@@ -22,7 +22,7 @@ import asyncio
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, Fleet, FleetDeployment
-from llmao.model_status import HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
+from llmao.model_status import AWAITING, HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
 from llmao.providers import ProviderDeployment
 from llmao.proxy.deployments import DeploymentManager
 from tests.fake_transport import FakeTransport
@@ -122,6 +122,22 @@ def test_sync_selfhost_deletes_when_down():
     be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
+
+
+def test_sync_selfhost_deletes_a_box_no_provider_lists():
+    """Awaiting, never probed, but gone: its deployment points at nothing."""
+    s = _server()
+    s.state = AWAITING
+    s.unlisted = True
+    models = {
+        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
+    }
+    fleet = Fleet(None, [s], models=models)
+    fleet.deployments[0].in_litellm = True
+    be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
+    asyncio.run(be.sync_selfhost())
+    assert fleet.deployments[0].in_litellm is False
+    assert "model/delete" in _paths(be)
 
 
 def _info(host: str, port: int, *, model_id: str | None = None):

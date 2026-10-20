@@ -686,6 +686,11 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
                 reason=reason,
             )
         )
+    if dep.vllm is not None and dep.vllm.unlisted:
+        # The box is gone: there is nothing to reboot, add or stop tracking.
+        # sync_selfhost drops its LiteLLM deployment by itself; the one thing
+        # left is taking it out of fleet.hosts, which is config.
+        return []
     return actions
 
 

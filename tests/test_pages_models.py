@@ -700,3 +700,15 @@ def test_an_unlisted_host_says_why_and_is_work_needed():
     assert item.detail == reason + " If it has, remove it from fleet.hosts."
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
     assert "has not requested its config" not in out
+
+
+def test_a_gone_box_has_no_buttons():
+    """Nothing to reboot or add; llmao drops its LiteLLM deployment by itself."""
+    pages = _app()
+    gone = _server("gemma", host="10.0.0.9")
+    gone.unlisted = True
+    fleet = _fleet(gone)
+    dep = fleet.deployments[0]
+    for in_litellm in (True, False):
+        dep.in_litellm = in_litellm
+        assert pages.admin_actions(fleet, dep) == []

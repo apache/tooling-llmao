@@ -237,14 +237,18 @@ class DeploymentManager:
             await self._each(self.add_deployment, dep)
 
     async def sync_selfhost(self) -> None:
-        """After vLLM probes: register serving backends, drop down ones."""
+        """After vLLM probes: register serving backends, drop down ones.
+
+        Down is Unhealthy or Stalled, or unlisted: no provider has the box
+        any more, so the deployment points at nothing.
+        """
         for dep in self.fleet.deployments:
             if not dep.self_hosted or dep.vllm is None:
                 continue
             srv = dep.vllm
             if srv.state == HEALTHY and dep.api_base and not dep.in_litellm:
                 await self._each(self.add_deployment, dep)
-            elif srv.state in (UNHEALTHY, STALLED) and dep.in_litellm:
+            elif (srv.state in (UNHEALTHY, STALLED) or srv.unlisted) and dep.in_litellm:
                 await self._each(self.delete_deployment, dep)
 
     async def check_config_skew(self) -> None:
