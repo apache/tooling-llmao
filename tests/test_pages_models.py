@@ -645,3 +645,44 @@ def test_a_card_says_what_its_model_is_good_for():
     assert "Good for:" not in _render(
         pages.model_catalog_rows(_fleet(_server("qwen3-8b")), [_catalog("qwen3-8b")], admin=False)
     )
+
+
+def test_each_deployment_says_where_to_find_it():
+    pages = _app()
+    vast, runpod, lost = (
+        _server("gemma", host="10.0.0.1"),
+        _server("gemma", host="10.0.0.2"),
+        _server("gemma", host="10.0.0.3"),
+    )
+    vast.box = edict(
+        provider="Vast",
+        box_id="53865410",
+        label="RTX 3060 x2",
+        url="https://cloud.vast.ai/instances/",
+        usd_per_hour=0.14,
+    )
+    runpod.box = edict(provider="RunPod", box_id="6jqrsngxdor2mc", label="llmao-qwen3-8b", url="", usd_per_hour=0.89)
+    rows = pages.model_catalog_rows(_fleet(vast, runpod, lost), [_catalog("gemma")], admin=True)
+    out = _render(rows, admin=True)
+    assert '<a href="https://cloud.vast.ai/instances/"' in out
+    assert "Vast · instance 53865410 · RTX 3060 x2</a>" in out
+    # No link for RunPod yet; the pod is named so it can be found.
+    assert "RunPod · pod llmao-qwen3-8b (6jqrsngxdor2mc)" in out
+    assert "RunPod · pod llmao-qwen3-8b (6jqrsngxdor2mc)</a>" not in out
+    # A host no provider lists stands out.
+    assert "location unknown: no provider lists this host" in out
+    assert "text-warning-emphasis" in out
+
+
+def test_where_a_deployment_lives_is_for_admins_only():
+    pages = _app()
+    srv = _server("gemma", host="10.0.0.1")
+    srv.box = edict(
+        provider="Vast",
+        box_id="53865410",
+        label="RTX 3060 x2",
+        url="https://cloud.vast.ai/instances/",
+        usd_per_hour=0.14,
+    )
+    out = _render(pages.model_catalog_rows(_fleet(srv), [_catalog("gemma")], admin=False))
+    assert "53865410" not in out

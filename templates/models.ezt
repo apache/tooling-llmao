@@ -161,9 +161,13 @@
     <div class="list-group-item dep-row[if-any models.deployments.attention] dep-attention[end]" id="[models.deployments.anchor]">
       <div class="dep-grid">
         <div class="dep-state"><span class="badge [models.deployments.badge_class]">[models.deployments.state]</span></div>
-        <div class="dep-ident font-monospace small">
-          [models.deployments.ident]
-          [if-any models.deployments.external]<span class="text-muted">external</span>[end]
+        <div class="dep-ident small">
+          <span class="font-monospace">[models.deployments.ident]</span>
+          [if-any models.deployments.where.label]
+          <div class="dep-where[if-any models.deployments.where.unknown] text-warning-emphasis[else] text-muted[end]">
+            [if-any models.deployments.where.url]<a href="[models.deployments.where.url]" class="link-secondary" target="_blank" rel="noopener">[models.deployments.where.label]</a>[else][models.deployments.where.label][end]
+          </div>
+          [end]
         </div>
         <div class="dep-reason small">[models.deployments.detail]</div>
         <div class="dep-flag small text-muted">[models.deployments.flag]</div>

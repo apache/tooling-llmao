@@ -477,6 +477,27 @@ def _dep_ident(dep) -> str:
     return dep.api_base or dep.name
 
 
+def _dep_where(dep) -> edict:
+    """Where a deployment lives, for finding it: the provider and its name for the machine.
+
+    Our boxes: "Vast · instance 53865410 · RTX 3060 x2", or "RunPod · pod
+    llmao-qwen3-8b (6jqrsngxdor2mc)". A host no provider lists says so,
+    which is how a box whose rental has gone shows up. A model provider's
+    deployment is its account name; its endpoint is the row's identity.
+    """
+    srv = dep.vllm
+    if srv is None:
+        return edict(label=dep.provider or "", url="", unknown=ezt.boolean(False))
+    box = srv.box
+    if box is None:
+        return edict(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
+    if box.provider == "RunPod":
+        label = f"RunPod · pod {box.label} ({box.box_id})"
+    else:
+        label = f"{box.provider} · instance {box.box_id} · {box.label}"
+    return edict(label=label, url=box.url or "", unknown=ezt.boolean(False))
+
+
 def _dep_anchor(dep) -> str:
     """DOM id of the deployment's row, e.g. dep-10-0-0-1-8001."""
     return "dep-" + re.sub(r"[^A-Za-z0-9]+", "-", _dep_ident(dep)).strip("-")
@@ -967,6 +988,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 primary=primary,
                 menu=menu,
                 ident=_dep_ident(dep) if admin else "",
+                where=_dep_where(dep) if admin else edict(label="", url="", unknown=ezt.boolean(False)),
                 anchor=_dep_anchor(dep) if admin else "",
                 external=ezt.boolean(not dep.self_hosted),
                 attention=ezt.boolean(admin and _needs_attention(lifecycle, dep.skew)),

@@ -15,10 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Vast.ai show-instances: each box's public ports, and what it costs.
+"""Vast.ai show-instances: each box's public ports, where it is, and what it costs.
 
 httpx only (no vastai SDK). One GET, no pagination; the fleet reads the
-body twice, for ports (port_map_from_body) and prices (price_map_from_body).
+body twice, for ports (port_map_from_body) and boxes (boxes_from_body).
 """
 
 from __future__ import annotations
@@ -98,28 +98,43 @@ def port_map_from_body(body: Any) -> edict:
     return mapping
 
 
-def price_map_from_body(body: Any) -> edict:
-    """public_ipaddr → the box's rental price, dollars per hour (dph_total).
+# Where an admin finds Vast instances. Vast has no stable page per instance;
+# the instance id on the row is what to look for there.
+VAST_CONSOLE_URL = "https://cloud.vast.ai/instances/"
 
-    dph_total includes the instance's storage. Bandwidth is billed per GB,
-    apart from this, and is left out.
+
+def boxes_from_body(body: Any) -> edict:
+    """public_ipaddr → the box: where it is (provider, instance id, GPUs) and its price.
+
+    usd_per_hour is dph_total, which includes the instance's storage;
+    bandwidth is billed per GB apart from it and is left out. None when
+    Vast does not say, which is unknown, not free.
     """
-    prices = edict()
+    boxes = edict()
     for inst in (body.get("instances") or []) if isinstance(body, dict) else []:
         if not isinstance(inst, dict):
             continue
         ip = _ip(inst.get("public_ipaddr"))
+        if not ip:
+            continue
         try:
             price = float(inst.get("dph_total"))
         except (TypeError, ValueError):
-            continue
-        if ip:
-            prices[ip] = price
-    return prices
+            price = None
+        gpus = inst.get("num_gpus") or 1
+        gpu = str(inst.get("gpu_name") or "GPU")
+        boxes[ip] = edict(
+            provider="Vast",
+            box_id=str(inst.get("id") or ""),
+            label=f"{gpu} x{gpus}",
+            url=VAST_CONSOLE_URL,
+            usd_per_hour=price,
+        )
+    return boxes
 
 
 async def fetch_instances(api_key: str, *, client: httpx.AsyncClient) -> Any:
-    """The show-instances body, for port_map_from_body and price_map_from_body."""
+    """The show-instances body, for port_map_from_body and boxes_from_body."""
     resp = await client.get(
         VAST_INSTANCES_URL,
         params={"limit": VAST_PAGE_LIMIT},

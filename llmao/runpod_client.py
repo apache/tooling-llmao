@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""RunPod's pods: what each running box costs.
+"""RunPod's pods: where each running box is, and what it costs.
 
 httpx only. One GET of the REST API's pod list, with providers.runpod.api_key.
 Each pod reports its public IP and costPerHr; a pod that is not running, or
@@ -38,20 +38,34 @@ if TYPE_CHECKING:
 RUNPOD_PODS_URL = "https://rest.runpod.io/v1/pods"
 
 
-def price_map_from_pods(pods: Any) -> edict:
-    """publicIp → the pod's rental price, dollars per hour, for running pods only."""
-    prices = edict()
+def boxes_from_pods(pods: Any) -> edict:
+    """publicIp → the box: where it is (provider, pod name and id) and its price.
+
+    Running pods only: a stopped pod still reports a price, and is not one
+    of our serving boxes.
+
+    No console link yet: RunPod's console URL for one pod has not been
+    confirmed, so the row names the pod and an admin finds it by name.
+    """
+    boxes = edict()
     for pod in pods if isinstance(pods, list) else []:
         if not isinstance(pod, dict) or pod.get("desiredStatus") != "RUNNING":
             continue
         ip = str(pod.get("publicIp") or "").strip()
+        if not ip:
+            continue
         try:
             price = float(pod.get("costPerHr"))
         except (TypeError, ValueError):
-            continue
-        if ip:
-            prices[ip] = price
-    return prices
+            price = None
+        boxes[ip] = edict(
+            provider="RunPod",
+            box_id=str(pod.get("id") or ""),
+            label=str(pod.get("name") or ""),
+            url="",
+            usd_per_hour=price,
+        )
+    return boxes
 
 
 async def fetch_pods(api_key: str, *, client: httpx.AsyncClient) -> Any:

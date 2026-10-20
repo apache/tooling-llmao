@@ -52,8 +52,8 @@ from llmao.model_status import (
 )
 from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
 from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
-from llmao.runpod_client import fetch_pods, price_map_from_pods
-from llmao.vast_client import fetch_instances, port_map_from_body, price_map_from_body
+from llmao.runpod_client import boxes_from_pods, fetch_pods
+from llmao.vast_client import boxes_from_body, fetch_instances, port_map_from_body
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -350,10 +350,12 @@ class VllmServer:
         # errors, which is the sharpest failure mode in the stack. It has only
         # ever been visible by reading a vLLM startup log by hand.
         self.kv_cache_tokens: int | None = None
-        # What the whole box rents for, dollars per hour, from its provider
-        # (Vast dph_total, RunPod costPerHr). None when no provider prices it.
-        # Servers sharing a box share its price; the capacity rows split it.
-        self.box_usd_per_hour: float | None = None
+        # The machine this server runs on, as its provider lists it: who
+        # (Vast, RunPod), the instance or pod, its GPUs or name, a console
+        # link where there is one, and what it rents for (usd_per_hour). None
+        # until a provider's listing names this host, which for a box no
+        # provider lists is never.
+        self.box: edict | None = None
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
         # Named by model_status. Awaiting contact until the box fetches its
@@ -470,6 +472,11 @@ class VllmServer:
         if port is None or port != self.listen_port or port == self.public_port:
             return False
         return model_name == self.model_name and normalize_peer_ip(host) == normalize_peer_ip(self.host)
+
+    @property
+    def box_usd_per_hour(self) -> float | None:
+        """What this server's whole box rents for, dollars per hour; None if unknown."""
+        return self.box and self.box.usd_per_hour
 
     @property
     def oversized(self) -> bool:
@@ -1042,28 +1049,30 @@ class Fleet:
         # listen port never receives its HostPort and probe_all skips it.
         self._materialize_approved_hosts()
         self.apply_port_map(mapping)
-        self.apply_prices(price_map_from_body(body))
+        self.apply_boxes(boxes_from_body(body))
         await self.adopt_vast_instances(mapping, client)
 
-    async def refresh_runpod_prices(self, client: httpx.AsyncClient) -> None:
-        """Price the RunPod boxes, while any server is still unpriced.
+    async def refresh_runpod_boxes(self, client: httpx.AsyncClient) -> None:
+        """Find the RunPod boxes, while any server is still unplaced.
 
-        A rental's price is fixed for as long as it is held, so once every
-        server has one there is nothing to ask. Vast's prices come free with
-        its port lookup; RunPod's are a call of their own.
+        A rental's place and price are fixed for as long as it is held, so
+        once every server is placed there is nothing to ask. Vast's come
+        free with its port lookup; RunPod's are a call of their own.
         """
         key = gpu_host_api_key(self.cfg, "runpod")
-        if not key or all(srv.box_usd_per_hour is not None for srv in self.servers):
+        if not key or all(srv.box is not None for srv in self.servers):
             return
-        self.apply_prices(price_map_from_pods(await fetch_pods(key, client=client)))
+        self.apply_boxes(boxes_from_pods(await fetch_pods(key, client=client)))
 
-    def apply_prices(self, prices: Any) -> None:
-        """Set each server's box price from a provider's public IP → dollars per hour."""
+    def apply_boxes(self, boxes: Any) -> None:
+        """Place each server on its box, from a provider's public IP → box listing."""
         for srv in self.servers:
-            price = prices.get(srv.host)
-            if price is not None and srv.box_usd_per_hour != price:
-                _LOGGER.info("price: %s rents for $%.3f/hr", srv.host, price)
-                srv.box_usd_per_hour = price
+            box = boxes.get(srv.host)
+            if box is not None and srv.box != box:
+                _LOGGER.info(
+                    "box: %s is %s %s (%s), $%s/hr", srv.host, box.provider, box.box_id, box.label, box.usd_per_hour
+                )
+                srv.box = box
 
     async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:
         """Probe Vast instances that are not in fleet.hosts.
@@ -1175,9 +1184,9 @@ class Fleet:
                     except Exception:
                         _LOGGER.exception("vast port map failed")
                     try:
-                        await self.refresh_runpod_prices(client)
+                        await self.refresh_runpod_boxes(client)
                     except Exception:
-                        _LOGGER.exception("runpod prices failed")
+                        _LOGGER.exception("runpod boxes failed")
                     self._materialize_approved_hosts()
                     await self.probe_all(client=client)
                     if self.after_probe is not None:
