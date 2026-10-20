@@ -25,7 +25,7 @@ import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.capacity import HOUR_S, HourlyRollup
-from llmao.fleet import Fleet, VllmServer
+from llmao.fleet import UNLISTED_PASSES, Fleet, VllmServer
 from llmao.runpod_client import boxes_from_pods
 from llmao.sampler import MetricsSampler
 from llmao.vast_client import VAST_CONSOLE_URL, boxes_from_body
@@ -146,8 +146,8 @@ def test_a_host_no_provider_lists_is_unlisted_and_said_once(caplog):
     fleet.vast_boxes = edict()
     fleet.runpod_boxes = edict({"203.0.113.20": _box(2.49, provider="RunPod")})
     with caplog.at_level("INFO", logger="llmao.fleet"):
-        fleet.place_servers()
-        fleet.place_servers()
+        for _ in range(UNLISTED_PASSES + 1):
+            fleet.place_servers()
     assert (gone.unlisted, here.unlisted) == (True, False)
     # Its old instance and price no longer apply.
     assert gone.box is None
@@ -158,6 +158,50 @@ def test_a_host_no_provider_lists_is_unlisted_and_said_once(caplog):
         fleet.place_servers()
     assert gone.unlisted is False
     assert "203.0.113.30 is listed again" in caplog.text
+
+
+def test_a_host_no_configured_provider_could_list_is_not_unlisted():
+    """A live box rented from a provider whose key is not configured.
+
+    An unconfigured provider is not a missing list, so `complete` goes true as
+    soon as Vast answers and every host of the other provider looks absent.
+    A host no listing has ever named is unknown, not gone.
+    """
+    never = _server("203.0.113.40")
+    fleet = Fleet(edict(providers=edict(vast=edict(api_key="v"))), [never])
+    fleet.vast_boxes = edict()
+    for _ in range(UNLISTED_PASSES + 2):
+        fleet.place_servers()
+    assert never.unlisted is False
+
+
+def test_a_provisioning_gap_shorter_than_the_threshold_is_not_a_dead_rental():
+    """The production incident: a RunPod pod absent while it provisions.
+
+    A pod was missing from the pod list for over 90 minutes after a
+    recreate, then appeared as RUNNING. One absent listing must not conclude
+    the rental ended, because the route gets deleted and re-added on
+    alternating passes for as long as the gap lasts.
+    """
+    pod = _server("203.0.113.50")
+    fleet = _fleet_renting_from_both([pod])
+    listed = edict({"203.0.113.50": _box(2.49, provider="RunPod")})
+    fleet.vast_boxes, fleet.runpod_boxes = edict(), listed
+    fleet.place_servers()
+    assert pod.unlisted is False
+    # Absent, but for fewer passes than the threshold.
+    fleet.runpod_boxes = edict()
+    for _ in range(UNLISTED_PASSES - 1):
+        fleet.place_servers()
+    assert pod.unlisted is False, "a provisioning gap is not a dead rental"
+    # Back in the listing: the count resets, so a flapping host never flips.
+    fleet.runpod_boxes = listed
+    fleet.place_servers()
+    assert pod.unlisted is False
+    fleet.runpod_boxes = edict()
+    for _ in range(UNLISTED_PASSES - 1):
+        fleet.place_servers()
+    assert pod.unlisted is False, "the count must reset on a sighting"
 
 
 def test_nothing_is_concluded_until_every_provider_has_answered():

@@ -135,6 +135,18 @@ RUNPOD_LISTING_INTERVAL_S = 600
 # Boxes already up on other ports. Delete a pair when that box is replaced.
 # Not a template for new hosts. These use the shared selfhost_api_key; every
 # other server uses the key derived from the salt.
+# Consecutive provider listings that must omit a host before llmao concludes
+# its rental ended. Not one: a RunPod pod is absent from the pod list while it
+# provisions -- measured at over 90 minutes after a recreate -- and a single
+# absence therefore means "not yet" as often as it means "gone". Mirrors
+# fleet.health_fail_threshold, which exists for the same reason one failed
+# vLLM probe does not mean a box is down.
+#
+# At the 10-minute listing interval this is half an hour of absence, which is
+# longer than any provisioning gap seen and still prompt for a real ending.
+# A constant rather than a config key: no p6 change, no eyaml round-trip.
+UNLISTED_PASSES = 3
+
 LEGACY_SERVERS = {
     ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
     ("103.196.86.105", 8004),  # qwen3.8-27b, public port pinned at 15602
@@ -361,9 +373,16 @@ class VllmServer:
         # provider lists is never.
         self.box: edict | None = None
         # True when every provider we rent from has listed its instances and
-        # none has this host: the rental has most likely ended. See
-        # Fleet.place_servers.
+        # none has this host, for UNLISTED_PASSES passes running: the rental
+        # has most likely ended. See Fleet.place_servers.
         self.unlisted = False
+        # Whether a provider has ever placed this host. A host no listing has
+        # EVER named is unknown, not gone: it may be rented from a provider
+        # whose key is not configured, so no list of ours could contain it.
+        self.ever_listed = False
+        # Consecutive listings that have omitted this host. Reset by any
+        # sighting, so a host that flaps never reaches the threshold.
+        self.unlisted_passes = 0
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
         # Named by model_status. Awaiting contact until the box fetches its
@@ -704,6 +723,14 @@ class ExtraLiteLLM:
     port: int | None
     model_name: str
     skew: tuple[str, ...]
+    # What /model/delete takes, and the normalised api_base it was found at.
+    # Empty id means LiteLLM reported the route without one, so it can be
+    # shown but not removed.
+    route_id: str = ""
+    api_base: str = ""
+    # Consecutive skew passes this route has been an extra. Shown so an
+    # admin can see a removal coming rather than only its result.
+    passes: int = 0
 
 
 class Fleet:
@@ -1099,10 +1126,26 @@ class Fleet:
         """Put each server on its box from the latest provider lists, and decide which are unlisted.
 
         Unlisted means every provider we rent from has answered with its
-        list, and none has this host: no instance has the address, so the
-        rental has most likely ended. With a list missing (an outage, or
+        list, none has this host for UNLISTED_PASSES passes running, and some
+        listing placed this host before. With a list missing (an outage, or
         RunPod not read yet) nothing is concluded, and the last verdict
         stands. Logged when the verdict changes, not on every pass.
+
+        Two guards, both learned from one incident. A host no list has EVER
+        named is unknown rather than gone: a provider with no key configured
+        is not a missing list, it is not a provider we rent from, so
+        `complete` goes true once the OTHER provider answers and every host of
+        the unconfigured one looks absent. And a single absence is not a
+        conclusion: a RunPod pod is missing from the pod list while it
+        provisions, over 90 minutes in the case measured.
+
+        Before unlisted drove deletion, either mistake was cosmetic. Now it
+        deletes the route of a box that is up and serving, which the next pass
+        re-adds -- the add fires on healthy-and-absent, the delete on unlisted
+        -- so the two alternate for as long as the listing gap lasts. Observed
+        on qwen3.8-27b at 47 seconds a cycle, 33 times in an hour, unroutable
+        through the gateway for half of each cycle while /fleet showed it
+        serving and a direct completion against the box passed.
         """
         vast_wanted = bool(gpu_host_api_key(self.cfg, "vast"))
         runpod_wanted = bool(gpu_host_api_key(self.cfg, "runpod"))
@@ -1115,7 +1158,13 @@ class Fleet:
         if not complete:
             return
         for srv in self.servers:
-            unlisted = srv.host not in boxes
+            listed = srv.host in boxes
+            # Read before the branch below clears srv.box, which would
+            # otherwise destroy the evidence and let the verdict flap.
+            if listed or srv.box is not None:
+                srv.ever_listed = True
+            srv.unlisted_passes = 0 if listed else srv.unlisted_passes + 1
+            unlisted = srv.ever_listed and srv.unlisted_passes >= UNLISTED_PASSES
             if unlisted != srv.unlisted:
                 if unlisted:
                     _LOGGER.warning("fleet: no provider lists %s; the rental may have ended", srv.host)
@@ -1323,6 +1372,11 @@ def remove_refusal(dep) -> str | None:
     None means the row is self-hosted, is already in LiteLLM, and vLLM is
     Unhealthy or Stalled — the same gate the automatic sync_selfhost applies.
     delete_deployment itself does not apply this gate.
+
+    "The same gate" is load-bearing, and was briefly untrue: e1567cb let
+    sync_selfhost delete an unlisted server's route while it was still
+    serving, which this function would have refused. A serving box keeps its
+    route in both paths.
     """
     if not dep.self_hosted or dep.vllm is None:
         return "not a self-hosted deployment"

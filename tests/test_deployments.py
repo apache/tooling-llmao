@@ -21,7 +21,7 @@ import asyncio
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, Fleet, FleetDeployment
+from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, UNLISTED_PASSES, Fleet, FleetDeployment
 from llmao.model_status import AWAITING, HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
 from llmao.providers import ProviderDeployment
 from llmao.proxy.deployments import DeploymentManager
@@ -138,6 +138,81 @@ def test_sync_selfhost_deletes_a_box_no_provider_lists():
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
     assert "model/delete" in _paths(be)
+
+
+def test_a_serving_box_no_provider_lists_keeps_its_route():
+    """The invariant remove_refusal states: a box that answers keeps its route.
+
+    e1567cb deleted an unlisted server's route regardless of health, and a
+    RunPod pod absent from the pod list while provisioning lost its route on
+    alternating passes while serving normally.
+    """
+    s = _server()
+    s.state = HEALTHY
+    s.unlisted = True
+    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    fleet = Fleet(None, [s], models=models)
+    fleet.deployments[0].in_litellm = True
+    be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
+    asyncio.run(be.sync_selfhost())
+    assert fleet.deployments[0].in_litellm is True
+    assert "model/delete" not in _paths(be)
+
+
+def _orphan(model_id="orphan-1"):
+    """A LiteLLM route at an address no deployment of ours claims."""
+    fleet = Fleet(None, [], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    return fleet, _info("198.51.100.9", 18490, model_id=model_id)
+
+
+def test_an_orphan_route_is_deleted_once_it_has_persisted():
+    """tooling-llmao#29: a host that changed address leaves its route behind.
+
+    Routes are made on the transition into SERVING and dropped on the one into
+    DOWN; a server removed from fleet.hosts makes neither, so check_config_skew
+    is the only thing that sees the leftover. It used to only report it.
+    """
+    fleet, info = _orphan()
+    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    for expected in range(1, UNLISTED_PASSES):
+        asyncio.run(be.check_config_skew())
+        assert [row.passes for row in fleet.extra_litellm] == [expected]
+        assert "model/delete" not in _paths(be), "not on the strength of one pass"
+    asyncio.run(be.check_config_skew())
+    assert "model/delete" in _paths(be)
+    sent = [c.json["id"] for c in be._transport.calls if c.path == "model/delete"]
+    assert sent == ["orphan-1"]
+
+
+def test_an_orphan_that_is_claimed_again_is_never_deleted():
+    """A provider lookup that failed one pass must not cost a live route."""
+    fleet, info = _orphan()
+    # A callable answer, so what LiteLLM reports can change between passes.
+    reply = {"body": info}
+    be = _manager(fleet, lambda call: reply["body"], cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_config_skew())
+    assert [row.passes for row in fleet.extra_litellm] == [1]
+    # The route is gone from LiteLLM's answer: nothing is an extra this pass.
+    reply["body"] = {"data": []}
+    asyncio.run(be.check_config_skew())
+    assert fleet.extra_litellm == []
+    # Back again: the count starts over rather than resuming.
+    reply["body"] = info
+    for expected in range(1, UNLISTED_PASSES):
+        asyncio.run(be.check_config_skew())
+        assert [row.passes for row in fleet.extra_litellm] == [expected]
+    assert "model/delete" not in _paths(be)
+
+
+def test_an_orphan_with_no_litellm_id_is_reported_not_deleted(caplog):
+    """LiteLLM answered without an id, so there is nothing to delete by."""
+    fleet, info = _orphan(model_id=None)
+    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    with caplog.at_level("WARNING", logger="llmao.proxy.deployments"):
+        for _ in range(UNLISTED_PASSES + 1):
+            asyncio.run(be.check_config_skew())
+    assert "model/delete" not in _paths(be)
+    assert "has no LiteLLM id" in caplog.text
 
 
 def _info(host: str, port: int, *, model_id: str | None = None):

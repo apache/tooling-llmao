@@ -33,6 +33,7 @@ from llmao.fleet import (
     LEGACY_SERVERS,
     ORDER_SELF_HOSTED,
     ORDER_SPEND,
+    UNLISTED_PASSES,
     ExtraLiteLLM,
     normalize_peer_ip,
     snapshot_for_status,
@@ -63,6 +64,10 @@ class DeploymentManager:
         self._cfg = cfg
         self.fleet = fleet
         self._transport = transport
+        # (api_base, model_name) -> consecutive skew passes seen as an extra.
+        # A route absent from one pass is dropped from the dict, so a flapping
+        # one never accumulates. See _prune_extras.
+        self._extra_passes: dict[tuple[str, str], int] = {}
 
     def deployment_body(self, dep, *, api_key: str | None = None) -> dict:
         """POST /model/new payload for one deployment.
@@ -165,10 +170,10 @@ class DeploymentManager:
             # Registered at every startup, so a restart must find the last one
             # rather than add a second copy.
             want = (_norm_base(dep.api_base), dep.model_name)
-            return any((norm, model_name) == want for norm, _host, _port, model_name in routes)
+            return any((norm, model_name) == want for norm, _host, _port, model_name, _id in routes)
         if not dep.self_hosted or dep.vllm is None:
             return False
-        return any(dep.vllm.same_deployment(host, port, model_name) for _norm, host, port, model_name in routes)
+        return any(dep.vllm.same_deployment(host, port, model_name) for _norm, host, port, model_name, _id in routes)
 
     async def add_deployment(self, dep) -> None:
         """POST /model/new for this deployment. No serving check.
@@ -239,8 +244,17 @@ class DeploymentManager:
     async def sync_selfhost(self) -> None:
         """After vLLM probes: register serving backends, drop down ones.
 
-        Down is Unhealthy or Stalled, or unlisted: no provider has the box
-        any more, so the deployment points at nothing.
+        Down is Unhealthy or Stalled. A box no provider lists any more counts
+        too -- the deployment points at nothing -- but ONLY while it is not
+        serving, which is the gate remove_refusal states and the Fleet Remove
+        button has always honoured: a box that answers keeps its route.
+
+        e1567cb dropped that condition, and a RunPod pod absent from the pod
+        list while it provisioned then had its route deleted and re-added on
+        alternating passes for as long as the gap lasted. The box was serving
+        throughout. Hysteresis on `unlisted` is the other half of that fix;
+        this is the half that says a serving box is never dropped, whatever
+        a provider's listing claims.
         """
         for dep in self.fleet.deployments:
             if not dep.self_hosted or dep.vllm is None:
@@ -248,7 +262,7 @@ class DeploymentManager:
             srv = dep.vllm
             if srv.state == HEALTHY and dep.api_base and not dep.in_litellm:
                 await self._each(self.add_deployment, dep)
-            elif (srv.state in (UNHEALTHY, STALLED) or srv.unlisted) and dep.in_litellm:
+            elif dep.in_litellm and (srv.state in (UNHEALTHY, STALLED) or (srv.unlisted and srv.state != HEALTHY)):
                 await self._each(self.delete_deployment, dep)
 
     async def check_config_skew(self) -> None:
@@ -256,9 +270,9 @@ class DeploymentManager:
         self._transport.raise_http(resp)
         routes = _routes_from_model_info(resp.json())
         by_base: dict[str, list[str]] = {}
-        for norm, _host, _port, model_name in routes:
+        for norm, _host, _port, model_name, _id in routes:
             by_base.setdefault(norm, []).append(model_name)
-        pairs = {(norm, model_name) for norm, _host, _port, model_name in routes}
+        pairs = {(norm, model_name) for norm, _host, _port, model_name, _id in routes}
         # One of our boxes serves one model, so its api_base identifies it. A
         # provider's api_base is shared by every model on the account, so a
         # provider deployment is its api_base and model name together.
@@ -290,17 +304,17 @@ class DeploymentManager:
                 continue
             present = any(
                 dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name)
-                for _norm, host, port, model_name in routes
+                for _norm, host, port, model_name, _id in routes
             )
             names = by_base.get(base, [])
             dep.in_litellm = bool(names) or present
             dep.config_mismatch = any(name != dep.model_name for name in names)
             dep.at_listen_port = any(
-                dep.vllm.on_listen_port(host, port, model_name) for _norm, host, port, model_name in routes
+                dep.vllm.on_listen_port(host, port, model_name) for _norm, host, port, model_name, _id in routes
             )
             self._store_skew(dep, now)
         extra: list[ExtraLiteLLM] = []
-        for norm, host, port, model_name in routes:
+        for norm, host, port, model_name, route_id in routes:
             if norm in ours or (norm, model_name) in bought:
                 continue
             if (normalize_peer_ip(host), model_name) in unplaced:
@@ -313,14 +327,86 @@ class DeploymentManager:
                 self._cfg.fleet,
                 now,
             )
-            extra.append(ExtraLiteLLM(host=host, port=port, model_name=model_name, skew=view.skew))
+            seen = self._extra_passes.get((norm, model_name), 0) + 1
+            extra.append(
+                ExtraLiteLLM(
+                    host=host,
+                    port=port,
+                    model_name=model_name,
+                    skew=view.skew,
+                    route_id=route_id,
+                    api_base=norm,
+                    passes=seen,
+                )
+            )
         self.fleet.extra_litellm = extra
+        self._extra_passes = {(row.api_base, row.model_name): row.passes for row in extra}
         if extra:
             _LOGGER.warning(
                 "skew: %s %s",
                 SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG],
-                [(row.host, row.port, row.model_name) for row in extra],
+                [(row.host, row.port, row.model_name, row.passes) for row in extra],
             )
+        await self._prune_extras(extra)
+
+    async def _prune_extras(self, extra: list[ExtraLiteLLM]) -> None:
+        """Delete a route no deployment claims, once it has persisted.
+
+        This is the deregistration hole in tooling-llmao#29: routes are created
+        on the transition into SERVING and deleted on the transition into DOWN,
+        and a server removed from fleet.hosts makes neither transition -- so its
+        route outlives it, and the model is unreachable through the proxy while
+        /fleet shows it serving. check_config_skew has always computed exactly
+        this set; it only reported it.
+
+        Why a threshold and not the first sighting. An extra is inferred from
+        absence, and absence has innocent causes: a provider lookup that failed
+        this pass, a box mid-recreate, a route llmao itself is about to claim.
+        The guards above remove the ones that can be named (`unplaced` for a
+        server whose address is not known yet), but not the ones that cannot,
+        so UNLISTED_PASSES consecutive passes are required -- the same count,
+        and the same reasoning, as a host missing from a provider listing.
+
+        No probe gate. An orphan's credential is unknown -- derivation needs the
+        LISTEN port and a route only carries the public one -- and the one
+        endpoint needing no credential is vLLM's /health, which cannot see the
+        served model name. A /health gate would therefore spare precisely the
+        routes that 404 on real traffic, which are the ones worth deleting.
+
+        Deleting is also what makes a restart converge: the counter starts
+        empty, so a portal that comes up to a proxy full of stale routes clears
+        them after UNLISTED_PASSES skew passes rather than waiting for a
+        transition that already happened.
+        """
+        for row in extra:
+            if row.passes < UNLISTED_PASSES:
+                continue
+            if not row.route_id:
+                _LOGGER.warning(
+                    "skew: %s:%s %s has no LiteLLM id; cannot remove it",
+                    row.host,
+                    row.port,
+                    row.model_name,
+                )
+                continue
+            resp = await self._transport.request("POST", "model/delete", json={"id": row.route_id})
+            if resp.status_code >= 400:
+                _LOGGER.warning(
+                    "model/delete orphan %s@%s id=%s failed: %s",
+                    row.model_name,
+                    row.api_base,
+                    row.route_id,
+                    resp.status_code,
+                )
+                continue
+            _LOGGER.info(
+                "model/delete orphan %s@%s id=%s after %d passes with no deployment",
+                row.model_name,
+                row.api_base,
+                row.route_id,
+                row.passes,
+            )
+            self._extra_passes.pop((row.api_base, row.model_name), None)
 
     async def check_health_skew(self) -> None:
         resp = await self._transport.request("GET", "health")
@@ -393,18 +479,20 @@ def _norm_base(url: Any) -> str:
     return s
 
 
-def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str]]:
-    """Each LiteLLM row as (normalised api_base, host, port, model_name).
+def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, str]]:
+    """Each LiteLLM row as (normalised api_base, host, port, model_name, id).
 
     Host and port stay separate. One machine serves several ports, and one
-    host:port can still report more than one model name.
+    host:port can still report more than one model name. The id is what
+    /model/delete takes, so a route with no deployment behind it can be
+    removed without a second lookup.
     """
     rows = []
     if isinstance(body, list):
         rows = body
     elif isinstance(body, dict):
         rows = body.get("data") or body.get("models") or []
-    out: list[tuple[str, str, int | None, str]] = []
+    out: list[tuple[str, str, int | None, str, str]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -413,5 +501,7 @@ def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str]]
             continue
         norm = _norm_base(params["api_base"])
         parsed = urlparse(norm)
-        out.append((norm, parsed.hostname or "", parsed.port, str(row.get("model_name") or "")))
+        info = row.get("model_info") or {}
+        route_id = str(info.get("id") or "") if isinstance(info, dict) else ""
+        out.append((norm, parsed.hostname or "", parsed.port, str(row.get("model_name") or ""), route_id))
     return out
