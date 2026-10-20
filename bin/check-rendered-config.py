@@ -87,7 +87,7 @@ def main() -> int:
     # showing a traceback for a missing module nobody asked about.
     try:
         import yaml
-        from easydict import EasyDict as edict
+        from easydict import EasyDict as edict  # noqa: N813
 
         from llmao import actions
         from llmao.capacity import retention_days as capacity_retention_days
@@ -137,7 +137,7 @@ def main() -> int:
         """Run one validator, keep going on failure."""
         try:
             result = fn()
-        except Exception as e:  # noqa: BLE001 - reporting every failure is the point
+        except Exception as e:
             print(f"  FAIL  {label}: {e}")
             failures.append((label, str(e)))
             return None
