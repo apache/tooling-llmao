@@ -686,3 +686,17 @@ def test_where_a_deployment_lives_is_for_admins_only():
     )
     out = _render(pages.model_catalog_rows(_fleet(srv), [_catalog("gemma")], admin=False))
     assert "53865410" not in out
+
+
+def test_an_unlisted_host_says_why_and_is_work_needed():
+    pages = _app()
+    gone = _server("gemma", host="10.0.0.9", ok=False)
+    gone.unlisted = True
+    fleet = _fleet(gone)
+    reason = "No Vast or RunPod instance has this address; the rental may have ended."
+    assert pages._deployment_reason(fleet.deployments[0]) == reason
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    assert item.kind == "unlisted"
+    assert item.detail == reason + " If it has, remove it from fleet.hosts."
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
+    assert "has not requested its config" not in out

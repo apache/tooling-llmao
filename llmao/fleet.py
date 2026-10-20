@@ -128,6 +128,10 @@ def client_ip(
 # on the host row, not taken from this tuple.
 VLLM_LISTEN_PORTS = (8001, 8002, 8003)
 
+# How often RunPod's list of our pods is read. Placing a box is not urgent: a
+# new pod is still provisioning when the next read comes round.
+RUNPOD_LISTING_INTERVAL_S = 600
+
 # Boxes already up on other ports. Delete a pair when that box is replaced.
 # Not a template for new hosts. These use the shared selfhost_api_key; every
 # other server uses the key derived from the salt.
@@ -356,6 +360,10 @@ class VllmServer:
         # until a provider's listing names this host, which for a box no
         # provider lists is never.
         self.box: edict | None = None
+        # True when every provider we rent from has listed its instances and
+        # none has this host: the rental has most likely ended. See
+        # Fleet.place_servers.
+        self.unlisted = False
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
         # Named by model_status. Awaiting contact until the box fetches its
@@ -738,6 +746,11 @@ class Fleet:
         # Identity is host, port, and model name. api_base is not a primary key:
         # one host serves several ports, and one host:port can report more than one model.
         self.extra_litellm: list[ExtraLiteLLM] = []
+        # The latest list of our instances from each provider we rent from,
+        # public IP → box. None until read: Vast's comes with every lifecycle
+        # pass, RunPod's from its own runner (run_runpod_listing).
+        self.vast_boxes: edict | None = None
+        self.runpod_boxes: edict | None = None
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
@@ -1005,7 +1018,10 @@ class Fleet:
                 url = srv.health_url
                 if url is None:
                     # No public port: nothing to probe. Leave the state alone.
-                    # apply_port_map already warned when the Vast row lacked it.
+                    # An unlisted host has no port because it has no instance,
+                    # which place_servers has already said once.
+                    if srv.unlisted:
+                        continue
                     _LOGGER.warning(
                         "fleet: no health url for %s@%s listen %s",
                         srv.name,
@@ -1049,20 +1065,66 @@ class Fleet:
         # listen port never receives its HostPort and probe_all skips it.
         self._materialize_approved_hosts()
         self.apply_port_map(mapping)
-        self.apply_boxes(boxes_from_body(body))
+        self.vast_boxes = boxes_from_body(body)
         await self.adopt_vast_instances(mapping, client)
 
-    async def refresh_runpod_boxes(self, client: httpx.AsyncClient) -> None:
-        """Find the RunPod boxes, while any server is still unplaced.
-
-        A rental's place and price are fixed for as long as it is held, so
-        once every server is placed there is nothing to ask. Vast's come
-        free with its port lookup; RunPod's are a call of their own.
-        """
+    async def read_runpod_listing(self, client: httpx.AsyncClient) -> None:
+        """Read RunPod's pod list into runpod_boxes. Raises if RunPod does not answer."""
         key = gpu_host_api_key(self.cfg, "runpod")
-        if not key or all(srv.box is not None for srv in self.servers):
+        self.runpod_boxes = boxes_from_pods(await fetch_pods(key, client=client))
+
+    async def run_runpod_listing(self) -> None:
+        """Runner: RunPod's list of our pods, every RUNPOD_LISTING_INTERVAL_S.
+
+        Kept apart from the lifecycle so that RunPod is asked on its own
+        schedule rather than on every probe pass; the lifecycle applies the
+        latest list it has. Pods do not move: a new one waits at most an
+        interval to be placed, and it is still provisioning by then. Ends at
+        once when no RunPod key is configured.
+        """
+        if not gpu_host_api_key(self.cfg, "runpod"):
             return
-        self.apply_boxes(boxes_from_pods(await fetch_pods(key, client=client)))
+        while True:
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                    await self.read_runpod_listing(client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # The last list stands; an outage only makes it older.
+                _LOGGER.warning("runpod listing failed: %s", e)
+            await asyncio.sleep(RUNPOD_LISTING_INTERVAL_S)
+
+    def place_servers(self) -> None:
+        """Put each server on its box from the latest provider lists, and decide which are unlisted.
+
+        Unlisted means every provider we rent from has answered with its
+        list, and none has this host: no instance has the address, so the
+        rental has most likely ended. With a list missing (an outage, or
+        RunPod not read yet) nothing is concluded, and the last verdict
+        stands. Logged when the verdict changes, not on every pass.
+        """
+        vast_wanted = bool(gpu_host_api_key(self.cfg, "vast"))
+        runpod_wanted = bool(gpu_host_api_key(self.cfg, "runpod"))
+        boxes = {**(self.runpod_boxes or {}), **(self.vast_boxes or {})}
+        self.apply_boxes(boxes)
+        # Neither provider configured (a local fleet): nothing is unlisted.
+        complete = (vast_wanted or runpod_wanted) and (
+            (not vast_wanted or self.vast_boxes is not None) and (not runpod_wanted or self.runpod_boxes is not None)
+        )
+        if not complete:
+            return
+        for srv in self.servers:
+            unlisted = srv.host not in boxes
+            if unlisted != srv.unlisted:
+                if unlisted:
+                    _LOGGER.warning("fleet: no provider lists %s; the rental may have ended", srv.host)
+                else:
+                    _LOGGER.info("fleet: %s is listed again", srv.host)
+            srv.unlisted = unlisted
+            if unlisted:
+                # Its old instance, and that instance's price, no longer apply.
+                srv.box = None
 
     def apply_boxes(self, boxes: Any) -> None:
         """Place each server on its box, from a provider's public IP → box listing."""
@@ -1183,10 +1245,7 @@ class Fleet:
                         await self.refresh_public_ports(client)
                     except Exception:
                         _LOGGER.exception("vast port map failed")
-                    try:
-                        await self.refresh_runpod_boxes(client)
-                    except Exception:
-                        _LOGGER.exception("runpod boxes failed")
+                    self.place_servers()
                     self._materialize_approved_hosts()
                     await self.probe_all(client=client)
                     if self.after_probe is not None:

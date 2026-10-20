@@ -503,9 +503,9 @@ def _dep_anchor(dep) -> str:
     return "dep-" + re.sub(r"[^A-Za-z0-9]+", "-", _dep_ident(dep)).strip("-")
 
 
-def _needs_attention(lifecycle: str, skew) -> bool:
+def _needs_attention(lifecycle: str, skew, *, unlisted: bool = False) -> bool:
     """The attention strip and the row accent ask the same question."""
-    return lifecycle in (STALLED, UNHEALTHY) or bool(skew)
+    return lifecycle in (STALLED, UNHEALTHY) or bool(skew) or unlisted
 
 
 def _match_deployments(fleet, name: str, host: str, port: str = "") -> list:
@@ -558,6 +558,9 @@ def _deployment_reason(dep) -> str:
     srv = dep.vllm
     if srv is None:
         return ""
+    if srv.unlisted:
+        # Said first: whatever else is true, this is why.
+        return "No Vast or RunPod instance has this address; the rental may have ended."
     if srv.state == AWAITING:
         if srv.probe_display:
             return srv.probe_display
@@ -716,17 +719,27 @@ def attention_items(fleet) -> list:
     for dep in fleet.deployments:
         view = deployment_status(snapshot_for_status(dep, cfg), cfg)
         phrases = [SKEW_PHRASE.get(n, n) for n in dep.skew]
-        if not _needs_attention(view.lifecycle, dep.skew):
+        unlisted = dep.vllm is not None and dep.vllm.unlisted
+        if not _needs_attention(view.lifecycle, dep.skew, unlisted=unlisted):
             continue
         host = dep.vllm.host if dep.vllm is not None else ""
         ident = _dep_ident(dep)
         rest = f"{dep.model_name} — {view.lifecycle.replace('_', ' ')}"
         reason = _deployment_reason(dep)
+        if unlisted:
+            # What to do about it: nothing in llmao clears a host that is gone.
+            reason += " If it has, remove it from fleet.hosts."
         if phrases:
             reason = "; ".join(p for p in (reason, "; ".join(phrases)) if p)
+        if unlisted:
+            kind = "unlisted"
+        elif view.lifecycle in (STALLED, UNHEALTHY):
+            kind = view.lifecycle
+        else:
+            kind = "skew"
         items.append(
             edict(
-                kind=view.lifecycle if view.lifecycle in (STALLED, UNHEALTHY) else "skew",
+                kind=kind,
                 what=f"{ident} · {rest}",
                 ident=ident,
                 anchor=_dep_anchor(dep),
@@ -991,7 +1004,9 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 where=_dep_where(dep) if admin else edict(label="", url="", unknown=ezt.boolean(False)),
                 anchor=_dep_anchor(dep) if admin else "",
                 external=ezt.boolean(not dep.self_hosted),
-                attention=ezt.boolean(admin and _needs_attention(lifecycle, dep.skew)),
+                attention=ezt.boolean(
+                    admin and _needs_attention(lifecycle, dep.skew, unlisted=srv is not None and srv.unlisted)
+                ),
                 badge_class=_badge_class(state, routed=dep.in_litellm or srv is None),
                 diags=diags,
                 skew_pills=skew_pills,

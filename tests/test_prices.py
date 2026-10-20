@@ -109,34 +109,67 @@ def _fleet_with_runpod(servers):
     return Fleet(edict(providers=edict(runpod=edict(api_key="rp-test"))), servers)
 
 
-def test_runpod_is_asked_only_while_a_server_is_unplaced():
+def _pod(ip, price=2.49):
+    return {"id": "p", "name": "n", "desiredStatus": "RUNNING", "publicIp": ip, "costPerHr": price}
+
+
+def test_the_runpod_listing_is_read_into_the_fleet_and_placed_on_the_next_pass():
     srv = _server("203.0.113.20")
     fleet = _fleet_with_runpod([srv])
-    asked = []
 
-    def answer(request):
-        asked.append(request.url.path)
-        pod = {"id": "p", "name": "n", "desiredStatus": "RUNNING", "publicIp": "203.0.113.20", "costPerHr": 2.49}
-        return httpx.Response(200, json=[pod])
+    async def read():
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[_pod("203.0.113.20")]))
+        async with httpx.AsyncClient(transport=transport) as client:
+            await fleet.read_runpod_listing(client)
 
-    async def two_passes():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
-            await fleet.refresh_runpod_boxes(client)
-            await fleet.refresh_runpod_boxes(client)
-
-    asyncio.run(two_passes())
+    asyncio.run(read())
+    assert srv.box is None, "the runner only reads; the lifecycle places"
+    fleet.place_servers()
     assert srv.box_usd_per_hour == 2.49
-    assert asked == ["/v1/pods"]
+    assert srv.unlisted is False
 
 
-def test_without_a_runpod_key_runpod_is_never_asked():
+def test_without_a_runpod_key_the_runner_ends_at_once():
     fleet = Fleet(edict(), [_server("203.0.113.20")])
+    asyncio.run(asyncio.wait_for(fleet.run_runpod_listing(), timeout=1))
 
-    async def one_pass():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: 1 / 0)) as client:
-            await fleet.refresh_runpod_boxes(client)
 
-    asyncio.run(one_pass())
+def _fleet_renting_from_both(servers):
+    cfg = edict(providers=edict(vast=edict(api_key="v"), runpod=edict(api_key="rp")))
+    return Fleet(cfg, servers)
+
+
+def test_a_host_no_provider_lists_is_unlisted_and_said_once(caplog):
+    gone, here = _server("203.0.113.30"), _server("203.0.113.20")
+    gone.box = _box(0.22)
+    fleet = _fleet_renting_from_both([gone, here])
+    fleet.vast_boxes = edict()
+    fleet.runpod_boxes = edict({"203.0.113.20": _box(2.49, provider="RunPod")})
+    with caplog.at_level("INFO", logger="llmao.fleet"):
+        fleet.place_servers()
+        fleet.place_servers()
+    assert (gone.unlisted, here.unlisted) == (True, False)
+    # Its old instance and price no longer apply.
+    assert gone.box is None
+    assert caplog.text.count("no provider lists 203.0.113.30") == 1
+    # Listed again: said once, and placed.
+    fleet.vast_boxes = edict({"203.0.113.30": _box(0.22)})
+    with caplog.at_level("INFO", logger="llmao.fleet"):
+        fleet.place_servers()
+    assert gone.unlisted is False
+    assert "203.0.113.30 is listed again" in caplog.text
+
+
+def test_nothing_is_concluded_until_every_provider_has_answered():
+    srv = _server("203.0.113.30")
+    fleet = _fleet_renting_from_both([srv])
+    fleet.vast_boxes = edict()  # Vast answered; RunPod not yet
+    fleet.place_servers()
+    assert srv.unlisted is False
+    # A fleet that rents from nobody (a local one) has nothing unlisted.
+    local = Fleet(edict(), [_server("127.0.0.1")])
+    local.place_servers()
+    assert local.servers[0].unlisted is False
 
 
 def test_each_row_carries_its_servers_share_of_the_box():
