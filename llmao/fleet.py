@@ -950,7 +950,7 @@ class Fleet:
         for srv in self.servers:
             if srv.public_port_pinned or not _listen_port_allowed(srv.host, srv.listen_port):
                 continue
-            by_listen = mapping.get(srv.host) if mapping is not None else None
+            by_listen = mapping and mapping.get(srv.host)
             if not by_listen:
                 _LOGGER.info("vast: no instance for fleet host %s", srv.host)
                 continue

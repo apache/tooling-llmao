@@ -201,8 +201,8 @@ def run_standalone() -> None:
     server = getattr(app.cfg, "server", None) or {}
     port = int(getattr(server, "port", None) or (server.get("port") if hasattr(server, "get") else None) or 8443)
 
-    certfile = getattr(server, "certfile", None) if server is not None else None
-    keyfile = getattr(server, "keyfile", None) if server is not None else None
+    certfile = getattr(server, "certfile", None)
+    keyfile = getattr(server, "keyfile", None)
     if isinstance(server, dict):
         certfile = server.get("certfile") or certfile
         keyfile = server.get("keyfile") or keyfile

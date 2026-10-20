@@ -181,7 +181,7 @@ def resolve_budget_duration(raw: Any, cfg: Any) -> str:
         if s:
             return s
     budgets = getattr(cfg, "budgets", None)
-    fallback = getattr(budgets, "duration", None) if budgets is not None else None
+    fallback = getattr(budgets, "duration", None)
     if fallback is not None:
         s = str(fallback).strip()
         if s:
@@ -848,7 +848,7 @@ class UsageManager:
                         token_id=row.token_id,
                         total_tokens=0,
                         total_cost_usd=0.0,
-                        cost_basis=self.fleet.cost_basis(row.model) if self.fleet else None,
+                        cost_basis=self.fleet and self.fleet.cost_basis(row.model),
                         requests=0,
                     )
                 acc.total_tokens += row.total_tokens
