@@ -38,7 +38,6 @@ from llmao.fleet import (
 )
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models, vllm_recipe
-from llmao.proxy.deployments import _norm_base
 from llmao.vllm_api_key import derive_vllm_api_key
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
@@ -484,44 +483,6 @@ def test_client_ip_claimed_host_not_peer():
         == "203.0.113.10"
     )
     assert HOST_HEADER == "X-LLMAO-Host"
-
-
-def test_norm_base_strips_trailing_v1():
-    """Why the normalisation exists.
-
-    An older LiteLLM appended /v1/chat/completions to api_base, so a base
-    that already ended in /v1 resolved to /v1/v1/... and 404'd at the origin.
-    LiteLLM then reported an OpenAI authentication error naming
-    platform.openai.com -- so the symptom pointed at the caller's key rather
-    than at the route. This happened in production against the Fastly-fronted
-    Gemma endpoint. The current LiteLLM appends only /chat/completions, so a
-    /v1-suffixed base is what vLLM needs now; routes pushed under the old
-    behaviour may lack it, and the comparison must match across both forms.
-    """
-    assert _norm_base("https://llm.tooling.apache.org/v1") == "https://llm.tooling.apache.org"
-    assert _norm_base("https://llm.tooling.apache.org/v1/") == "https://llm.tooling.apache.org"
-    assert _norm_base("http://127.0.0.1:8003/v1") == "http://127.0.0.1:8003"
-
-
-def test_norm_base_leaves_other_paths_alone():
-    """Only a trailing /v1 is stripped -- not a path that merely contains it."""
-    assert _norm_base("http://127.0.0.1:8003") == "http://127.0.0.1:8003"
-    assert _norm_base("http://127.0.0.1:8003/") == "http://127.0.0.1:8003"
-    assert _norm_base("https://example.com/v1/proxy") == "https://example.com/v1/proxy"
-    assert _norm_base("") == ""
-    assert _norm_base(None) == ""
-
-
-def test_norm_base_makes_skew_comparison_match():
-    """The comparison this exists for.
-
-    check_config_skew compares VllmServer.api_base against what LiteLLM reports.
-    VllmServer.api_base ends in /v1; a deployment pushed before that, or a
-    models.yaml row, may lack it. Without normalisation on both sides the
-    same deployment never matches, and the skew check reports a missing
-    deployment that is actually present.
-    """
-    assert _norm_base("http://100.105.28.100:8003/v1") == _norm_base("http://100.105.28.100:8003")
 
 
 def test_from_row_api_key_is_salt_hmac():

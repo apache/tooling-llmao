@@ -49,6 +49,7 @@ from llmao.model_status import (
 )
 from llmao.providers import provider_api_key
 from llmao.proxy.errors import BackendUnavailableError
+from llmao.reconcile import norm_base
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class DeploymentManager:
 
         info: dict[str, Any] = {
             "self_hosted": dep.self_hosted,
-            "asf_api_base": _norm_base(dep.api_base),
+            "asf_api_base": norm_base(dep.api_base),
         }
         if dep.access_groups:
             # What LiteLLM reads to decide which teams may use this
@@ -134,13 +135,13 @@ class DeploymentManager:
     def _litellm_id(self, row: dict, dep) -> str | None:
         if str(row.get("model_name") or "") != dep.model_name:
             return None
-        want = _norm_base(dep.api_base)
+        want = norm_base(dep.api_base)
         info = row.get("model_info") or {}
         if not isinstance(info, dict):
             info = {}
         if (
-            _norm_base(info.get("asf_api_base")) == want
-            or _norm_base(
+            norm_base(info.get("asf_api_base")) == want
+            or norm_base(
                 (row.get("litellm_params") or {}).get("api_base") if isinstance(row.get("litellm_params"), dict) else ""
             )
             == want
@@ -169,7 +170,7 @@ class DeploymentManager:
         if dep.provider is not None:
             # Registered at every startup, so a restart must find the last one
             # rather than add a second copy.
-            want = (_norm_base(dep.api_base), dep.model_name)
+            want = (norm_base(dep.api_base), dep.model_name)
             return any((norm, model_name) == want for norm, _host, _port, model_name, _id in routes)
         if not dep.self_hosted or dep.vllm is None:
             return False
@@ -276,8 +277,8 @@ class DeploymentManager:
         # One of our boxes serves one model, so its api_base identifies it. A
         # provider's api_base is shared by every model on the account, so a
         # provider deployment is its api_base and model name together.
-        ours = {_norm_base(d.api_base) for d in self.fleet.deployments if d.api_base and d.provider is None}
-        bought = {(_norm_base(d.api_base), d.model_name) for d in self.fleet.deployments if d.provider is not None}
+        ours = {norm_base(d.api_base) for d in self.fleet.deployments if d.api_base and d.provider is None}
+        bought = {(norm_base(d.api_base), d.model_name) for d in self.fleet.deployments if d.provider is not None}
         # Servers whose address is not known this pass: no public port yet, or
         # the provider's lookup failed. A LiteLLM deployment on the same host
         # and model may well be theirs, so it is not called an extra.
@@ -289,7 +290,7 @@ class DeploymentManager:
         servers = [d.vllm for d in self.fleet.deployments if d.provider is None and d.vllm is not None]
         now = time.time()
         for dep in self.fleet.deployments:
-            base = _norm_base(dep.api_base) if dep.api_base else None
+            base = norm_base(dep.api_base) if dep.api_base else None
             if dep.provider is not None:
                 dep.in_litellm = (base, dep.model_name) in pairs
                 dep.config_mismatch = False
@@ -415,12 +416,12 @@ class DeploymentManager:
         # Each endpoint as (api_base, LiteLLM model). Our boxes match on the
         # base alone; a provider's base is shared, so it matches on both.
         healthy = {
-            (_norm_base(x.get("api_base")), x.get("model"))
+            (norm_base(x.get("api_base")), x.get("model"))
             for x in (body.get("healthy_endpoints") or [])
             if isinstance(x, dict) and x.get("api_base")
         }
         unhealthy = {
-            (_norm_base(x.get("api_base")), x.get("model"))
+            (norm_base(x.get("api_base")), x.get("model"))
             for x in (body.get("unhealthy_endpoints") or [])
             if isinstance(x, dict) and x.get("api_base")
         }
@@ -428,7 +429,7 @@ class DeploymentManager:
         unhealthy_bases = {base for base, _model in unhealthy}
         stamp = time.time()
         for dep in self.fleet.deployments:
-            base = _norm_base(dep.api_base) if dep.api_base else None
+            base = norm_base(dep.api_base) if dep.api_base else None
             if base is None:
                 # Nothing to match LiteLLM's answer to. The last result stands
                 # rather than being wiped for the four hours until the next check.
@@ -458,27 +459,6 @@ class DeploymentManager:
             _LOGGER.warning("skew: %s@%s %s", dep.name, dep.api_base, SKEW_PHRASE[badge])
 
 
-def _norm_base(url: Any) -> str:
-    """Strip trailing slashes and a trailing /v1.
-
-    The identity the skew check compares on: the same route appears with the
-    suffix (VllmServer.api_base, and the litellm_params.api_base copied from
-    it) and without (asf_api_base, routes pushed before the suffix). The
-    comparison must match across both forms.
-
-    (The suffix was once actively wrong: an older LiteLLM appended
-    /v1/chat/completions to api_base, so a /v1-suffixed base resolved to
-    /v1/v1/..., 404'd at the origin, and surfaced as an OpenAI
-    authentication error naming platform.openai.com -- which sends the reader
-    after their own key rather than the route. The current LiteLLM appends
-    only /chat/completions, so the suffix is what vLLM needs now.)
-    """
-    s = str(url or "").rstrip("/")
-    if s.endswith("/v1"):
-        s = s[:-3].rstrip("/")
-    return s
-
-
 def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, str]]:
     """Each LiteLLM row as (normalised api_base, host, port, model_name, id).
 
@@ -499,7 +479,7 @@ def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, 
         params = row.get("litellm_params") or {}
         if not isinstance(params, dict) or not params.get("api_base"):
             continue
-        norm = _norm_base(params["api_base"])
+        norm = norm_base(params["api_base"])
         parsed = urlparse(norm)
         info = row.get("model_info") or {}
         route_id = str(info.get("id") or "") if isinstance(info, dict) else ""

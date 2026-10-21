@@ -52,6 +52,7 @@ from llmao.model_status import (
 )
 from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
 from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
+from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.runpod_client import boxes_from_pods, fetch_pods
 from llmao.vast_client import boxes_from_body, fetch_instances, port_map_from_body
 
@@ -80,13 +81,6 @@ def _ago(ts: float | None) -> str:
     if sec < 3600:
         return f"{sec // 60}m"
     return f"{sec // 3600}h"
-
-
-def normalize_peer_ip(addr: str | None) -> str:
-    ip = (addr or "").strip()
-    if ip.startswith("::ffff:"):
-        ip = ip[7:]
-    return ip
 
 
 # Box-claimed public IP (Vast PUBLIC_IPADDR). Not X-Forwarded-For.
@@ -464,6 +458,11 @@ class VllmServer:
         return _ago(self.config_served_at)
 
     @property
+    def key(self) -> DeploymentKey:
+        """This server's identity everywhere: its listen URL and model name. Never the public port."""
+        return deployment_key(self.model_name, host=self.host, listen_port=self.listen_port)
+
+    @property
     def root_url(self) -> str | None:
         if self.public_port is None:
             return None
@@ -671,6 +670,13 @@ class FleetDeployment:
             provider=pd.provider,
             litellm_model=pd.litellm_model,
         )
+
+    @property
+    def key(self) -> DeploymentKey:
+        """The deployment's identity: the server's listen URL, or the provider's base, plus our model name."""
+        if self.vllm is not None:
+            return self.vllm.key
+        return deployment_key(self.model_name, api_base=self._api_base)
 
     @property
     def api_base(self) -> str | None:
