@@ -165,6 +165,22 @@ def _listen_port_allowed(host: str, port: int) -> bool:
     return port in VLLM_LISTEN_PORTS or (normalize_peer_ip(host), port) in LEGACY_SERVERS
 
 
+def working_api_key(cfg: Any, srv: Any) -> str:
+    """The bearer this vLLM process accepts: what LiteLLM registers and what /v1/models is asked with.
+
+    LEGACY_SERVERS were launched with the shared fleet.selfhost_api_key, which
+    validate_fleet already required when one of those hosts is configured.
+    Every other box uses the key derived from the salt (srv.api_key). One
+    rule, read by the deployment body and by the served-window fetch alike;
+    the fetch used to send the derived key to every box, so a legacy box
+    answered 401 on every pass and never reported its context window.
+    No probe: the wrong key 401s, and the next pass says so.
+    """
+    if (normalize_peer_ip(srv.host), int(srv.listen_port)) in LEGACY_SERVERS:
+        return str(cfg.fleet.selfhost_api_key).strip()
+    return str(srv.api_key or "")
+
+
 def _require_listen_port(host: str, port: int) -> None:
     if _listen_port_allowed(host, port):
         return
@@ -1092,7 +1108,7 @@ class Fleet:
                 if srv.state == HEALTHY and (was != HEALTHY or srv.observed_max_model_len is None):
                     root = srv.root_url
                     if root:
-                        mml = await fetch_max_model_len(client, root, srv.api_key)
+                        mml = await fetch_max_model_len(client, root, working_api_key(self.cfg, srv))
                         if mml is not None:
                             srv.observed_max_model_len = mml
                             srv.observed_at = stamp

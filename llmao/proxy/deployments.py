@@ -30,13 +30,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from llmao.fleet import (
-    LEGACY_SERVERS,
     ORDER_SELF_HOSTED,
     ORDER_SPEND,
     ORPHAN_PASSES,
     ExtraLiteLLM,
     normalize_peer_ip,
     snapshot_for_status,
+    working_api_key,
 )
 from llmao.model_status import (
     HEALTHY,
@@ -149,21 +149,11 @@ class DeploymentManager:
             return str(info.get("id") or row.get("model_id") or "") or None
         return None
 
-    async def _working_api_key(self, dep) -> str | None:
-        """The bearer to register for this server.
-
-        LEGACY_SERVERS were launched with the shared selfhost_api_key.
-        validate_fleet already required that key when one of those hosts is
-        configured, so this just returns it. Every other box uses the key
-        derived from the salt. No probe: trying the wrong one 401s and the
-        next pass deletes the route.
-        """
+    def _working_api_key(self, dep) -> str | None:
+        """The bearer to register for this server: fleet.working_api_key, or None off our boxes."""
         if not dep.self_hosted or dep.vllm is None:
             return None
-        srv = dep.vllm
-        if (normalize_peer_ip(srv.host), int(srv.listen_port)) in LEGACY_SERVERS:
-            return str(self._cfg.fleet.selfhost_api_key).strip()
-        return srv.api_key or None
+        return working_api_key(self._cfg, dep.vllm) or None
 
     async def _deployment_present(self, dep) -> bool:
         routes = _routes_from_model_info(await self._model_info_rows())
@@ -188,7 +178,7 @@ class DeploymentManager:
             dep.in_litellm = True
             _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
             return
-        body = self.deployment_body(dep, api_key=await self._working_api_key(dep))
+        body = self.deployment_body(dep, api_key=self._working_api_key(dep))
         resp = await self._transport.request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
             dep.in_litellm = True

@@ -35,6 +35,7 @@ from llmao.fleet import (
     parse_host_row,
     snapshot_for_status,
     validate_fleet,
+    working_api_key,
 )
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models, vllm_recipe
@@ -388,6 +389,7 @@ def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
 
 
 def test_working_api_key_follows_the_legacy_set():
+    """One rule for the bearer a box accepts: shared for LEGACY_SERVERS, derived for every other."""
     from llmao.proxy.client import LiteLLMBackend
 
     cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
@@ -396,18 +398,56 @@ def test_working_api_key_follows_the_legacy_set():
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    backend = LiteLLMBackend(cfg, fleet)
     legacy = fleet.deployments[0]
-    other = edict(self_hosted=True, vllm=edict(host="10.0.0.1", listen_port=8001, api_key="sk-derived"))
-    in_range = edict(self_hosted=True, vllm=edict(host="213.173.110.78", listen_port=8003, api_key="sk-derived"))
+    other = edict(host="10.0.0.1", listen_port=8001, api_key="sk-derived")
+    in_range = edict(host="213.173.110.78", listen_port=8003, api_key="sk-derived")
+    assert working_api_key(cfg, legacy.vllm) == "sk-shared"
+    assert working_api_key(cfg, in_range) == "sk-shared"
+    assert working_api_key(cfg, other) == "sk-derived"
 
-    async def run():
-        assert await backend.deployments._working_api_key(legacy) == "sk-shared"
-        assert await backend.deployments._working_api_key(in_range) == "sk-shared"
-        assert await backend.deployments._working_api_key(other) == "sk-derived"
-        await backend.aclose()
+    # The executor asks the same function, and has no answer off our boxes.
+    backend = LiteLLMBackend(cfg, fleet)
+    assert backend.deployments._working_api_key(legacy) == "sk-shared"
+    assert backend.deployments._working_api_key(edict(self_hosted=False, vllm=None)) is None
+    asyncio.run(backend.aclose())
 
-    asyncio.run(run())
+
+def test_served_window_is_asked_for_with_the_working_key():
+    """The /v1/models read on the edge into Healthy sends what the box accepts.
+
+    It used to send the derived key to every box, so a legacy box answered
+    401 on every pass and its context window stayed unknown for good.
+    """
+    cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
+    cfg.fleet.selfhost_api_key = "sk-shared"
+    models = load_models(EXAMPLE)
+    validate_fleet(cfg, models=models)
+    fleet = Fleet.from_cfg(cfg, models=models)
+    fleet.apply_port_map({"80.188.223.202": {"10100": 40000}})
+    (srv,) = fleet.servers
+    bearers = []
+
+    class _Resp:
+        def __init__(self, status_code, body=None):
+            self.status_code = status_code
+            self._body = body
+            self.text = "OK"
+
+        def json(self):
+            return self._body
+
+    class _Client:
+        async def get(self, url, headers=None):
+            if url.endswith("/health"):
+                return _Resp(200)
+            bearers.append((headers or {}).get("Authorization"))
+            if headers and headers.get("Authorization") == "Bearer sk-shared":
+                return _Resp(200, {"data": [{"max_model_len": 8192}]})
+            return _Resp(401)
+
+    asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
+    assert bearers == ["Bearer sk-shared"]
+    assert srv.observed_max_model_len == 8192
 
 
 def test_listen_port_outside_the_set_fails():
