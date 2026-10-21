@@ -33,10 +33,14 @@ different from not configured. Mixing inventory and probes under one
 said Healthy.
 
 The box protocol is an edge, not a level: a host fetches its config once.
-It still gets a snapshot of its own (host → stamp of the last fetch, and
-of the first), replaced by the handler and folded by reconcile, so the
-HTTP handler never writes history. Today that stamp is `config_served_at`
-on the server object, set from three places.
+It still gets a snapshot of its own (host → stamp of the last fetch),
+replaced by the handler and folded by reconcile, so the HTTP handler
+never writes history. Lifecycle only asks whether a fetch has happened.
+Today that stamp is `config_served_at` on the server object, set from
+three places: the handler, and `adopt_vast_instances` for an approved
+host answering 503 and for a discovered Healthy port. Those two adopt
+stamps go away with adopt. An approved host that has not fetched reads
+Awaiting.
 
 The work of keeping them in step is spread around and tightly coupled.
 Different runners set mutable flags on shared objects: `srv.state`,
@@ -71,17 +75,27 @@ is observed, rather than updating state step by step from many places.
    different from an empty one. The "unlisted" rule already depends on
    that difference; here it applies to every source. A failed fetch
    leaves the last good snapshot in place; it does not publish
-   empty-as-absent. Inventory has a third state, not configured, for a
-   GPU provider with no API key. That source is ignored. `None`
+   empty-as-absent. One exception: a fetch that was confirming a write
+   to LiteLLM. If that GET fails, the LiteLLM deployments are unread
+   until a GET succeeds. The pre-write snapshot must not stay in force
+   and look like a fresh absence, because `/model/new` is not an upsert
+   and the next pass would add a second deployment. Unread means no add,
+   no delete, and no prune. Inventory has a third state, not configured,
+   for a GPU provider with no API key. That source is ignored. `None`
    (configured, never read) does not count as an absence.
 
    **Staleness is one rule.** A snapshot kept past its fetch failing
    ages, so a snapshot older than `health_fail_threshold` times its own
    interval counts as unread: a stale inventory does not advance an
    unlisted count, a stale read of the LiteLLM deployments adds, deletes
-   and prunes nothing,
-   a stale probe is the `stale` signal `model_status._stale` already
-   computes. The same rule, the same multiplier, for every source.
+   and prunes nothing, a stale probe is the `stale` signal
+   `model_status._stale` already computes. The same rule, the same
+   multiplier, for every source. That multiplier is already what
+   `_stale` uses for the probe and for LiteLLM `/health`.
+
+   A counter advances only when that source publishes a new snapshot,
+   one whose taken-at changed. Reconcile waking because some other
+   source changed, or because the tick fired, is not another miss.
 
 2. **One pure function decides.**
    `reconcile(snapshots, history) -> (view, plan)`.
@@ -102,9 +116,12 @@ is observed, rather than updating state step by step from many places.
    - **Discovered servers are computed, not added.** Today
      `adopt_vast_instances` probes inventory hosts that are not in
      `fleet.hosts` and, on a match, mutates the server list. Under
-     reconcile, probing those hosts is part of the vLLM health fetch, and
+     reconcile, the vLLM health fetcher probes those hosts too, from the
+     inventory snapshot's listen-port to public-port map, and
      "discovered" is a record reconcile makes from an inventory entry
      with no intended row and a probe that named a `models.yaml` model.
+     The view cannot be the target list for that probe: the host has no
+     record until the probe has named the model.
    - The **plan** is a list of actions. Each action names a kind, a key
      and a reason. A **policy table** then marks each kind `auto` or
      `needs_human`. Reconcile does not embed that policy.
@@ -113,9 +130,11 @@ is observed, rather than updating state step by step from many places.
    memory: first seen, last ok, last dialable URL, last instance id,
    `config_served_at`, the counters that stop one missed probe or one
    missing listing from becoming a verdict, and the last verdict, so a
-   change is logged once. It is small and explicit, and **only
-   `reconcile()` writes it**, by folding new snapshots into the previous
-   history.
+   change is logged once. It is small and explicit. The pure function
+   returns the next history and the loop stores it. Fetchers, the
+   executor, and the pages do not write it. The one exception is the
+   placement key, below: reconcile returns the change and a store
+   adapter writes it.
 
    Fetchers replace their snapshot. They neither read nor write history;
    what they need to know (which URL to dial) they take from the view.
@@ -129,40 +148,71 @@ is observed, rather than updating state step by step from many places.
    own store.
 
    Hysteresis is one **pattern**: consecutive misses, reset on a hit, and
-   an unread or stale snapshot is not a miss. Each counter is its own
-   history entry and keeps its own threshold and interval.
+   an unread or stale snapshot is not a miss. A miss is a new snapshot.
+   Each counter is its own history entry and keeps its own threshold.
    `health_fail_threshold` stays a `fleet.*` config key (probe clock,
-   ~45s). Two constants, one per clock, so there is no p6/eyaml
-   round-trip: `UNLISTED_PASSES` on the listing clock (10 min) and
-   `ORPHAN_PASSES` on the skew clock (3 min). Today one constant serves
-   both. Unlisted is a **host** verdict — one instance, several listen
-   ports — applied to every key on that host.
+   ~45s). Two constants, so there is no p6/eyaml round-trip.
+   `UNLISTED_PASSES` counts new snapshots from the provider that placed
+   the host. `ORPHAN_PASSES` counts new snapshots of the LiteLLM
+   deployments (`skew_interval_s`, 180s). Today one constant, 3, serves
+   both, and `place_servers` increments it on every probe pass, so three
+   passes is about two minutes. There is no 10-minute listing clock.
+   Vast is refreshed on the probe pass. RunPod is fetched every 600s.
+   The same count is a different amount of wall time on each.
+
+   Unlisted is a **host** verdict — one instance, several listen ports —
+   applied to every key on that host. The "remove it from `fleet.hosts`"
+   sentence waits until the verdict is true and the lifecycle is not
+   Healthy. A listing gap while the probe still passes keeps the route
+   and does not ask for a config edit. A RunPod pod is absent from the
+   pod list for over 90 minutes while it provisions, and no pass count
+   on a 600s fetch is both prompt and longer than that gap, so the
+   sentence is gated on the probe. When the probe then fails, the delete
+   is the probe gate's and the sentence is unlisted's.
 
    **Which listing can say a host is gone is remembered, not configured.**
    config.yaml does not say which provider rents a host, and it will not:
-   that is a schema change. Instead, the first time a listing places a
-   host, llmao remembers which one (`llmao:placed:<host>` → provider, in
-   the memory store). Unlisted then means: that provider's listing, read
+   that is a schema change. The first time a listing places a host that
+   is in `fleet.hosts`, reconcile returns a placement
+   (`llmao:placed:<host>` → provider). The host in that key has been
+   through `normalize_peer_ip`. A store adapter writes it to the memory
+   store. `reconcile()` stays pure and does not touch the store. When
+   both listings contain the host on that first sighting, remember Vast:
+   that is what `{**runpod_boxes, **vast_boxes}` does today. A later
+   listing from the other provider does not change the remembered one.
+   Moving the host to the other provider at the same address is a config
+   edit, removing the row and adding it back, which clears the key.
+
+   Unlisted then means: that provider's listing, a new snapshot, read
    and not stale, has omitted the host `UNLISTED_PASSES` times running.
    A host no listing has ever placed is never unlisted, and one
    provider's outage says nothing about the other's hosts. This is
-   `ever_listed` today, with two changes: it names the provider, and it
-   survives a restart. The restart matters: a rental that dies before
-   llmao restarts is never `ever_listed` afterwards in the current code,
-   so the "remove from `fleet.hosts`" sentence never shows for it. This is
-   the one history item kept in the store; the rest stays in process
-   memory. It is cleared when the host leaves `fleet.hosts`.
+   `ever_listed` today, with three changes: it names the provider, it
+   survives a restart, and the sentence does not show while the probe
+   passes. The restart matters: a rental that dies before llmao restarts
+   is never `ever_listed` afterwards in the current code, so the sentence
+   never shows for it. This is the one history item kept in the store;
+   the rest stays in process memory. If the store cannot be read, the
+   host is not unlisted for this process. A missing key because LiteLLM
+   is down is not "this host was never placed." The adapter clears the
+   key when a successful intended snapshot omits the host. A failed
+   config load keeps the last intended snapshot, so it does not look
+   like every host left. Discovered hosts are not in `fleet.hosts` and
+   get no placement key. When one leaves the inventory, a LiteLLM
+   deployment it still has is an orphan.
 
 4. **An executor carries out the plan.** It runs the `auto` actions
    idempotently. It never trusts its own writes: the LiteLLM deployments
-   it fetches straight after confirm them.
+   it fetches straight after confirm them. If that fetch fails, the
+   source is unread until a later fetch succeeds.
 
 5. **The plan is what /models and /admin show.** The "Work needed"
    strip, the reason text, and the action buttons all come from it. The
    pages no longer reason for themselves, so the automatic path and the
    button cannot drift apart. `needs_human` is not always a button.
    Add, Stop tracking, Approve, and the labels post. "Remove it from
-   `fleet.hosts`" is a sentence: the page does not write config.yaml.
+   `fleet.hosts`" is a sentence, and only when the host is unlisted and
+   not Healthy. The page does not write config.yaml.
 
 ## Identity: (canonical URL, model)
 
@@ -293,9 +343,14 @@ Two cases become plain:
 - **A port remap.** The key is the same, but the dialable URL no longer
   matches the `api_base` LiteLLM holds, so the plan says "update this
   deployment's api_base". Today that case is spread across
-  `at_listen_port`, `same_deployment` and `on_listen_port`. Until an
-  update endpoint is verified, that action is delete+add, a brief route
-  gap.
+  `at_listen_port`, `same_deployment` and `on_listen_port`.
+  `POST /model/update` merges `litellm_params`, which is where `api_base`
+  lives, so the action is that call. The hand check during backfill is a
+  different question: whether the same call rewrites other `model_info`
+  fields, the stamp among them. If it updates `api_base` and does not
+  rewrite the stamp, a remap still updates and the backfill is the wipe
+  in the stamping section. If the hand check shows it cannot change
+  `api_base` either, the action is delete+add, a brief gap.
 
 ## Policy
 
@@ -309,22 +364,26 @@ self-hosted and commercial are different gates:
   set, stays Healthy and is not deleted. Prune unmatched orphans after
   `ORPHAN_PASSES`.
 - **Unlisted is not a delete gate.** Today `sync_selfhost` also deletes
-  when unlisted and not Healthy, but that clause never deletes anything
-  the probe gate would not: Unhealthy and Stalled already delete, and
-  Awaiting or Loading is never a LiteLLM deployment except after a restart,
-  which is its own row and comes out Unhealthy. All the clause did was
-  tie the 10-minute listing clock to the delete action, which is what
-  produced 65e22c8. Unlisted is an attention verdict: the sentence, and no
-  buttons.
+  when unlisted and not Healthy. Once `last_ok` is set, a box that is not
+  Healthy is Unhealthy, and the probe gate already deletes that. The
+  extra clause tied the listing count to the delete, which is what
+  produced 65e22c8. Unlisted is an attention verdict. The sentence, and
+  no buttons, wait until the lifecycle is not Healthy. While the probe
+  passes, a listing gap keeps the route and stays quiet.
 - **Auto, commercial:** add when absent from the LiteLLM deployments, including
   while LiteLLM health is still unknown (`Configured`). Do not delete when
   LiteLLM later marks the endpoint unhealthy. `ensure_providers` is
   startup-only today; under reconcile this add runs every pass.
-- **Deployments are config-truth; hand edits are reverted.** A deployment
-  deleted or changed in LiteLLM's own UI comes back, or is put back, on
-  the next pass, and the action log records the revert so it is seen
-  rather than silent. `watch_outside_edits` keeps reporting hand edits
-  to teams and keys, which reconcile does not touch.
+- **Deployments are config-truth for membership and api_base.** v1
+  reverts two hand edits, and the action log records the revert. A
+  deployment deleted in LiteLLM's UI is added again when the add gate is
+  open: self-hosted Healthy and dialable, or commercial and absent. An
+  Unhealthy row stays absent. An `api_base` that does not match the
+  dialable URL is updated. Body fields (`access_groups`, `order`,
+  `hosted_vllm/` prefix, working API key) are later skew, and v1 does
+  not rewrite them. `watch_outside_edits` keeps reporting pretend-project
+  team drift, which is all `check_outside_edits` does today. It does not
+  report keys, it does not revert, and reconcile does not take it over.
 - **Human:** approve, labels, and anything that spends money or destroys
   a box. "Remove it from `fleet.hosts`" is a sentence on the attention
   item, not a POST.
@@ -339,10 +398,15 @@ Also:
   (`access_groups`, `order`, `hosted_vllm/` prefix, working API key) are
   later skew, not v1.
 - `adopt_vast_instances` materializing a server from live `/v1/models`
-  with no approval is **discovered**, not `fleet.hosts`. While this
-  process has it and it is Healthy and dialable, add runs, as it does
-  today. A restart forgets it until adopt sees it again. The attention
-  sentence is that it is not in `fleet.hosts`, not "remove it".
+  with no approval is **discovered**, not `fleet.hosts`. Reconcile
+  computes the record; it does not add a server. While the record is
+  Healthy and dialable, add runs, as it does today. A restart does not
+  forget it: the next pass recomputes it while the listing and the probe
+  still match. The attention sentence is that it is not in `fleet.hosts`,
+  not "remove it". It has no placement key, so it is never unlisted.
+- Two LiteLLM ids for one key: keep the stamped row if there is one,
+  else the row whose `api_base` matches the dialable URL. Any further id
+  is an orphan and follows `ORPHAN_PASSES`.
 - Unknown fleet-key fetches stay an onboarding strip: still 404 until
   approved, still not a LiteLLM row.
 - Served-model skew (GET `/v1/models` vs the intended HF id) stays
@@ -352,7 +416,11 @@ Also:
 ## Runners
 
 - One fetcher per source, each on its own schedule (as the RunPod listing
-  runner is today). Each one publishes a new snapshot.
+  runner is today). Each one publishes a new snapshot. The vLLM health
+  fetcher dials the dialable URL on each record in the view, and it
+  probes inventory hosts that have no record yet, using that snapshot's
+  listen-port to public-port map. It reads the inventory snapshot for
+  those extra targets. It does not read history.
 - One reconcile loop, woken by an `asyncio.Event` when any snapshot
   changes, and by a slow periodic tick.
 
@@ -370,8 +438,13 @@ The snapshots, key, record, plan and `reconcile()` are a new
 `llmao/reconcile.py` — pure, table-tested. It absorbs `model_status.py`:
 `self_hosted_lifecycle`, `commercial_lifecycle` and `deployment_status`
 become the part of reconcile that writes the verdicts on the record, and
-`DeploymentSnapshot` becomes the record. One status layer, computed once
-per pass, not a compute layer the pages call again on the same data.
+`DeploymentSnapshot` becomes the record. `model_rollup` and privacy,
+including a `litellm_only` row forcing MIXED, stay pure functions over
+the records of one model name. They are not fields of one record. One
+status layer, computed once per pass, not a compute layer the pages
+call again on the same data. The loop stores the history the pure
+function returns. The placement adapter is the only writer of
+`llmao:placed:<host>`.
 `proxy/deployments.py` becomes the executor (`add_deployment` /
 `delete_deployment` / `update_deployment`, and the fetch of the LiteLLM
 deployments that follows each).
@@ -410,8 +483,8 @@ the button.
 
 Restart-empty hysteresis is a feature: `_prune_extras` starts its counter
 at 0 so a portal coming up to stale deployments clears them after
-`ORPHAN_PASSES` rather than on the first pass. History stays in process
-memory.
+`ORPHAN_PASSES` rather than on the first pass. Those counters stay in
+process memory. The placement key is the one item in the memory store.
 
 ## Open questions
 
@@ -446,9 +519,12 @@ memory.
 4. **Where history lives.** In memory, as today, so a restart forgets the
    hysteresis counters and starts cautious? Or in the memory store?
 
-   **Answer:** Process memory, start cautious on restart. Only
-   `reconcile()` writes history. Approvals/labels persisting is a
-   separate product question.
+   **Answer:** Process memory, start cautious on restart. `reconcile()`
+   returns the next history and the loop stores it. The one exception is
+   which listing placed a `fleet.hosts` host, kept in the memory store so
+   a restart can still say the rental ended. Reconcile returns that
+   change and a store adapter writes it. See History above. Approvals
+   and labels persisting is a separate product question.
 
 5. **The decision table itself:** worked out from today's real states and
    transitions, before any code.
@@ -482,24 +558,29 @@ badges, unlisted (host-level), and the plan actions.
 | Healthy, absent | probe ok, dialable, no LiteLLM deployment | Healthy; skew intended_not_in_litellm | add_litellm |
 | Probe failed, under threshold | `last_ok` set, `fails` < `health_fail_threshold` | stays Healthy | none |
 | Healthy, present, api_base matches | probe ok, the deployment's api_base == dialable | Healthy | none |
-| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base (`/model/update`; delete+add if the hand check during backfill shows it cannot). `asf_api_base` lags until that write |
+| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base via `/model/update` (it merges `litellm_params`). Delete+add only if the hand check shows that call cannot change `api_base`. The stamp check is separate. `asf_api_base` lags until that write |
 | LiteLLM health skew | vLLM up and LiteLLM `/health` down, or the reverse | badge only (`vllm_up_litellm_down` / `vllm_down_litellm_up`) | none |
 | Unhealthy / Stalled, in LiteLLM | self-hosted; probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
-| 65e22c8 serving through a listing gap | inventory absent or unlisted counting up; probe ok on last-known dialable | Healthy; not unlisted until `UNLISTED_PASSES`; keep route | none (keep probing last-known URL) |
-| Unlisted, deployment present | host verdict true, whatever the lifecycle | unlisted + lifecycle | no delete from this row (the probe rows delete); sentence, no POST, no buttons: remove from `fleet.hosts` |
-| Unlisted, deployment already absent | host verdict true; row is in `fleet.hosts` | unlisted | sentence, no POST: remove from `fleet.hosts` |
+| 65e22c8 serving through a listing gap | placing provider's new snapshots omit the host; probe ok on last-known dialable | Healthy. The count may reach `UNLISTED_PASSES` during a provision gap (RunPod: over 90 minutes). The route stays | none. No sentence while Healthy. Keep probing the last-known URL |
+| Unlisted, deployment present, not Healthy | host verdict true; lifecycle is Unhealthy, Stalled, Loading, or Awaiting | unlisted + lifecycle | no delete from this row (the probe rows delete); sentence, no POST, no buttons: remove from `fleet.hosts` |
+| Unlisted, still Healthy | host verdict true; probe ok | unlisted + Healthy | none. No sentence, no buttons. The route stays |
+| Unlisted, deployment already absent | host verdict true; row is in `fleet.hosts`; lifecycle is not Healthy | unlisted | sentence, no POST: remove from `fleet.hosts`. A Healthy absent row is the add row, not this one |
 | #29 orphan, early | not intended, a LiteLLM deployment exists, orphan_passes < `ORPHAN_PASSES` | litellm_only skew | none (count) |
 | #29 orphan, persisted | orphan_passes ≥ `ORPHAN_PASSES` | litellm_only | prune_orphan |
 | Orphan that is our listen port | a LiteLLM deployment matches a key's listen URL | at_listen_port | update_api_base, not prune |
-| Hand edit in LiteLLM's UI | intended row; its deployment is gone, or differs from the body llmao writes | skew | add or update, every pass; action log records the revert |
+| Hand edit in LiteLLM's UI | intended row; its deployment is gone, or its api_base differs | skew | add when the add gate is open; update_api_base when api_base differs. Body fields are not reverted in v1. Action log records the revert |
+| Two LiteLLM ids, one key | two rows for one key | keep the stamped id, else the api_base that matches the dialable URL | the other id is an orphan (`ORPHAN_PASSES`) |
+| Confirm fetch failed | a write just happened; the follow-up GET of the LiteLLM deployments failed | that source is unread, not "still absent" | no add, no delete, no prune |
+| Same snapshot, reconcile woken again | taken-at unchanged | counters do not move | none |
 | New rental, same address | instance id changed under the same key | history reset | probe afresh; add/delete from new observations |
 | Commercial, missing | intended provider, no LiteLLM deployment, health unknown or known | Configured or Healthy | add_litellm (every pass, not only startup) |
 | Commercial, LiteLLM unhealthy | deployment exists, LiteLLM `/health` says down | Unhealthy | none (keep the deployment) |
 | Commercial listing | no GPU inventory for that key | never unlisted | LiteLLM deployment and health only |
 | No GPU source configured | no Vast key and no RunPod key | dialable is the pin, else the canonical listen URL | probe and add as a self-hosted row |
 | Host never placed | no listing has ever named it (our own box, a hand pin, or a provider with no key) | nothing remembered for it | never unlisted; probe and add on the pin or last-known URL |
-| Discovered, Healthy | inventory host not in `fleet.hosts`, no approval, live `/v1/models` matched a `models.yaml` row, probe ok, dialable | a record reconcile computed, not a server it added; Healthy | add_litellm. Sentence: not in `fleet.hosts`; a restart forgets it until the next pass sees it again |
-| Inventory unread or stale | that snapshot `None`, or older than the threshold × its interval | last unlisted verdict stands; do not increment | no unlisted transition |
+| Discovered, Healthy | inventory host not in `fleet.hosts`, no approval, live `/v1/models` matched a `models.yaml` row, probe ok, dialable | a record reconcile computed, not a server it added; Healthy; no placement key | add_litellm. Sentence: not in `fleet.hosts`. A restart recomputes it on the next pass while the listing and the probe still match. Never unlisted |
+| Inventory unread or stale | that snapshot `None`, or older than the threshold × its interval, or the same taken-at as the last count | last unlisted verdict stands; do not increment | no unlisted transition |
+| Store unread | the memory store could not be read | placement unknown for this process | not unlisted. The failed read is not "never placed" |
 | LiteLLM deployments unread or stale | that snapshot `None`, or past the staleness rule | do not invent orphans or absences | no add/delete/prune |
 | Restart, orphans present | empty orphan_passes, deployments still there | orphans at pass 1 | no prune until `ORPHAN_PASSES` |
 | Other provider's outage | Vast placed the host; RunPod list stale or unread | nothing: only the listing that placed the host counts | unlisted unaffected |
