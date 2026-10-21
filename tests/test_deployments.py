@@ -44,6 +44,31 @@ def _paths(manager):
     return [c.path for c in manager._transport.calls]
 
 
+def _litellm(rows=None):
+    """A stand-in LiteLLM that remembers its deployments, so a read after a write sees the write.
+
+    model/info answers with the rows; model/new appends the posted body with
+    an id; model/delete removes the row with that id. Pass it to _manager.
+    """
+    state = edict(rows=list(rows or []), n=0)
+
+    def answer(call):
+        if call.path == "model/info":
+            return {"data": list(state.rows)}
+        if call.path == "model/new":
+            state.n += 1
+            row = dict(call.json)
+            row["model_info"] = {**(row.get("model_info") or {}), "id": f"id-{state.n}"}
+            state.rows.append(row)
+            return {}
+        if call.path == "model/delete":
+            state.rows = [r for r in state.rows if (r.get("model_info") or {}).get("id") != call.json["id"]]
+            return {}
+        return {}
+
+    return answer
+
+
 def test_deployment_body_from_models():
     s = _server()
     models = {
@@ -85,11 +110,48 @@ def test_sync_selfhost_posts_new_when_serving():
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(None, [s], models=models)
+    be = _manager(fleet, _litellm())
+    asyncio.run(be.sync_selfhost())
+    # Is it there?, the write, and the read that confirms the write.
+    assert _paths(be) == ["model/info", "model/new", "model/info"]
+    assert fleet.deployments[0].in_litellm is True
+
+
+def test_presence_after_a_write_is_observed_not_assumed():
+    """A LiteLLM that answers 200 to model/new and then does not list the deployment.
+
+    The old code set in_litellm on the strength of the 200. Now the read that
+    follows decides, so the next pass tries again instead of trusting a write
+    LiteLLM lost.
+    """
+    s = _server()
+    s.state = HEALTHY
+    fleet = Fleet(None, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
     be = _manager(fleet, {"data": []})
     asyncio.run(be.sync_selfhost())
-    last = be._transport.calls[-1]
-    assert (last.method, last.path) == ("POST", "model/new")
+    assert "model/new" in _paths(be)
+    assert fleet.deployments[0].in_litellm is False
+
+
+def test_a_failed_confirm_keeps_the_last_answer(caplog):
+    """The re-read after a write failed: the write is assumed, as before, and the tick does not raise."""
+    s = _server()
+    s.state = HEALTHY
+    fleet = Fleet(None, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    reads = []
+
+    def answer(call):
+        if call.path == "model/info":
+            reads.append(call)
+            return (500, {}) if len(reads) > 1 else {"data": []}
+        return {}
+
+    be = _manager(fleet, answer)
+    with caplog.at_level("WARNING", logger="llmao.proxy.deployments"):
+        asyncio.run(be.sync_selfhost())
+    assert _paths(be) == ["model/info", "model/new", "model/info"]
     assert fleet.deployments[0].in_litellm is True
+    assert "could not be re-read after a write" in caplog.text
 
 
 def test_one_failing_deployment_does_not_stop_the_rest(caplog):
@@ -101,7 +163,7 @@ def test_one_failing_deployment_does_not_stop_the_rest(caplog):
     # "gone" is not in models.yaml, so its body cannot be built.
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(None, [broken, *fine], models=models)
-    be = _manager(fleet, {"data": []})
+    be = _manager(fleet, _litellm())
     with caplog.at_level("ERROR", logger="llmao.proxy.deployments"):
         asyncio.run(be.sync_selfhost())
     posted = [c.json["litellm_params"]["api_base"] for c in be._transport.calls if c.path == "model/new"]
@@ -119,8 +181,10 @@ def test_sync_selfhost_deletes_when_down():
     }
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
-    be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
+    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc")["data"]))
     asyncio.run(be.sync_selfhost())
+    # The id lookup, the delete, and the read that confirms it.
+    assert _paths(be) == ["model/info", "model/delete", "model/info"]
     assert fleet.deployments[0].in_litellm is False
 
 
@@ -134,7 +198,7 @@ def test_sync_selfhost_deletes_a_box_no_provider_lists():
     }
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
-    be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
+    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc")["data"]))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
     assert "model/delete" in _paths(be)
@@ -182,6 +246,8 @@ def test_an_orphan_route_is_deleted_once_it_has_persisted():
     assert "model/delete" in _paths(be)
     sent = [c.json["id"] for c in be._transport.calls if c.path == "model/delete"]
     assert sent == ["orphan-1"]
+    # A write, then the read that confirms it.
+    assert _paths(be)[-2:] == ["model/delete", "model/info"]
 
 
 def test_an_orphan_that_is_claimed_again_is_never_deleted():

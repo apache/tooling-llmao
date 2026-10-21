@@ -166,8 +166,8 @@ class DeploymentManager:
             return False
         return any(dep.vllm.same_deployment(host, port, model_name) for _norm, host, port, model_name, _id in routes)
 
-    async def add_deployment(self, dep) -> None:
-        """POST /model/new for this deployment. No serving check.
+    async def add_deployment(self, dep) -> bool:
+        """POST /model/new for this deployment. No serving check. True when a write was sent.
 
         Callers decide the gate. sync_selfhost waits until vLLM is SERVING.
         POST /do-add-deployment uses add_refusal for the same gate, then calls
@@ -177,18 +177,20 @@ class DeploymentManager:
         if await self._deployment_present(dep):
             dep.in_litellm = True
             _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
-            return
+            return False
         body = self.deployment_body(dep, api_key=self._working_api_key(dep))
         resp = await self._transport.request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
             dep.in_litellm = True
             _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
-            return
+            return True
         self._transport.raise_http(resp)
         dep.in_litellm = True
         _LOGGER.info("model/new %s@%s", dep.name, dep.api_base)
+        return True
 
-    async def delete_deployment(self, dep) -> None:
+    async def delete_deployment(self, dep) -> bool:
+        """POST /model/delete for this deployment's LiteLLM id. True when a write was sent."""
         rows = await self._model_info_rows()
         found = None
         for row in rows:
@@ -199,29 +201,51 @@ class DeploymentManager:
         if not found:
             dep.in_litellm = False
             _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, dep.api_base)
-            return
+            return False
         resp = await self._transport.request("POST", "model/delete", json={"id": found})
         self._transport.raise_http(resp)
         dep.in_litellm = False
         _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.api_base, found)
+        return True
 
-    async def _each(self, action, dep) -> None:
+    async def _each(self, action, dep) -> bool:
         """Run `action` on one deployment; a failure is logged and goes no further.
 
         The callers walk every deployment. Unguarded, the first one to raise
         ended the walk, and every deployment after it was never registered:
         vLLM up and Healthy, nothing in LiteLLM, the same on every pass.
+        Returns whether the action sent a write to LiteLLM.
         """
         try:
-            await action(dep)
+            wrote = await action(dep)
         except Exception as e:
             _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.api_base)
             # Kept for /models, which otherwise shows only that it is missing.
             dep.litellm_error = str(e) or type(e).__name__
             dep.litellm_error_at = time.time()
-        else:
-            dep.litellm_error = ""
-            dep.litellm_error_at = None
+            return False
+        dep.litellm_error = ""
+        dep.litellm_error_at = None
+        return bool(wrote)
+
+    async def _confirm(self) -> None:
+        """Re-read the LiteLLM deployments straight after a write, so presence is observed, not assumed.
+
+        LiteLLM updates its router inside the /model/new and /model/delete
+        handlers before answering (1.105.0: add_new_model awaits
+        proxy_config.add_deployment; delete_model calls
+        llm_router.delete_deployment), so the read that follows sees the
+        write. If the read fails, the last answer stands and the next skew
+        pass reads again; a failure here never raises out of the probe tick.
+        """
+        try:
+            routes = _routes_from_model_info(await self._model_info_rows())
+        except Exception as e:
+            _LOGGER.warning("the LiteLLM deployments could not be re-read after a write: %s", e)
+            return
+        by_base, pairs = _index_deployments(routes)
+        for dep in self.fleet.deployments:
+            self._mark_presence(dep, routes, by_base, pairs)
 
     async def ensure_providers(self) -> None:
         """At startup: POST /model/new for each config.yaml providers deployment."""
@@ -247,23 +271,53 @@ class DeploymentManager:
         this is the half that says a serving box is never dropped, whatever
         a provider's listing claims.
         """
+        wrote = False
         for dep in self.fleet.deployments:
             if not dep.self_hosted or dep.vllm is None:
                 continue
             srv = dep.vllm
             if srv.state == HEALTHY and dep.api_base and not dep.in_litellm:
-                await self._each(self.add_deployment, dep)
+                wrote = await self._each(self.add_deployment, dep) or wrote
             elif dep.in_litellm and (srv.state in (UNHEALTHY, STALLED) or (srv.unlisted and srv.state != HEALTHY)):
-                await self._each(self.delete_deployment, dep)
+                wrote = await self._each(self.delete_deployment, dep) or wrote
+        if wrote:
+            await self._confirm()
+
+    def _mark_presence(self, dep, routes, by_base, pairs) -> None:
+        """Set what one read of the LiteLLM deployments says about this deployment.
+
+        A provider deployment is present when its (base, model name) pair is.
+        One of our boxes is present when a deployment is at its public port,
+        or at its base under any name (then config_mismatch says which); one
+        at its listen port is noted, not counted.
+        """
+        base = norm_base(dep.api_base) if dep.api_base else None
+        if dep.provider is not None:
+            dep.in_litellm = (base, dep.model_name) in pairs
+            dep.config_mismatch = False
+            return
+        if base is None:
+            # No address is not evidence that LiteLLM lacks it: the last
+            # answer stands. Not even a deployment on the listen port says
+            # otherwise -- off-box that port is unreachable, so it is not the
+            # deployment this server needs.
+            return
+        present = any(
+            dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name)
+            for _norm, host, port, model_name, _id in routes
+        )
+        names = by_base.get(base, [])
+        dep.in_litellm = bool(names) or present
+        dep.config_mismatch = any(name != dep.model_name for name in names)
+        dep.at_listen_port = any(
+            dep.vllm.on_listen_port(host, port, model_name) for _norm, host, port, model_name, _id in routes
+        )
 
     async def check_config_skew(self) -> None:
         resp = await self._transport.request("GET", "model/info")
         self._transport.raise_http(resp)
         routes = _routes_from_model_info(resp.json())
-        by_base: dict[str, list[str]] = {}
-        for norm, _host, _port, model_name, _id in routes:
-            by_base.setdefault(norm, []).append(model_name)
-        pairs = {(norm, model_name) for norm, _host, _port, model_name, _id in routes}
+        by_base, pairs = _index_deployments(routes)
         # One of our boxes serves one model, so its api_base identifies it. A
         # provider's api_base is shared by every model on the account, so a
         # provider deployment is its api_base and model name together.
@@ -280,29 +334,7 @@ class DeploymentManager:
         servers = [d.vllm for d in self.fleet.deployments if d.provider is None and d.vllm is not None]
         now = time.time()
         for dep in self.fleet.deployments:
-            base = norm_base(dep.api_base) if dep.api_base else None
-            if dep.provider is not None:
-                dep.in_litellm = (base, dep.model_name) in pairs
-                dep.config_mismatch = False
-                self._store_skew(dep, now)
-                continue
-            if base is None:
-                # No address is not evidence that LiteLLM lacks it: the last
-                # answer stands. Not even a deployment on the listen port says
-                # otherwise -- off-box that port is unreachable, so it is not the
-                # deployment this server needs.
-                self._store_skew(dep, now)
-                continue
-            present = any(
-                dep.vllm is not None and dep.vllm.same_deployment(host, port, model_name)
-                for _norm, host, port, model_name, _id in routes
-            )
-            names = by_base.get(base, [])
-            dep.in_litellm = bool(names) or present
-            dep.config_mismatch = any(name != dep.model_name for name in names)
-            dep.at_listen_port = any(
-                dep.vllm.on_listen_port(host, port, model_name) for _norm, host, port, model_name, _id in routes
-            )
+            self._mark_presence(dep, routes, by_base, pairs)
             self._store_skew(dep, now)
         extra: list[ExtraLiteLLM] = []
         for norm, host, port, model_name, route_id in routes:
@@ -338,10 +370,11 @@ class DeploymentManager:
                 SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG],
                 [(row.host, row.port, row.model_name, row.passes) for row in extra],
             )
-        await self._prune_extras(extra)
+        if await self._prune_extras(extra):
+            await self._confirm()
 
-    async def _prune_extras(self, extra: list[ExtraLiteLLM]) -> None:
-        """Delete a route no deployment claims, once it has persisted.
+    async def _prune_extras(self, extra: list[ExtraLiteLLM]) -> int:
+        """Delete a route no deployment claims, once it has persisted. Returns how many were deleted.
 
         This is the deregistration hole in tooling-llmao#29: routes are created
         on the transition into SERVING and deleted on the transition into DOWN,
@@ -370,6 +403,7 @@ class DeploymentManager:
         them after ORPHAN_PASSES skew passes rather than waiting for a
         transition that already happened.
         """
+        pruned = 0
         for row in extra:
             if row.passes < ORPHAN_PASSES:
                 continue
@@ -399,6 +433,8 @@ class DeploymentManager:
                 row.passes,
             )
             self._extra_passes.pop((row.api_base, row.model_name), None)
+            pruned += 1
+        return pruned
 
     async def check_health_skew(self) -> None:
         resp = await self._transport.request("GET", "health")
@@ -448,6 +484,15 @@ class DeploymentManager:
         dep.skew = list(view.skew)
         for badge in fresh:
             _LOGGER.warning("skew: %s@%s %s", dep.name, dep.api_base, SKEW_PHRASE[badge])
+
+
+def _index_deployments(rows) -> tuple[dict[str, list[str]], set[tuple[str, str]]]:
+    """The LiteLLM deployments by normalised base (the model names at each), and as (base, model name) pairs."""
+    by_base: dict[str, list[str]] = {}
+    for norm, _host, _port, model_name, _id in rows:
+        by_base.setdefault(norm, []).append(model_name)
+    pairs = {(norm, model_name) for norm, _host, _port, model_name, _id in rows}
+    return by_base, pairs
 
 
 def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, str]]:
