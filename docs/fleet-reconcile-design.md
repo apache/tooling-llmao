@@ -359,27 +359,34 @@ LiteLLM's deployments then say which deployment they are, with no
 translation from public port to listen port. `asf_api_base` stays the
 dialable URL last registered, which can lag the record's dialable URL.
 
-Backfill in place if the proxy can update `model_info` without dropping
-the deployment. `POST /model/update` exists in LiteLLM 1.105.0 (and back
-to at least 1.81.10): it takes `model_info.id`, needs the DB-backed model
-list that `/model/new` already needs, and merges `litellm_params`.
-Whether it rewrites other `model_info` fields, the stamp among them, is
-found out **by hand, once, against the running proxy** when we do the
-backfill. It is not a test in the suite, and llmao does not branch on it;
-the code does whichever we chose. If the update does not rewrite the
-stamp, no workaround: delete every llmao-managed deployment and let the
-add path rebuild them for each Healthy, dialable, intended row, which
-llmao can already do. A brief gap, then one generation of stamped
-deployments.
+**Done (2026-10-22).** The stamp is `model_info.llmao_key`, written on
+every `/model/new` (52818a2), and the id lookup reads it first. The
+backfill was done in place, by hand, against the running proxy. What the
+hand check found, in LiteLLM 1.105.0:
 
-While both generations exist, an unstamped row is not an orphan. Prune
-only unmatched rows after backfill (or after the wipe) has finished.
-`LEGACY_SERVERS` are matched from their known listen ports and stamped;
-the executor still passes `fleet.selfhost_api_key` for those pairs.
+- `POST /model/update` **never writes `model_info`.** It merges
+  `litellm_params` key by key (a key sent as null keeps the stored
+  value), can rename, and requires `litellm_params` in the body. It is
+  the call for a port remap, and nothing else.
+- `PATCH /model/{id}/update` **merges `model_info`** with the stored
+  blob, and leaves `litellm_params` alone when they are omitted. The
+  body is `{"model_info": {"id": ..., "llmao_key": ...}}`. Our fields
+  (`self_hosted`, `asf_api_base`, `access_groups`) survived.
+- The merge strips stored cost-map echoes, and that set includes
+  `max_tokens`, `max_input_tokens` and `max_output_tokens`. All three
+  rows lost them (a copy of a lookup made the day each row was created;
+  nothing re-derives it for a hosted vLLM model). llmao reads none of
+  them: the context window comes from vLLM. LiteLLM reads
+  `max_input_tokens` only for its pre-call context check, which
+  production does not enable. Accepted.
+- Both handlers update the router before answering, so a `GET
+  /model/info` straight after a write sees it (the confirm read, 7bd46bc).
 
-This is small, works with today's code, and removes much of the port
-matching in the skew checks. It could come first, before any other part of
-this design.
+Every production row is stamped, so the generation is one. The address
+match in the id lookup stays only as the fallback for a row no llmao
+stamped, and goes when the executor is the only writer.
+`LEGACY_SERVERS` were stamped from their known listen ports; the executor
+still passes `fleet.selfhost_api_key` for those pairs.
 
 ## The dialable URL: a field on the record
 
@@ -433,12 +440,9 @@ Two cases become plain:
   deployment's api_base". Today that case is spread across
   `at_listen_port`, `same_deployment` and `on_listen_port`.
   `POST /model/update` merges `litellm_params`, which is where `api_base`
-  lives, so the action is that call. The hand check during backfill is a
-  different question: whether the same call rewrites other `model_info`
-  fields, the stamp among them. If it updates `api_base` and does not
-  rewrite the stamp, a remap still updates and the backfill is the wipe
-  in the stamping section. If the hand check shows it cannot change
-  `api_base` either, the action is delete+add, a brief gap.
+  lives, so the action is that call, and it does not touch `model_info`,
+  so the stamp is safe across it (verified in the backfill; see the
+  stamping section).
 
 ## Policy
 
@@ -561,11 +565,9 @@ the button.
 1. Freeze the key function with tests (norm, IPv6 `::ffff:`, host case,
    `/v1`, provider bases, two names on one provider model,
    `LEGACY_SERVERS`).
-2. Stamp the canonical URL on every new `/model/new`. Try
-   `/model/update` by hand on the running proxy; backfill in place if it
-   rewrites `model_info`, else wipe the llmao-managed deployments and let
-   add recreate them. Do not prune unstamped deployments while both
-   generations exist.
+2. Stamp the canonical URL on every new `/model/new`, and backfill the
+   existing rows. **Done:** 52818a2, and the three production rows were
+   stamped in place through `PATCH /model/{id}/update` on 2026-10-22.
    Before step 3, read RunPod's `portMappings` into the inventory (the
    parked RunPod step 2, now a prerequisite): with the pin gone, a
    RunPod box has no dial address until the listing supplies one.
@@ -605,16 +607,14 @@ process memory; the memory store holds nothing of this design.
 3. **The key's name in `model_info`,** and how to backfill the existing
    deployments, including the legacy servers in `LEGACY_SERVERS`.
 
-   **Answer:** Stamp the canonical URL as `llmao_key` (name can stay an
-   example until we pick it). The bytes are the post-`_norm_base` form,
-   `http://{host}:{listen_port}` for a box. `asf_api_base` stays the
-   dialable URL last registered, which lags the record's dialable URL
-   after a remap.
-   Backfill in place if trying `/model/update` by hand shows it rewrites
-   `model_info`; otherwise wipe the llmao-managed deployments and let add
-   recreate them. `LEGACY_SERVERS` are stamped from their known listen
-   ports; the executor still passes `fleet.selfhost_api_key` for those
-   pairs. Unstamped is not an orphan during a mixed generation.
+   **Answer:** the stamp is `llmao_key`, the post-`norm_base` canonical
+   URL, `http://{host}:{listen_port}` for a box; the row's `model_name`
+   is the other half of the key. `asf_api_base` stays the dialable URL
+   last registered, which lags the record's dialable URL after a remap.
+   Backfilled in place on 2026-10-22 through `PATCH /model/{id}/update`
+   (the stamping section has what the hand check found). `LEGACY_SERVERS`
+   were stamped from their known listen ports; the executor still passes
+   `fleet.selfhost_api_key` for those pairs.
 
 4. **Where history lives.** In memory, as today, so a restart forgets the
    hysteresis counters and starts cautious? Or in the memory store?
@@ -662,7 +662,7 @@ badges, unlisted (host-level), and the plan actions.
 | Healthy, absent | probe ok, dialable, no LiteLLM deployment | Healthy; skew intended_not_in_litellm | add_litellm |
 | Probe failed, under threshold | `last_ok` set, `fails` < `health_fail_threshold` | stays Healthy | none |
 | Healthy, present, api_base matches | probe ok, the deployment's api_base == dialable | Healthy | none |
-| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base via `/model/update` (it merges `litellm_params`). Delete+add only if the hand check shows that call cannot change `api_base`. The stamp check is separate. `asf_api_base` lags until that write |
+| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base via `POST /model/update` (it merges `litellm_params` and leaves `model_info`, the stamp included, alone). `asf_api_base` lags until that write |
 | LiteLLM health skew | vLLM up and LiteLLM `/health` down, or the reverse | badge only (`vllm_up_litellm_down` / `vllm_down_litellm_up`) | none |
 | Unhealthy / Stalled, in LiteLLM | self-hosted; probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
 | 65e22c8 serving through a listing gap | both listings fresh, neither names the host; probe ok on last-known dialable | Healthy. The count may reach `UNLISTED_PASSES`. The route stays | none. No sentence while Healthy. Keep probing the last-known URL |
@@ -704,8 +704,9 @@ Each of these works in today's code, survives the rewrite, and closes a
 real gap on its own. In order:
 
 1. **Freeze the key function** with tests (migration step 1).
-2. **Stamp the canonical URL** on every `/model/new`; try `/model/update`
-   by hand; backfill or wipe (migration step 2).
+2. **Stamp the canonical URL** on every `/model/new`, and backfill the
+   existing rows (migration step 2). Done: 52818a2 and the backfill of
+   2026-10-22.
 3. **Two constants.** Split today's one `UNLISTED_PASSES` into
    `UNLISTED_PASSES` (listing passes) and `ORPHAN_PASSES` (skew passes).
 4. **Re-read `/model/info` after every write.** `sync_selfhost` and
