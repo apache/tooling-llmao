@@ -129,17 +129,29 @@ RUNPOD_LISTING_INTERVAL_S = 600
 # Boxes already up on other ports. Delete a pair when that box is replaced.
 # Not a template for new hosts. These use the shared selfhost_api_key; every
 # other server uses the key derived from the salt.
-# Consecutive provider listings that must omit a host before llmao concludes
-# its rental ended. Not one: a RunPod pod is absent from the pod list while it
-# provisions -- measured at over 90 minutes after a recreate -- and a single
-# absence therefore means "not yet" as often as it means "gone". Mirrors
-# fleet.health_fail_threshold, which exists for the same reason one failed
-# vLLM probe does not mean a box is down.
+# Two hysteresis counts, one per clock. Each is a constant rather than a config
+# key: no p6 change, no eyaml round-trip. Both mirror fleet.health_fail_threshold,
+# which exists for the same reason: one failed vLLM probe does not mean a box
+# is down, and one absence does not mean a thing is gone.
 #
-# At the 10-minute listing interval this is half an hour of absence, which is
-# longer than any provisioning gap seen and still prompt for a real ending.
-# A constant rather than a config key: no p6 change, no eyaml round-trip.
+# Consecutive provider listings that must omit a host before llmao calls it
+# unlisted (the listing clock). Not one: a RunPod pod is absent from the pod
+# list while it provisions -- measured at over 90 minutes after a recreate --
+# and a single absence means "not yet" as often as "gone". The count does not
+# have to outlast that gap: unlisted is an attention verdict, a serving box
+# keeps its route whatever the listing says, and a box that is still coming
+# up stays quiet (docs/fleet-reconcile-design.md). Today Vast is read on the
+# probe pass and RunPod every RUNPOD_LISTING_INTERVAL_S; the design moves both
+# to one listing interval of about a minute, so three passes is a few minutes.
 UNLISTED_PASSES = 3
+
+# Consecutive skew passes (skew_interval_s, 180s) a LiteLLM deployment that no
+# fleet deployment claims must persist before it is pruned (the skew clock).
+# Absence has innocent causes -- a provider lookup that failed this pass, a box
+# mid-recreate, a deployment llmao is about to claim -- and the counter starts
+# empty on restart, so a proxy full of stale deployments is cleared after this
+# many passes rather than on the first.
+ORPHAN_PASSES = 3
 
 LEGACY_SERVERS = {
     ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast

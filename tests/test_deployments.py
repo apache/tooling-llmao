@@ -21,7 +21,7 @@ import asyncio
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, UNLISTED_PASSES, Fleet, FleetDeployment
+from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, ORPHAN_PASSES, Fleet, FleetDeployment
 from llmao.model_status import AWAITING, HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
 from llmao.providers import ProviderDeployment
 from llmao.proxy.deployments import DeploymentManager
@@ -174,7 +174,7 @@ def test_an_orphan_route_is_deleted_once_it_has_persisted():
     """
     fleet, info = _orphan()
     be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
-    for expected in range(1, UNLISTED_PASSES):
+    for expected in range(1, ORPHAN_PASSES):
         asyncio.run(be.check_config_skew())
         assert [row.passes for row in fleet.extra_litellm] == [expected]
         assert "model/delete" not in _paths(be), "not on the strength of one pass"
@@ -198,7 +198,7 @@ def test_an_orphan_that_is_claimed_again_is_never_deleted():
     assert fleet.extra_litellm == []
     # Back again: the count starts over rather than resuming.
     reply["body"] = info
-    for expected in range(1, UNLISTED_PASSES):
+    for expected in range(1, ORPHAN_PASSES):
         asyncio.run(be.check_config_skew())
         assert [row.passes for row in fleet.extra_litellm] == [expected]
     assert "model/delete" not in _paths(be)
@@ -209,7 +209,7 @@ def test_an_orphan_with_no_litellm_id_is_reported_not_deleted(caplog):
     fleet, info = _orphan(model_id=None)
     be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
     with caplog.at_level("WARNING", logger="llmao.proxy.deployments"):
-        for _ in range(UNLISTED_PASSES + 1):
+        for _ in range(ORPHAN_PASSES + 1):
             asyncio.run(be.check_config_skew())
     assert "model/delete" not in _paths(be)
     assert "has no LiteLLM id" in caplog.text

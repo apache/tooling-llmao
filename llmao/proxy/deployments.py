@@ -33,7 +33,7 @@ from llmao.fleet import (
     LEGACY_SERVERS,
     ORDER_SELF_HOSTED,
     ORDER_SPEND,
-    UNLISTED_PASSES,
+    ORPHAN_PASSES,
     ExtraLiteLLM,
     normalize_peer_ip,
     snapshot_for_status,
@@ -365,8 +365,9 @@ class DeploymentManager:
         this pass, a box mid-recreate, a route llmao itself is about to claim.
         The guards above remove the ones that can be named (`unplaced` for a
         server whose address is not known yet), but not the ones that cannot,
-        so UNLISTED_PASSES consecutive passes are required -- the same count,
-        and the same reasoning, as a host missing from a provider listing.
+        so ORPHAN_PASSES consecutive skew passes are required -- its own count
+        on its own clock, for the same reasoning as UNLISTED_PASSES on the
+        provider listings.
 
         No probe gate. An orphan's credential is unknown -- derivation needs the
         LISTEN port and a route only carries the public one -- and the one
@@ -376,11 +377,11 @@ class DeploymentManager:
 
         Deleting is also what makes a restart converge: the counter starts
         empty, so a portal that comes up to a proxy full of stale routes clears
-        them after UNLISTED_PASSES skew passes rather than waiting for a
+        them after ORPHAN_PASSES skew passes rather than waiting for a
         transition that already happened.
         """
         for row in extra:
-            if row.passes < UNLISTED_PASSES:
+            if row.passes < ORPHAN_PASSES:
                 continue
             if not row.route_id:
                 _LOGGER.warning(
