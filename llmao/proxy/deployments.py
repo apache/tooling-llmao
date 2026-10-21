@@ -101,7 +101,13 @@ class DeploymentManager:
 
         info: dict[str, Any] = {
             "self_hosted": dep.self_hosted,
+            # The dialable base this deployment was registered at, normalised.
             "asf_api_base": norm_base(dep.api_base),
+            # The stamp: the deployment's key, so a LiteLLM row says which of
+            # ours it is without translating its public port back to the
+            # listen port. Built from the LISTEN port, so a remap keeps it.
+            # The row's model_name is the other half of the key.
+            "llmao_key": dep.key.url,
         }
         if dep.access_groups:
             # What LiteLLM reads to decide which teams may use this
@@ -133,20 +139,28 @@ class DeploymentManager:
         return []
 
     def _litellm_id(self, row: dict, dep) -> str | None:
+        """This deployment's LiteLLM id from one /model/info row, or None when the row is not it.
+
+        The stamp decides when the row has one: a row stamped with this key
+        is this deployment at whatever address it was registered, including
+        a public port that has since been remapped. A row with no stamp is
+        from before stamping, and is matched by its address, as before. The
+        address match goes once the backfill has stamped every row.
+        """
         if str(row.get("model_name") or "") != dep.model_name:
             return None
-        want = norm_base(dep.api_base)
         info = row.get("model_info") or {}
         if not isinstance(info, dict):
             info = {}
-        if (
-            norm_base(info.get("asf_api_base")) == want
-            or norm_base(
-                (row.get("litellm_params") or {}).get("api_base") if isinstance(row.get("litellm_params"), dict) else ""
-            )
-            == want
-        ):
-            return str(info.get("id") or row.get("model_id") or "") or None
+        row_id = str(info.get("id") or row.get("model_id") or "") or None
+        stamp = info.get("llmao_key")
+        if stamp:
+            return row_id if norm_base(stamp) == dep.key.url else None
+        want = norm_base(dep.api_base)
+        params = row.get("litellm_params")
+        registered = params.get("api_base") if isinstance(params, dict) else ""
+        if want and (norm_base(info.get("asf_api_base")) == want or norm_base(registered) == want):
+            return row_id
         return None
 
     def _working_api_key(self, dep) -> str | None:

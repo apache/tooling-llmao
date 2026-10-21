@@ -83,6 +83,7 @@ def test_deployment_body_from_models():
     assert body["litellm_params"]["api_base"] == "http://10.0.0.1:8001/v1"
     assert body["litellm_params"]["api_key"] == "sk-x"
     assert body["model_info"]["asf_api_base"] == "http://10.0.0.1:8001"
+    assert body["model_info"]["llmao_key"] == "http://10.0.0.1:8001"
     assert body["model_info"]["self_hosted"] is True
     # Our boxes first: LiteLLM uses the lowest order among healthy deployments.
     assert body["litellm_params"]["order"] == ORDER_SELF_HOSTED
@@ -299,6 +300,53 @@ def _listen_and_public():
     return Fleet(None, [s], models=models)
 
 
+def test_the_stamp_is_the_listen_url_not_the_public_one():
+    """A Vast remap changes the public port LiteLLM dials; the stamp does not move."""
+    fleet = _listen_and_public()
+    body = _manager(fleet).deployment_body(fleet.deployments[0])
+    assert body["litellm_params"]["api_base"] == "http://10.0.0.7:12711/v1"
+    assert body["model_info"]["asf_api_base"] == "http://10.0.0.7:12711"
+    assert body["model_info"]["llmao_key"] == "http://10.0.0.7:10100"
+
+
+def test_a_stamped_deployment_is_found_after_a_remap():
+    """The box is down and its deployment points at the old public port.
+
+    Matched by address, the id lookup fails ("no LiteLLM id") and the stale
+    deployment stays. Matched by the stamp, it is deleted.
+    """
+    fleet = _listen_and_public()
+    (dep,) = fleet.deployments
+    dep.vllm.state = UNHEALTHY
+    dep.in_litellm = True
+    stale = {
+        "model_name": "gemma4-26b",
+        "litellm_params": {"api_base": "http://10.0.0.7:11111/v1"},
+        "model_info": {"id": "old", "asf_api_base": "http://10.0.0.7:11111", "llmao_key": "http://10.0.0.7:10100"},
+    }
+    be = _manager(fleet, _litellm([stale]))
+    asyncio.run(be.sync_selfhost())
+    sent = [c.json["id"] for c in be._transport.calls if c.path == "model/delete"]
+    assert sent == ["old"]
+    assert dep.in_litellm is False
+
+
+def test_a_stamp_for_another_key_is_not_this_deployment():
+    """Same model name and, by coincidence, the same address: the stamp says it is another box's."""
+    fleet = _listen_and_public()
+    (dep,) = fleet.deployments
+    be = _manager(fleet)
+    row = {
+        "model_name": "gemma4-26b",
+        "litellm_params": {"api_base": "http://10.0.0.7:12711/v1"},
+        "model_info": {"id": "theirs", "llmao_key": "http://10.0.0.8:8001"},
+    }
+    assert be._litellm_id(row, dep) is None
+    # Unstamped, the address still decides, until the backfill.
+    del row["model_info"]["llmao_key"]
+    assert be._litellm_id(row, dep) == "theirs"
+
+
 def test_sync_selfhost_does_not_repost_the_same_deployment():
     fleet = _listen_and_public()
     be = _manager(fleet, _info("10.0.0.7", 12711))
@@ -387,6 +435,8 @@ def test_a_provider_deployment_is_built_from_config():
     assert dep.access_groups == set()
     assert "access_groups" not in body["model_info"]
     assert ORDER_SPEND > ORDER_SELF_HOSTED
+    # Stamped like any other deployment: the provider base, and the row's model_name.
+    assert body["model_info"]["llmao_key"] == "https://api.x.ai"
 
 
 def test_ensure_providers_registers_each_one_once():
