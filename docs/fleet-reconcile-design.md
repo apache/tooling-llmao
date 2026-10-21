@@ -4,8 +4,9 @@ Status: a working document. It is edited as the work lands, so what it
 says is the current intent and the current state, not a record of either.
 Sections marked **Done** name the commit. The document is meant to become
 obsolete: once the reconcile loop is the code, its outcome is folded into
-the architecture documentation (`ARCHITECTURE.md`, and the fleet sections
-of `vllm-fleet-design.md`) and this file is removed.
+the architecture documentation (`ARCHITECTURE.md`) and this file is
+removed. The box side of the fleet, the one request a box makes and what
+it gets back, is `box-protocol.md` and is not changed by this work.
 
 ## The problem
 

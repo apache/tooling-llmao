@@ -15,7 +15,7 @@ here.
 | **This README** | How to run the software |
 | **[Help](https://llm.apache.org/help)** (`docs/help/`) | How to use the gateway: keys, connecting tools |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
-| [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) | GPU fleet: control-plane contract, box provisioning |
+| [`docs/box-protocol.md`](docs/box-protocol.md) | How a GPU box asks for its configuration: the fleet key, the vLLM bearer, the JSON |
 | [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md) | Fleet state kept in step with LiteLLM (working document) |
 | Infra `p6/modules/llmao` | Production deploy |
 
@@ -165,7 +165,7 @@ and port. `GET /vllm/config` still comes from `fleet.hosts` (listen ports)
 plus `models.yaml`. Boxes fetch it with template `FLEET_KEY`.
 
 See [`hosting/README.md`](hosting/README.md),
-[`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) and
+[`docs/box-protocol.md`](docs/box-protocol.md) and
 [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md). Operational detail — what is
 running where, and the exact launch commands — is kept out of this repo.
 

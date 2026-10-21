@@ -3,7 +3,8 @@
 Artifacts that run **on** a GPU instance (Vast.ai and RunPod). They are
 not part of the asfquart process.
 
-**Design (why):** [`docs/vllm-fleet-design.md`](../docs/vllm-fleet-design.md).
+**The contract (what a box asks for and gets):**
+[`docs/box-protocol.md`](../docs/box-protocol.md).
 
 **Control plane (all providers):** asfquart serves `GET /vllm/config`
 as JSON from `config.yaml` `fleet.hosts` plus `models.yaml`. Bearer fleet

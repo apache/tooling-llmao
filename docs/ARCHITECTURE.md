@@ -67,7 +67,7 @@ keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
-**GPU fleet (control plane):** `docs/vllm-fleet-design.md`. `APP.fleet`
+**GPU fleet (control plane):** `docs/box-protocol.md`. `APP.fleet`
 (`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
 `fleet.key`) maps `X-LLMAO-Host` (Vast `PUBLIC_IPADDR`) or
 `X-Forwarded-For` / peer to `fleet.hosts`.
