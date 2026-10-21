@@ -17,8 +17,12 @@ today they are folded into flags on shared objects.
 
 A commercial model provider (OpenRouter, xAI) has no GPU listing; it is
 intended plus the two LiteLLM sources. A GPU host listing is the inventory
-source. Mixing those under one "Live" hid the failure in 65e22c8: the
-listing said absent, the probe said serving.
+source. A GPU provider with no API key is not a source: `place_servers`
+already treats that as `vast_wanted` / `runpod_wanted` false. `None` means
+configured and not yet read, which is different from an empty list and
+different from not configured. Mixing inventory and probes under one
+"Live" hid the failure in 65e22c8: the listing said absent, the probe
+said Healthy.
 
 The work of keeping them in step is spread around and tightly coupled.
 Different runners set mutable flags on shared objects: `srv.state`,
@@ -53,7 +57,10 @@ is observed, rather than updating state step by step from many places.
    different from an empty one. The "unlisted" rule already depends on
    that difference; here it applies to every source, as does staleness. A
    failed fetch leaves the last good snapshot in place; it does not
-   publish empty-as-absent.
+   publish empty-as-absent. Inventory has a third state, not configured,
+   for a GPU provider with no API key. That source is ignored. `None`
+   (configured, never read) does not count as an absence, and it does
+   not block the other provider.
 
 2. **One pure function decides.**
    `reconcile(snapshots, history) -> (view, plan)`.
@@ -101,11 +108,12 @@ is observed, rather than updating state step by step from many places.
    idempotently. It never trusts its own writes: the next LiteLLM
    snapshot confirms them.
 
-5. **The `needs_human` actions are the buttons.** The "Work needed"
-   strip, the reason text and the action buttons on /models and /admin
-   all come from the plan. The pages show the view and the plan, and no
-   longer reason for themselves. Because the automatic path and the
-   button read the same table, "the same gate" cannot drift apart again.
+5. **The plan is what /models and /admin show.** The "Work needed"
+   strip, the reason text, and the action buttons all come from it. The
+   pages no longer reason for themselves, so the automatic path and the
+   button cannot drift apart. `needs_human` is not always a button.
+   Add, Stop tracking, Approve, and the labels post. "Remove it from
+   `fleet.hosts`" is a sentence: the page does not write config.yaml.
 
 ## Identity: (canonical URL, model)
 
@@ -119,11 +127,15 @@ both go away.
 
 config.yaml names a host and a listen port, not a URL. One function
 fashions the canonical URL from the provider, the host and port, and a
-known endpoint construction (`_norm_base` is most of it today):
+known endpoint construction, then runs `_norm_base`. The stored key, the
+comparison, and `model_info.llmao_key` are that result, the same bytes.
 
-- Self-hosted: `http://{host}:{listen_port}/v1` (peer IP normalised). The
-  listen port is the one the vLLM key is derived from.
-- Commercial: the provider's `api_base`, normalised the same way.
+`_norm_base` strips a trailing slash and a trailing `/v1`. That is why
+`asf_api_base` is stored without `/v1` today. The self-hosted input is
+`http://{host}:{listen_port}/v1` (peer IP normalised, listen port the one
+the vLLM key is derived from). After `_norm_base` the canonical URL is
+`http://{host}:{listen_port}`. A commercial canonical URL is
+`_norm_base(api_base)`.
 
 The key is that URL plus our public model name.
 
@@ -138,9 +150,11 @@ The key is that URL plus our public model name.
   return.
 - **Canonical is not dialable on a remapped box.** The listen-port URL is
   the identity; the public HostPort URL is what LiteLLM dials (see
-  below). They are two fields. Today's `model_info.asf_api_base` is the
-  dialable URL (`_norm_base(dep.api_base)`). The stamp is the canonical
-  URL. A remapped port leaves the key, and its history, as they are.
+  below). They are two fields. `model_info.asf_api_base` is the dialable
+  URL last written into LiteLLM (`_norm_base` of `api_base` at
+  `/model/new`). After a remap it lags the resolver's last-known dialable
+  until that update lands. The stamp is the canonical URL. A remapped
+  port leaves the key, and its history, as they are.
 - **The key is not driven by Vast.** A Vast instance id exists only at
   Vast, after we ask; config.yaml, LiteLLM, RunPod and the commercial
   providers have none. As a key it would make every non-Vast record a
@@ -155,7 +169,7 @@ llmao creates every self-hosted LiteLLM deployment, so it can record the
 canonical URL in the deployment's `model_info` (for example `llmao_key`).
 LiteLLM's deployments then say which deployment they are, with no
 translation from public port to listen port. `asf_api_base` stays the
-last-known dialable URL.
+dialable URL last registered, which can lag the resolver.
 
 Backfill in place if the proxy can update `model_info` without dropping
 the route. This tree only calls `/model/new` and `/model/delete`; confirm
@@ -179,8 +193,11 @@ The URL that can actually be reached, `http://host:public_port/v1` on a
 Vast box, comes from **one resolver**. Given a key, it returns, in order:
 the public port pinned on the intended row, else the current inventory
 HostPort (or RunPod pin), else the last-known dialable URL in history,
+else the canonical listen URL when no GPU inventory source is configured,
 else nothing (unplaced). For commercial providers and for a pin that
-equals the listen port, the dialable URL is the canonical one.
+equals the listen port, the dialable URL is the canonical one. A
+Vast-only fleet does not wait on RunPod, and a fleet with no GPU key
+still probes and adds on the listen URL.
 
 Last-known is load-bearing. `place_servers` already leaves `public_port`
 in place when it clears `srv.box` for an unlisted host, so probes of a
@@ -219,25 +236,36 @@ Two cases become plain:
 ## Policy
 
 `reconcile()` emits actions with a kind and a reason. The policy table
-marks each kind auto or `needs_human`. v1 matches today's gates:
+marks each kind auto or `needs_human`. v1 matches today's gates, and
+self-hosted and commercial are different gates:
 
-- **Auto:** add when Healthy, dialable, and absent from LiteLLM; delete
-  when Unhealthy or Stalled, or unlisted and not Healthy; prune unmatched
-  extras after `UNLISTED_PASSES`.
-- **Human:** approve, labels, remove from `fleet.hosts`, anything that
-  spends money or destroys a box.
+- **Auto, self-hosted:** add when Healthy, dialable, and absent from
+  LiteLLM. Delete when the route exists and vLLM is Unhealthy or
+  Stalled, or the host is unlisted and vLLM is not Healthy. A failed
+  probe under `health_fail_threshold`, with `last_ok` set, stays Healthy
+  and is not deleted. Prune unmatched extras after `UNLISTED_PASSES`.
+- **Auto, commercial:** add when absent from LiteLLM, including while
+  LiteLLM health is still unknown (`Configured`). Do not delete when
+  LiteLLM later marks the endpoint unhealthy. `ensure_providers` is
+  startup-only today; under reconcile this add runs every pass.
+- **Human:** approve, labels, and anything that spends money or destroys
+  a box. "Remove it from `fleet.hosts`" is a sentence on the attention
+  item, not a POST.
 - No v1 switch that holds production LiteLLM writes for approval. The
   read-only alongside phase is that net.
+- vLLM-up / LiteLLM-down, and the reverse, are badges. LiteLLM `/health`
+  is on a four-hour clock. They do not add or delete.
 
 Also:
 
-- `ensure_providers` is startup-only today. Under reconcile a missing
-  commercial route is added every pass.
 - First cut diffs membership and dialable `api_base`. Body fields
   (`access_groups`, `order`, `hosted_vllm/` prefix, working API key) are
   later skew, not v1.
 - `adopt_vast_instances` materializing a server from live `/v1/models`
-  with no approval is **discovered**, not `fleet.hosts`.
+  with no approval is **discovered**, not `fleet.hosts`. While this
+  process has it and it is Healthy and dialable, add runs, as it does
+  today. A restart forgets it until adopt sees it again. The attention
+  sentence is that it is not in `fleet.hosts`, not "remove it".
 - Unknown fleet-key fetches stay an onboarding strip: still 404 until
   approved, still not a LiteLLM row.
 - Served-model skew (GET `/v1/models` vs the intended HF id) stays
@@ -322,7 +350,9 @@ memory.
    deployments, including the legacy servers in `LEGACY_SERVERS`.
 
    **Answer:** Stamp the canonical URL as `llmao_key` (name can stay an
-   example until we pick it). Keep `asf_api_base` as the dialable URL.
+   example until we pick it). The bytes are the post-`_norm_base` form,
+   `http://{host}:{listen_port}` for a box. `asf_api_base` stays the
+   dialable URL last registered, which lags the resolver after a remap.
    Backfill in place if the proxy can update `model_info`; otherwise wipe
    llmao-managed deployments and let add recreate. `LEGACY_SERVERS` are
    stamped from their known listen ports; the executor still passes
@@ -349,7 +379,7 @@ already uses.
 
 The **record** holds the detail (stored only as snapshots + history):
 key, intended (hosts / approved / discovered / absent), commercial
-provider or self-hosted, inventory (unread / listed(id) / absent),
+provider or self-hosted, inventory (not configured / unread / listed(id) / absent),
 dialable URL, probe observation (including which URL was probed),
 `config_served_at`, LiteLLM membership (unread / absent / present with
 id, api_base, stamped), LiteLLM health (unread / up / down / missing),
@@ -366,18 +396,24 @@ history counters and last verdict.
 | Loading | config_served, probe not ok, inside `health_grace_s` | Loading | none |
 | Stalled, in LiteLLM | config_served, never `last_ok`, past grace | Stalled | delete_litellm |
 | Healthy, absent | probe ok, dialable, not in LiteLLM | Healthy; skew intended_not_in_litellm | add_litellm |
+| Probe failed, under threshold | `last_ok` set, `fails` < `health_fail_threshold` | stays Healthy | none |
 | Healthy, present, api_base matches | probe ok, membership api_base == dialable | Healthy | none |
-| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base (delete+add until update exists) |
-| Unhealthy / Stalled, in LiteLLM | probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
+| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base (delete+add until update exists). `asf_api_base` lags until that write |
+| LiteLLM health skew | vLLM up and LiteLLM `/health` down, or the reverse | badge only (`vllm_up_litellm_down` / `vllm_down_litellm_up`) | none |
+| Unhealthy / Stalled, in LiteLLM | self-hosted; probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
 | 65e22c8 serving through a listing gap | inventory absent or unlisted counting up; probe ok on last-known dialable | Healthy; not unlisted until `UNLISTED_PASSES`; keep route | none (keep probing last-known URL) |
-| Unlisted, not Healthy, in LiteLLM | host verdict true; lifecycle ≠ Healthy | unlisted + lifecycle | delete_litellm; needs_human: remove from `fleet.hosts` |
-| Unlisted, already absent from LiteLLM | host verdict true | unlisted | needs_human: remove from `fleet.hosts` |
+| Unlisted, not Healthy, in LiteLLM | host verdict true; self-hosted lifecycle ≠ Healthy | unlisted + lifecycle | delete_litellm; sentence, no POST: remove from `fleet.hosts` |
+| Unlisted, already absent from LiteLLM | host verdict true; row is in `fleet.hosts` | unlisted | sentence, no POST: remove from `fleet.hosts` |
 | #29 orphan, early | not intended, membership present, extra_passes < `UNLISTED_PASSES` | litellm_only skew | none (count) |
 | #29 orphan, persisted | extra_passes ≥ `UNLISTED_PASSES` | litellm_only | prune_orphan |
 | Extra that is our listen port | membership matches a key's listen URL | at_listen_port | update_api_base, not prune |
 | New rental, same address | instance id changed under the same key | history reset | probe afresh; add/delete from new observations |
-| Commercial, missing | intended provider, not in LiteLLM | Configured / Healthy per LiteLLM health | add_litellm (every pass, not only startup) |
+| Commercial, missing | intended provider, not in LiteLLM, health unknown or known | Configured or Healthy | add_litellm (every pass, not only startup) |
+| Commercial, LiteLLM unhealthy | route exists, LiteLLM `/health` says down | Unhealthy | none (keep the route) |
 | Commercial listing | no GPU inventory for that key | never unlisted | membership/health only |
+| No GPU source configured | no Vast key and no RunPod key | dialable is the canonical listen URL | probe and add as a self-hosted row |
+| One GPU source | the other provider has no API key | that provider is not a source; `None` on the configured one does not count as absence | unlisted only from the configured source |
+| Discovered, Healthy | not in `fleet.hosts`, no approval, live `/v1/models` matched a `models.yaml` row, probe ok, dialable | in-memory server; Healthy | add_litellm. Sentence: not in `fleet.hosts`; a restart forgets it until adopt sees it again |
 | Inventory unread | that snapshot `None` | last unlisted verdict stands; do not increment | no unlisted transition |
 | LiteLLM membership unread | that snapshot `None` | do not invent extras or absences | no add/delete/prune |
 | Restart, extras present | empty extra_passes, routes still there | extras at pass 1 | no prune until `UNLISTED_PASSES` |
