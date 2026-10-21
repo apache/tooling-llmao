@@ -1,6 +1,11 @@
-# Fleet reconciliation: design (draft)
+# Fleet reconciliation: design (work in progress)
 
-Status: thinking, not decided. Nothing here is built.
+Status: a working document. It is edited as the work lands, so what it
+says is the current intent and the current state, not a record of either.
+Sections marked **Done** name the commit. The document is meant to become
+obsolete: once the reconcile loop is the code, its outcome is folded into
+the architecture documentation (`ARCHITECTURE.md`, and `fleet-state.md`
+or its replacement) and this file is removed.
 
 ## The problem
 
