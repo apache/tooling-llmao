@@ -470,11 +470,10 @@ def _badge_class(state: str, *, routed: bool = True) -> str:
 
 
 def _dep_ident(dep) -> str:
-    """host:port for a box (the listen port from fleet.hosts), else the endpoint."""
-    srv = dep.vllm
-    if srv is not None:
-        return f"{srv.host}:{srv.listen_port}"
-    return dep.api_base or dep.name
+    """The key's display form: host:port for a box (the listen port), the base for a provider."""
+    if dep.vllm is not None or dep.api_base:
+        return dep.key.display
+    return dep.name
 
 
 def _dep_where(dep) -> edict:

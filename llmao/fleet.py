@@ -612,9 +612,9 @@ class VllmServer:
         )
         self.state = self_hosted_lifecycle(snap, cfg, now)
         if self.state == HEALTHY and was != HEALTHY:
-            _LOGGER.info("fleet server %s@%s healthy", self.name, self.api_base)
+            _LOGGER.info("fleet server %s@%s healthy", self.name, self.key.display)
         elif self.state in (UNHEALTHY, STALLED) and was not in (UNHEALTHY, STALLED):
-            _LOGGER.warning("fleet server %s@%s %s (%s)", self.name, self.api_base, self.state, self.last_error)
+            _LOGGER.warning("fleet server %s@%s %s (%s)", self.name, self.key.display, self.state, self.last_error)
 
 
 # What a deployment's cost figure means, when it is not simply money owed.

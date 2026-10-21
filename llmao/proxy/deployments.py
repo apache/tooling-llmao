@@ -190,17 +190,17 @@ class DeploymentManager:
         """
         if await self._deployment_present(dep):
             dep.in_litellm = True
-            _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
+            _LOGGER.info("model/new already present %s@%s", dep.name, dep.key.display)
             return False
         body = self.deployment_body(dep, api_key=self._working_api_key(dep))
         resp = await self._transport.request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
             dep.in_litellm = True
-            _LOGGER.info("model/new already present %s@%s", dep.name, dep.api_base)
+            _LOGGER.info("model/new already present %s@%s", dep.name, dep.key.display)
             return True
         self._transport.raise_http(resp)
         dep.in_litellm = True
-        _LOGGER.info("model/new %s@%s", dep.name, dep.api_base)
+        _LOGGER.info("model/new %s@%s", dep.name, dep.key.display)
         return True
 
     async def delete_deployment(self, dep) -> bool:
@@ -214,12 +214,12 @@ class DeploymentManager:
                     break
         if not found:
             dep.in_litellm = False
-            _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, dep.api_base)
+            _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, dep.key.display)
             return False
         resp = await self._transport.request("POST", "model/delete", json={"id": found})
         self._transport.raise_http(resp)
         dep.in_litellm = False
-        _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.api_base, found)
+        _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.key.display, found)
         return True
 
     async def _each(self, action, dep) -> bool:
@@ -233,7 +233,7 @@ class DeploymentManager:
         try:
             wrote = await action(dep)
         except Exception as e:
-            _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.api_base)
+            _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.key.display)
             # Kept for /models, which otherwise shows only that it is missing.
             dep.litellm_error = str(e) or type(e).__name__
             dep.litellm_error_at = time.time()
@@ -497,7 +497,7 @@ class DeploymentManager:
         fresh = [badge for badge in view.skew if badge not in dep.skew]
         dep.skew = list(view.skew)
         for badge in fresh:
-            _LOGGER.warning("skew: %s@%s %s", dep.name, dep.api_base, SKEW_PHRASE[badge])
+            _LOGGER.warning("skew: %s@%s %s", dep.name, dep.key.display, SKEW_PHRASE[badge])
 
 
 def _index_deployments(rows) -> tuple[dict[str, list[str]], set[tuple[str, str]]]:

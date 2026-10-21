@@ -123,6 +123,17 @@ def test_same_name_from_two_providers_are_two_keys():
     )
 
 
+def test_display_is_host_and_listen_port_for_a_box():
+    """What pages and logs print. Never the public port, never a URL to paste."""
+    assert deployment_key("gemma4-26b", host="192.0.2.10", listen_port=8001).display == "192.0.2.10:8001"
+    assert deployment_key("gemma4-26b", host="2001:db8::1", listen_port=8001).display == "[2001:db8::1]:8001"
+
+
+def test_display_is_the_base_for_a_provider():
+    assert deployment_key("grok-4", api_base="https://api.x.ai/v1").display == "https://api.x.ai"
+    assert deployment_key("grok-4", api_base="https://openrouter.ai/api/v1").display == "https://openrouter.ai/api"
+
+
 def test_key_refuses_half_an_identity():
     with pytest.raises(ValueError):
         deployment_key("", host="192.0.2.10", listen_port=8001)

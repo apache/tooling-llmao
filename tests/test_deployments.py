@@ -171,7 +171,7 @@ def test_one_failing_deployment_does_not_stop_the_rest(caplog):
     assert posted == ["http://10.0.0.1:8001/v1", "http://10.0.0.2:8001/v1"]
     assert [d.in_litellm for d in fleet.deployments] == [False, True, True]
     # Says which deployment, so the log points at the cause.
-    assert "add_deployment failed for gone@http://10.0.0.9:8001/v1" in caplog.text
+    assert "add_deployment failed for gone@10.0.0.9:8001" in caplog.text
 
 
 def test_sync_selfhost_deletes_when_down():

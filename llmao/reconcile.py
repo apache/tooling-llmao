@@ -90,6 +90,20 @@ class DeploymentKey(NamedTuple):
     url: str
     model_name: str
 
+    @property
+    def display(self) -> str:
+        """How a page or a log line names the deployment: host:port for a box, the base for a provider.
+
+        Never a dialable URL. The public port is a fact about reaching the
+        box, not about which deployment it is, and a URL on a page gets cut
+        and pasted. A box's key is its listen URL, so this is host and listen
+        port. A provider's key is its base, which is already the name to use.
+        """
+        parsed = urlparse(self.url)
+        if parsed.port and parsed.path in ("", "/"):
+            return parsed.netloc
+        return self.url
+
 
 def deployment_key(
     model_name: str,
