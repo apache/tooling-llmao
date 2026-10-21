@@ -16,7 +16,7 @@ here.
 | **[Help](https://llm.apache.org/help)** (`docs/help/`) | How to use the gateway: keys, connecting tools |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
 | [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) | GPU fleet: control-plane contract, box provisioning |
-| [`docs/fleet-state.md`](docs/fleet-state.md) | Fleet membership: ownership, lifecycle, recovery |
+| [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md) | Fleet state kept in step with LiteLLM (working document) |
 | Infra `p6/modules/llmao` | Production deploy |
 
 ```
@@ -166,7 +166,7 @@ plus `models.yaml`. Boxes fetch it with template `FLEET_KEY`.
 
 See [`hosting/README.md`](hosting/README.md),
 [`docs/vllm-fleet-design.md`](docs/vllm-fleet-design.md) and
-[`docs/fleet-state.md`](docs/fleet-state.md). Operational detail — what is
+[`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md). Operational detail — what is
 running where, and the exact launch commands — is kept out of this repo.
 
 `models.yaml` is **admin definitions** — served id, licence, provenance, and

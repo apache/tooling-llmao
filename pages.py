@@ -1149,8 +1149,8 @@ async def do_set_admin_label():
     """Site admin sets, changes, or clears a host's admin label.
 
     The label is an in-memory, host-scoped annotation (see
-    ``Fleet.set_admin_label`` and fleet-state.md section 5.2); it is never
-    read by the lifecycle and is lost on a control-plane restart.
+    ``Fleet.set_admin_label`` and docs/models-dashboard-design.md); it is
+    never read by the lifecycle and is lost on a control-plane restart.
     """
     ident = await current_identity(APP.cfg)
     if not ident.is_site_admin:

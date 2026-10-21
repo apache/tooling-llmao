@@ -1,17 +1,19 @@
 # Design: Multi-vLLM Fleet on Vast.ai with asfquart Control Plane
 
 **Box contract and control-plane protocol** (host = IP, fleet key,
-`GET /vllm/config` shape, listen vs public, identical templates). Live
-state, mix, recovery, HMAC `api_key`: [`fleet-state.md`](fleet-state.md).
-Box boot: [`../hosting/README.md`](../hosting/README.md). Do not merge those
-docs.
+`GET /vllm/config` shape, listen vs public, identical templates). How the
+fleet's live state is kept in step with LiteLLM:
+[`fleet-reconcile-design.md`](fleet-reconcile-design.md) (a working
+document; its outcome lands in `ARCHITECTURE.md`). The HMAC `api_key`
+derivation: `llmao/vllm_api_key.py`. Box boot:
+[`../hosting/README.md`](../hosting/README.md).
 
 **Status:** Operating — boxes fetch `GET /vllm/config` (`X-LLMAO-Host` on
 Vast). Listen vs public ports; Vast HostPort (`vast_client`); health-gated
 `/model/new` / `/model/delete`; commercial register at llmao startup.
 Remaining: long vLLM boot, config revision, box smoke. Per-vLLM `api_key`
 is HMAC of `fleet.vllm_api_salt` and is returned on `/vllm/config`
-(fleet-state §2.3). A leaked host/port map is accepted for today.
+(§3.1). A leaked host/port map is accepted for today.
 **Date:** 2026-09-10
 **Scope:** One or more Vast.ai GPU instances, each running 1–3 vLLM servers for distinct models, fronted by a LiteLLM proxy managed by an asfquart application.
 
@@ -30,7 +32,7 @@ is HMAC of `fleet.vllm_api_salt` and is returned on `/vllm/config`
 - Automatic scaling / serverless.
 - Per-instance *random* secrets or short-lived tokens. Per-vLLM `api_key` is
   **derived** (HMAC of `fleet.vllm_api_salt`, not `fleet.key`); see
-  fleet-state §2.3. A leaked host/port map is accepted for today.
+  §3.1. A leaked host/port map is accepted for today.
 - Reverse proxy / path-based routing on the GPU box (LiteLLM talks directly to the vLLM ports).
 
 ---
@@ -97,10 +99,25 @@ weights id** (`model_info.vllm.model`); that field name is deferred.
   not a proof; the fleet key is the gate.
 - Chosen over per-instance *random* secrets for operational simplicity (one
   value to manage, works across providers). Each vLLM `--api-key` is HMAC of
-  `fleet.vllm_api_salt` plus host and listen port
-  ([fleet-state §2.3](fleet-state.md)). `fleet.key` does not mint that
-  bearer. `/vllm/config` returns it. A leaked host/port map is accepted for
-  today; revisit is recorded in fleet-state §2.3.
+  `fleet.vllm_api_salt` plus host and listen port (`llmao/vllm_api_key.py`
+  is the derivation; `bin/llmao-vllm-api-key` computes one by hand).
+  `fleet.key` does not mint that bearer. `/vllm/config` returns it in
+  `servers[].api_key`; instance env injection was tried on Vast and does not
+  work, so the JSON is how a box learns `--api-key`. The salt lives only in
+  llmao `config.yaml` (Puppet eyaml), never in the box template, and is not
+  rotated in place: a change means a new bearer on every box, a vLLM restart,
+  and a new `/model/new`.
+- **Who can mint.** The salt never leaves llmao, so a third party cannot
+  compute a bearer, including a box that copied `FLEET_KEY`. Host and listen
+  port are still required inputs.
+- **Leaked host/port map.** A list of fleet IPs and listen ports can leak
+  (config, logs, the public Vast mapping). Accepted for today: the map alone
+  does not mint bearers, and membership is not hidden beyond the fleet key on
+  `GET /vllm/config`. Revisit if a leaked map should be insufficient even for
+  someone who also holds `FLEET_KEY`: that caller can still claim
+  `X-LLMAO-Host` for each listed IP and receive the derived key. Those
+  fetches are logged (claimed host, TCP peer, `X-Forwarded-For`).
+  Per-instance bootstrap tokens stay out of scope until that revisit.
 - Acceptable risk for a small, operator-controlled fleet. Can be hardened later (instance binding, short-lived tokens, etc.) without changing the rest of the design.
 
 ### 3.2 Hosts
@@ -116,9 +133,14 @@ asfquart owns placement. `models.yaml` is how to serve, not where. Changing
 placement is a control-plane change only; GPU templates stay identical (shared
 `FLEET_KEY`).
 
-Fleet state lives in LiteLLM: a deployment's `api_base` is the host and port, and
-`model_info` carries the recipe and provenance. See
-[fleet-state.md](fleet-state.md) for ownership, lifecycle, and recovery.
+llmao config is the source of truth; LiteLLM's Postgres is the working copy
+the proxy needs in order to route. A deployment's `litellm_params.api_base`
+is the host and public port, and its `model_info` carries `llmao_key` (the
+host and LISTEN port, the deployment's identity), `asf_api_base`,
+`self_hosted` and `access_groups`. Registration is health-gated: a
+deployment is added when its vLLM is Healthy and deleted when it is
+Unhealthy or Stalled. How that is kept in step is
+[`fleet-reconcile-design.md`](fleet-reconcile-design.md).
 
 ### 3.3 Config lifetimes
 
@@ -297,11 +319,11 @@ The template is identical for every box. Placement is keyed by public IP in
 - Remaining Vast operational nits (framework works; boxes fetch config).
 
 **Resolved:** `GET /vllm/config` (no path) is keyed from `fleet.hosts`.
-That stays; it is not derived from LiteLLM rows
-([`fleet-state.md`](fleet-state.md) §1). A fleet-key fetch from an IP not in
-`fleet.hosts` is remembered in memory and shown as a highlighted Fleet row;
-Add into LiteLLM is on the existing row and waits until that vLLM is serving
-([`fleet-state.md`](fleet-state.md) §2.4). Deployments live in Postgres
+That stays; it is not derived from LiteLLM rows. A fleet-key fetch from an
+IP not in `fleet.hosts` is remembered in memory and shown on the `/models`
+attention strip, where an admin can approve it with its models; Add into
+LiteLLM is on the existing row and waits until that vLLM is serving
+(`models-dashboard-design.md`). Deployments live in Postgres
 (`store_model_in_db` in YAML and/or env). Registration is health-gated.
 `ASFQUART_URL` + template `FLEET_KEY`; no `VLLM_SET`; no on-disk
 `servers.yaml`; no Werkzeug ProxyFix on Quart ASGI.

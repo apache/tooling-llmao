@@ -134,7 +134,7 @@ The states below are **computed**: `deployment_status` derives each from the pro
 | **Approved** | I vouched for this box; I intend to add it to `fleet.hosts`. |
 | **Reboot requested** | I started a reboot by hand; watching for it to re-request config. |
 
-Labels are lost on a control-plane restart; because they are annotations, losing one can never change a computed state. What losing each costs, and how it is recovered, is in `fleet-state.md` §5.2. One label per host: the two are phases of one onboarding.
+Labels are lost on a control-plane restart; because they are annotations, losing one can never change a computed state. Losing one costs little: the admin re-applies Approved, and a reboot is visible again the moment the box re-requests config and reads as Loading (whether a reboot was ever requested is lost). One label per host: the two are phases of one onboarding.
 
 Notes:
 
