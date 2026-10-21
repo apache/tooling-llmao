@@ -187,30 +187,66 @@ is observed, rather than updating state step by step from many places.
    `UNLISTED_PASSES` counts passes on which both listings were fresh and
    neither named the host. `ORPHAN_PASSES` counts new snapshots of the LiteLLM
    deployments (`skew_interval_s`, 180s). A pass is one fresh round of
-   both listings. Both providers are polled on that same interval, about
-   a minute, and a few passes is the whole wait, for a Vast host and a
-   RunPod host alike. A listing that does not answer is stale, and the
-   count does not move. A long silence from either provider is not an
-   absence.
+   both listings: the count moves when both snapshots are fresh and
+   each has a taken-at newer than the one counted last, so a fast
+   fetcher is never counted twice against one read of the other. Both
+   providers are polled on one listing interval, a constant of about a
+   minute (today Vast rides on the probe pass and RunPod is on its own
+   600s runner, chosen because placing was not urgent, not from a rate
+   limit; RunPod's documented limit for the pods endpoint is to be
+   checked once before the constant moves). A few passes is the whole
+   wait, for a Vast host and a RunPod host alike. That is short by
+   choice: `UNLISTED_PASSES` no longer has to outlast a provisioning
+   gap, because Loading is quiet and unlisted is attention-only, so the
+   comment that justifies today's 3 as "half an hour at the 10-minute
+   interval" is rewritten when the constant moves. A listing that does
+   not answer is stale, and the count does not move. A long silence
+   from either provider is not an absence.
 
    Unlisted is a **host** verdict — one instance, several listen ports —
    applied to every key on that host. The "remove it from `fleet.hosts`"
    sentence waits until the verdict is true and the lifecycle is
-   Unhealthy, Stalled, or Foreign, or a probe was attempted and did not
-   reach the box. Awaiting means this process has not probed yet, and it
-   stays quiet. Loading stays quiet. Healthy stays quiet and keeps the
-   route: the probe still passes. When the probe fails, the delete is
-   the probe gate's and the sentence is unlisted's.
+   Unhealthy, Stalled, or Foreign. Awaiting, Loading and Healthy stay
+   quiet; Healthy keeps the route, because the probe still passes. When
+   the probe fails, the delete is the probe gate's and the sentence is
+   unlisted's.
+
+   **A probe that does not reach, with no anchor, runs out of grace.**
+   Today a failed probe with no anchor reads Unhealthy only while the
+   deployment exists (`model_status.py`); the moment the probe gate
+   deletes it, the same box reads Awaiting, and a rental that died
+   before a restart never shows the sentence once the delete lands.
+   Under reconcile, Awaiting means no probe has been attempted in this
+   process. A record with no anchor whose probes do not reach (no
+   connection, `reached` false) is Awaiting until `health_grace_s`
+   after the first attempt, then **Stalled**. No new lifecycle, and the
+   sentence rule stays the three names. The first attempt is not an
+   anchor: a dead rental with its deployment still present reads
+   Unhealthy on the no-anchor rule, as today, and is deleted at once.
+   After that delete the record is Awaiting until the grace runs out,
+   about thirty minutes after the restart, and the sentence shows then.
+   That gap is accepted. The clock is the grace constant, and not
+   `UNLISTED_PASSES`, because on a one-minute listing clock a new
+   RunPod row is unlisted within minutes, while the pod it waits for is
+   absent from the listing for over ninety minutes and fetches
+   `/vllm/config` only after its image pull; the sentence must not show
+   for a box the admin created five minutes ago. A probe that reaches
+   (a 503) is the anchor and the row above.
 
    **An unlisted host is probed with the key we believe that process
    has.** `/health` takes no key, so a passing probe alone cannot tell
    our box from another tenant's vLLM at an address a provider has
    reassigned. llmao already calls `/v1/models` on the edge into Healthy
    (for `max_model_len`) and throws a 401 away. That call sends
-   `srv.api_key`, the derived key, including for `LEGACY_SERVERS`.
-   Under reconcile it sends what `_working_api_key` returns, the status
-   is kept, and the call is repeated on each probe pass while the host
-   is unlisted. A 401 makes the lifecycle **Foreign**: the deployment is
+   `srv.api_key`, the derived key, including for `LEGACY_SERVERS`, so a
+   legacy box answers 401 on every pass and never gets
+   `observed_max_model_len`; under the Foreign rule the derived key
+   would have deleted those boxes. The rule that picks the key is
+   `_working_api_key`, a method on the executor today. It becomes a
+   plain function in `fleet.py` of host, listen port and config, which
+   the deployment body and the `/v1/models` fetch both call. Under
+   reconcile the fetch sends that key, the status is kept, and the call
+   is repeated on each probe pass while the host is unlisted. A 401 makes the lifecycle **Foreign**: the deployment is
    deleted by the probe gate, and the sentence shows. A wrong
    `vllm_api_salt` shows up the same way, which is right.
 
@@ -223,7 +259,8 @@ is observed, rather than updating state step by step from many places.
    either listing is unread or stale is not a miss, and the count does
    not move, so one provider's outage says nothing about anyone's hosts.
    A fleet with neither key (a laptop) has no listings, and unlisted is
-   never computed.
+   never computed; it is not a mode, only two sources that are not
+   configured.
 
    This drops `ever_listed`. That guard existed for a host rented from a
    provider with no key, which would be absent from every listing and
@@ -258,9 +295,8 @@ is observed, rather than updating state step by step from many places.
    button cannot drift apart. `needs_human` is not always a button.
    Add, Stop tracking, Approve, and the labels post. "Remove it from
    `fleet.hosts`" is a sentence when the host is unlisted and the
-   lifecycle is Unhealthy, Stalled, or Foreign, or a probe was attempted
-   and did not reach the box. Awaiting, Loading, and Healthy stay quiet.
-   The page does not write config.yaml.
+   lifecycle is Unhealthy, Stalled, or Foreign. Awaiting, Loading, and
+   Healthy stay quiet. The page does not write config.yaml.
 
 ## Identity: (canonical URL, model)
 
@@ -351,10 +387,16 @@ The URL that can actually be reached, `http://host:public_port/v1` on a
 Vast box, is **a field reconcile computes** on each record, from, in
 order: the current port map from the listing that has the host and is
 running (Vast or RunPod; both are configured in production), else the
-last-known dialable URL, which history carries forward, else nothing
-(unplaced). For commercial providers the dialable URL is the canonical
-one. A fleet with neither GPU key probes and adds on the listen URL.
-A public port written on the `fleet.hosts` row is not a dial address.
+last-known dialable URL, which history carries forward, else the
+canonical listen URL. The last step is unconditional: it is what a
+laptop with neither key dials, and what our own box dials in a fleet
+with both keys, a host neither listing names and so never maps. A dead
+rental after a restart is probed at its listen port on an address the
+provider may have reassigned; that fails or goes Foreign, and is
+harmless. Unplaced, a record with no address, is therefore only a
+record with no host. For commercial providers the dialable URL is the
+canonical one. A public port written on the `fleet.hosts` row is not a
+dial address.
 
 It is a field and not a function so that the decision is made in one
 place and tested as table rows, and so that fetchers never consult
@@ -414,10 +456,11 @@ self-hosted and commercial are different gates:
   Healthy is Unhealthy, and the probe gate already deletes that. The
   extra clause tied the listing count to the delete, which is what
   produced 65e22c8. Unlisted is an attention verdict. The sentence, and
-  no buttons, show when the lifecycle is Unhealthy, Stalled, or Foreign,
-  or a probe was attempted and did not reach the box. Awaiting means not
-  probed yet. Loading stays quiet. While the probe passes with our key,
-  a listing gap keeps the route and stays quiet.
+  no buttons, show when the lifecycle is Unhealthy, Stalled, or Foreign.
+  Awaiting means not attempted yet, and a not-reached record with no
+  anchor becomes Stalled when the grace runs out. Loading stays quiet.
+  While the probe passes with our key, a listing gap keeps the route
+  and stays quiet.
 - **Auto, commercial:** add when absent from the LiteLLM deployments, including
   while LiteLLM health is still unknown (`Configured`). Do not delete when
   LiteLLM later marks the endpoint unhealthy. `ensure_providers` is
@@ -523,6 +566,12 @@ the button.
    rewrites `model_info`, else wipe the llmao-managed deployments and let
    add recreate them. Do not prune unstamped deployments while both
    generations exist.
+   Before step 3, read RunPod's `portMappings` into the inventory (the
+   parked RunPod step 2, now a prerequisite): with the pin gone, a
+   RunPod box has no dial address until the listing supplies one.
+   Then a four-element `fleet.hosts` row fails at load, as any other
+   shape does, rather than being ignored; the p6 template drops the
+   fourth element first.
 3. Build the snapshots, the key, the record with its dialable field, and
    `reconcile()`, and run them **read only**, alongside the current code.
    Log every disagreement between the computed plan and what
@@ -602,8 +651,10 @@ badges, unlisted (host-level), and the plan actions.
 
 | Fixture | Given | Computed | Plan |
 |---|---|---|---|
-| Unplaced | intended self-host, no dialable | Awaiting or last lifecycle; no probe | cannot add; reason: public address unknown |
-| Awaiting, never probed | no config_served, probe unread, not in LiteLLM | Awaiting | none |
+| Unplaced | a record with no host (every intended row dials at least its listen URL) | no probe | cannot add; reason: no address |
+| Awaiting, never probed | no anchor, no probe attempted, not in LiteLLM | Awaiting | none |
+| Not reached, no anchor | probe attempted, `reached` false, no config fetch, not in LiteLLM; inside `health_grace_s` of the first attempt | Awaiting | none |
+| Not reached, grace run out | as above, past `health_grace_s` of the first attempt | Stalled | sentence if unlisted. No deployment to delete |
 | Loading | anchor set (config fetch or first reached probe), probe not ok, inside `health_grace_s` of it | Loading | none |
 | Stalled, in LiteLLM | anchor set, never `last_ok`, past grace | Stalled | delete_litellm |
 | Approved after a restart, answering 503 | no config fetch this process; probe reached | anchor = first reached probe; Loading, then Stalled past grace | none, then delete_litellm (the adopt stamp this replaces) |
@@ -616,7 +667,7 @@ badges, unlisted (host-level), and the plan actions.
 | Unhealthy / Stalled, in LiteLLM | self-hosted; probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
 | 65e22c8 serving through a listing gap | both listings fresh, neither names the host; probe ok on last-known dialable | Healthy. The count may reach `UNLISTED_PASSES`. The route stays | none. No sentence while Healthy. Keep probing the last-known URL |
 | Unlisted, deployment present, down | host verdict true; lifecycle is Unhealthy, Stalled or Foreign | unlisted + lifecycle | no delete from this row (the probe rows delete); sentence, no POST, no buttons: remove from `fleet.hosts` |
-| Unlisted, probe did not reach | host verdict true; a probe was attempted, `reached` is false; deployment already absent | unlisted; not Awaiting | sentence, no POST: remove from `fleet.hosts`. No deployment to delete |
+| Unlisted, not reached, no anchor | host verdict true; probes do not reach; deployment already absent | unlisted + Awaiting, then Stalled past `health_grace_s` of the first attempt | none, then the sentence, no POST: remove from `fleet.hosts`. No deployment to delete |
 | Unlisted, Loading | host verdict true; anchor set, inside `health_grace_s` | unlisted + Loading | none. No sentence |
 | Unlisted, still Healthy with our key | host verdict true; `/health` ok and `/v1/models` accepts our key | unlisted + Healthy | none. No sentence, no buttons. The route stays |
 | Unlisted, deployment already absent | host verdict true; row is in `fleet.hosts`; lifecycle Unhealthy, Stalled or Foreign | unlisted | sentence, no POST: remove from `fleet.hosts`. A Healthy absent row is the add row, not this one |
@@ -632,8 +683,8 @@ badges, unlisted (host-level), and the plan actions.
 | Commercial, missing | intended provider, no LiteLLM deployment, health unknown or known | Configured or Healthy | add_litellm (every pass, not only startup) |
 | Commercial, LiteLLM unhealthy | deployment exists, LiteLLM `/health` says down | Unhealthy | none (keep the deployment) |
 | Commercial listing | no GPU inventory for that key | never unlisted | LiteLLM deployment and health only |
-| Neither GPU key | a laptop; production configures both | dialable is the canonical listen URL | probe and add as a self-hosted row. Unlisted is never computed |
-| Our own box | `fleet.hosts` row that neither listing names; both keys are configured | counted as a miss on every fresh pass of both listings | unlisted after `UNLISTED_PASSES`; the sentence shows once it is Unhealthy, Stalled, or Foreign, or a probe did not reach, and is wrong for this host. Accepted: a sentence, never an action. Probe and add on the last-known URL, else unplaced |
+| Neither GPU key | a laptop; production configures both | both inventory sources not configured; dialable is the canonical listen URL | probe and add as a self-hosted row. Unlisted is never computed |
+| Our own box | `fleet.hosts` row that neither listing names; both keys are configured | counted as a miss on every fresh pass of both listings; dialable is the canonical listen URL (no map, no last-known) | unlisted after `UNLISTED_PASSES`; the sentence shows once it is Unhealthy, Stalled, or Foreign, and is wrong for this host. Accepted: a sentence, never an action. Probe and add on the listen URL |
 | Discovered, Healthy | inventory host not in `fleet.hosts`, no approval, live `/v1/models` matched a `models.yaml` row, probe ok, dialable | a record reconcile computed, not a server it added; Healthy | add_litellm. Sentence: not in `fleet.hosts`. A restart recomputes it on the next pass while the listing and the probe still match. The unlisted sentence never applies |
 | Inventory unread or stale | that snapshot `None`, or older than the threshold × its interval, or the same taken-at as the last count | last unlisted verdict stands; do not increment | no unlisted transition |
 | LiteLLM deployments unread or stale | that snapshot `None`, or past the staleness rule | do not invent orphans or absences | no add/delete/prune |
@@ -644,7 +695,7 @@ badges, unlisted (host-level), and the plan actions.
 | Sibling ports | two keys on one host | two records; one host unlisted verdict | host gone applies to both |
 | Restart, probe ok, no config_served | `probe_ok` true | Healthy (current `self_hosted_lifecycle`) | add if absent |
 | Restart, deployment present, probe failed, no config_served | | Unhealthy | delete_litellm |
-| Rental died before a restart | after the restart both listings are read; neither names the host, `UNLISTED_PASSES` times; probe failed | Unhealthy, then unlisted | delete_litellm from the probe; sentence from unlisted. (Today's `ever_listed` would never fire here, so the sentence never showed) |
+| Rental died before a restart | after the restart both listings are read; neither names the host, `UNLISTED_PASSES` times; probe does not reach | Unhealthy while the deployment is present, then unlisted; after the delete, Awaiting, then Stalled past `health_grace_s` of the first attempt | delete_litellm from the probe; the sentence from unlisted once Stalled, about thirty minutes after the restart. (Today's `ever_listed` would never fire here, so the sentence never showed) |
 | Address reassigned to another tenant's vLLM | rental ended; `/health` at the last-known URL still ok; `/v1/models` 401 | Foreign, unlisted once the count is reached | delete_litellm from the probe; sentence from unlisted |
 
 ## Early work, independent of the rest
@@ -660,12 +711,21 @@ real gap on its own. In order:
 4. **Re-read `/model/info` after every write.** `sync_selfhost` and
    `_prune_extras` can do this now, so a write is confirmed by the next
    pass and not assumed.
-5. **Keep the `/v1/models` status, and re-check it when unlisted.** The
-   call uses `_working_api_key`. A 401 is Foreign: delete the deployment
-   and say so. Today the status is thrown away, the call sends the
-   derived key, and an unlisted-but-answering host is trusted.
-6. **Carry the pod status in the RunPod inventory** instead of filtering
+5. **One working-key function.** Lift `_working_api_key` out of the
+   executor into `fleet.py` as a function of host, listen port and
+   config, and call it from the deployment body and from
+   `fetch_max_model_len`. Today the fetch sends the derived key, so a
+   legacy box 401s on every pass and never reports its context window.
+6. **Keep the `/v1/models` status, and re-check it when unlisted.** A
+   401 with the working key is Foreign: delete the deployment and say
+   so. Today the status is thrown away and an unlisted-but-answering
+   host is trusted.
+7. **Carry the pod status in the RunPod inventory** instead of filtering
    to `RUNNING` with a `publicIp` in `boxes_from_pods`, so "listed, not
    running" stops counting as an absence.
-7. **Gate the `fleet.hosts` sentence** on Unhealthy, Stalled or Foreign,
-   not on "not Healthy".
+8. **Read RunPod's `portMappings`** into the same inventory, so the
+   listing is the dial address for a RunPod box as it is for a Vast
+   box. Then drop the fourth element of a `fleet.hosts` row (p6 first,
+   then the loader rejects it).
+9. **Gate the `fleet.hosts` sentence** on Unhealthy, Stalled or Foreign,
+   not on "not Healthy", with the not-reached grace clock above.
