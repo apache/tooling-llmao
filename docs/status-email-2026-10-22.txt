@@ -1,0 +1,165 @@
+Subject: llmao progress — keys and tiers, capacity, and the fleet (Oct)
+
+Hi all,
+
+A follow-up to the 4 October note. This covers tooling-llmao from then
+through 22 October, and says where the work goes next. Drafted with
+Claude Code this time; the last one was Qwen3.8-27B on our own fleet.
+
+llmao is the Tooling app behind llm.apache.org. You sign in with your
+ASF id, get a personal access token for a project, and point your own
+tools at the LiteLLM proxy with it. The proxy enforces the budget and
+attributes every call. llmao is not a chat window; inference does not
+pass through it. The code is apache/tooling-llmao; the product design
+is rai-private, services/llmao/README.md.
+
+Where we are
+------------
+Three self-hosted models (gemma4-26b, qwen3.8-27b, qwen3-8b) serve on
+rented GPU boxes, Vast and RunPod, behind the proxy at llm.apache.org.
+Claude Code, Codex, Grok Build and Pi all run against it; the Help pages
+on the site say how to set each one up.
+
+What landed since 4 October
+---------------------------
+About 190 commits. The themes:
+
+• Key requests and tiers. Asking for a key is a request with a
+  lifecycle: ask, answer, and the answer shows what was granted against
+  what was asked. Every key has a ceiling, set by its tier. A site admin
+  or RAI admin can change a tier's limits on /admin while the service
+  runs; a PMC can adjust its own project. My Keys shows a rolling
+  allowance read from the proxy's spend log. Keys that belong to no
+  project (the free tier, and service keys) sit in two pretend projects
+  that may use only our own boxes, so a projectless key cannot spend
+  money. All of this is recorded in LiteLLM's memory store; llmao still
+  has no database of its own.
+
+• Help and the pages. Help is rendered from markdown in the repo, with
+  a page each for Claude Code, Codex, Grok Build and Pi. Home walks a
+  newcomer to a first request. The Models page says what each model is
+  good for, whether it thinks by default, and where each deployment
+  lives; a model id copies from an icon.
+
+• The proxy layer, rebuilt. The one large LiteLLM backend class is now
+  a set of managers (deployments, teams, keys, tiers, usage, access
+  requests, the memory store) with the HTTP plumbing in a class of its
+  own. Usage reads LiteLLM's daily aggregate instead of the raw spend
+  log. Edits made to the proxy outside llmao are noticed and shown as
+  work needed. An empty completion is rejected rather than returned as
+  a 200. LiteLLM is at 1.105.
+
+• Hosting. One installer for every provider. RunPod runs our own image,
+  built on GitHub and pushed to ghcr: it provisions once, then hands
+  over to supervisord, and a pod names itself by its pod id. The
+  installer now uses every GPU on a box, divides the card's memory
+  between the servers on it, fits the KV cache as well as the weights,
+  keeps 2 GB of each card back, and runs vLLM with its startup plan so
+  a second boot does not re-estimate. There is a runbook for
+  re-provisioning a box, and a BF16 Qwen3 8B for cards the FP8 build
+  will not load on.
+
+• Capacity and spend. A sampler reads each box's /metrics on a short
+  interval and rolls the readings up by the hour in the memory store.
+  Each hour carries its server's share of the box's rental, priced from
+  the Vast and RunPod APIs, and what we paid the model providers comes
+  from LiteLLM's daily activity. /admin/capacity shows it: per model,
+  per provider, by day. Self-hosted tokens are priced at zero in the
+  proxy on purpose, so they never count against a project budget.
+
+• Admin. /admin is one page: what is waiting on an admin, and a short
+  log of what admins have done. A daily pruner keeps the memory store
+  from growing without bound.
+
+• Fleet. Every account we pay, GPU hosts and model providers alike, is
+  under one providers section of the config. A box that disappears from
+  its provider's listing has its proxy deployment dropped by itself; a
+  host that no provider lists is flagged. The two GPU providers are
+  asked on their own schedules.
+
+What we learned tuning the fleet
+--------------------------------
+• The 60-second cutoff. Apache's ProxyTimeout killed any generation
+  over a minute, and it looked exactly like the model truncating its
+  answer. It is now 1800 seconds.
+
+• vLLM's batch size. Its default max_num_batched_tokens of 2048 held
+  every box to two or three requests at once while most of the KV cache
+  sat idle. Raised, the 27B model went from 2 concurrent requests to 38.
+  The right value follows the card, not the model: a setting that suits
+  an 80 GB card crashed the engine on a 24 GB one.
+
+Next: fleet reconciliation
+--------------------------
+This is the current project, and it is the reason the rest is parked.
+
+The problem. llmao keeps three pictures of the fleet in step: what we
+intend (the config plus boxes an admin has approved), what is live (the
+Vast and RunPod listings, and the health probes), and what the proxy
+holds (its deployments). They run on different clocks, and today they
+are reconciled through flags on shared objects, spread across the code.
+It works, and it is the part of llmao most expensive to change.
+
+The design (docs/fleet-reconcile-design.md, six review rounds, some of
+them with Grok) replaces that with the controller pattern: an immutable
+snapshot per source, one pure function that takes the snapshots and
+computes the gap and a plan, a policy table that says which actions run
+unattended and which wait for an admin, and an executor that carries the
+plan out. A deployment's identity becomes the pair (listen URL, model
+name), stamped into the proxy's own record of it, so a box whose public
+port changes is a remap, not a new deployment.
+
+Done so far, one commit each: the identity key with its tests; the two
+hysteresis constants; one rule for which API key a box accepts (this
+found a live bug: the older boxes had been asked for their model list
+with the wrong key on every pass); a re-read of the proxy's deployments
+after every write, so presence is observed rather than assumed; and the
+stamp, written on every new deployment and backfilled onto the three in
+production. Still to do before the cut-over: the Foreign state (a box
+that answers the health probe but rejects our key), RunPod pod status
+in the inventory, and reading RunPod's port mappings from its API, which
+retires the hand-written public port in the host list (a Puppet change).
+
+Then the migration: build the snapshots and the reconcile function and
+run them read-only beside the current code, logging every disagreement;
+flip the automatic actions one kind at a time (add, delete, prune),
+deleting each old path as it goes; and point /models and /admin at the
+result. The design document is a working document and is meant to
+become obsolete: its outcome folds into ARCHITECTURE.md.
+
+Two documentation changes with it: docs/box-protocol.md now records how
+a GPU box asks for its configuration and what it gets, as fact rather
+than proposal, and the stale fleet-state notes are gone.
+
+Parked, pending that
+--------------------
+• Access control (docs/access-control-design.md, a draft): which
+  projects or people reach which models, using the proxy's access
+  groups. Open: who grants, whether paid models are restricted by
+  default, grants to a person, and keeping hidden models out of usage
+  reports.
+• Fleet key hardening. A leaked fleet key plus a host name yields that
+  box's vLLM key today. The plan is a list of keys, with an old key
+  treated as suspicious.
+• Capacity, step 6: add-a-box and remove-a-box suggestions once there
+  are a few weeks of data, and a revisit of the capacity-per-dollar
+  figure shown on the project pages.
+• Admin follow-ups: fleet problems shown on /admin as well as Models,
+  a near-the-limit section, withdrawing an unused approval, a button to
+  re-run the proxy's health check on one deployment.
+• Project envelopes and reports beyond the read-only overview.
+• RAI policy: who may create a project-scoped automation key is still
+  provisional (any PMC member).
+
+Pointers
+--------
+  https://llm.apache.org
+  https://github.com/apache/tooling-llmao
+  Design: rai-private → services/llmao/README.md
+  Status: tooling-llmao → docs/STATUS.md
+  Fleet: tooling-llmao → docs/fleet-reconcile-design.md
+
+Questions welcome.
+
+Cheers,
+-g
