@@ -9,10 +9,10 @@ and your project today.
 What it is
 ----------
 Apache LLMAO is the Foundation's gateway to AI models, at
-https://llm.apache.org. You sign in with your ASF id, create a key, and
-use that key in the tools you already work with. The models answer
-through the gateway, and the usage is attributed to you and your project.
-No PMC needs to hold a provider account of its own.
+https://llm.apache.org (LLM.A.O). You sign in with your ASF id, create a
+key, and use that key in the tools you already work with. The models
+answer through the gateway, and the usage is attributed to you and your
+project. No PMC needs to hold a provider account of its own.
 
 The models run on GPU machines the Foundation rents and operates. Your
 prompts go to our machines, not to a third party.
@@ -20,7 +20,7 @@ prompts go to our machines, not to a third party.
 How it helps
 ------------
 • Run AI coding agents on ASF work. Claude Code, Codex, Grok Build and Pi
-  all work against the gateway today, each with a setup page under Help
+  all work with the gateway today, each with a setup page under Help
   on the site. Point the tool at llm.apache.org, paste your key, pick a
   model, and work as you would with any other backend.
 
