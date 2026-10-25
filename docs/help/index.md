@@ -14,7 +14,8 @@ Point the tool at `https://llm.apache.org`. The endpoint follows the OpenAI API.
 * [[]Codex](/help/codex)
 * [[]Grok Build](/help/grok-build)
 * [[]Pi](/help/pi)
+* [[]Qwen Code](/help/qwen-code)
 
 ## More tools
 
-Further details are being developed for Qwen Code, OpenCode, Gemini CLI, and Antigravity.
+Further details are being developed for OpenCode, Gemini CLI, and Antigravity.
