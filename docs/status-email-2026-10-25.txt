@@ -1,0 +1,84 @@
+Subject: Apache LLMAO — AI models for ASF communities
+
+Hi all,
+
+The earlier notes on llmao were written for the people building it. This
+one is for everyone else: what Apache LLMAO is and how it can help you
+and your project today.
+
+What it is
+----------
+Apache LLMAO is the Foundation's gateway to AI models, at
+https://llm.apache.org. You sign in with your ASF id, create a key, and
+use that key in the tools you already work with. The models answer
+through the gateway, and the usage is attributed to you and your project.
+No PMC needs to hold a provider account of its own.
+
+The models run on GPU machines the Foundation rents and operates. Your
+prompts go to our machines, not to a third party.
+
+How it helps
+------------
+• Run AI coding agents on ASF work. Claude Code, Codex, Grok Build and Pi
+  all work against the gateway today, each with a setup page under Help
+  on the site. Point the tool at llm.apache.org, paste your key, pick a
+  model, and work as you would with any other backend.
+
+• Use any tool that speaks the OpenAI API, which is most of them. A base
+  URL and a key are usually all it takes. Setup notes for Qwen Code,
+  OpenCode, Gemini CLI and Antigravity are being written.
+
+• Put a model behind a script. A bot, a CI job or a triage script can
+  have a key of its own: ask for one on My Keys, say what it is for, and
+  once it is approved you create the key yourself. The secret is shown
+  once, to you.
+
+• Build agents, not just prompts. All three models support tool calling,
+  so agents that read files, run commands and call functions work.
+
+• Know what you are using. My Keys shows your keys, your allowance and
+  your usage. The Models page shows each model's id, whether it is up
+  right now, its context window and its licence.
+
+The models
+----------
+Three open-weight models, all Apache-2.0 licensed:
+
+• gemma4-26b: general work and agents that use tools. Answers start
+  immediately, which agents like. The default when unsure.
+• qwen3.8-27b: harder reasoning and code. It thinks before it answers,
+  so it is slow to start; better for a hard question than for an
+  interactive session.
+• qwen3-8b: quick questions, small edits, classification, routine calls.
+  Fast and cheap.
+
+The Models page is the live list, and a model is shown as available only
+when it is actually serving.
+
+Who can use it
+--------------
+Any committer. A personal key belongs to you and to one project you are
+a member of. A key with no project is also available for trying things
+out and for work that belongs to no project. Every key has rate limits,
+because the machines are shared.
+
+Privacy
+-------
+The Models page says, for each model, who can see your prompts. For this
+pilot, treat what you send as visible to the llmao admins: public and
+project-internal material is fine, credentials and embargoed work are
+not.
+
+Try it
+------
+  1. Sign in at https://llm.apache.org
+  2. Create a personal key on My Keys
+  3. Pick a tool from Help and follow its page
+
+Questions, problems and requests: reply here, or open an issue at
+https://github.com/apache/tooling-llmao.
+
+Cheers,
+-g
+
+ps. drafted with help from Claude Code.
