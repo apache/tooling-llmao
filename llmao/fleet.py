@@ -54,6 +54,7 @@ from llmao.model_status import (
 )
 from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
 from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
+from llmao.provisioning import ProvisioningRecord
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
@@ -844,9 +845,9 @@ class Fleet:
         # fleet with LiteLLM waits for it; before then no Vast server has an
         # address, and a comparison reads every one of them as missing.
         self.ready = asyncio.Event()
-        self.config_fetch_at: dict[str, float] = {}
-        # Fleet-key GETs for IPs not in fleet.hosts. Process memory only.
-        self.unknown_config_fetches: dict[str, edict] = {}
+        # What boxes have fetched (llmao/provisioning.py): the last config
+        # fetch per known host, and the strangers that presented the fleet key.
+        self.provisioning = ProvisioningRecord()
         # Admin labels (Approved, Reboot requested), keyed by normalized host IP.
         # In-memory only: cleared on process restart, and they never affect the
         # computed lifecycle -- the page reads them for display. See admin_label.
@@ -904,17 +905,18 @@ class Fleet:
         """Record that we handed this box its config.
 
         An approved host that is not in fleet.hosts becomes a server and a
-        deployment here, the first time. Stamping ``config_served_at`` is what
-        moves them from awaiting contact into the Loading window (the next
-        probe, or immediately for any probe running now, re-derives the state).
+        deployment here, the first time. The ConfigFetch is the record; the
+        ``config_served_at`` stamped on each server is the Loading anchor it
+        sets, which moves them from awaiting contact into the Loading window
+        (the next probe, or immediately for any probe running now,
+        re-derives the state).
         """
-        stamp = now or time.time()
-        self.config_fetch_at[host] = stamp
+        fetch = self.provisioning.note(host, now=now)
         self._materialize_approved(host)
         for srv in self.servers:
             if srv.host == host:
-                srv.config_served_at = stamp
-        self.unknown_config_fetches.pop(normalize_peer_ip(host), None)
+                srv.config_served_at = fetch.at
+        self.provisioning.unknown.pop(normalize_peer_ip(host), None)
 
     def _models_by_name(self) -> dict[str, Any]:
         if self.models:
@@ -998,17 +1000,17 @@ class Fleet:
 
     def config_fetch_display(self, host: str) -> str:
         """Human-readable age of the last config fetch for a host, "—" if never."""
-        at = self.config_fetch_at.get(host)
+        at = self.provisioning.fetched_at(host)
         if at is None:
             return "—"
         return _ago(at)
 
     def unknown_fetch_detail(self, host: str) -> str:
         """The attention-strip line for one unknown box: 'seen 5s · 3 requests'."""
-        rec = self.unknown_config_fetches.get(host)
-        if rec is None:
+        seen = self.provisioning.unknown.get(host)
+        if seen is None:
             return ""
-        line = f"seen {_ago(rec.last_seen)} · {int(rec.count)} requests"
+        line = f"seen {_ago(seen.last_seen)} · {seen.count} requests"
         names = self.approved_models.get(normalize_peer_ip(host))
         if names:
             line += " · " + ", ".join(names)
@@ -1047,32 +1049,17 @@ class Fleet:
         50, dropping the oldest last-seen. A member IP is removed and not recorded.
         """
         host = normalize_peer_ip(host)
-        stamp = now or time.time()
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
-        for known in list(self.unknown_config_fetches):
-            if known in members:
-                del self.unknown_config_fetches[known]
-                self.approved_models.pop(known, None)
+        # A stranger that has since joined config is neither unknown nor
+        # approved; its approval, if any, is spent.
+        self.provisioning.forget_unknown(members)
         for known in list(self.approved_models):
             if known in members:
                 self.approved_models.pop(known, None)
         if host in members:
             return
-        rec = self.unknown_config_fetches.get(host)
-        if rec is None:
-            self.unknown_config_fetches[host] = edict(first_seen=stamp, last_seen=stamp, count=1)
-        else:
-            rec.last_seen = stamp
-            rec.count = int(rec.count) + 1
-        extra = len(self.unknown_config_fetches) - 50
-        if extra > 0:
-            oldest = sorted(
-                self.unknown_config_fetches,
-                key=lambda ip: float(self.unknown_config_fetches[ip].last_seen),
-            )
-            for ip in oldest[:extra]:
-                del self.unknown_config_fetches[ip]
-                self.approved_models.pop(ip, None)
+        for evicted in self.provisioning.note_unknown(host, now=now):
+            self.approved_models.pop(evicted, None)
 
     def apply_port_map(self, mapping: Any) -> None:
         """Set public_port from a host → {listen: public} map such as port_map_from_body's. Leave unset if missing.

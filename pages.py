@@ -763,8 +763,8 @@ def attention_items(fleet) -> list:
     """The admin strip: only actionable items, in the order they were listed
     in the design (unknown boxes, Stalled, Unhealthy, true skew)."""
     items: list[edict] = []
-    for host, _rec in sorted(
-        fleet.unknown_config_fetches.items(),
+    for host, _seen in sorted(
+        fleet.provisioning.unknown.items(),
         key=lambda item: item[1].last_seen,
         reverse=True,
     ):

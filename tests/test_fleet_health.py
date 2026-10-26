@@ -46,6 +46,7 @@ from llmao.model_status import (
     UNAVAILABLE,
     UNHEALTHY,
 )
+from llmao.provisioning import UNKNOWN_FETCH_CAP, ConfigFetch, ProvisioningRecord, UnknownFetch
 from llmao.proxy.deployments import DeploymentManager
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
@@ -130,7 +131,10 @@ def test_model_rollup_aggregate():
 def test_note_config_fetch():
     fleet = Fleet(cfg=None, servers=[])
     fleet.note_config_fetch("primary", now=42.0)
-    assert fleet.config_fetch_at["primary"] == 42.0
+    assert fleet.provisioning.fetches["primary"] == ConfigFetch("primary", 42.0)
+    assert fleet.provisioning.fetched_at("primary") == 42.0
+    assert fleet.provisioning.fetched_at("never") is None
+    assert fleet.config_fetch_display("never") == "—"
 
 
 def test_unknown_config_fetch_drops_once_in_hosts():
@@ -138,13 +142,27 @@ def test_unknown_config_fetch_drops_once_in_hosts():
     fleet = Fleet(cfg=cfg, servers=[])
     fleet.note_unknown_config_fetch("198.51.100.8", now=10)
     fleet.note_unknown_config_fetch("198.51.100.8", now=20)
-    assert fleet.unknown_config_fetches["198.51.100.8"]["count"] == 2
+    assert fleet.provisioning.unknown["198.51.100.8"] == UnknownFetch("198.51.100.8", 10, 20, 2)
     fleet.note_unknown_config_fetch("203.0.113.10", now=30)
-    assert "203.0.113.10" not in fleet.unknown_config_fetches
+    assert "203.0.113.10" not in fleet.provisioning.unknown
     cfg.fleet.hosts["198.51.100.8"] = []
     fleet.note_unknown_config_fetch("203.0.113.9", now=40)
-    assert "198.51.100.8" not in fleet.unknown_config_fetches
-    assert "203.0.113.9" in fleet.unknown_config_fetches
+    assert "198.51.100.8" not in fleet.provisioning.unknown
+    assert "203.0.113.9" in fleet.provisioning.unknown
+    # A known host's fetch forgets it as a stranger.
+    fleet.note_config_fetch("203.0.113.9", now=50)
+    assert "203.0.113.9" not in fleet.provisioning.unknown
+
+
+def test_the_unknown_record_is_capped_at_the_oldest_last_seen():
+    record = ProvisioningRecord()
+    for i in range(UNKNOWN_FETCH_CAP):
+        record.note_unknown(f"10.0.{i // 256}.{i % 256}", now=100 + i)
+    # The first host seen again is the newest; the second-seen is now the oldest.
+    record.note_unknown("10.0.0.0", now=1000)
+    assert record.note_unknown("10.9.9.9", now=2000) == ["10.0.0.1"]
+    assert len(record.unknown) == UNKNOWN_FETCH_CAP
+    assert record.unknown["10.0.0.0"].count == 2
 
 
 def test_add_refusal_until_serving():
