@@ -74,13 +74,15 @@ qwen3-8b-c     qwen3-8b       99.29.94.155:8001*         C-   0  down        · 
 `src` is `C` for in `fleet.hosts`, `L` for LiteLLM has a route. `rt` is how
 many routes point at this box; more than one is route duplication.
 
-**The `auth` column is the point of the script.** `/healthz` needs no
-credential, so a box with the wrong `--api-key` answers healthy to llmao and
-401 to LiteLLM, forever: LiteLLM cools the deployment down, llmao reads that
-as the backend being down and deletes the route, the next probe finds
-`/healthz` answering and re-adds it with the same wrong key. That is the loop
-that produced twenty-two routes for three models. This column shows the
-mismatch before the churn starts.
+**The `auth` column is the point of the script.** `/health` needs no
+credential, so a box with the wrong `--api-key` used to answer healthy to
+llmao and 401 to LiteLLM, forever: LiteLLM cooled the deployment down, llmao
+read that as the backend being down and deleted the route, the next probe
+found `/health` answering and re-added it with the same wrong key. That loop
+produced twenty-two routes for three models. llmao now asks `/v1/models`
+with the key it registers, and a 401 makes the box Rejected: deployment
+deleted, never re-added until the key is accepted. This column still shows
+which key a box runs with, which the Rejected state alone does not say.
 
 - `derived` — the per-box HMAC key, what llmao registers. Correct.
 - `shared` — launched with the fleet-wide `selfhost_api_key` as a container

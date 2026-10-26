@@ -28,7 +28,7 @@ Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBacke
 
 **LiteLLM price list:** LiteLLM prices each request to a paid provider from its model cost map, fetched from GitHub at its startup. It reloads every 24 hours because of a schedule set once with `POST /schedule/model_cost_map_reload?hours=24` (master key). The schedule lives in LiteLLM's database, so a rebuilt database loses it; llmao logs an ERROR at startup when it is missing. Spend is priced when a request is made and is never re-priced, so it is LiteLLM's estimate, not the provider's bill.
 
-**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment is identified everywhere by `host:port`, the listen port, since one host can run several servers; the public port is shown only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy or Stalled when a route exists (`models.yaml` template). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages show it as `host:port`, the listen port, since one host can run several servers, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/box-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
 
 **Public ports come from the provider's listing.** Vast's instance listing and RunPod's pod listing both carry the container→public mapping; the lifecycle stamps each server's public port from the box its listing places it on. RunPod reassigns the port on every pod recreate, even when the pod lands on the same machine; the next listing read follows it. The optional fourth host-row element that pinned a RunPod port is deprecated: it loads with a warning and only seeds the port until the listing names the box.
 
@@ -55,7 +55,7 @@ its usage prices at zero.
 
 Limits of that sizing, all in `hosting/README.md`: it happens once, at install; re-running the install on a box whose servers are already up sees little free memory and sets no fraction; and servers that load at the same moment get less KV cache than their share.
 
-**Observed state:** the `/models` drill-down shows measured KV cache against the served context window, the cache size taken from each reading of vLLM's `/metrics` by the sampler, and the window from `/v1/models` on the transition into Healthy. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
+**Observed state:** the `/models` drill-down shows measured KV cache against the served context window, the cache size taken from each reading of vLLM's `/metrics` by the sampler, and the window from `/v1/models` with the working key, asked on the transition into Healthy and again until it has answered, while the key is refused, or while no listing names the host. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
 
 Remaining: long vLLM boot, config revision on the box, pending-assignment table, box smoke, and nothing restarting a GPU box automatically.
 
@@ -258,12 +258,13 @@ Home = role-aware launchpad (not keys-only)
 1. **`hosted_vllm/` — done in `models.yaml`.** New `/model/new` bodies use
    that prefix. LiteLLM DB rows created as `openai/` stay until deleted and
    re-pushed.
-2. **Deployment registration is not idempotent.** A host that changes
-   address leaves the old deployment behind, and nothing removes it — one
-   model had accumulated twelve identical rows, invisible in both UIs. The
-   `bases - fleet_bases` branch of the skew check is exactly this case and
-   should delete rather than only report. Pair with reconciliation at
-   startup. A Models **sync** action when skew is found is a later UX.
+2. **Deployment registration — done.** A host that changed address used to
+   leave the old deployment behind for good (one model had accumulated
+   twelve identical rows). Now every deployment is stamped with its
+   identity (`model_info.llmao_key`), every write is confirmed by
+   re-reading `/model/info`, and a deployment no server claims is pruned
+   after `ORPHAN_PASSES` skew passes. The rest of the clean-up is the
+   reconcile migration (`docs/fleet-reconcile-design.md`).
 3. **`models.yaml` does not record `reasoning_effort` levels** per model
    (Qwen 3.8 lists them; not a uniform field).
 4. Harden PAT against LiteLLM pagination / delete ids

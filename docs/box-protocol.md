@@ -45,7 +45,10 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
 - **Which name a box sends** is the provider's business, set in that
   provider's `provision.sh` as `LLMAO_HOST`: the public IP on Vast
   (`PUBLIC_IPADDR`), the pod id on RunPod (`RUNPOD_POD_ID`). `install_set.py`
-  knows no provider's names.
+  knows no provider's names. llmao only matches the name against the keys
+  of `fleet.hosts`, which are addresses today, so a pod that sends its id
+  is an unknown host until a `fleet.hosts` row can be keyed by pod id (the
+  parked RunPod step 2; the RunPod image has not yet run on a real pod).
 - **An unknown host** gets 404, and the fetch is remembered in memory (the
   host, first and last seen, a count), so the `/models` attention strip can
   show "fleet key presented from a host not in `fleet.hosts`" and an admin
@@ -54,7 +57,7 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
 - **A known host's fetch is noted.** The time of the last config fetch is
   the anchor for the Loading window: a box that fetched its config and is
   not yet answering is Loading until `fleet.health_grace_s` has passed, then
-  Stalled.
+  Stalled. The whole state machine is `box-lifecycle.md`.
 
 Boxes fetch `https://llm.apache.org/vllm/config` with default TLS
 verification.
@@ -110,13 +113,15 @@ a box gets at most three), plus the handful of older pairs in
 `models.yaml` row.
 
 A provider publishes each listen port on some other public port. llmao
-learns that mapping from the provider's listing (Vast today, RunPod's
-`portMappings` as early-work item 8 of the reconcile design) and uses it
-for everything that dials the box: the LiteLLM deployment's `api_base`,
-the health probe, the `/v1/models` read and the metrics sampler. A fourth
-element on a host row, a public port written by hand, is on its way out
-with that item. Without a GPU provider key configured, public equals
-listen.
+learns that mapping from the provider's listing (Vast's instance ports,
+RunPod's `portMappings`) and uses it for everything that dials the box:
+the LiteLLM deployment's `api_base`, the health probe, the `/v1/models`
+read and the metrics sampler. A fourth element on a host row, a public
+port written by hand, is deprecated: it loads with a warning and only
+seeds the port until the listing names the box. Without a Vast key
+configured the fleet is taken to be local and public equals listen; a
+RunPod-only configuration reads as local too, which is a wart to fix when
+one exists.
 
 llmao owns placement. `models.yaml` says how to serve a model, not where.
 Moving a model between boxes is a config change and a restart of llmao;
@@ -197,7 +202,9 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
 - `GET /vllm/config` is served over HTTPS only.
 - vLLM's `/health` takes no key. A passing probe says something answers at
   that address, not that it is ours; `/v1/models` with the bearer is the
-  check that it is (the reconcile design's Foreign verdict).
+  check that it is. A 401 makes the server Rejected (its deployment is
+  deleted, the probe continues); Rejected on `REJECTED_PASSES` passes at an
+  address no listing names is Foreign. See `box-lifecycle.md`.
 - Hardening that is possible without changing the rest: instance binding,
   short-lived bootstrap tokens, a signed token in place of the static fleet
   key. None is planned until the leaked-map revisit above.

@@ -159,22 +159,28 @@ models_path: models.yaml
 
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
 # GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
-# Placement is keyed by the box public IP (request.remote_addr / X-Forwarded-For).
+# A box names itself with X-LLMAO-Host (what its provider's provision.sh
+# sets), else the leftmost X-Forwarded-For, else the peer; that name must be
+# a fleet.hosts key. The provider listings place a server on its box by
+# address, then by the instance or pod it was on before.
 fleet:
   key: CHANGE_ME_FLEET_KEY
   # HMAC secret for each vLLM --api-key. This file and Puppet eyaml only.
   # Never the Vast template. GET /vllm/config returns sk-vllm-… from this
   # salt plus host and listen port. A missing attribute fails fleet build.
-  # Changing it invalidates every box bearer. See docs/fleet-state.md §2.3.
+  # Changing it invalidates every box bearer. See docs/box-protocol.md.
   vllm_api_salt: CHANGE_ME_VLLM_API_SALT
   # Shared bearer for LEGACY_SERVERS only. validate_fleet requires a real
   # value when one of those hosts is configured. Drop it with the last pair.
   selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
-  # Seconds between vLLM GET /health probes (unauthenticated; private path only).
+  # Seconds between vLLM GET /health probes, on the public port (/health takes
+  # no key; /v1/models with the box's key is asked when it passes).
   health_interval_s: 45
   # Per-probe HTTP timeout for vLLM /health.
   health_timeout_s: 3
-  # After first observation, stay "starting" this long before treating never-up as down.
+  # The loading window: a box that fetched its config reads Loading this long
+  # before never-up is Stalled; a box never reached reads Awaiting this long
+  # after its first probe before it is Stalled. See docs/box-lifecycle.md.
   health_grace_s: 1800
   # Consecutive failed probes before a previously healthy server is marked down.
   health_fail_threshold: 3
@@ -186,9 +192,12 @@ fleet:
   # Without providers.vast, the public port equals the listen port (local).
   # fleet.hosts is loaded once at process start. Standalone (runx) watches
   # config.yaml and reloads. Production: Puppet restart after a change.
-  # Production: set providers.vast.api_key (gitignored config.yaml). Lifecycle
-  # fetches Vast HostPorts; never send those to the box. fleet.vast.api_key
-  # still works, with a deprecation warning at startup.
+  # Production: set providers.vast.api_key and providers.runpod.api_key
+  # (gitignored config.yaml). The lifecycle reads each box's public ports
+  # from its provider's listing (Vast HostPorts, RunPod portMappings); never
+  # send those to the box. fleet.vast.api_key still works, with a
+  # deprecation warning at startup. A fourth element on a row, a public
+  # port by hand, is deprecated: it warns and only seeds the port.
   hosts:
     127.0.0.1:
       - [gemma4-26b, 8001]

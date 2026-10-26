@@ -36,7 +36,7 @@ A box present in one and absent from another is a finding, not a detail:
                              balances onto it (issue #29)
   model not in models.yaml   validate_fleet would raise on next startup; the
                              p6 [qwen3-8b-a, 8001, qwen3-8b] rows are this
-  running, wrong key         the 401 class. /healthz needs no credential, so
+  running, wrong key         the 401 class. /health needs no credential, so
                              llmao calls it healthy while LiteLLM cannot use
                              it, forever.
 
@@ -482,7 +482,7 @@ def probe_auth(box: Box, salt: str | None, shared: str | None, timeout: float = 
     Off-box that is the normal answer: export LLMAO_VLLM_SALT (for the derived
     keys) or VLLM_API_KEY (for the shared one) to get a real verdict.
 
-    This is the one question /healthz cannot answer, and the reason llmao's
+    This is the one question /health cannot answer, and the reason llmao's
     view of health and LiteLLM's view of usability can disagree forever.
 
     The key comes back so the caller can then ask the box something that does

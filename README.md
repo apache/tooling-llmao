@@ -16,6 +16,7 @@ here.
 | **[Help](https://llm.apache.org/help)** (`docs/help/`) | How to use the gateway: keys, connecting tools |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
 | [`docs/box-protocol.md`](docs/box-protocol.md) | How a GPU box asks for its configuration: the fleet key, the vLLM bearer, the JSON |
+| [`docs/box-lifecycle.md`](docs/box-lifecycle.md) | The state machine for a vLLM server on our boxes: states, transitions, what each makes llmao do |
 | [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md) | Fleet state kept in step with LiteLLM (working document) |
 | Infra `p6/modules/llmao` | Production deploy |
 

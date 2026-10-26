@@ -18,7 +18,7 @@ today they are folded into flags on shared objects.
 | **Intended** | `fleet.hosts`, in-memory approvals, `models.yaml`, `config.yaml` providers | process start, approve, config load |
 | **Box protocol** | the last `GET /vllm/config` served to each host | on each fetch |
 | **GPU inventory** | Vast and RunPod, the same snapshot: status, public address, listen-port to public-port map | both, about a minute |
-| **vLLM health** | `/health` (and `/v1/models` on the edge into Healthy) | `health_interval_s` |
+| **vLLM health** | `/health` (and `/v1/models` with the working key: on the edge into Healthy, until it has answered, and on every pass while refused or unlisted) | `health_interval_s` |
 | **LiteLLM deployments** | GET `/model/info`, one entry per deployment | `skew_interval_s` |
 | **LiteLLM health** | GET `/health` | `litellm_health_interval_s` (~4h) |
 
@@ -86,9 +86,10 @@ three more pieces of history, each with its own hand-written rule, in two
 classes: `unlisted_passes` and `ever_listed` on `VllmServer`, and
 `_extra_passes` on `DeploymentManager`. After that fix the serving-box
 invariant holds, and the delete condition is still two tables:
-`sync_selfhost` deletes when Unhealthy/Stalled, or unlisted and not
-Healthy; `remove_refusal` allows Unhealthy/Stalled only; `admin_actions`
-offers no buttons at all when unlisted.
+`sync_selfhost` deletes when Unhealthy, Stalled, Rejected or Foreign, or
+unlisted and not Healthy; `remove_refusal` allows the four states but
+knows nothing of unlisted; `admin_actions` offers no buttons at all when
+unlisted.
 
 ## The pattern: observe, compute the gap, act
 
@@ -209,9 +210,8 @@ is observed, rather than updating state step by step from many places.
    checked once before the constant moves). A few passes is the whole
    wait, for a Vast host and a RunPod host alike. That is short by
    choice: `UNLISTED_PASSES` no longer has to outlast a provisioning
-   gap, because Loading is quiet and unlisted is attention-only, so the
-   comment that justifies today's 3 as "half an hour at the 10-minute
-   interval" is rewritten when the constant moves. A listing that does
+   gap, because Loading is quiet and unlisted is attention-only; the
+   constant's comment in `fleet.py` already says so. A listing that does
    not answer is stale, and the count does not move. A long silence
    from either provider is not an absence.
 
@@ -224,10 +224,13 @@ is observed, rather than updating state step by step from many places.
    unlisted's.
 
    **A probe that does not reach, with no anchor, runs out of grace.**
-   Today a failed probe with no anchor reads Unhealthy only while the
-   deployment exists (`model_status.py`); the moment the probe gate
-   deletes it, the same box reads Awaiting, and a rental that died
-   before a restart never shows the sentence once the delete lands.
+   Before item 9, a failed probe with no anchor read Unhealthy only while
+   the deployment existed (`model_status.py`); the moment the probe gate
+   deleted it, the same box read Awaiting, and a rental that died before
+   a restart never showed the sentence once the delete landed. Since
+   c2e3c14 it reads Stalled once `health_grace_s` has passed since the
+   first probe attempt (`first_probed_at`); the rest of this paragraph is
+   the rule as reconcile keeps it.
    Under reconcile, Awaiting means no probe has been attempted in this
    process. A record with no anchor whose probes do not reach (no
    connection, `reached` false) is Awaiting until `health_grace_s`
@@ -248,16 +251,16 @@ is observed, rather than updating state step by step from many places.
    **An unlisted host is probed with the key we believe that process
    has.** `/health` takes no key, so a passing probe alone cannot tell
    our box from another tenant's vLLM at an address a provider has
-   reassigned. llmao already calls `/v1/models` on the edge into Healthy
-   (for `max_model_len`) and throws a 401 away. That call sends
+   reassigned. llmao calls `/v1/models` on the edge into Healthy
+   (for `max_model_len`). It used to throw a 401 away, and to send
    `srv.api_key`, the derived key, including for `LEGACY_SERVERS`, so a
-   legacy box answers 401 on every pass and never gets
+   legacy box answered 401 on every pass and never got
    `observed_max_model_len`; under the Foreign rule the derived key
-   would have deleted those boxes. The rule that picks the key is
-   `_working_api_key`, a method on the executor today. It becomes a
-   plain function in `fleet.py` of host, listen port and config, which
-   the deployment body and the `/v1/models` fetch both call. Under
-   reconcile the fetch sends that key, the status is kept, and the call
+   would have deleted those boxes. Both are fixed (items 5 and 6): the
+   rule that picks the key is `working_api_key` in `fleet.py`, a function
+   of host, listen port and config, which the deployment body and the
+   `/v1/models` fetch (`fetch_served_models`) both call. The fetch sends
+   that key, the status is kept, and the call
    is repeated on every probe pass while the last answer was a 401 or
    the host is unlisted. A 401 makes the lifecycle **Rejected** (ruled
    2026-10-25): the deployment is deleted by the probe gate on the first
@@ -592,7 +595,7 @@ the button.
 
 1. Freeze the key function with tests (norm, IPv6 `::ffff:`, host case,
    `/v1`, provider bases, two names on one provider model,
-   `LEGACY_SERVERS`).
+   `LEGACY_SERVERS`). **Done:** 9fbee0e (`llmao/reconcile.py`).
 2. Stamp the canonical URL on every new `/model/new`, and backfill the
    existing rows. **Done:** 52818a2, and the three production rows were
    stamped in place through `PATCH /model/{id}/update` on 2026-10-22.
@@ -734,26 +737,26 @@ badges, unlisted (host-level), and the plan actions.
 Each of these works in today's code, survives the rewrite, and closes a
 real gap on its own. In order:
 
-1. **Freeze the key function** with tests (migration step 1).
+1. **Freeze the key function** with tests (migration step 1). Done:
+   9fbee0e (`llmao/reconcile.py`, `tests/test_reconcile.py`).
 2. **Stamp the canonical URL** on every `/model/new`, and backfill the
    existing rows (migration step 2). Done: 52818a2 and the backfill of
    2026-10-22.
-3. **Two constants.** Split today's one `UNLISTED_PASSES` into
+3. **Two constants.** Split the one `UNLISTED_PASSES` into
    `UNLISTED_PASSES` (listing passes) and `ORPHAN_PASSES` (skew passes).
+   Done: b9b5ce3.
 4. **Re-read `/model/info` after every write.** `sync_selfhost` and
-   `_prune_extras` can do this now, so a write is confirmed by the next
-   pass and not assumed.
-5. **One working-key function.** Lift `_working_api_key` out of the
-   executor into `fleet.py` as a function of host, listen port and
-   config, and call it from the deployment body and from
-   `fetch_max_model_len`. Today the fetch sends the derived key, so a
-   legacy box 401s on every pass and never reports its context window.
+   `_prune_extras` do this, so a write is confirmed by the next pass and
+   not assumed. Done: 7bd46bc (`_confirm`).
+5. **One working-key function.** `working_api_key(cfg, srv)` in
+   `fleet.py`, called from the deployment body and from the `/v1/models`
+   fetch, so a legacy box no longer 401s on every pass and reports its
+   context window. Done: 039c403.
 6. **Keep the `/v1/models` status, and re-check it while rejected or
    unlisted.** A 401 with the working key is Rejected: delete the
    deployment, keep probing, say the box rejects our key. Unlisted and
    `REJECTED_PASSES` 401s running is Foreign, and the sentence shows.
-   Today the status is thrown away and an unlisted-but-answering host
-   is trusted. Done: 5efa688. `fetch_served_models` keeps the status;
+   Done: 5efa688. `fetch_served_models` keeps the status;
    `key_rejected` and `rejected_passes` on the server and the snapshot;
    `REJECTED_PASSES` lives in `model_status.py`, where the rule is.
 7. **Carry the pod status in the RunPod inventory** instead of filtering
@@ -772,7 +775,9 @@ real gap on its own. In order:
    Vast's HostPort and RunPod's portMappings alike); `apply_boxes`
    stamps `public_port` from the box a server is placed on, through
    the one stamp function `apply_port_map` and Vast adoption also use;
-   `refresh_public_ports` only reads. The fourth element is deprecated,
+   `refresh_public_ports` no longer applies the map itself (it still
+   materializes approved hosts and runs Vast adoption). The fourth
+   element is deprecated,
    not refused: `from_cfg` warns and the value seeds the port until the
    box is placed; `public_port_pinned` is gone. The p6 node data drops
    the three fourth elements in its own PR.

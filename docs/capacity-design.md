@@ -84,7 +84,8 @@ the row, a returned box keeps its price in history.
 
 A row carries its server's **share** of the box: a box running two servers
 puts half its price on each, so adding rows up gives the real bill. Prices
-come from the providers, by the box's public IP: Vast's `dph_total` from the
+come from the providers, through the box the listing places the server on
+(by address, else the instance or pod it was on before): Vast's `dph_total` from the
 instance list the fleet already reads for ports, and RunPod's `costPerHr`
 from its pod list (`providers.runpod.api_key`), read every 10 minutes by its
 own runner. A box no provider prices has no price, never $0, so the report

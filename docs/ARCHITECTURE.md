@@ -67,26 +67,40 @@ keys are team-scoped exceptions (who may create them is an **open RAI
 policy** question — see design + `docs/STATUS.md`). Secrets shown once;
 metadata in LiteLLM.
 
-**GPU fleet (control plane):** `docs/box-protocol.md`. `APP.fleet`
-(`llmao/fleet.py`) is built at startup. `GET /vllm/config` (Bearer
-`fleet.key`) maps `X-LLMAO-Host` (Vast `PUBLIC_IPADDR`) or
-`X-Forwarded-For` / peer to `fleet.hosts`.
-JSON `{host, servers[]}` — `servers[].port` is the **container listen** port
-(not Vast's public HostPort). Lifecycle/skew: `app.add_runner`
-(`fleet-lifecycle`, `litellm-skew`). After probes, `Fleet.after_probe`
-POSTs `/model/new` / `/model/delete`. `Fleet.models` is the YAML recipe.
-`FleetDeployment` is one intended LiteLLM backend. `VllmServer` states:
-Loading, Healthy, Unhealthy, Stalled. The `/models` admin drill-down shows the
-Healthy badge only when the server is Healthy **and** LiteLLM has a deployment;
-host:port is site-admin. JSON handlers use `@api` in `api.py`. Do not wrap Quart
-`asgi_app` with Werkzeug ProxyFix.
+**GPU fleet (control plane).** The box side is `docs/box-protocol.md`; the
+state machine is `docs/box-lifecycle.md`. `APP.fleet` (`llmao/fleet.py`) is
+built at startup.
+
+- `GET /vllm/config` (Bearer `fleet.key`) maps `X-LLMAO-Host` to a
+  `fleet.hosts` row, else the leftmost `X-Forwarded-For`, else the peer.
+  The header is whatever the provider's `provision.sh` sets: Vast's
+  `PUBLIC_IPADDR`, RunPod's pod id.
+- The JSON is `{host, servers[]}`. `servers[].port` is the **container
+  listen** port, never the public port. Both providers' listings supply the
+  public port; it is never sent to the box.
+- Three runners (`app.add_runner`):
+  - `fleet-lifecycle`: reads the Vast listing, places servers on their
+    boxes, probes `/health`, then calls `Fleet.after_probe`, which is
+    `DeploymentManager.sync_selfhost`: `/model/new` for a Healthy server,
+    `/model/delete` for a down one.
+  - `litellm-skew`: reads the LiteLLM deployments and LiteLLM's own
+    `/health`, prunes orphans.
+  - `runpod-listing`: reads the RunPod pod list every 10 minutes.
+- `Fleet.models` is the YAML recipe. `FleetDeployment` is one intended
+  LiteLLM deployment. `VllmServer` carries the lifecycle state: Awaiting,
+  Loading, Healthy, Unhealthy, Stalled, Rejected or Foreign.
+- The `/models` admin drill-down shows the green badge only when the server
+  is Healthy **and** LiteLLM has its deployment. host:port is site-admin.
+- JSON handlers use `@api` in `api.py`. Do not wrap Quart `asgi_app` with
+  Werkzeug ProxyFix.
 
 **GPU boxes are not this process.** Vast: custom template,
 `PROVISIONING_SCRIPT` → `provision.sh` → curl `install_set.py` (stock
-container). RunPod: later, COPY in our image. Detail:
-[`hosting/README.md`](../hosting/README.md). Runbook:
+container). RunPod: our own image, built by CI from `hosting/runpod/`, with
+`provision.sh` as the entrypoint; the installer is still fetched at boot.
+Detail: [`hosting/README.md`](../hosting/README.md). Runbooks:
 [`hosting/vast/README.md`](../hosting/vast/README.md);
-[`hosting/runpod/README.md`](../hosting/runpod/README.md) (image not built).
+[`hosting/runpod/README.md`](../hosting/runpod/README.md).
 
 Build status and backlog: **`docs/STATUS.md`**.
 
@@ -143,7 +157,7 @@ flowchart LR
     PAGES[HTML pages: pages.py]
     JSON[JSON API: api.py]
     FLEET[Fleet control plane<br/>GET /vllm/config]
-    RUNNERS[runners: fleet-lifecycle,<br/>litellm-skew]
+    RUNNERS[runners: fleet-lifecycle,<br/>litellm-skew, runpod-listing]
   end
   subgraph litellm [LiteLLM proxy]
     ADMIN[admin API<br/>teams / budgets / PATs / model/*]
@@ -169,10 +183,13 @@ flowchart LR
 ## Class relationships
 
 `Fleet` is built at startup and holds the fleet state the runners and pages read.
-`LiteLLMBackend` takes the same `Fleet` and is the only thing that writes to
-LiteLLM. The lifecycle/skew logic in `model_status.py` is a set of **pure
-functions**: it takes a `DeploymentSnapshot` (frozen out of a deployment + its
-server) and returns a status object, with no shared mutable state.
+`LiteLLMBackend` takes the same `Fleet`; it and its `DeploymentManager`
+(`llmao/proxy/deployments.py`, which adds, deletes and prunes deployments
+and confirms every write by re-reading `/model/info`) are the only things
+that write to LiteLLM. The lifecycle/skew logic in `model_status.py` is a set
+of **pure functions**: it takes a `DeploymentSnapshot` (frozen out of a
+deployment + its server) and returns a status object, with no shared mutable
+state.
 
 ```mermaid
 classDiagram
@@ -198,6 +215,12 @@ classDiagram
   }
   class LiteLLMBackend {
     +fleet
+    +deployments
+  }
+  class DeploymentManager {
+    +sync_selfhost()
+    +check_config_skew()
+    +check_health_skew()
   }
   class DeploymentSnapshot
   class DeploymentStatus
@@ -206,6 +229,7 @@ classDiagram
   Fleet "1" *-- "0..n" FleetDeployment : deployments
   FleetDeployment "1" o-- "0..1" VllmServer : vllm
   Fleet "1" -- "1" LiteLLMBackend : held by
+  LiteLLMBackend "1" *-- "1" DeploymentManager : deployments
   DeploymentSnapshot ..> FleetDeployment : built from
   DeploymentSnapshot ..> VllmServer : built from
   DeploymentSnapshot ..> DeploymentStatus : deployment_status()
