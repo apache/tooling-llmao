@@ -235,10 +235,13 @@ is observed, rather than updating state step by step from many places.
      **computed once per pass, by reconcile, and written on the record**;
      reconcile needs them to plan (delete when Stalled), and the pages
      read them rather than computing them a second time. Nothing derived
-     is carried from one pass to the next except through history. The
+     is carried from one pass to the next except through history, and
+     the lifecycle is carried that way on purpose: the step reads the
+     last verdict (see Needs, the ruling of 2026-10-26). The
      record is `DeploymentSnapshot`, extended, not something it is
-     converted into. The state diagram becomes a decision table that can
-     be read in one place (appendix).
+     converted into. The state diagram becomes a transition table that
+     can be read in one place: previous state, observation, next state
+     (the appendix's decision table gains that first column).
    - **Discovered servers are computed, not added.** Today
      `adopt_vast_instances` probes inventory hosts that are not in
      `fleet.hosts` and, on a match, mutates the server list. Under
@@ -255,7 +258,8 @@ is observed, rather than updating state step by step from many places.
 3. **History is the only state that changes.** It holds only what needs
    memory: first seen, last ok, last dialable URL, last instance id, the
    counters that stop one missed probe or one missing listing from
-   becoming a verdict, and the last verdict, so a change is logged once.
+   becoming a verdict, and the last verdict, which the step reads as its
+   starting state and which also lets a change be logged once.
    It is small and explicit. (`config_served_at` is not in it: that is
    the box protocol snapshot, and a restart loses both alike.) The pure
    function returns the next history and the loop stores it. Fetchers,
@@ -584,16 +588,23 @@ it. It moves into Deployment.
   emits for LiteLLM. The runner executes the reads, the executor the
   writes, and neither decides anything.
 
-**Proposed, not yet settled:** that the step itself is explicit. Today
-the lifecycle is recomputed from a dozen counters on every pass, which is
-why the anchor makes the same observation name a different state, and
-why a Rejected deployment that misses one probe reads Healthy through
-the hold-over rule (`box-lifecycle.md`, quirk 1). The alternative is that
-the Deployment's state is its history and each arriving observation
-steps it through one transition table: `step(state, observation) ->
-state`, pure and testable, so the table is the diagram and the diagram
-is checkable against the code. The reconcile pattern below still holds;
-the previous state is the history it already allows for.
+**Settled 2026-10-26: the last verdict in history is read by the step,
+not only logged.** History already holds the last verdict (rule 3 of
+the pattern, "so a change is logged once"), and the lifecycle function
+has never been handed it. Today the lifecycle is recomputed from a dozen
+counters on every pass, which is why the anchor makes the same
+observation name a different state, and why a Rejected deployment that
+misses one probe reads Healthy through the hold-over rule
+(`box-lifecycle.md`, quirk 1). The counters are history too; the one
+fact that was never an input is what we concluded last time. So the
+Deployment's state is its history, and each arriving observation steps
+it through one transition table: `step(state, observation) -> state`,
+pure and testable. The previous state is the table's first column; the
+table is the diagram, and the diagram is checkable against the code, one
+test per row. The pattern below stands unchanged: one pure function, one
+history store, nothing derived carried between passes except through
+history. This does not reintroduce edges into the runners; the Deployment
+holds the history, the runners hold none.
 
 ## Policy
 
