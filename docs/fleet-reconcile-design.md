@@ -735,4 +735,9 @@ real gap on its own. In order:
    box. Then drop the fourth element of a `fleet.hosts` row (p6 first,
    then the loader rejects it).
 9. **Gate the `fleet.hosts` sentence** on Unhealthy, Stalled or Foreign,
-   not on "not Healthy", with the not-reached grace clock above.
+   not on "not Healthy", with the not-reached grace clock above. Done:
+   c2e3c14 (Unhealthy or Stalled; Foreign follows with item 6). The
+   clock runs from the first probe attempt, `first_probed_at` on the
+   server; an unlisted host with no address to dial counts as an attempt.
+   A reached probe (a 503) with no config fetch is not anchored yet and
+   stays Awaiting: the first-reached-probe anchor is reconcile's.
