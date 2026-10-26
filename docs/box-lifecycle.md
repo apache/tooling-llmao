@@ -166,6 +166,60 @@ restart. Approval does feed the machine in one way: an approved host that
 is not in `fleet.hosts` gets its servers created (Awaiting), and Vast
 adoption may anchor them and probe them in the same pass.
 
+The labels are annotations on top of the computed states, kept in process
+memory on `Fleet`, keyed by the normalized host, one per host because the
+two are phases of one onboarding. *Approved* means "I vouched for this box
+and chose its models"; *Reboot requested* means "I started a reboot by
+hand and am watching for it to re-request config". Losing a label on a
+restart costs little: the admin re-applies Approved, and a reboot shows
+itself the moment the box re-requests config and reads Loading. Whether a
+reboot was ever requested is lost, and that is accepted. Membership in
+`fleet.hosts` is the durable gate; a label never controls anything, so a
+recycled address gains nothing from a stale one.
+
+## Skew badges
+
+Skew is reserved for a genuine disagreement between sources. "vLLM is not
+up yet, so there is no LiteLLM deployment" is Loading, not skew. The
+lifecycle emits these six badges and nothing else (`SKEW_PHRASE` in
+`model_status.py`):
+
+| Badge | Means | Clears when |
+|---|---|---|
+| Intended, not in LiteLLM | A deployment config intends, and LiteLLM lacks. Emitted only for Healthy, or for a commercial deployment that is Configured. | `sync_selfhost` adds it, or Add does. |
+| vLLM up, LiteLLM down | The probe passes but LiteLLM's own `/health` reports the endpoint down. The two signals carry their own ages, so a difference reads as two snapshots, not a contradiction. | LiteLLM's next health pass agrees. |
+| vLLM down, LiteLLM up | The reverse. | likewise |
+| In LiteLLM, not in config | A LiteLLM deployment whose `api_base` matches no server (kept beside the fleet as host, port and model name). Pruned after `ORPHAN_PASSES` skew passes. | the prune, or a config row that claims it |
+| Config and LiteLLM disagree | The server's `api_base` is in LiteLLM under a different model name. Kept across the health pass. | a matching name |
+| In LiteLLM at the listen port | LiteLLM has the server at its listen port where that differs from its public port. Unreachable off-box, so it does not count as "in LiteLLM"; the server is registered at its public port as well and the listen-port entry is left for an admin. | the entry is removed |
+
+A signal is stale after `health_fail_threshold` missed intervals (about
+2.5 minutes for the probe, about 12 hours for LiteLLM's health). Stale
+reads as Unknown, never as Down, and drops the row out of the roll-up.
+
+## Decisions with a history
+
+Rulings that shaped the machine, kept so they are not relitigated by
+accident.
+
+- **Retirement is not a state.** Retiring a box is manual teardown: remove
+  it from `fleet.hosts`; the orphan prune removes its deployment. Once off
+  the fleet the row disappears rather than accumulating in Stalled.
+- **Reboot is observed, not assumed.** Rebooting through a provider's API
+  gave unclear results once; the label marks the intent and the lifecycle
+  reports what it sees. There is no timeout on the label.
+- **One grace window.** `health_grace_s` is the only loading timeout, from
+  the anchor (or the first attempt) to Stalled. Big models load slowly, so
+  it is config, not a constant.
+- **A serving box keeps its route.** Whatever a listing claims, a box that
+  answers `/health` with our key accepted is never deleted from LiteLLM.
+  Learned from the listing-gap incident described in `fleet-reconcile-design.md`.
+- **`ok` means contacted, not well.** A 200 from `/health` is vLLM's word
+  that it is up; the key verdict is separate. The variable name predates
+  Rejected and may be renamed in its own commit.
+- **A stale signal is unknown.** Never down. Counting a stale row as down
+  would make a paused control plane read as an outage.
+
 ## Quirks in the machine as it stands
 
 Found while drawing it. None is fixed here; each is a candidate for the

@@ -140,6 +140,50 @@ client tool → LiteLLM + PAT → budget / capacity → model
 
 See `../README.md` for quickstart and API surface.
 
+## Models and deployments
+
+The vocabulary the `/models` page and the fleet code share. (Folded in from
+the retired models-dashboard design, whose two passes shipped as
+`llmao/model_status.py` and the combined Models page.)
+
+- A **model** is what a user calls by the `model` parameter (`qwen3-8b`).
+  A **deployment** is one place it is served: a vLLM server on a box we
+  rent, or a commercial provider's endpoint. One model may have several
+  deployments at once; LiteLLM's `order` puts our boxes first.
+- **Self-hosted** means we control the virtual machine, not that we own the
+  hardware (the ASF owns none). A rented Vast or RunPod VM running our vLLM
+  is self-hosted.
+- **Privacy** is a first-class, user-facing field. It answers "will my
+  prompt leave the LLMs we control?"
+  - **Private**: served only by vLLM on VMs we control.
+  - **External**: sent to a third-party provider.
+  - **Mixed**: the model has both kinds of deployment, or a LiteLLM
+    deployment that config does not list. Mixed is the least private tier,
+    so a Private badge is never shown for a model that could route
+    externally.
+  - The wording must not overclaim: a GPU host operator can in principle
+    observe a rented VM's memory.
+  - The LiteLLM-to-box hop is plain HTTP on the provider's public port,
+    authenticated by the per-box bearer. It is not TLS.
+- **What users see** per model:
+  - Available, Degraded or Unavailable (the roll-up in
+    `docs/box-lifecycle.md`).
+  - Labeled capability chips.
+  - The context window as the **minimum** across healthy deployments.
+  - Concurrency as "up to N full-context requests": KV cache tokens divided
+    by the window, summed over healthy self-hosted deployments. An upper
+    bound.
+  - Never an Awaiting, Loading or Stalled deployment. A box's pre-states
+    must not make a working model look broken.
+- **What admins see** in addition: the attention strip (unknown boxes,
+  Stalled, Unhealthy, Rejected, Foreign, unlisted, skew), a replica summary
+  per model, and the deployments drill-down with one primary action and a
+  menu. Admin labels are shown, never counted.
+- **Single source of intent:** `fleet.hosts` plus in-memory approvals say
+  what should run; servers and LiteLLM deployments are derived from it. A
+  deployment config intends but LiteLLM lacks is a visible skew badge, not
+  a mystery.
+
 ## Components
 
 Two request paths cross this process. The **HTML/UX** path (browser) goes through

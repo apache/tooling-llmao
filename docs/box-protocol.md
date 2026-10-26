@@ -199,6 +199,16 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
 
 - The fleet key is the only long-lived secret a box holds. The vLLM bearer
   is derived from a salt the box never sees.
+- Membership is the durable gate. A box's standing to fetch its config
+  comes from `fleet.hosts` (in `config.yaml`, survives a restart) or from
+  an admin's in-memory approval of a host that presented the fleet key.
+  The *Approved* label itself never controls anything, so a recycled
+  address cannot gain access from a lost or stale label. A new tenant on
+  a previously onboarded address would still not hold the fleet key, and
+  admins know the addresses of the boxes they expect. The residual risks
+  are a leaked fleet key and a stale `fleet.hosts` row outliving its
+  instance; the unlisted verdict in `box-lifecycle.md` is the answer to
+  the second.
 - `GET /vllm/config` is served over HTTPS only.
 - vLLM's `/health` takes no key. A passing probe says something answers at
   that address, not that it is ours; `/v1/models` with the bearer is the

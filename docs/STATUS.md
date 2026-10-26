@@ -236,6 +236,25 @@ Home = role-aware launchpad (not keys-only)
 - Capacity meters (TPM/RPM/parallel) separate from $
 - Models: wire Available (and key `models` allow-list) when team / envelope policy exists; column already stubbed
 
+### P6 — Models page follow-ups
+
+Left open when the models-dashboard design was retired (its two passes
+shipped; the durable parts are in `docs/ARCHITECTURE.md` and
+`docs/box-lifecycle.md`):
+
+- **Event history** per deployment: record every lifecycle transition with
+  a timestamp and show the latest ("Loading since 12:04"). Debugging a
+  stalled box otherwise means guessing.
+- **Check LiteLLM now** per deployment: force LiteLLM's health check from
+  the page. It costs tokens, so a per-deployment cooldown (proposed five
+  minutes); paid providers flagged.
+- **Preview as user** toggle for admins, so the user view can be checked
+  without a second account.
+- **Drained** state for planned maintenance, so maintenance is not read as
+  degradation.
+- **Privacy wording** for users, with the rented-VM caveat (a GPU host
+  operator can in principle observe a VM's memory).
+
 ### Cross-cutting UX rules (when building)
 
 - ASF vocabulary only (project, person, purpose, envelope)

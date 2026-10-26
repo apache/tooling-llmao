@@ -965,8 +965,8 @@ class Fleet:
 
         ``label`` is ``APPROVED`` / ``REBOOT_REQUESTED``, or ``None`` to clear.
         The value is display-only: it is never read by the lifecycle, and it is
-        lost when the process restarts (docs/models-dashboard-design.md says
-        what losing one costs). One label per host -- these are phases of one
+        lost when the process restarts (docs/box-lifecycle.md says what
+        losing one costs). One label per host -- these are phases of one
         onboarding, so a host is in at most one at a time.
         """
         if label is not None and label not in ADMIN_LABELS:
