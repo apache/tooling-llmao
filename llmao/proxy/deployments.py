@@ -39,7 +39,9 @@ from llmao.fleet import (
     working_api_key,
 )
 from llmao.model_status import (
+    FOREIGN,
     HEALTHY,
+    REJECTED,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_PHRASE,
     STALLED,
@@ -292,7 +294,9 @@ class DeploymentManager:
             srv = dep.vllm
             if srv.state == HEALTHY and dep.api_base and not dep.in_litellm:
                 wrote = await self._each(self.add_deployment, dep) or wrote
-            elif dep.in_litellm and (srv.state in (UNHEALTHY, STALLED) or (srv.unlisted and srv.state != HEALTHY)):
+            elif dep.in_litellm and (
+                srv.state in (UNHEALTHY, STALLED, REJECTED, FOREIGN) or (srv.unlisted and srv.state != HEALTHY)
+            ):
                 wrote = await self._each(self.delete_deployment, dep) or wrote
         if wrote:
             await self._confirm()

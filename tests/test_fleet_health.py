@@ -27,14 +27,16 @@ from llmao.fleet import (
     FleetDeployment,
     VllmServer,
     add_refusal,
-    fetch_max_model_len,
+    fetch_served_models,
     parse_max_model_len,
 )
 from llmao.model_status import (
     AVAILABLE,
     AWAITING,
+    FOREIGN,
     HEALTHY,
     LOADING,
+    REJECTED,
     SKEW_CONFIG_MISMATCH,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_INTENDED_NOT_IN_LITELLM,
@@ -487,7 +489,7 @@ def test_oversized_falls_back_to_configured_length():
 
 
 def test_the_served_window_is_read_from_the_root():
-    """fetch_max_model_len takes the server root, not a /v1-suffixed api_base.
+    """fetch_served_models takes the server root, not a /v1-suffixed api_base.
 
     A /v1-suffixed base would ask for root/v1/v1/models, 404, and leave the
     window unknown -- oversized detection quietly dead while the rest of the
@@ -503,14 +505,15 @@ def test_the_served_window_is_read_from_the_root():
                 return _Resp(200, body={"data": [{"max_model_len": 131072}]})
             return _Resp(404)
 
-    assert asyncio.run(fetch_max_model_len(_Client(), root, "sk-x")) == 131072
+    served = asyncio.run(fetch_served_models(_Client(), root, "sk-x"))
+    assert (served.status, served.max_model_len) == (200, 131072)
     assert calls == [f"{root}/v1/models"]
 
 
 def test_probe_all_scrapes_from_root_not_api_base():
     """The SERVING-transition read must be handed root_url, not api_base.
 
-    Catches the regression one layer up from fetch_max_model_len: if
+    Catches the regression one layer up from fetch_served_models: if
     probe_all ever passes the /v1-suffixed base, the read 404s on every
     transition and oversized stays unknown without any other test failing.
     /metrics is the sampler's, so the fleet no longer asks for it.
@@ -611,3 +614,86 @@ def test_an_unlisted_host_with_no_address_is_still_an_attempt():
     assert (s.state, s.first_probed_at, s.last_error) == (AWAITING, 1.0, "no address to dial")
     asyncio.run(fleet.probe_all(client=_Boom(), now=1801.0))
     assert s.state == STALLED
+
+
+class _KeyClient:
+    """/health always 200; /v1/models answers `status`, settable between passes."""
+
+    def __init__(self, status=401):
+        self.status = status
+        self.models_calls = 0
+
+    async def get(self, url, headers=None):
+        if url.endswith("/health"):
+            return _Resp(200, text="OK")
+        if url.endswith("/v1/models"):
+            self.models_calls += 1
+            if self.status == 200:
+                return _Resp(200, body={"data": [{"max_model_len": 131072}]})
+            return _Resp(self.status)
+        return _Resp(404)
+
+    async def aclose(self):
+        return None
+
+
+def _key_fleet(s):
+    cfg = edict({"fleet": edict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    return Fleet(cfg=cfg, servers=[s])
+
+
+def test_a_refused_key_is_rejected_and_asked_again_every_pass():
+    s = _server()
+    fleet, client = _key_fleet(s), _KeyClient(401)
+    for n in (1, 2, 3, 4, 5):
+        asyncio.run(fleet.probe_all(client=client, now=float(n)))
+        assert (s.state, s.key_rejected, s.rejected_passes) == (REJECTED, True, n)
+    # Listed, so never Foreign, however long it goes on.
+    assert client.models_calls == 5
+    assert s.observed_max_model_len is None
+    # The admin fixes the key: Healthy on that pass, the window read, the count gone.
+    client.status = 200
+    asyncio.run(fleet.probe_all(client=client, now=6.0))
+    assert (s.state, s.key_rejected, s.rejected_passes, s.observed_max_model_len) == (HEALTHY, False, 0, 131072)
+    # Healthy with the window known: /v1/models is not asked again.
+    asyncio.run(fleet.probe_all(client=client, now=7.0))
+    assert client.models_calls == 6
+
+
+def test_rejected_at_an_unlisted_host_becomes_foreign_after_the_passes():
+    s = _server()
+    s.unlisted = True
+    fleet, client = _key_fleet(s), _KeyClient(401)
+    asyncio.run(fleet.probe_all(client=client, now=1.0))
+    asyncio.run(fleet.probe_all(client=client, now=2.0))
+    assert s.state == REJECTED
+    asyncio.run(fleet.probe_all(client=client, now=3.0))
+    assert s.state == FOREIGN
+    # Listed again (the provider's gap closed): ours after all, back to Rejected.
+    s.unlisted = False
+    asyncio.run(fleet.probe_all(client=client, now=4.0))
+    assert s.state == REJECTED
+
+
+def test_a_failed_probe_interrupts_the_rejected_run():
+    s = _server()
+    s.unlisted = True
+    s.record_probe(True, now=1.0, grace_s=1800, fail_threshold=3, key_rejected=True)
+    s.record_probe(True, now=2.0, grace_s=1800, fail_threshold=3, key_rejected=True)
+    assert (s.state, s.rejected_passes) == (REJECTED, 2)
+    s.record_probe(False, now=3.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    assert s.rejected_passes == 0
+    assert s.state != FOREIGN
+
+
+def test_rejected_and_foreign_may_be_removed_but_not_added():
+    from llmao.fleet import remove_refusal
+
+    s = _server()
+    dep = FleetDeployment.from_vllm(s)
+    for state in (REJECTED, FOREIGN):
+        s.state = state
+        dep.in_litellm = False
+        assert add_refusal(dep) == "vLLM rejects our key"
+        dep.in_litellm = True
+        assert remove_refusal(dep) is None

@@ -42,7 +42,9 @@ from llmao.model_status import (
     ADMIN_LABELS,
     APPROVED,
     AWAITING,
+    FOREIGN,
     HEALTHY,
+    REJECTED,
     STALLED,
     UNHEALTHY,
     DeploymentSnapshot,
@@ -423,6 +425,10 @@ class VllmServer:
         # The first probe attempt in this process: the grace clock for a server
         # with no config fetch that never answers (see self_hosted_lifecycle).
         self.first_probed_at: float | None = None
+        # The last /v1/models answer with the working key (True: 401) and how
+        # many passes running it has been refused. Rejected and Foreign.
+        self.key_rejected: bool | None = None
+        self.rejected_passes = 0
 
     @classmethod
     def from_row(
@@ -587,7 +593,15 @@ class VllmServer:
         err: str | None = None,
         reached: bool | None = None,
         in_litellm: bool = False,
+        key_rejected: bool | None = None,
     ) -> None:
+        """One probe pass.
+
+        ``ok`` is a 200 from /health: vLLM says it is up. Not "all is well":
+        /health takes no key, so a box that refuses ours is ``ok`` and
+        Rejected. ``key_rejected`` is /v1/models' verdict on the working key
+        this pass, when it was asked; None leaves the last verdict standing.
+        """
         was = self.state
         if ok:
             self.last_ok = now
@@ -602,6 +616,12 @@ class VllmServer:
             self.first_probed_at = now
         if reached is not None:
             self.reached = reached
+        if key_rejected is not None:
+            self.key_rejected = key_rejected
+        if ok and self.key_rejected:
+            self.rejected_passes += 1
+        else:
+            self.rejected_passes = 0
         # The counters above are the observation. The name comes from one place.
         cfg = edict(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
         snap = DeploymentSnapshot(
@@ -615,12 +635,19 @@ class VllmServer:
             config_served_at=self.config_served_at,
             reached=self.reached,
             first_probed_at=self.first_probed_at,
+            key_rejected=self.key_rejected,
+            rejected_passes=self.rejected_passes,
+            unlisted=self.unlisted,
         )
         self.state = self_hosted_lifecycle(snap, cfg, now)
         if self.state == HEALTHY and was != HEALTHY:
             _LOGGER.info("fleet server %s@%s healthy", self.name, self.key.display)
         elif self.state in (UNHEALTHY, STALLED) and was not in (UNHEALTHY, STALLED):
             _LOGGER.warning("fleet server %s@%s %s (%s)", self.name, self.key.display, self.state, self.last_error)
+        elif self.state == REJECTED and was != REJECTED:
+            _LOGGER.warning("fleet server %s@%s up but rejects our key", self.name, self.key.display)
+        elif self.state == FOREIGN and was != FOREIGN:
+            _LOGGER.warning("fleet server %s@%s foreign: unlisted and rejects our key", self.name, self.key.display)
 
 
 # What a deployment's cost figure means, when it is not simply money owed.
@@ -1110,6 +1137,24 @@ class Fleet:
                     continue
                 was = srv.state
                 ok, reached, err = await _get_health(client, url)
+                # /v1/models with the working key, when /health passed: the
+                # served window on the edge into Healthy, and again if an
+                # earlier read came back empty (it is fixed at engine init,
+                # so every probe would be waste); and on every pass while the
+                # key was refused, so Rejected ends the pass the key is
+                # fixed, or while no listing names the host, so a reassigned
+                # address is caught. The KV cache size comes from the sampler.
+                key_rejected = None
+                ask = was != HEALTHY or srv.observed_max_model_len is None or srv.key_rejected or srv.unlisted
+                if ok and ask:
+                    served = await fetch_served_models(client, srv.root_url, working_api_key(self.cfg, srv))
+                    if served.status == 401:
+                        key_rejected = True
+                    elif served.status == 200:
+                        key_rejected = False
+                        if served.max_model_len is not None:
+                            srv.observed_max_model_len = served.max_model_len
+                            srv.observed_at = stamp
                 srv.record_probe(
                     ok,
                     now=stamp,
@@ -1118,18 +1163,8 @@ class Fleet:
                     err=err,
                     reached=reached,
                     in_litellm=bool(in_litellm_by_srv.get(srv, False)),
+                    key_rejected=key_rejected,
                 )
-                # Read the served window on the edge into SERVING, and again
-                # if an earlier attempt came back empty. It is fixed at engine
-                # init, so re-reading it every probe would be waste. The KV
-                # cache size comes from the sampler.
-                if srv.state == HEALTHY and (was != HEALTHY or srv.observed_max_model_len is None):
-                    root = srv.root_url
-                    if root:
-                        mml = await fetch_max_model_len(client, root, working_api_key(self.cfg, srv))
-                        if mml is not None:
-                            srv.observed_max_model_len = mml
-                            srv.observed_at = stamp
         finally:
             if own:
                 await client.aclose()
@@ -1399,6 +1434,9 @@ def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> Deployment
         config_served_at=srv.config_served_at,
         reached=srv.reached,
         first_probed_at=srv.first_probed_at,
+        key_rejected=srv.key_rejected,
+        rejected_passes=srv.rejected_passes,
+        unlisted=srv.unlisted,
     )
 
 
@@ -1412,6 +1450,8 @@ def add_refusal(dep) -> str | None:
         return "not a self-hosted deployment"
     if dep.in_litellm:
         return "already in LiteLLM"
+    if dep.vllm.state in (REJECTED, FOREIGN):
+        return "vLLM rejects our key"
     if dep.vllm.state != HEALTHY:
         return "vLLM is not serving yet"
     if not dep.api_base:
@@ -1423,8 +1463,8 @@ def remove_refusal(dep) -> str | None:
     """Why the Fleet Remove button must not call delete_deployment.
 
     None means the row is self-hosted, is already in LiteLLM, and vLLM is
-    Unhealthy or Stalled — the same gate the automatic sync_selfhost applies.
-    delete_deployment itself does not apply this gate.
+    Unhealthy, Stalled, Rejected or Foreign — the same gate the automatic
+    sync_selfhost applies. delete_deployment itself does not apply this gate.
 
     "The same gate" is load-bearing, and was briefly untrue: e1567cb let
     sync_selfhost delete an unlisted server's route while it was still
@@ -1435,7 +1475,7 @@ def remove_refusal(dep) -> str | None:
         return "not a self-hosted deployment"
     if not dep.in_litellm:
         return "not in LiteLLM"
-    if dep.vllm.state not in (UNHEALTHY, STALLED):
+    if dep.vllm.state not in (UNHEALTHY, STALLED, REJECTED, FOREIGN):
         return "vLLM is still healthy"
     return None
 
@@ -1456,28 +1496,31 @@ def parse_max_model_len(models_json: Any) -> int | None:
     return None
 
 
-async def fetch_max_model_len(client: httpx.AsyncClient, base: str, api_key: str) -> int | None:
-    """The served context window, from a serving vLLM's /v1/models, or None.
+async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
+    """GET /v1/models with the key we believe this vLLM has: (status, max_model_len).
+
+    ``status`` is the HTTP status, or None when nothing usable came back. A
+    401 is the box refusing the key (Rejected); a 200 carries the served
+    context window, ``max_model_len``, which is None when the body has none.
 
     base is the server root, not api_base: a /v1-suffixed base would ask for
-    /v1/v1/models and 404. The window is fixed at engine init, so this is
-    called on the transition into SERVING, not every probe. /v1/models needs
-    the server's key.
+    /v1/v1/models and 404. The KV cache size, the other half of the oversized
+    check, is read by the sampler (llmao/sampler.py), the one reader of
+    /metrics.
 
-    The KV cache size, the other half of the oversized check, is read by the
-    sampler (llmao/sampler.py), the one reader of /metrics.
-
-    Never raises: an unreachable or differently-shaped endpoint leaves it
-    unknown and the UX shows it as such.
+    Never raises: an unreachable or differently-shaped endpoint leaves both
+    unknown and the UX shows them as such.
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    served = edict(status=None, max_model_len=None)
     try:
         resp = await client.get(f"{base}/v1/models", headers=headers)
+        served.status = resp.status_code
         if resp.status_code == 200:
-            return parse_max_model_len(resp.json())
+            served.max_model_len = parse_max_model_len(resp.json())
     except (httpx.HTTPError, ValueError):
         pass
-    return None
+    return served
 
 
 async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:

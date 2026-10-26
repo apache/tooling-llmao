@@ -53,10 +53,12 @@ from llmao.model_status import (
     CONFIGURED,
     DEGRADED,
     EXTERNAL,
+    FOREIGN,
     HEALTHY,
     LOADING,
     MIXED,
     PRIVATE,
+    REJECTED,
     SKEW_PHRASE,
     STALLED,
     UNAVAILABLE,
@@ -76,7 +78,7 @@ from llmao.proxy.client import (
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.
-_REPLICA_ORDER = (HEALTHY, LOADING, AWAITING, "no deployment", "pending", UNHEALTHY, STALLED)
+_REPLICA_ORDER = (HEALTHY, LOADING, AWAITING, "no deployment", "pending", UNHEALTHY, STALLED, REJECTED, FOREIGN)
 
 APP = asfquart.APP
 
@@ -504,6 +506,8 @@ _BADGE_CLASS = {
     AWAITING: "text-bg-info",
     UNHEALTHY: "text-bg-danger",
     STALLED: "text-bg-danger",
+    REJECTED: "text-bg-danger",
+    FOREIGN: "text-bg-danger",
     UNKNOWN: "text-bg-dark",
     CONFIGURED: "text-bg-light border",
     "pending": "text-bg-light border",
@@ -554,7 +558,7 @@ def _dep_anchor(dep) -> str:
 
 def _needs_attention(lifecycle: str, skew, *, unlisted: bool = False) -> bool:
     """The attention strip and the row accent ask the same question."""
-    return lifecycle in (STALLED, UNHEALTHY) or bool(skew) or unlisted
+    return lifecycle in (STALLED, UNHEALTHY, REJECTED, FOREIGN) or bool(skew) or unlisted
 
 
 def _match_deployments(fleet, name: str, host: str, port: str = "") -> list:
@@ -612,7 +616,14 @@ def _deployment_reason(dep) -> str:
         # answers, the listing is what is in doubt, not the rental.
         if srv.state == HEALTHY:
             return "No Vast or RunPod instance has this address, but it is serving; the listing may be behind."
+        if srv.state == FOREIGN:
+            return (
+                "No Vast or RunPod instance has this address, and the vLLM there rejects our key; "
+                "it may be someone else's now."
+            )
         return "No Vast or RunPod instance has this address; the rental may have ended."
+    if srv.state == REJECTED:
+        return "vLLM is up but rejects our key, so it was dropped from LiteLLM. Check the api key on the box."
     if srv.state == AWAITING:
         if srv.probe_display:
             return srv.probe_display
@@ -783,16 +794,17 @@ def attention_items(fleet) -> list:
         ident = _dep_ident(dep)
         rest = f"{dep.model_name} — {view.lifecycle.replace('_', ' ')}"
         reason = _deployment_reason(dep)
-        if unlisted and view.lifecycle in (STALLED, UNHEALTHY):
+        if unlisted and view.lifecycle in (STALLED, UNHEALTHY, FOREIGN):
             # What to do about it: nothing in llmao clears a host that is gone.
-            # Only once the box is also down. A listing gap with the box still
-            # serving, loading, or not yet tried is not a rental that ended.
-            reason += " If it has, remove it from fleet.hosts."
+            # Only once the box is also down, or answering as someone else's.
+            # A listing gap with the box still serving, loading, not yet
+            # tried, or refusing our key for a few passes is not that.
+            reason += " If so, remove it from fleet.hosts."
         if phrases:
             reason = "; ".join(p for p in (reason, "; ".join(phrases)) if p)
         if unlisted:
             kind = "unlisted"
-        elif view.lifecycle in (STALLED, UNHEALTHY):
+        elif view.lifecycle in (STALLED, UNHEALTHY, REJECTED):
             kind = view.lifecycle
         else:
             kind = "skew"
@@ -941,7 +953,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             no_deployment = srv.state == HEALTHY and not dep.in_litellm
             serving = srv.state == HEALTHY and dep.in_litellm
             loading = srv.state == LOADING
-            unhealthy = srv.state in (UNHEALTHY, STALLED)
+            unhealthy = srv.state in (UNHEALTHY, STALLED, REJECTED, FOREIGN)
             awaiting = srv.state == AWAITING
             pending = False
             state = srv.state

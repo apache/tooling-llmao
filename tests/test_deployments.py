@@ -550,3 +550,18 @@ def test_an_unknown_address_keeps_its_last_litellm_health():
     asyncio.run(be.check_health_skew())
     assert dep.litellm_healthy is True
     assert dep.litellm_health_at == 1000.0
+
+
+def test_sync_selfhost_drops_a_box_that_rejects_our_key():
+    """The first 401 deletes: every request through the deployment would fail."""
+    from llmao.model_status import REJECTED
+
+    s = _server()
+    s.state = REJECTED
+    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    fleet = Fleet(None, [s], models=models)
+    fleet.deployments[0].in_litellm = True
+    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc")["data"]))
+    asyncio.run(be.sync_selfhost())
+    assert fleet.deployments[0].in_litellm is False
+    assert "model/delete" in _paths(be)

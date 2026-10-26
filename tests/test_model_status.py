@@ -325,3 +325,30 @@ def test_not_reached_with_no_anchor_runs_out_of_grace():
     assert view(first_probed_at=NOW - CFG.health_grace_s, reached=True).lifecycle == AWAITING
     # In LiteLLM and down is Unhealthy at once, as before; the clock is for after the delete.
     assert view(first_probed_at=NOW - 1, in_litellm=True).lifecycle == UNHEALTHY
+
+
+def test_a_refused_key_is_rejected_until_unlisted_and_the_passes_run():
+    from llmao.model_status import FOREIGN, REJECTED, REJECTED_PASSES
+
+    def lifecycle(**kw):
+        return deployment_status(_self(probe_ok=True, key_rejected=True, **kw), CFG, NOW).lifecycle
+
+    assert lifecycle() == REJECTED
+    assert lifecycle(rejected_passes=REJECTED_PASSES * 10) == REJECTED, "a listed host is ours, never Foreign"
+    assert lifecycle(unlisted=True, rejected_passes=REJECTED_PASSES - 1) == REJECTED
+    assert lifecycle(unlisted=True, rejected_passes=REJECTED_PASSES) == FOREIGN
+    # A 200 is Healthy whatever the count says.
+    assert deployment_status(_self(key_rejected=False, rejected_passes=9, unlisted=True), CFG, NOW).lifecycle == HEALTHY
+
+
+def test_rejected_counts_as_down_and_foreign_does_not():
+    from llmao.model_status import FOREIGN, REJECTED
+
+    healthy = deployment_status(_self(), CFG, NOW)
+    rejected = deployment_status(_self(probe_ok=True, key_rejected=True, in_litellm=False), CFG, NOW)
+    foreign = deployment_status(_self(probe_ok=True, key_rejected=True, unlisted=True, rejected_passes=3), CFG, NOW)
+    assert (rejected.lifecycle, rejected.counted, rejected.skew) == (REJECTED, True, ())
+    assert (foreign.lifecycle, foreign.counted) == (FOREIGN, False)
+    assert model_status(MODEL, [healthy, rejected]).rollup == DEGRADED
+    assert model_status(MODEL, [rejected]).rollup == UNAVAILABLE
+    assert model_status(MODEL, [healthy, foreign]).rollup == AVAILABLE

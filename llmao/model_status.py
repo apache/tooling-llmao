@@ -58,11 +58,30 @@ LOADING = "loading"
 HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
 STALLED = "stalled"
+# vLLM answers /health but refuses the key we believe it has on /v1/models.
+# Our box with the wrong key, or the salt changed: a person fixes it, and
+# nothing but a 200 (or /health going away) ends it. The deployment is
+# deleted on the first 401, since every request through it would fail.
+REJECTED = "rejected"
+# Rejected for REJECTED_PASSES passes running at an address no provider
+# listing names any more: something else is serving there. The "remove it
+# from fleet.hosts" sentence shows. A host a listing still names is ours
+# whatever it answers, so it is never Foreign.
+FOREIGN = "foreign"
 UNKNOWN = "unknown"
 CONFIGURED = "configured"
 
-# User-facing roll-up. Only Healthy and Unhealthy count, and only when the
-# signal that drives them is fresh.
+# Consecutive probe passes a 401 must persist, with the host unlisted, before
+# Rejected becomes Foreign. A debounce for a transient refusal (vLLM
+# restarting before its key is in place), not time for an admin: about two
+# minutes at the 45-second interval. The admin's time comes from Rejected
+# having no clock. The third of the pass counts, with fleet.py's
+# UNLISTED_PASSES (listing clock) and ORPHAN_PASSES (skew clock).
+REJECTED_PASSES = 3
+
+# User-facing roll-up. Only Healthy, Unhealthy and Rejected count, and only
+# when the signal that drives them is fresh. Rejected is our box, down for
+# traffic; Foreign is not our box, and is left out.
 AVAILABLE = "available"
 DEGRADED = "degraded"
 UNAVAILABLE = "unavailable"
@@ -100,6 +119,12 @@ class DeploymentSnapshot:
     Self-hosted probe fields are the counters ``record_probe`` already keeps.
     ``probe_ok`` is None until the first probe. ``fails`` is the count after
     the probe being described. Commercial rows leave the vLLM fields empty.
+
+    Three levels of contact, and ``ok`` is the middle one, not "all is well":
+    ``reached`` is any answer from vLLM's HTTP server (a 503 counts);
+    ``probe_ok`` is a 200 from /health, which takes no key, so it is vLLM's
+    own word that it is serving; ``key_rejected`` is /v1/models' verdict on
+    our key. A Rejected box has ``probe_ok`` True.
     """
 
     model_name: str
@@ -131,6 +156,16 @@ class DeploymentSnapshot:
     # server that has no anchor and never answers: Awaiting until
     # health_grace_s after this, then Stalled. None until the first attempt.
     first_probed_at: float | None = None
+    # The last /v1/models answer with the working key: True is a 401, False
+    # is a 200, None is not asked yet or no usable answer. Read only when the
+    # probe passes; a box that does not answer /health has no key to judge.
+    key_rejected: bool | None = None
+    # Consecutive probe passes the key has been refused. Reset by a 200, and
+    # by a failed probe, which interrupts the run.
+    rejected_passes: int = 0
+    # The host verdict from the provider listings (Fleet.place_servers).
+    # Foreign needs it; nothing else here reads it.
+    unlisted: bool = False
 
 
 @dataclass(frozen=True)
@@ -181,7 +216,9 @@ def self_hosted_lifecycle(
     """Name the vLLM observation.
 
     A passing probe: Healthy, always -- including the first probe after a
-    control-plane restart. No config served yet (``config_served_at`` is None):
+    control-plane restart -- unless /v1/models refused the working key:
+    Rejected, and Foreign once the refusal has run ``REJECTED_PASSES`` passes
+    at a host no listing names. No config served yet (``config_served_at`` is None):
     Unhealthy if it is in LiteLLM and the probe failed (it was serving before
     a restart, now down); Stalled if nothing has answered at all for
     ``health_grace_s`` after the first probe attempt (a rental that died, with
@@ -200,6 +237,10 @@ def self_hosted_lifecycle(
     grace = float(cfg.health_grace_s)
     threshold = int(cfg.health_fail_threshold)
     if snap.probe_ok is True:
+        if snap.key_rejected is True:
+            if snap.unlisted and snap.rejected_passes >= REJECTED_PASSES:
+                return FOREIGN
+            return REJECTED
         return HEALTHY
     if snap.config_served_at is None:
         if snap.in_litellm and snap.probe_ok is False:
@@ -242,7 +283,7 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
     # and LiteLLM for a commercial endpoint. A stale one drops out of the
     # roll-up instead of reading as down.
     driving_unknown = vllm_signal == SIGNAL_UNKNOWN if snap.self_hosted else litellm_signal == SIGNAL_UNKNOWN
-    counted = lifecycle in (HEALTHY, UNHEALTHY) and not driving_unknown and not snap.litellm_only
+    counted = lifecycle in (HEALTHY, UNHEALTHY, REJECTED) and not driving_unknown and not snap.litellm_only
 
     skew: list[str] = []
     if snap.litellm_only:
@@ -310,7 +351,7 @@ def model_status(
     healthy = [v for v in counted if v.lifecycle == HEALTHY]
     if not counted or not healthy:
         rollup = UNAVAILABLE
-    elif any(v.lifecycle == UNHEALTHY for v in counted):
+    elif any(v.lifecycle in (UNHEALTHY, REJECTED) for v in counted):
         rollup = DEGRADED
     else:
         rollup = AVAILABLE

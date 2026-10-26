@@ -697,7 +697,7 @@ def test_an_unlisted_host_says_why_and_is_work_needed():
     assert pages._deployment_reason(fleet.deployments[0]) == reason
     (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
     assert item.kind == "unlisted"
-    assert item.detail == reason + " If it has, remove it from fleet.hosts."
+    assert item.detail == reason + " If so, remove it from fleet.hosts."
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
     assert "has not requested its config" not in out
 
@@ -747,4 +747,37 @@ def test_an_unlisted_host_never_reached_gets_the_sentence_once_the_grace_is_out(
     srv.first_probed_at = time.time() - 1801
     (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
     assert "stalled" in item.rest
-    assert item.detail == reason + " If it has, remove it from fleet.hosts."
+    assert item.detail == reason + " If so, remove it from fleet.hosts."
+
+
+def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
+    from llmao.model_status import FOREIGN, REJECTED
+
+    pages = _app()
+    srv = _server("gemma", host="10.0.0.9", ok=True)
+    srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3, key_rejected=True)
+    assert srv.state == REJECTED
+    fleet = _fleet(srv)
+    dep = fleet.deployments[0]
+    dep.in_litellm = False  # the first 401 dropped it
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    assert item.kind == "rejected"
+    assert "rejected" in item.rest
+    assert (
+        item.detail == "vLLM is up but rejects our key, so it was dropped from LiteLLM. Check the api key on the box."
+    )
+    (add,) = [a for a in pages.admin_actions(fleet, dep) if a.kind == "add"]
+    assert (add.kind, add.enabled, add.reason) == ("add", ezt.boolean(False), "vLLM rejects our key")
+
+    # Unlisted as well, for long enough: Foreign, and the sentence.
+    srv.unlisted = True
+    for n in (1, 2, 3):
+        srv.record_probe(True, now=time.time() + n, grace_s=1800, fail_threshold=3, key_rejected=True)
+    assert srv.state == FOREIGN
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    assert item.kind == "unlisted"
+    assert item.detail == (
+        "No Vast or RunPod instance has this address, and the vLLM there rejects our key; "
+        "it may be someone else's now. If so, remove it from fleet.hosts."
+    )
+    assert pages.admin_actions(fleet, dep) == []
