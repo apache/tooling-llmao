@@ -48,9 +48,9 @@ def _signed_in(monkeypatch, *, pmcs=()):
     monkeypatch.setattr(asfquart.session, "read", read)
 
 
-async def _get(path):
+async def _get(path, **headers):
     client = _app().APP.test_client()
-    response = await client.get(path)
+    response = await client.get(path, headers=headers)
     async with client.session_transaction() as sess:
         flashes = list(sess.get("_flashes", []))
     return response, flashes
@@ -62,6 +62,20 @@ def test_a_caught_refusal_is_a_redirect_not_a_500(monkeypatch):
     assert response.status_code == 302
     assert response.headers["Location"] == "/"
     assert flashes == [("warning", "Capacity is limited to site admins.")]
+
+
+def test_a_refusal_goes_back_to_the_page_the_person_came_from(monkeypatch):
+    _signed_in(monkeypatch)
+    response, _flashes = asyncio.run(_get("/admin/capacity", Referer="http://localhost/admin"))
+    assert response.headers["Location"] == "/admin"
+
+
+def test_a_refusal_straight_after_login_goes_home_not_back_to_the_callback(monkeypatch):
+    # asfquart's callback forwards with a Refresh header, so the Referer is
+    # the callback URL. /auth without its arguments answers the session as JSON.
+    _signed_in(monkeypatch)
+    response, _flashes = asyncio.run(_get("/admin/capacity", Referer="http://localhost/auth?code=abc&state=def"))
+    assert response.headers["Location"] == "/"
 
 
 def test_an_uncaught_exception_goes_home_with_a_flash(monkeypatch):

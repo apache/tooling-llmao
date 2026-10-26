@@ -30,6 +30,7 @@ from urllib.parse import quote, urlsplit
 
 import asfquart
 import asfquart.auth
+import asfquart.generics
 import asfquart.session
 import asfquart.utils
 import cmarkgfm
@@ -213,6 +214,11 @@ def _safe_back(default: str = "/") -> str:
       itself forever
     - no Referer at all means a bookmark, a pasted link or a typed URL, so
       there is nowhere to go back to
+    - the login endpoint is refused: asfquart's OAuth callback sends the
+      browser on to the page it wanted with a Refresh header, so when that
+      page then refuses the person, the Referer is /auth?code=...&state=...
+      Going "back" there, without those arguments, dumps the session as
+      JSON
     """
     ref = quart.request.headers.get("Referer") or ""
     if not ref:
@@ -221,7 +227,7 @@ def _safe_back(default: str = "/") -> str:
     if parsed.netloc and parsed.netloc != quart.request.host:
         return default
     target = parsed.path or default
-    if target == quart.request.path:
+    if target in (quart.request.path, asfquart.generics.DEFAULT_OAUTH_URI):
         return default
     return target
 
