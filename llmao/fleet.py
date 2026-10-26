@@ -392,9 +392,11 @@ class VllmServer:
         self.kv_cache_tokens: int | None = None
         # The machine this server runs on, as its provider lists it: who
         # (Vast, RunPod), the instance or pod, its GPUs or name, a console
-        # link where there is one, and what it rents for (usd_per_hour). None
-        # until a provider's listing names this host, which for a box no
-        # provider lists is never.
+        # link where there is one, what it rents for (usd_per_hour), its
+        # status and its address (host). None until a provider's listing
+        # names this host, which for a box no provider lists is never. Once
+        # placed, the listing's row for the same instance or pod keeps it
+        # here through a stop or a restart under a new address.
         self.box: edict | None = None
         # True when every provider we rent from has listed its instances and
         # none has this host, for UNLISTED_PASSES passes running: the rental
@@ -841,8 +843,9 @@ class Fleet:
         # one host serves several ports, and one host:port can report more than one model.
         self.extra_litellm: list[ExtraLiteLLM] = []
         # The latest list of our instances from each provider we rent from,
-        # public IP → box. None until read: Vast's comes with every lifecycle
-        # pass, RunPod's from its own runner (run_runpod_listing).
+        # instance or pod id → box, every one the provider reports with its
+        # status and address. None until read: Vast's comes with every
+        # lifecycle pass, RunPod's from its own runner (run_runpod_listing).
         self.vast_boxes: edict | None = None
         self.runpod_boxes: edict | None = None
 
@@ -1236,8 +1239,7 @@ class Fleet:
         """
         vast_wanted = bool(gpu_host_api_key(self.cfg, "vast"))
         runpod_wanted = bool(gpu_host_api_key(self.cfg, "runpod"))
-        boxes = {**(self.runpod_boxes or {}), **(self.vast_boxes or {})}
-        self.apply_boxes(boxes)
+        placed = self.apply_boxes(self.runpod_boxes, self.vast_boxes)
         # Neither provider configured (a local fleet): nothing is unlisted.
         complete = (vast_wanted or runpod_wanted) and (
             (not vast_wanted or self.vast_boxes is not None) and (not runpod_wanted or self.runpod_boxes is not None)
@@ -1245,7 +1247,7 @@ class Fleet:
         if not complete:
             return
         for srv in self.servers:
-            listed = srv.host in boxes
+            listed = srv in placed
             # Read before the branch below clears srv.box, which would
             # otherwise destroy the evidence and let the verdict flap.
             if listed or srv.box is not None:
@@ -1262,15 +1264,42 @@ class Fleet:
                 # Its old instance, and that instance's price, no longer apply.
                 srv.box = None
 
-    def apply_boxes(self, boxes: Any) -> None:
-        """Place each server on its box, from a provider's public IP → box listing."""
+    def apply_boxes(self, *inventories: Any) -> list[VllmServer]:
+        """Place each server on its box from the providers' listings; the servers some listing names.
+
+        Each inventory is one provider's instance or pod id → box, with the
+        box's host and status. A server is on the box whose host is its
+        address; failing that, on the box that is the same instance or pod
+        as the one it was placed on before. The second match is what keeps
+        a listed box listed while it is stopped, or initializing, or back
+        under a new address: a pod names no public IP in those states, and
+        a serving box that drops out of its listing for a moment is the
+        incident place_servers tells. Only a box in no listing at all is
+        unplaced this pass.
+        """
+        boxes = [box for inv in inventories for box in (inv or {}).values()]
+        placed = []
         for srv in self.servers:
-            box = boxes.get(srv.host)
-            if box is not None and srv.box != box:
+            box = next((b for b in boxes if b.host and b.host == srv.host), None)
+            if box is None and srv.box is not None:
+                same = (srv.box.provider, srv.box.box_id)
+                box = next((b for b in boxes if (b.provider, b.box_id) == same), None)
+            if box is None:
+                continue
+            placed.append(srv)
+            if srv.box != box:
                 _LOGGER.info(
-                    "box: %s is %s %s (%s), $%s/hr", srv.host, box.provider, box.box_id, box.label, box.usd_per_hour
+                    "box: %s is %s %s (%s), %s at %s, $%s/hr",
+                    srv.host,
+                    box.provider,
+                    box.box_id,
+                    box.label,
+                    box.status or "status unknown",
+                    box.host or "no address",
+                    box.usd_per_hour,
                 )
                 srv.box = box
+        return placed
 
     async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:
         """Probe Vast instances that are not in fleet.hosts.

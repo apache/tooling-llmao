@@ -104,7 +104,12 @@ VAST_CONSOLE_URL = "https://cloud.vast.ai/instances/"
 
 
 def boxes_from_body(body: Any) -> edict:
-    """public_ipaddr → the box: where it is (provider, instance id, GPUs) and its price.
+    """instance id → the box: where it is (provider, instance id, GPUs), its status, its address and its price.
+
+    Every instance, in any status: ``host`` is public_ipaddr, "" when Vast
+    has not given one; ``status`` is actual_status (running, loading,
+    exited, ...), the observed state. The same shape as RunPod's pods, so
+    the fleet places and lists from either without caring which.
 
     usd_per_hour is dph_total, which includes the instance's storage;
     bandwidth is billed per GB apart from it and is left out. None when
@@ -114,8 +119,8 @@ def boxes_from_body(body: Any) -> edict:
     for inst in (body.get("instances") or []) if isinstance(body, dict) else []:
         if not isinstance(inst, dict):
             continue
-        ip = _ip(inst.get("public_ipaddr"))
-        if not ip:
+        box_id = str(inst.get("id") or "")
+        if not box_id:
             continue
         try:
             price = float(inst.get("dph_total"))
@@ -123,12 +128,14 @@ def boxes_from_body(body: Any) -> edict:
             price = None
         gpus = inst.get("num_gpus") or 1
         gpu = str(inst.get("gpu_name") or "GPU")
-        boxes[ip] = edict(
+        boxes[box_id] = edict(
             provider="Vast",
-            box_id=str(inst.get("id") or ""),
+            box_id=box_id,
             label=f"{gpu} x{gpus}",
             url=VAST_CONSOLE_URL,
             usd_per_hour=price,
+            host=_ip(inst.get("public_ipaddr")),
+            status=str(inst.get("actual_status") or "").lower(),
         )
     return boxes
 

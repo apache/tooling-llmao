@@ -44,34 +44,51 @@ def _server(host, port=8001, *, public_port=None):
     )
 
 
-def _box(price, provider="Vast", box_id="1", label="GB10 x1"):
-    return edict(provider=provider, box_id=box_id, label=label, url="", usd_per_hour=price)
+def _box(price, provider="Vast", box_id="1", label="GB10 x1", host="", status="running"):
+    return edict(provider=provider, box_id=box_id, label=label, url="", usd_per_hour=price, host=host, status=status)
 
 
-def test_a_vast_box_is_its_instance_gpus_and_price_by_public_ip():
+def _listing(*boxes):
+    """A provider's inventory: instance or pod id → box."""
+    return edict({box.box_id: box for box in boxes})
+
+
+def test_a_vast_box_is_its_instance_gpus_status_address_and_price():
     body = {
         "instances": [
-            {"id": 55406468, "public_ipaddr": "203.0.113.10", "gpu_name": "GB10", "num_gpus": 1, "dph_total": 0.2059},
+            {
+                "id": 55406468,
+                "public_ipaddr": "203.0.113.10",
+                "gpu_name": "GB10",
+                "num_gpus": 1,
+                "dph_total": 0.2059,
+                "actual_status": "running",
+            },
             {"id": 53865410, "public_ipaddr": "198.51.100.8", "gpu_name": "RTX 3060", "num_gpus": 2},
-            {"id": 1, "public_ipaddr": "", "dph_total": 0.5},
+            {"id": 1, "public_ipaddr": "", "dph_total": 0.5, "actual_status": "loading"},
         ]
     }
     boxes = boxes_from_body(body)
-    assert boxes["203.0.113.10"] == {
+    assert boxes["55406468"] == {
         "provider": "Vast",
         "box_id": "55406468",
         "label": "GB10 x1",
         "url": VAST_CONSOLE_URL,
         "usd_per_hour": 0.2059,
+        "host": "203.0.113.10",
+        "status": "running",
     }
-    # Placed, but no price: unknown, not free.
-    assert boxes["198.51.100.8"].label == "RTX 3060 x2"
-    assert boxes["198.51.100.8"].usd_per_hour is None
-    assert set(boxes) == {"203.0.113.10", "198.51.100.8"}
+    # Listed, but no price: unknown, not free. No status given: unknown, not running.
+    assert boxes["53865410"].label == "RTX 3060 x2"
+    assert boxes["53865410"].usd_per_hour is None
+    assert boxes["53865410"].status == ""
+    # Listed, no address yet: kept, with its status, so it is not a miss.
+    assert (boxes["1"].host, boxes["1"].status) == ("", "loading")
+    assert set(boxes) == {"55406468", "53865410", "1"}
     assert boxes_from_body({}) == {}
 
 
-def test_a_runpod_box_is_a_running_pod_with_an_address():
+def test_every_runpod_pod_is_kept_with_its_status_and_address():
     pods = [
         {
             "id": "tafo5",
@@ -80,18 +97,40 @@ def test_a_runpod_box_is_a_running_pod_with_an_address():
             "publicIp": "203.0.113.20",
             "costPerHr": 2.49,
         },
-        # A stopped pod still reports a price; it is not one of our boxes.
+        # A stopped pod has no address and still reports a price: listed, not running.
         {"id": "tjfs5", "name": "testing", "desiredStatus": "EXITED", "publicIp": "", "costPerHr": 0.89},
-        {"id": "x", "desiredStatus": "RUNNING", "publicIp": "", "costPerHr": 0.89},
+        # Initializing: RUNNING with no address yet.
+        {"id": "x", "desiredStatus": "RUNNING", "publicIp": None, "costPerHr": "0.89"},
+        {"name": "no id", "desiredStatus": "RUNNING"},
     ]
     assert boxes_from_pods(pods) == {
-        "203.0.113.20": {
+        "tafo5": {
             "provider": "RunPod",
             "box_id": "tafo5",
             "label": "llmao-qwen38-27b",
             "url": "",
             "usd_per_hour": 2.49,
-        }
+            "host": "203.0.113.20",
+            "status": "running",
+        },
+        "tjfs5": {
+            "provider": "RunPod",
+            "box_id": "tjfs5",
+            "label": "testing",
+            "url": "",
+            "usd_per_hour": 0.89,
+            "host": "",
+            "status": "exited",
+        },
+        "x": {
+            "provider": "RunPod",
+            "box_id": "x",
+            "label": "",
+            "url": "",
+            "usd_per_hour": 0.89,
+            "host": "",
+            "status": "running",
+        },
     }
     assert boxes_from_pods({"error": "nope"}) == {}
 
@@ -99,10 +138,55 @@ def test_a_runpod_box_is_a_running_pod_with_an_address():
 def test_a_box_lands_on_every_server_on_it():
     a, b, other = _server("203.0.113.10", 8001), _server("203.0.113.10", 8002), _server("198.51.100.8")
     fleet = Fleet(None, [a, b, other])
-    fleet.apply_boxes({"203.0.113.10": _box(0.206)})
+    placed = fleet.apply_boxes(_listing(_box(0.206, host="203.0.113.10")))
+    assert placed == [a, b]
     assert (a.box_usd_per_hour, b.box_usd_per_hour, other.box_usd_per_hour) == (0.206, 0.206, None)
     assert a.box.label == "GB10 x1"
     assert other.box is None
+
+
+def test_a_listed_box_with_no_address_is_not_placed_until_it_has_one():
+    """An initializing pod names no public IP, so no server can be its yet."""
+    srv = _server("203.0.113.20")
+    fleet = Fleet(None, [srv])
+    assert fleet.apply_boxes(_listing(_box(2.49, provider="RunPod", box_id="p", host="", status="running"))) == []
+    assert srv.box is None
+
+
+def test_a_stopped_pod_keeps_its_server_listed_and_says_so(caplog):
+    """Listed, not running: a stopped pod drops its address; it is not a miss for the unlisted count."""
+    srv = _server("203.0.113.20")
+    fleet = _fleet_with_runpod([srv])
+    running = _box(2.49, provider="RunPod", box_id="p", host="203.0.113.20")
+    fleet.runpod_boxes = _listing(running)
+    fleet.place_servers()
+    assert srv.box == running
+    stopped = _box(0.89, provider="RunPod", box_id="p", host="", status="exited")
+    fleet.runpod_boxes = _listing(stopped)
+    with caplog.at_level("INFO", logger="llmao.fleet"):
+        for _ in range(UNLISTED_PASSES + 1):
+            fleet.place_servers()
+    assert srv.unlisted is False
+    assert srv.unlisted_passes == 0
+    assert srv.box == stopped, "the server follows its pod, status and price included"
+    assert caplog.text.count("exited at no address") == 1
+    # Started again under a new address: still the same pod, so still listed and placed.
+    moved = _box(2.49, provider="RunPod", box_id="p", host="203.0.113.21")
+    fleet.runpod_boxes = _listing(moved)
+    fleet.place_servers()
+    assert srv.box == moved
+    assert srv.unlisted is False
+
+
+def test_the_address_match_wins_over_the_old_pod():
+    """A server whose address another instance now has is on that instance; the old pod's row is history."""
+    srv = _server("203.0.113.20")
+    srv.box = _box(2.49, provider="RunPod", box_id="old", host="")
+    fleet = _fleet_with_runpod([srv])
+    new = _box(1.0, provider="RunPod", box_id="new", host="203.0.113.20")
+    fleet.runpod_boxes = _listing(_box(2.49, provider="RunPod", box_id="old", host="", status="exited"), new)
+    fleet.place_servers()
+    assert srv.box == new
 
 
 def _fleet_with_runpod(servers):
@@ -144,7 +228,7 @@ def test_a_host_no_provider_lists_is_unlisted_and_said_once(caplog):
     gone.box = _box(0.22)
     fleet = _fleet_renting_from_both([gone, here])
     fleet.vast_boxes = edict()
-    fleet.runpod_boxes = edict({"203.0.113.20": _box(2.49, provider="RunPod")})
+    fleet.runpod_boxes = _listing(_box(2.49, provider="RunPod", box_id="p", host="203.0.113.20"))
     with caplog.at_level("INFO", logger="llmao.fleet"):
         for _ in range(UNLISTED_PASSES + 1):
             fleet.place_servers()
@@ -153,7 +237,7 @@ def test_a_host_no_provider_lists_is_unlisted_and_said_once(caplog):
     assert gone.box is None
     assert caplog.text.count("no provider lists 203.0.113.30") == 1
     # Listed again: said once, and placed.
-    fleet.vast_boxes = edict({"203.0.113.30": _box(0.22)})
+    fleet.vast_boxes = _listing(_box(0.22, host="203.0.113.30"))
     with caplog.at_level("INFO", logger="llmao.fleet"):
         fleet.place_servers()
     assert gone.unlisted is False
@@ -185,7 +269,7 @@ def test_a_provisioning_gap_shorter_than_the_threshold_is_not_a_dead_rental():
     """
     pod = _server("203.0.113.50")
     fleet = _fleet_renting_from_both([pod])
-    listed = edict({"203.0.113.50": _box(2.49, provider="RunPod")})
+    listed = _listing(_box(2.49, provider="RunPod", box_id="p", host="203.0.113.50"))
     fleet.vast_boxes, fleet.runpod_boxes = edict(), listed
     fleet.place_servers()
     assert pod.unlisted is False

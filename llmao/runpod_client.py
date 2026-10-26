@@ -18,9 +18,11 @@
 """RunPod's pods: where each running box is, and what it costs.
 
 httpx only. One GET of the REST API's pod list, with providers.runpod.api_key.
-Each pod reports its public IP and costPerHr; a pod that is not running, or
-has no public IP, is not one of our serving boxes and is left out (a stopped
-pod still reports its price).
+Every pod is kept, with its status and its public IP, which is empty while
+the pod initializes and once it has stopped: a pod the list still names is
+listed whatever its status, and only absence from the list is a miss for
+the fleet's unlisted count. `desiredStatus` is the pod's requested state
+(RUNNING, EXITED, TERMINATED), the only status the API reports.
 
 The same list carries each pod's portMappings, which a later change can use
 to find RunPod public ports the way Vast's are found.
@@ -39,31 +41,34 @@ RUNPOD_PODS_URL = "https://rest.runpod.io/v1/pods"
 
 
 def boxes_from_pods(pods: Any) -> edict:
-    """publicIp → the box: where it is (provider, pod name and id) and its price.
+    """pod id → the box: where it is (provider, pod name and id), its status, its address and its price.
 
-    Running pods only: a stopped pod still reports a price, and is not one
-    of our serving boxes.
+    Every pod, in any status. ``host`` is the public IP, "" while the pod
+    initializes or once it has stopped; ``status`` is ``desiredStatus`` in
+    lower case. A stopped pod still reports a price.
 
     No console link yet: RunPod's console URL for one pod has not been
     confirmed, so the row names the pod and an admin finds it by name.
     """
     boxes = edict()
     for pod in pods if isinstance(pods, list) else []:
-        if not isinstance(pod, dict) or pod.get("desiredStatus") != "RUNNING":
+        if not isinstance(pod, dict):
             continue
-        ip = str(pod.get("publicIp") or "").strip()
-        if not ip:
+        box_id = str(pod.get("id") or "")
+        if not box_id:
             continue
         try:
             price = float(pod.get("costPerHr"))
         except (TypeError, ValueError):
             price = None
-        boxes[ip] = edict(
+        boxes[box_id] = edict(
             provider="RunPod",
-            box_id=str(pod.get("id") or ""),
+            box_id=box_id,
             label=str(pod.get("name") or ""),
             url="",
             usd_per_hour=price,
+            host=str(pod.get("publicIp") or "").strip(),
+            status=str(pod.get("desiredStatus") or "").lower(),
         )
     return boxes
 

@@ -534,9 +534,11 @@ def _dep_where(dep) -> edict:
     """Where a deployment lives, for finding it: the provider and its name for the machine.
 
     Our boxes: "Vast · instance 53865410 · RTX 3060 x2", or "RunPod · pod
-    llmao-qwen3-8b (6jqrsngxdor2mc)". A host no provider lists says so,
-    which is how a box whose rental has gone shows up. A model provider's
-    deployment is its account name; its endpoint is the row's identity.
+    llmao-qwen3-8b (6jqrsngxdor2mc)", with the provider's status after it
+    when that is not running ("..., exited"): listed, not running. A host
+    no provider lists says so, which is how a box whose rental has gone
+    shows up. A model provider's deployment is its account name; its
+    endpoint is the row's identity.
     """
     srv = dep.vllm
     if srv is None:
@@ -548,6 +550,8 @@ def _dep_where(dep) -> edict:
         label = f"RunPod · pod {box.label} ({box.box_id})"
     else:
         label = f"{box.provider} · instance {box.box_id} · {box.label}"
+    if box.status and box.status != "running":
+        label += f", {box.status}"
     return edict(label=label, url=box.url or "", unknown=ezt.boolean(False))
 
 
