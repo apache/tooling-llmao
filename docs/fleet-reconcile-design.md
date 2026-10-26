@@ -716,14 +716,29 @@ fetcher that produces it; a stateful thing lives alone.
   cache-line parsers now in `fleet.py` and `sampler.py` move here; the
   sampler keeps its runner and its rollup. Another engine gets its own
   client module, not an `if` in this one.
-- **`fleet.py`** keeps the box protocol: host rows, HMAC, `GET
-  /vllm/config` JSON, listen-port rules, `LEGACY_SERVERS`, materialize
-  and approve. It produces `ConfigFetch` (host to time, replacing the
-  per-server copies of `config_served_at`) and `IntendedDeployment` (one
-  function over `fleet.hosts`, the approvals and the provider lines,
-  replacing the ad hoc construction in `from_cfg`). It loses the probe,
-  the parsers, the lifecycle counters on `VllmServer`, and in the end
-  `VllmServer` itself.
+- **`provisioning.py`** (new) is the server side of a box provisioning
+  itself, the one request a box makes (`hosting/provision.sh` →
+  `install_set.py` → `GET /vllm/config`) and what it gets back: the
+  endpoint handler, bound to `asfquart.APP` like `pages.py` and
+  `api.py` and imported after them in `main.py`; how a box names itself
+  (`X-LLMAO-Host`, else the forwarded address, else the peer); the
+  payload, host rows or approval to servers JSON; the bearer derivation
+  the payload carries and `working_api_key` also calls; `ConfigFetch`,
+  host to time of the last fetch; and the unknown-box record (first
+  seen, last seen, count, the cap). It replaces `docs/box-protocol.md`'s
+  "box" with the box's own verb. Two commits: ConfigFetch and the
+  unknown-box record first, then the endpoint, the naming rule, the
+  payload and the bearer move in.
+- **`fleet.py`** keeps the runners, the view, placement, approvals as
+  intent, the host-row parsing and listen-port rules, `LEGACY_SERVERS`,
+  and materialize. It produces `IntendedDeployment` (one function over
+  `fleet.hosts`, the approvals and the provider lines, replacing the ad
+  hoc construction in `from_cfg`). It loses the protocol half to
+  `provisioning.py`, the probe and the parsers to `vllm_client.py`, the
+  lifecycle counters on `VllmServer`, and in the end `VllmServer` itself.
+  `config_served_at` on a server is the Loading anchor, a lifecycle fact
+  set from a ConfigFetch or from Vast adoption; it is not the fetch
+  record and moves into `deployment.py` with the rest of the history.
 - **`proxy/deployments.py`** produces `LiteLLMDeployment` (one per
   `/model/info` entry, found by the stamp; replaces the route tuples,
   the index and `ExtraLiteLLM`) and `LiteLLMHealth` (replaces the two
@@ -755,7 +770,10 @@ fact has two homes. Then `deployment.py` against six known shapes.
 1. Rental. **Done:** 92798c9 (`llmao/rental.py`: `Rental`,
    `ProviderRentals`, `match_rental`; the host-side verdict still sits
    in `place_servers` and moves with the Deployment work).
-2. ConfigFetch.
+2. ConfigFetch. **Done:** 57aff8b (`llmao/provisioning.py`:
+   `ConfigFetch`, `UnknownFetch`, `ProvisioningRecord`; the endpoint,
+   the naming rule, the payload and the bearer derivation follow in
+   their own commit).
 3. LiteLLMHealth.
 4. LiteLLMDeployment.
 5. VllmProbe (with `vllm_client.py`).
