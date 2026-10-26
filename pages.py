@@ -35,6 +35,7 @@ import asfquart.utils
 import cmarkgfm
 import ezt
 import quart
+import werkzeug.sansio.response
 from asfpy.stopwatch import Stopwatch
 from cmarkgfm.cmark import Options
 from dunamai import Version
@@ -100,6 +101,30 @@ flash_warning = functools.partial(quart.flash, category="warning")
 
 def _render(template_name: str, data) -> str:
     return asfquart.utils.render(APP.load_template(TEMPLATES / template_name), data)
+
+
+def use_template(path):
+    """asfquart's use_template, except a Response is returned as it is.
+
+    @page answers a caught AuthzError or BackendUnavailableError with a
+    redirect. asfquart's wrapper handed that Response to ezt as the data
+    dictionary, which failed on the first name looked up ([title] in the
+    header), so every such bounce was a 500 instead. Stands in until
+    asfquart passes a Response through itself.
+    """
+    template = APP.load_template(path)
+
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            data = await fn(*args, **kwargs)
+            if isinstance(data, werkzeug.sansio.response.Response):
+                return data
+            return asfquart.utils.render(template, data)
+
+        return wrapper
+
+    return deco
 
 
 def _flash_rows():
@@ -189,7 +214,7 @@ def _safe_back(default: str = "/") -> str:
 def page(*extra_exc, title: str = "llmao", category: str = "warning"):
     """GET pages: basic_info(title), inject result=, catch, attach flashes.
 
-    Innermost under ``@APP.use_template``. Views take ``result`` as a keyword
+    Innermost under ``@use_template``. Views take ``result`` as a keyword
     (Quart path params stay named kwargs).
     """
     types = (AuthzError, BackendUnavailableError, *extra_exc)
@@ -344,7 +369,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
 
 
 @APP.get("/")
-@APP.use_template(TEMPLATES / "home.ezt")
+@use_template(TEMPLATES / "home.ezt")
 @page(title="Home")
 async def home_page(result):
     return result
@@ -406,7 +431,7 @@ def help_articles(directory: pathlib.Path | None = None) -> list:
 
 @APP.get("/help")
 @APP.get("/help/<slug>")
-@APP.use_template(TEMPLATES / "help.ezt")
+@use_template(TEMPLATES / "help.ezt")
 @page(title="Help")
 async def help_page(result, slug: str = "index"):
     doc = help_article(slug, uid=result.uid)
@@ -833,7 +858,7 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
 
 @APP.get("/models")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "models.ezt")
+@use_template(TEMPLATES / "models.ezt")
 @page(FileNotFoundError, ValueError, OSError, title="Models")
 async def models_page(result):
     """Gateway model inventory (public fields; supply path for site admins)."""
@@ -1194,7 +1219,7 @@ def _project_list_rows(rows) -> list:
 
 @APP.get("/projects")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "projects.ezt")
+@use_template(TEMPLATES / "projects.ezt")
 @page(title="Projects")
 async def projects_list(result):
     """Projects you belong to, with project-budget summary."""
@@ -1205,7 +1230,7 @@ async def projects_list(result):
 
 @APP.get("/projects/<project>")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "project.ezt")
+@use_template(TEMPLATES / "project.ezt")
 @page()
 async def project_overview(result, project: str):
     """What a project is drawing, and who is drawing it.
@@ -1300,7 +1325,7 @@ async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_c
 
 @APP.get("/keys")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "keys.ezt")
+@use_template(TEMPLATES / "keys.ezt")
 @page(title="My Keys")
 async def keys_list(result):
     """My Keys — the allowance, the keys drawing on it, and project draw.
@@ -1439,7 +1464,7 @@ async def usage_moved():
 
 @APP.get("/admin")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "admin.ezt")
+@use_template(TEMPLATES / "admin.ezt")
 @page(title="Admin")
 async def admin_index(result):
     """Everything that needs a site admin, on one page.
@@ -1704,7 +1729,7 @@ CAPACITY_PERIODS = (7, 30, 90)
 
 @APP.get("/admin/capacity")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "capacity.ezt")
+@use_template(TEMPLATES / "capacity.ezt")
 @page(title="Capacity")
 async def admin_capacity(result):
     """What the fleet did and cost, and what the providers we pay were paid.
@@ -1840,7 +1865,7 @@ def _spend_provider_row(p) -> edict:
 
 @APP.get("/admin/tiers")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "tiers.ezt")
+@use_template(TEMPLATES / "tiers.ezt")
 @page(title="Tiers")
 async def admin_tiers(result):
     """Allowances and rate limits per tier."""
@@ -1987,7 +2012,7 @@ def _decided_h(r) -> str:
 
 @APP.get("/keys/other")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "keys_other.ezt")
+@use_template(TEMPLATES / "keys_other.ezt")
 @page(title="Service keys")
 async def keys_other_list(result):
     """Service keys — every key with no human at the keyboard.
@@ -2014,7 +2039,7 @@ async def keys_other_list(result):
 
 @APP.get("/keys/new")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "key_create.ezt")
+@use_template(TEMPLATES / "key_create.ezt")
 @page(title="Create personal key")
 async def keys_new_form(result):
     model = (quart.request.args.get("model") or "").strip()
@@ -2079,7 +2104,7 @@ async def do_create_approved_key():
 
 @APP.get("/keys/other/new")
 @asfquart.auth.require
-@APP.use_template(TEMPLATES / "key_create_other.ezt")
+@use_template(TEMPLATES / "key_create_other.ezt")
 @page(title="Create automation key")
 async def keys_other_new_form(result):
     if not result.can_create_automation:
