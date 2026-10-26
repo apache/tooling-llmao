@@ -35,14 +35,16 @@ from typing import TYPE_CHECKING, Any
 
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao.rental import Rental, price
+
 if TYPE_CHECKING:
     import httpx
 
 RUNPOD_PODS_URL = "https://rest.runpod.io/v1/pods"
 
 
-def boxes_from_pods(pods: Any) -> edict:
-    """pod id → the box: where it is (provider, pod name and id), its status, its address and its price.
+def rentals_from_pods(pods: Any) -> edict:
+    """pod id → Rental: where it is (pod name and id), its status, its address, its ports and its price.
 
     Every pod, in any status. ``host`` is the public IP, "" while the pod
     initializes or once it has stopped; ``status`` is ``desiredStatus`` in
@@ -53,28 +55,24 @@ def boxes_from_pods(pods: Any) -> edict:
     No console link yet: RunPod's console URL for one pod has not been
     confirmed, so the row names the pod and an admin finds it by name.
     """
-    boxes = edict()
+    rentals = edict()
     for pod in pods if isinstance(pods, list) else []:
         if not isinstance(pod, dict):
             continue
-        box_id = str(pod.get("id") or "")
-        if not box_id:
+        pod_id = str(pod.get("id") or "")
+        if not pod_id:
             continue
-        try:
-            price = float(pod.get("costPerHr"))
-        except (TypeError, ValueError):
-            price = None
-        boxes[box_id] = edict(
+        rentals[pod_id] = Rental(
             provider="RunPod",
-            box_id=box_id,
+            id=pod_id,
             label=str(pod.get("name") or ""),
             url="",
-            usd_per_hour=price,
+            usd_per_hour=price(pod.get("costPerHr")),
             host=str(pod.get("publicIp") or "").strip(),
             status=str(pod.get("desiredStatus") or "").lower(),
             ports=ports_from_pod(pod),
         )
-    return boxes
+    return rentals
 
 
 def ports_from_pod(pod: dict[str, Any]) -> edict:

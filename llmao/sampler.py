@@ -240,7 +240,7 @@ class MetricsSampler:
             if sample is None:
                 self._rollup.missed(server)
                 continue
-            share = srv.box_usd_per_hour / per_box[srv.host] if srv.box_usd_per_hour is not None else None
+            share = srv.rental_usd_per_hour / per_box[srv.host] if srv.rental_usd_per_hour is not None else None
             self._rollup.record(server, model_name, sample, usd_per_hour=share)
             # The KV cache size, for the /models drill-down and the oversized
             # check. Fixed at engine start, but taken from every reading: a

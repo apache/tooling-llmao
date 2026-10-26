@@ -46,6 +46,7 @@ from llmao.model_status import (
     UNKNOWN,
 )
 from llmao.providers import ProviderDeployment
+from llmao.rental import Rental
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -654,9 +655,9 @@ def test_each_deployment_says_where_to_find_it():
         _server("gemma", host="10.0.0.2"),
         _server("gemma", host="10.0.0.3"),
     )
-    vast.box = edict(
+    vast.rental = Rental(
         provider="Vast",
-        box_id="53865410",
+        id="53865410",
         label="RTX 3060 x2",
         url="https://cloud.vast.ai/instances/",
         usd_per_hour=0.14,
@@ -664,24 +665,23 @@ def test_each_deployment_says_where_to_find_it():
         status="running",
         ports=edict({"8001": 41234}),
     )
-    runpod.box = edict(
+    runpod.rental = Rental(
         provider="RunPod",
-        box_id="6jqrsngxdor2mc",
+        id="6jqrsngxdor2mc",
         label="llmao-qwen3-8b",
         url="",
         usd_per_hour=0.89,
         host="",
         status="exited",
-        ports=edict(),
     )
     rows = pages.model_catalog_rows(_fleet(vast, runpod, lost), [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
     assert '<a href="https://cloud.vast.ai/instances/"' in out
-    assert "Vast · instance 53865410 · RTX 3060 x2</a>" in out
+    assert "Vast · RTX 3060 x2 (53865410)</a>" in out
     # No link for RunPod yet; the pod is named so it can be found. Listed,
     # not running: the provider's status follows the name.
-    assert "RunPod · pod llmao-qwen3-8b (6jqrsngxdor2mc), exited" in out
-    assert "RunPod · pod llmao-qwen3-8b (6jqrsngxdor2mc), exited</a>" not in out
+    assert "RunPod · llmao-qwen3-8b (6jqrsngxdor2mc), exited" in out
+    assert "RunPod · llmao-qwen3-8b (6jqrsngxdor2mc), exited</a>" not in out
     # A host no provider lists stands out.
     assert "location unknown: no provider lists this host" in out
     assert "text-warning-emphasis" in out
@@ -690,9 +690,9 @@ def test_each_deployment_says_where_to_find_it():
 def test_where_a_deployment_lives_is_for_admins_only():
     pages = _app()
     srv = _server("gemma", host="10.0.0.1")
-    srv.box = edict(
+    srv.rental = Rental(
         provider="Vast",
-        box_id="53865410",
+        id="53865410",
         label="RTX 3060 x2",
         url="https://cloud.vast.ai/instances/",
         usd_per_hour=0.14,

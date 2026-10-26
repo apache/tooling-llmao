@@ -259,7 +259,7 @@ reconcile migration.
   roll-up and staleness (`deployment_status`, `model_status`).
 - `llmao/fleet.py`: `VllmServer.record_probe` (the counters and the
   transition log lines), `Fleet.probe_all` (when `/v1/models` is asked),
-  `Fleet.place_servers` and `apply_boxes` (listed, unlisted, the public
+  `Fleet.place_servers` and `apply_rentals` (listed, unlisted, the public
   port), `note_config_fetch` (the anchor), `adopt_vast_instances`,
   `add_refusal` and `remove_refusal` (the button gates).
 - `llmao/proxy/deployments.py`: `sync_selfhost` (the automatic add and

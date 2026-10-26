@@ -55,8 +55,9 @@ from llmao.model_status import (
 from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
 from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
-from llmao.runpod_client import boxes_from_pods, fetch_pods
-from llmao.vast_client import boxes_from_body, fetch_instances, port_map_from_body
+from llmao.rental import ProviderRentals, Rental, match_rental
+from llmao.runpod_client import fetch_pods, rentals_from_pods
+from llmao.vast_client import fetch_instances, port_map_from_body, rentals_from_body
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -408,14 +409,12 @@ class VllmServer:
         # errors, which is the sharpest failure mode in the stack. It has only
         # ever been visible by reading a vLLM startup log by hand.
         self.kv_cache_tokens: int | None = None
-        # The machine this server runs on, as its provider lists it: who
-        # (Vast, RunPod), the instance or pod, its GPUs or name, a console
-        # link where there is one, what it rents for (usd_per_hour), its
-        # status and its address (host). None until a provider's listing
-        # names this host, which for a box no provider lists is never. Once
-        # placed, the listing's row for the same instance or pod keeps it
-        # here through a stop or a restart under a new address.
-        self.box: edict | None = None
+        # The machine this server runs on, as its provider reports it
+        # (llmao/rental.py). None until a provider's set names this host,
+        # which for a machine no provider lists is never. Once matched, the
+        # same machine's Rental keeps it here through a stop or a restart
+        # under a new address.
+        self.rental: Rental | None = None
         # True when every provider we rent from has listed its instances and
         # none has this host, for UNLISTED_PASSES passes running: the rental
         # has most likely ended. See Fleet.place_servers.
@@ -557,9 +556,9 @@ class VllmServer:
         return model_name == self.model_name and normalize_peer_ip(host) == normalize_peer_ip(self.host)
 
     @property
-    def box_usd_per_hour(self) -> float | None:
-        """What this server's whole box rents for, dollars per hour; None if unknown."""
-        return self.box and self.box.usd_per_hour
+    def rental_usd_per_hour(self) -> float | None:
+        """What this server's whole machine rents for, dollars per hour; None if unknown."""
+        return self.rental and self.rental.usd_per_hour
 
     @property
     def oversized(self) -> bool:
@@ -860,12 +859,11 @@ class Fleet:
         # Identity is host, port, and model name. api_base is not a primary key:
         # one host serves several ports, and one host:port can report more than one model.
         self.extra_litellm: list[ExtraLiteLLM] = []
-        # The latest list of our instances from each provider we rent from,
-        # instance or pod id → box, every one the provider reports with its
-        # status and address. None until read: Vast's comes with every
-        # lifecycle pass, RunPod's from its own runner (run_runpod_listing).
-        self.vast_boxes: edict | None = None
-        self.runpod_boxes: edict | None = None
+        # What each provider we rent from last reported (llmao/rental.py).
+        # None until read: Vast's comes with every lifecycle pass, RunPod's
+        # from its own runner (run_runpod_listing).
+        self.vast_rentals: ProviderRentals | None = None
+        self.runpod_rentals: ProviderRentals | None = None
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
@@ -1080,7 +1078,7 @@ class Fleet:
         """Set public_port from a host → {listen: public} map such as port_map_from_body's. Leave unset if missing.
 
         The lifecycle itself stamps ports from the box each server is placed
-        on (apply_boxes); this is the same stamp from a bare map, for the
+        on (apply_rentals); this is the same stamp from a bare map, for the
         operator CLI and for tests.
         """
         for srv in self.servers:
@@ -1204,13 +1202,13 @@ class Fleet:
         # boxes, or a newly approved listen port never receives its
         # HostPort and probe_all skips it.
         self._materialize_approved_hosts()
-        self.vast_boxes = boxes_from_body(body)
+        self.vast_rentals = ProviderRentals("Vast", rentals_from_body(body))
         await self.adopt_vast_instances(mapping, client)
 
     async def read_runpod_listing(self, client: httpx.AsyncClient) -> None:
-        """Read RunPod's pod list into runpod_boxes. Raises if RunPod does not answer."""
+        """Read RunPod's pod list into runpod_rentals. Raises if RunPod does not answer."""
         key = gpu_host_api_key(self.cfg, "runpod")
-        self.runpod_boxes = boxes_from_pods(await fetch_pods(key, client=client))
+        self.runpod_rentals = ProviderRentals("RunPod", rentals_from_pods(await fetch_pods(key, client=client)))
 
     async def run_runpod_listing(self) -> None:
         """Runner: RunPod's list of our pods, every RUNPOD_LISTING_INTERVAL_S.
@@ -1235,7 +1233,7 @@ class Fleet:
             await asyncio.sleep(RUNPOD_LISTING_INTERVAL_S)
 
     def place_servers(self) -> None:
-        """Put each server on its box from the latest provider lists, and decide which are unlisted.
+        """Put each server on its Rental from the latest provider sets, and decide which are unlisted.
 
         Unlisted means every provider we rent from has answered with its
         list, none has this host for UNLISTED_PASSES passes running, and some
@@ -1261,18 +1259,19 @@ class Fleet:
         """
         vast_wanted = bool(gpu_host_api_key(self.cfg, "vast"))
         runpod_wanted = bool(gpu_host_api_key(self.cfg, "runpod"))
-        placed = self.apply_boxes(self.runpod_boxes, self.vast_boxes)
+        placed = self.apply_rentals(self.runpod_rentals, self.vast_rentals)
         # Neither provider configured (a local fleet): nothing is unlisted.
         complete = (vast_wanted or runpod_wanted) and (
-            (not vast_wanted or self.vast_boxes is not None) and (not runpod_wanted or self.runpod_boxes is not None)
+            (not vast_wanted or self.vast_rentals is not None)
+            and (not runpod_wanted or self.runpod_rentals is not None)
         )
         if not complete:
             return
         for srv in self.servers:
             listed = srv in placed
-            # Read before the branch below clears srv.box, which would
+            # Read before the branch below clears srv.rental, which would
             # otherwise destroy the evidence and let the verdict flap.
-            if listed or srv.box is not None:
+            if listed or srv.rental is not None:
                 srv.ever_listed = True
             srv.unlisted_passes = 0 if listed else srv.unlisted_passes + 1
             unlisted = srv.ever_listed and srv.unlisted_passes >= UNLISTED_PASSES
@@ -1283,49 +1282,40 @@ class Fleet:
                     _LOGGER.info("fleet: %s is listed again", srv.host)
             srv.unlisted = unlisted
             if unlisted:
-                # Its old instance, and that instance's price, no longer apply.
-                srv.box = None
+                # Its old machine, and that machine's price, no longer apply.
+                srv.rental = None
 
-    def apply_boxes(self, *inventories: Any) -> list[VllmServer]:
-        """Place each server on its box from the providers' listings; the servers some listing names.
+    def apply_rentals(self, *sets: ProviderRentals | None) -> list[VllmServer]:
+        """Put each server on its Rental from the providers' sets; the servers some provider names.
 
-        Each inventory is one provider's instance or pod id → box, with the
-        box's host and status. A server is on the box whose host is its
-        address; failing that, on the box that is the same instance or pod
-        as the one it was placed on before. The second match is what keeps
-        a listed box listed while it is stopped, or initializing, or back
-        under a new address: a pod names no public IP in those states, and
-        a serving box that drops out of its listing for a moment is the
-        incident place_servers tells. Only a box in no listing at all is
-        unplaced this pass.
+        The matching rule is rental.match_rental: by address, else the same
+        machine as last time. A server that matches is placed even when its
+        Rental is stopped or initializing and names no address; only a
+        server no provider names at all is unplaced this pass.
         """
-        boxes = [box for inv in inventories for box in (inv or {}).values()]
         placed = []
         for srv in self.servers:
-            box = next((b for b in boxes if b.host and b.host == srv.host), None)
-            if box is None and srv.box is not None:
-                same = (srv.box.provider, srv.box.box_id)
-                box = next((b for b in boxes if (b.provider, b.box_id) == same), None)
-            if box is None:
+            rental = match_rental(srv.host, srv.rental, *sets)
+            if rental is None:
                 continue
             placed.append(srv)
-            # The listing is where the public port comes from, for either
-            # provider. A box with no map (a stopped pod) says nothing; the
-            # last port stands until the listing has one again.
-            if box.ports:
-                _set_public_port(srv, box.ports, box.provider.lower())
-            if srv.box != box:
+            # The provider's report is where the public port comes from. A
+            # Rental with no map (a stopped pod) says nothing; the last port
+            # stands until the report has one again.
+            if rental.ports:
+                _set_public_port(srv, rental.ports, rental.provider.lower())
+            if srv.rental != rental:
                 _LOGGER.info(
-                    "box: %s is %s %s (%s), %s at %s, $%s/hr",
+                    "rental: %s is %s %s (%s), %s at %s, $%s/hr",
                     srv.host,
-                    box.provider,
-                    box.box_id,
-                    box.label,
-                    box.status or "status unknown",
-                    box.host or "no address",
-                    box.usd_per_hour,
+                    rental.provider,
+                    rental.id,
+                    rental.label,
+                    rental.status or "status unknown",
+                    rental.host or "no address",
+                    rental.usd_per_hour,
                 )
-                srv.box = box
+                srv.rental = rental
         return placed
 
     async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:

@@ -18,7 +18,7 @@
 """Vast.ai show-instances: each box's public ports, where it is, and what it costs.
 
 httpx only (no vastai SDK). One GET, no pagination; the fleet reads the
-body twice, for ports (port_map_from_body) and boxes (boxes_from_body).
+body twice, for ports (port_map_from_body) and rentals (rentals_from_body).
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from easydict import EasyDict as edict  # noqa: N813
+
+from llmao.rental import Rental, price
 
 if TYPE_CHECKING:
     import httpx
@@ -103,48 +105,42 @@ def port_map_from_body(body: Any) -> edict:
 VAST_CONSOLE_URL = "https://cloud.vast.ai/instances/"
 
 
-def boxes_from_body(body: Any) -> edict:
-    """instance id → the box: where it is (provider, instance id, GPUs), its status, its address and its price.
+def rentals_from_body(body: Any) -> edict:
+    """instance id → Rental: where it is (instance id, GPUs), its status, its address, its ports and its price.
 
     Every instance, in any status: ``host`` is public_ipaddr, "" when Vast
     has not given one; ``status`` is actual_status (running, loading,
     exited, ...), the observed state; ``ports`` is container listen port →
-    public HostPort, as ports_from_instance reads it. The same shape as
-    RunPod's pods, so the fleet places, lists and dials from either without
-    caring which.
+    public HostPort, as ports_from_instance reads it.
 
     usd_per_hour is dph_total, which includes the instance's storage;
     bandwidth is billed per GB apart from it and is left out. None when
     Vast does not say, which is unknown, not free.
     """
-    boxes = edict()
+    rentals = edict()
     for inst in (body.get("instances") or []) if isinstance(body, dict) else []:
         if not isinstance(inst, dict):
             continue
-        box_id = str(inst.get("id") or "")
-        if not box_id:
+        instance_id = str(inst.get("id") or "")
+        if not instance_id:
             continue
-        try:
-            price = float(inst.get("dph_total"))
-        except (TypeError, ValueError):
-            price = None
         gpus = inst.get("num_gpus") or 1
         gpu = str(inst.get("gpu_name") or "GPU")
-        boxes[box_id] = edict(
+        rentals[instance_id] = Rental(
             provider="Vast",
-            box_id=box_id,
+            id=instance_id,
             label=f"{gpu} x{gpus}",
             url=VAST_CONSOLE_URL,
-            usd_per_hour=price,
+            usd_per_hour=price(inst.get("dph_total")),
             host=_ip(inst.get("public_ipaddr")),
             status=str(inst.get("actual_status") or "").lower(),
             ports=ports_from_instance(inst),
         )
-    return boxes
+    return rentals
 
 
 async def fetch_instances(api_key: str, *, client: httpx.AsyncClient) -> Any:
-    """The show-instances body, for port_map_from_body and boxes_from_body."""
+    """The show-instances body, for port_map_from_body and rentals_from_body."""
     resp = await client.get(
         VAST_INSTANCES_URL,
         params={"limit": VAST_PAGE_LIMIT},
