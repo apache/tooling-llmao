@@ -13,14 +13,19 @@ it gets back, is `box-protocol.md` and is not changed by this work.
 llmao keeps several sources in step. They run on different clocks, and
 today they are folded into flags on shared objects.
 
-| Source | What | Cadence |
-|---|---|---|
-| **Intended** | `fleet.hosts`, in-memory approvals, `models.yaml`, `config.yaml` providers | process start, approve, config load |
-| **Box protocol** | the last `GET /vllm/config` served to each host | on each fetch |
-| **GPU inventory** | Vast and RunPod, the same snapshot: status, public address, listen-port to public-port map | both, about a minute |
-| **vLLM health** | `/health` (and `/v1/models` with the working key: on the edge into Healthy, until it has answered, and on every pass while refused or unlisted) | `health_interval_s` |
-| **LiteLLM deployments** | GET `/model/info`, one entry per deployment | `skew_interval_s` |
-| **LiteLLM health** | GET `/health` | `litellm_health_interval_s` (~4h) |
+| Source | Named | What | Keyed by | Cadence |
+|---|---|---|---|---|
+| **Intended** | `IntendedDeployment` | one row of `fleet.hosts`, one in-memory approval, or one `config.yaml` provider line; `models.yaml` supplies the recipe | the key | process start, approve, config load |
+| **Box protocol** | `ConfigFetch` | the last `GET /vllm/config` a host fetched, and when | host | on each fetch |
+| **GPU inventory** | `Rental`, in a `ProviderRentals` set | what one provider reports about one machine: id, status, address, listen-port to public-port map, price | provider id; matched to a host by address, then by the id it had last time | each provider's listing interval |
+| **vLLM health** | `VllmProbe` | what the probe found at an address: reached, `/health` ok, the key verdict and served window from `/v1/models`, the cache size (the last three only when asked for; see Needs) | the key | `health_interval_s` |
+| **LiteLLM deployments** | `LiteLLMDeployment` | what `GET /model/info` has for the key, found by the `llmao_key` stamp | the key | `skew_interval_s` |
+| **LiteLLM health** | `LiteLLMHealth` | LiteLLM's own `GET /health` verdict on a deployment, and when | the key | `litellm_health_interval_s` (~4h) |
+
+Two of the six are per host, not per key: `ConfigFetch` and `Rental`.
+Every deployment on the same machine reads the same values through its
+host. Nothing else is host-level; the machine is not an object of its
+own (see Vocabulary).
 
 Terms. "Deployment" is LiteLLM's word (`Router.get_deployment`), and
 ours. LiteLLM calls the whole set its `model_list`; this doc does not,
@@ -29,19 +34,95 @@ because `models.yaml` is a different thing and is always named in full.
 `models.yaml`. "The LiteLLM deployments" is the set LiteLLM holds, as
 `GET /model/info` reports it.
 
-More terms, all from the code. **Placing** a host is matching it to an
-entry in a provider's listing (`place_servers`). That entry is the
-host's **box** (`srv.box`: provider, instance or pod id, label, price).
-The **placing provider** is the one whose listing supplied the box; it
-is read off the box and remembered nowhere. A public port is not a field
-of `fleet.hosts`. Both listings carry the listen-port to public-port
-map, and that map is the dial address. **Rejected** and **Foreign** are
-lifecycles added here. Rejected: the address answers vLLM's `/health`,
-which takes no key, but rejects the key `working_api_key` returns on
-`/v1/models` (`fleet.selfhost_api_key` for `LEGACY_SERVERS`, the derived
-key otherwise). Our box with the wrong key, or the salt changed; a person
-fixes it. Foreign: Rejected for `REJECTED_PASSES` passes running at an
-address no listing names. Something else is serving there.
+### Vocabulary (settled 2026-10-26)
+
+Every name says where the thing comes from. One name says what we
+concluded. Older sections of this document still say box, instance, pod
+and listing; they are rewritten as the code moves, and these names win
+where they differ.
+
+**Observed, one per source.** Each is an immutable snapshot of what one
+source said, with the time it was read, and nothing of ours on it.
+
+- **Rental**: what a provider reports about one machine we rent: its id,
+  status (running, stopped, initializing), address, listen-port to
+  public-port map, price. Replaces `box`, `instance` and `pod`.
+  **ProviderRentals** is one provider's set of Rentals as of one fetch
+  (replaces `vast_boxes`, `runpod_boxes`). A Rental no deployment matches
+  is just inventory; a deployment no Rental matches is **unlisted**.
+- **ConfigFetch**: the last `GET /vllm/config` a host made, and when. The
+  anchor for the loading window. Today a timestamp on each server.
+- **VllmProbe**: what one probe of one address found. It carries the
+  engine's name because it is not engine-neutral: `/health` and its 200
+  versus 503 are vLLM's, the served window is vLLM's `max_model_len`
+  field on `/v1/models`, and the cache size is vLLM's
+  `cache_config_info` line on `/metrics`. Another engine gets its own
+  probe class, not an `if` in this one. Replaces the probe counters on
+  `VllmServer`; `VllmServer` itself goes unused.
+- **LiteLLMDeployment**: what LiteLLM has for the key, as `GET
+  /model/info` reports it. Replaces `ExtraLiteLLM` and the route tuples.
+- **LiteLLMHealth**: LiteLLM's own `/health` verdict on that deployment,
+  and when. Its own source because it has its own cadence and its own
+  staleness; today two fields on the deployment.
+
+**Intended, one.**
+
+- **IntendedDeployment**: one row of `fleet.hosts`, one approval, or one
+  commercial provider line: host, listen port, model; the key. Nothing
+  intended is ever called a server.
+
+**The join, one.**
+
+- **Deployment**: one per key. Holds the IntendedDeployment (or none,
+  for an orphan), the latest of each observation, its own history, and
+  the state machine. It is the only object with state, and the only
+  place a lifecycle name is read. Out of it come a **verdict**, a
+  **reason** sentence, the **needs** (below) and the plan actions. The
+  verdict has four values, and they are the whole public surface:
+  - **Starting**: leave it alone (Awaiting, Loading inside).
+  - **Serving**: route to it (Healthy with the key accepted).
+  - **Down**: take it out of LiteLLM, tell an admin (Unhealthy, Stalled,
+    Rejected inside).
+  - **NotOurs**: ignore it, say so (Foreign).
+  The executor adds when a Deployment is wanted and absent, deletes when
+  present and not wanted, where wanted is "Serving and the address is
+  known". The Remove button, the attention strip and the badge read the
+  same verdict. The fine state names are display only; adding one
+  changes Deployment and nothing else. A commercial Deployment reads only
+  the intended and the two LiteLLM sources, and has the short machine:
+  Configured, Serving, Down.
+
+**Not objects.** The machine itself is not one: everything true of it is
+either a Rental (the provider's) or a per-host observation a Deployment
+reads through its host. The admin labels (Approved, Reboot requested)
+stay a host-keyed annotation on `Fleet`, outside the machine. The
+metrics sampler is a consumer of the view, not a source: it reads
+`/metrics` for the Serving deployments on its own interval and hands
+samples to the capacity rollup, and it no longer writes the cache size
+onto anything; the probe owns that read.
+
+**Placing** a host is matching it to a Rental, by address first and then
+by the id of the Rental it matched last time, which is what keeps a
+deployment on a stopped pod with no address, or on a restarted one under
+a new address. The **placing provider** is read off the Rental and
+remembered nowhere. A public port is not a field of `fleet.hosts`; both
+providers' Rentals carry the port map, and that map is the dial address.
+**Rejected** and **Foreign** are fine states added here. Rejected: the
+address answers vLLM's `/health`, which takes no key, but rejects the key
+`working_api_key` returns on `/v1/models` (`fleet.selfhost_api_key` for
+`LEGACY_SERVERS`, the derived key otherwise). Our box with the wrong key,
+or the salt changed; a person fixes it. Foreign: Rejected for
+`REJECTED_PASSES` passes running at an address no Rental names.
+Something else is serving there.
+
+**Durations, not pass counts, for the knobs that face config.** "Down
+after `health_fail_threshold` failed passes" becomes "down after N
+seconds without a passing probe", and "stale after three missed
+intervals" becomes "stale after N seconds", so a change of probe pace
+changes no verdict. The internal debounces (`UNLISTED_PASSES`,
+`ORPHAN_PASSES`, `REJECTED_PASSES`) stay counts; they are not config.
+Settled 2026-10-26; the p6 change that renames the knob comes with the
+code that reads it.
 
 A commercial model provider (OpenRouter, xAI) has no GPU listing; it is
 intended plus the two LiteLLM sources. A GPU host listing is the inventory
@@ -473,6 +554,47 @@ Two cases become plain:
   so the stamp is safe across it (verified in the backfill; see the
   stamping section).
 
+## Needs: the state holder says what to fetch
+
+Settled 2026-10-26. A runner fetches; it does not know what an edge is.
+Today `probe_all` decides when to read `/v1/models` with a rule that
+reads the server's previous state, whether the window has been read,
+whether the key was refused and whether the host is unlisted. That is
+lifecycle knowledge in the fetch loop, and every new state has extended
+it. It moves into Deployment.
+
+- A Deployment exposes its **needs**, computed from its own state and
+  nothing else: "the window and the key verdict" (`/v1/models` with the
+  working key), "the cache size" (the `cache_config_info` line, which
+  means one `/metrics` read), or nothing. A Deployment that is not yet
+  Serving needs only `/health`. One whose window is unknown, or whose key
+  was refused, or whose host no Rental names, needs `/v1/models`. One
+  whose cache size is unknown needs the cache line. One that is Serving
+  with everything known needs nothing, and its pass is one cheap request.
+- The probe runner, each pass, for each Deployment with an address:
+  fetch `/health`, hand the VllmProbe to the Deployment, then ask it what
+  it needs now, fetch that, hand it over. The same pass, because the
+  runner reads the Deployment's answer after the first result, not its
+  own notion of a transition. No memory between passes, no state names.
+- "Once, on the edge" falls out rather than being coded: after a box
+  restarts the Deployment steps back through Starting, its window and
+  cache size are unknown again, and it asks. Nothing re-reads a fixed
+  value while the process lives.
+- A need is a read action, beside the write actions the plan already
+  emits for LiteLLM. The runner executes the reads, the executor the
+  writes, and neither decides anything.
+
+**Proposed, not yet settled:** that the step itself is explicit. Today
+the lifecycle is recomputed from a dozen counters on every pass, which is
+why the anchor makes the same observation name a different state, and
+why a Rejected deployment that misses one probe reads Healthy through
+the hold-over rule (`box-lifecycle.md`, quirk 1). The alternative is that
+the Deployment's state is its history and each arriving observation
+steps it through one transition table: `step(state, observation) ->
+state`, pure and testable, so the table is the diagram and the diagram
+is checkable against the code. The reconcile pattern below still holds;
+the previous state is the history it already allows for.
+
 ## Policy
 
 `reconcile()` emits actions with a kind and a reason. The policy table
@@ -546,16 +668,21 @@ Also:
 ## Runners
 
 - One fetcher per source, each on its own schedule (as the RunPod listing
-  runner is today). Each one publishes a new snapshot. The vLLM health
-  fetcher dials the dialable URL on each record in the view, and it
-  probes inventory hosts that have no record yet, using that snapshot's
-  listen-port to public-port map. It reads the inventory snapshot for
-  those extra targets. It does not read history.
+  runner is today). Runners are cheap; two reads with different
+  endpoints, cadences and consumers are two runners, never one loop at
+  a compromise pace. Each one publishes a new snapshot. The probe runner
+  dials the dialable URL on each record in the view, fetches what each
+  Deployment says it needs (see Needs), and probes Rentals that have no
+  record yet, using that Rental's listen-port to public-port map. It
+  does not read history and knows no state names.
 - One reconcile loop, woken by an `asyncio.Event` when any snapshot
   changes, and by a slow periodic tick.
 
-The metrics sampler and the capacity runners stay as they are. They read
-the view, and dial the record's dialable URL.
+The metrics sampler and the capacity runners stay as they are: consumers
+of the view, dialing the record's dialable URL for the Serving
+deployments on `sample_interval_s`. The sampler hands samples to the
+capacity rollup and writes nothing else; the cache size it used to copy
+onto the server is the probe's read now (a need, asked once).
 
 ## Where the code goes
 
