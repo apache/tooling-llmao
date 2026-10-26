@@ -747,7 +747,9 @@ real gap on its own. In order:
    deployment, keep probing, say the box rejects our key. Unlisted and
    `REJECTED_PASSES` 401s running is Foreign, and the sentence shows.
    Today the status is thrown away and an unlisted-but-answering host
-   is trusted.
+   is trusted. Done: 5efa688. `fetch_served_models` keeps the status;
+   `key_rejected` and `rejected_passes` on the server and the snapshot;
+   `REJECTED_PASSES` lives in `model_status.py`, where the rule is.
 7. **Carry the pod status in the RunPod inventory** instead of filtering
    to `RUNNING` with a `publicIp` in `boxes_from_pods`, so "listed, not
    running" stops counting as an absence.
