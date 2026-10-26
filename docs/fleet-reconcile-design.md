@@ -599,9 +599,11 @@ the button.
    Before step 3, read RunPod's `portMappings` into the inventory (the
    parked RunPod step 2, now a prerequisite): with the pin gone, a
    RunPod box has no dial address until the listing supplies one.
-   Then a four-element `fleet.hosts` row fails at load, as any other
-   shape does, rather than being ignored; the p6 template drops the
-   fourth element first.
+   **Done:** f76a42f. A four-element `fleet.hosts` row still loads, with
+   a warning, and the value only seeds the port until the listing names
+   the box: a stale row never stops llmao (the user's ruling, 2026-10-26,
+   over the earlier "fails at load"). The p6 node data drops the fourth
+   element in its own PR.
 3. Build the snapshots, the key, the record with its dialable field, and
    `reconcile()`, and run them **read only**, alongside the current code.
    Log every disagreement between the computed plan and what
@@ -765,8 +767,15 @@ real gap on its own. In order:
    and the test fixtures build) is a follow-up after item 8.
 8. **Read RunPod's `portMappings`** into the same inventory, so the
    listing is the dial address for a RunPod box as it is for a Vast
-   box. Then drop the fourth element of a `fleet.hosts` row (p6 first,
-   then the loader rejects it).
+   box. Then drop the fourth element of a `fleet.hosts` row. Done:
+   f76a42f. Every box carries `ports` (container port → public port,
+   Vast's HostPort and RunPod's portMappings alike); `apply_boxes`
+   stamps `public_port` from the box a server is placed on, through
+   the one stamp function `apply_port_map` and Vast adoption also use;
+   `refresh_public_ports` only reads. The fourth element is deprecated,
+   not refused: `from_cfg` warns and the value seeds the port until the
+   box is placed; `public_port_pinned` is gone. The p6 node data drops
+   the three fourth elements in its own PR.
 9. **Gate the `fleet.hosts` sentence** on Unhealthy, Stalled or Foreign,
    not on "not Healthy", with the not-reached grace clock above. Done:
    c2e3c14 (Unhealthy or Stalled; Foreign follows with item 6). The
