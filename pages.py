@@ -127,6 +127,21 @@ def use_template(path):
     return deco
 
 
+@APP.errorhandler(500)
+async def _server_error(_error):
+    """An exception nothing caught: an application bug, by design.
+
+    Quart has already logged it with the traceback by the time this runs
+    (and in tests it propagates instead, so nothing is hidden there). The
+    person gets a flash and the home page, not a bare "Internal Server
+    Error". The home page itself failing cannot bounce to itself.
+    """
+    if quart.request.path == "/":
+        return "Something went wrong. It has been logged.", 500
+    await flash_danger("Something went wrong on that page. It has been logged.")
+    return quart.redirect("/")
+
+
 def _flash_rows():
     """Drain Quart flashes for EZT. Call immediately before use_template render."""
     try:

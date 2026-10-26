@@ -62,3 +62,30 @@ def test_a_caught_refusal_is_a_redirect_not_a_500(monkeypatch):
     assert response.status_code == 302
     assert response.headers["Location"] == "/"
     assert flashes == [("warning", "Capacity is limited to site admins.")]
+
+
+def test_an_uncaught_exception_goes_home_with_a_flash(monkeypatch):
+    pages = _app()
+    _signed_in(monkeypatch)
+    monkeypatch.setitem(pages.APP.config, "PROPAGATE_EXCEPTIONS", False)
+
+    async def broken(_title):
+        raise RuntimeError("an application bug")
+
+    monkeypatch.setattr(pages, "basic_info", broken)
+    response, flashes = asyncio.run(_get("/admin/capacity"))
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/"
+    assert flashes == [("danger", "Something went wrong on that page. It has been logged.")]
+
+
+def test_the_home_page_failing_does_not_bounce_to_itself(monkeypatch):
+    pages = _app()
+    monkeypatch.setitem(pages.APP.config, "PROPAGATE_EXCEPTIONS", False)
+
+    async def broken(_title):
+        raise RuntimeError("an application bug")
+
+    monkeypatch.setattr(pages, "basic_info", broken)
+    response, _flashes = asyncio.run(_get("/"))
+    assert response.status_code == 500
