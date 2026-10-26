@@ -175,11 +175,14 @@ the vLLM recipe. A LiteLLM **deployment** is one instance of a row (one
 server is serving and removed when it goes down. Cache and logs live under
 `$DATA_DIRECTORY` on the box (typically `/workspace`), not in the config JSON.
 
-**Port resolution differs by provider.** Vast exposes its container-to-public
-mapping through an API, so those hosts resolve automatically. RunPod does not,
-so a RunPod host must state its public port in the `fleet.hosts` row — an
-optional fourth element. RunPod also reassigns the port on every pod recreate,
-even when the pod lands on the same machine.
+**Public ports come from the provider's listing.** Vast's instance listing
+and RunPod's pod listing both carry the container-to-public port mapping, so
+a host row states only the container listen port and the lifecycle dials the
+public port the listing maps it to. RunPod reassigns the port on every pod
+recreate, even when the pod lands on the same machine; the next listing read
+follows it. A fourth element on a host row, which used to pin a RunPod port,
+is deprecated: it loads with a warning and only seeds the port until the
+listing names the box.
 
 ---
 

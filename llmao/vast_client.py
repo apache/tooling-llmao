@@ -108,8 +108,10 @@ def boxes_from_body(body: Any) -> edict:
 
     Every instance, in any status: ``host`` is public_ipaddr, "" when Vast
     has not given one; ``status`` is actual_status (running, loading,
-    exited, ...), the observed state. The same shape as RunPod's pods, so
-    the fleet places and lists from either without caring which.
+    exited, ...), the observed state; ``ports`` is container listen port →
+    public HostPort, as ports_from_instance reads it. The same shape as
+    RunPod's pods, so the fleet places, lists and dials from either without
+    caring which.
 
     usd_per_hour is dph_total, which includes the instance's storage;
     bandwidth is billed per GB apart from it and is left out. None when
@@ -136,6 +138,7 @@ def boxes_from_body(body: Any) -> edict:
             usd_per_hour=price,
             host=_ip(inst.get("public_ipaddr")),
             status=str(inst.get("actual_status") or "").lower(),
+            ports=ports_from_instance(inst),
         )
     return boxes
 

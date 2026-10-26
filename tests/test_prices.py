@@ -44,8 +44,17 @@ def _server(host, port=8001, *, public_port=None):
     )
 
 
-def _box(price, provider="Vast", box_id="1", label="GB10 x1", host="", status="running"):
-    return edict(provider=provider, box_id=box_id, label=label, url="", usd_per_hour=price, host=host, status=status)
+def _box(price, provider="Vast", box_id="1", label="GB10 x1", host="", status="running", ports=None):
+    return edict(
+        provider=provider,
+        box_id=box_id,
+        label=label,
+        url="",
+        usd_per_hour=price,
+        host=host,
+        status=status,
+        ports=edict(ports or {}),
+    )
 
 
 def _listing(*boxes):
@@ -63,6 +72,7 @@ def test_a_vast_box_is_its_instance_gpus_status_address_and_price():
                 "num_gpus": 1,
                 "dph_total": 0.2059,
                 "actual_status": "running",
+                "ports": {"8001/tcp": [{"HostIp": "0.0.0.0", "HostPort": "41234"}]},
             },
             {"id": 53865410, "public_ipaddr": "198.51.100.8", "gpu_name": "RTX 3060", "num_gpus": 2},
             {"id": 1, "public_ipaddr": "", "dph_total": 0.5, "actual_status": "loading"},
@@ -77,11 +87,13 @@ def test_a_vast_box_is_its_instance_gpus_status_address_and_price():
         "usd_per_hour": 0.2059,
         "host": "203.0.113.10",
         "status": "running",
+        "ports": {"8001": 41234},
     }
-    # Listed, but no price: unknown, not free. No status given: unknown, not running.
+    # Listed, but no price: unknown, not free. No status given: unknown, not running. No ports: none.
     assert boxes["53865410"].label == "RTX 3060 x2"
     assert boxes["53865410"].usd_per_hour is None
     assert boxes["53865410"].status == ""
+    assert boxes["53865410"].ports == {}
     # Listed, no address yet: kept, with its status, so it is not a miss.
     assert (boxes["1"].host, boxes["1"].status) == ("", "loading")
     assert set(boxes) == {"55406468", "53865410", "1"}
@@ -96,11 +108,14 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             "desiredStatus": "RUNNING",
             "publicIp": "203.0.113.20",
             "costPerHr": 2.49,
+            # Container port → public port. "22/tcp" is the shape of the pod's
+            # `ports` field, tolerated here; a value that is not a port is dropped.
+            "portMappings": {"8002": 16643, "22/tcp": "10341", "8003": None},
         },
         # A stopped pod has no address and still reports a price: listed, not running.
         {"id": "tjfs5", "name": "testing", "desiredStatus": "EXITED", "publicIp": "", "costPerHr": 0.89},
         # Initializing: RUNNING with no address yet.
-        {"id": "x", "desiredStatus": "RUNNING", "publicIp": None, "costPerHr": "0.89"},
+        {"id": "x", "desiredStatus": "RUNNING", "publicIp": None, "costPerHr": "0.89", "portMappings": None},
         {"name": "no id", "desiredStatus": "RUNNING"},
     ]
     assert boxes_from_pods(pods) == {
@@ -112,6 +127,7 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             "usd_per_hour": 2.49,
             "host": "203.0.113.20",
             "status": "running",
+            "ports": {"8002": 16643, "22": 10341},
         },
         "tjfs5": {
             "provider": "RunPod",
@@ -121,6 +137,7 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             "usd_per_hour": 0.89,
             "host": "",
             "status": "exited",
+            "ports": {},
         },
         "x": {
             "provider": "RunPod",
@@ -130,9 +147,40 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             "usd_per_hour": 0.89,
             "host": "",
             "status": "running",
+            "ports": {},
         },
     }
     assert boxes_from_pods({"error": "nope"}) == {}
+
+
+def test_a_runpod_box_is_dialed_on_the_port_its_listing_maps(caplog):
+    """The listing is the dial address for a RunPod box as for a Vast one; a stopped pod keeps the last port."""
+    srv = _server("203.0.113.20", 8002)
+    fleet = _fleet_with_runpod([srv])
+    assert srv.public_port is None
+    fleet.runpod_boxes = _listing(_box(2.49, provider="RunPod", box_id="p", host="203.0.113.20", ports={"8002": 16643}))
+    with caplog.at_level("INFO", logger="llmao.fleet"):
+        fleet.place_servers()
+    assert srv.public_port == 16643
+    assert srv.api_base == "http://203.0.113.20:16643/v1"
+    assert "runpod: qwen3-8b-8002@203.0.113.20 listen 8002 public 16643" in caplog.text
+    # Stopped: no map. The last port stands, and nothing is said.
+    caplog.clear()
+    fleet.runpod_boxes = _listing(_box(0.89, provider="RunPod", box_id="p", host="", status="exited"))
+    with caplog.at_level("INFO", logger="llmao.fleet"):
+        fleet.place_servers()
+    assert srv.public_port == 16643
+    assert "public port" not in caplog.text
+    # Recreated: RunPod hands out a new port, and the listing is believed.
+    fleet.runpod_boxes = _listing(_box(2.49, provider="RunPod", box_id="p", host="203.0.113.20", ports={"8002": 17001}))
+    fleet.place_servers()
+    assert srv.public_port == 17001
+    # A map that knows the box but not this listen port is a warning.
+    fleet.runpod_boxes = _listing(_box(2.49, provider="RunPod", box_id="p", host="203.0.113.20", ports={"22": 10341}))
+    with caplog.at_level("WARNING", logger="llmao.fleet"):
+        fleet.place_servers()
+    assert "runpod: no public port for qwen3-8b-8002@203.0.113.20 listen 8002" in caplog.text
+    assert srv.public_port == 17001
 
 
 def test_a_box_lands_on_every_server_on_it():

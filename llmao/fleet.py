@@ -120,8 +120,8 @@ def client_ip(
 
 
 # Vast publishes these three container ports for vLLM, in order. A box does
-# not get a fourth. RunPod stops at three as well; its public ports are pinned
-# on the host row, not taken from this tuple.
+# not get a fourth. RunPod stops at three as well. Either provider's listing
+# maps each one to the public port a server is dialed on.
 VLLM_LISTEN_PORTS = (8001, 8002, 8003)
 
 # How often RunPod's list of our pods is read. Placing a box is not urgent: a
@@ -157,7 +157,7 @@ ORPHAN_PASSES = 3
 
 LEGACY_SERVERS = {
     ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
-    ("103.196.86.105", 8004),  # qwen3.8-27b, public port pinned at 15602
+    ("103.196.86.105", 8004),  # qwen3.8-27b, public port from RunPod
     # 8003 is a normal listen port. This box still runs the shared key.
     ("213.173.110.78", 8003),
 }
@@ -165,6 +165,26 @@ LEGACY_SERVERS = {
 
 def _listen_port_allowed(host: str, port: int) -> bool:
     return port in VLLM_LISTEN_PORTS or (normalize_peer_ip(host), port) in LEGACY_SERVERS
+
+
+def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
+    """Set srv.public_port from a listen port → public port map; said when it changes.
+
+    ``by_listen`` is keyed by the listen port as a string, which is how both
+    providers' maps are built. A map that lacks this server's listen port is
+    a warning: the listing knows the box but not this port, so the row or
+    the box is wrong. A listen port llmao does not allow is left alone.
+    """
+    if not _listen_port_allowed(srv.host, srv.listen_port):
+        return
+    public = by_listen.get(str(srv.listen_port))
+    if public is None:
+        _LOGGER.warning("%s: no public port for %s@%s listen %s", source, srv.name, srv.host, srv.listen_port)
+        return
+    public = int(public)
+    if srv.public_port != public:
+        _LOGGER.info("%s: %s@%s listen %s public %s", source, srv.name, srv.host, srv.listen_port, public)
+        srv.public_port = public
 
 
 def working_api_key(cfg: Any, srv: Any) -> str:
@@ -193,14 +213,12 @@ def _require_listen_port(host: str, port: int) -> None:
 def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int | None]:
     """[model, port] | [model, port, name] | [model, port, name, public_port]
 
-    The fourth element pins the public port for providers whose mapping we
-    cannot look up. Vast exposes one through its API; RunPod does not, so a
-    RunPod box would otherwise never get an api_base and could never go
-    healthy -- the model simply shows unavailable with nothing to say why.
-
-    Use null for `name` to reach the fourth slot without renaming a server:
-
-        - [qwen3.8-27b, 8002, null, 16643]
+    The fourth element is deprecated. It pinned the public port for RunPod
+    boxes while their mapping could not be looked up; now both providers'
+    listings carry it (Vast's HostPort, RunPod's portMappings). A row that
+    still has one loads, with a warning from Fleet.from_cfg, and the value
+    only seeds public_port until a listing names the box. Drop it from
+    config; it is not refused so that a config change never stops llmao.
     """
     if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3, 4):
         raise ValueError(
@@ -363,12 +381,12 @@ class VllmServer:
         self.kv_bytes_per_token = kv_bytes_per_token
         self.host = host
         self.listen_port = int(listen_port)
+        # The port this server is dialed on: from the listing of the
+        # provider that places it (Vast's HostPort, RunPod's portMappings),
+        # applied on every lifecycle pass. None until a listing names the
+        # box, unless a deprecated fourth host-row element seeds it, or the
+        # fleet is local and public is listen.
         self.public_port = int(public_port) if public_port is not None else None
-        # Set when the port came from the host row rather than a provider
-        # API. apply_port_map leaves these alone -- otherwise a Vast lookup
-        # that does not know this host would log a warning and, worse, a
-        # future resolver could overwrite a correct value with a guess.
-        self.public_port_pinned = False
         self.hf_model = hf_model
         self.api_key = api_key
         self.args = args
@@ -866,9 +884,17 @@ class Fleet:
                 seen_ports.add(port)
                 srv = VllmServer.from_row(host, model_name, port, name, by_name[model_name], cfg)
                 if public is not None:
-                    # Pinned in config: no provider lookup can override it.
+                    # Deprecated: the listing supplies the public port now.
+                    # The value seeds it until the box is placed; it is not
+                    # refused, so a stale row never stops llmao.
+                    _LOGGER.warning(
+                        "fleet.hosts.%s[%s]: the fourth element (public port %s) is deprecated; "
+                        "the provider listing supplies it. Drop it from the row.",
+                        host,
+                        i,
+                        public,
+                    )
                     srv.public_port = public
-                    srv.public_port_pinned = True
                 elif local:
                     srv.public_port = srv.listen_port
                 servers.append(srv)
@@ -1051,27 +1077,23 @@ class Fleet:
                 self.approved_models.pop(ip, None)
 
     def apply_port_map(self, mapping: Any) -> None:
-        """Set public_port from Vast IP → listen → HostPort. Leave unset if missing.
+        """Set public_port from a host → {listen: public} map such as port_map_from_body's. Leave unset if missing.
 
-        Servers with a pinned public_port are skipped: the host row is more
-        authoritative than a provider lookup that may not cover the host at
-        all.
+        The lifecycle itself stamps ports from the box each server is placed
+        on (apply_boxes); this is the same stamp from a bare map, for the
+        operator CLI and for tests.
         """
         for srv in self.servers:
-            if srv.public_port_pinned or not _listen_port_allowed(srv.host, srv.listen_port):
-                continue
             by_listen = mapping and mapping.get(srv.host)
             if not by_listen:
-                _LOGGER.info("vast: no instance for fleet host %s", srv.host)
+                _LOGGER.info("listing: no instance for fleet host %s", srv.host)
                 continue
-            public = by_listen.get(str(srv.listen_port))
-            if public is None:
-                _LOGGER.warning("vast: no HostPort for %s@%s listen %s", srv.name, srv.host, srv.listen_port)
-                continue
-            public = int(public)
-            if srv.public_port != public:
-                _LOGGER.info("vast: %s@%s listen %s public %s", srv.name, srv.host, srv.listen_port, public)
-                srv.public_port = public
+            _set_public_port(srv, by_listen, "listing")
+
+    def _stamp_public_ports(self, host: str, by_listen: Any) -> None:
+        for srv in self.servers:
+            if srv.host == host:
+                _set_public_port(srv, by_listen, "vast")
 
     def model_rollup(self, model_name: str, *, now: float | None = None):
         """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
@@ -1178,10 +1200,10 @@ class Fleet:
             return
         body = await fetch_instances(key, client=client)
         mapping = port_map_from_body(body)
-        # Servers must exist before the map is applied, or a newly approved
-        # listen port never receives its HostPort and probe_all skips it.
+        # Servers must exist before place_servers stamps ports from the
+        # boxes, or a newly approved listen port never receives its
+        # HostPort and probe_all skips it.
         self._materialize_approved_hosts()
-        self.apply_port_map(mapping)
         self.vast_boxes = boxes_from_body(body)
         await self.adopt_vast_instances(mapping, client)
 
@@ -1287,6 +1309,11 @@ class Fleet:
             if box is None:
                 continue
             placed.append(srv)
+            # The listing is where the public port comes from, for either
+            # provider. A box with no map (a stopped pod) says nothing; the
+            # last port stands until the listing has one again.
+            if box.ports:
+                _set_public_port(srv, box.ports, box.provider.lower())
             if srv.box != box:
                 _LOGGER.info(
                     "box: %s is %s %s (%s), %s at %s, $%s/hr",
@@ -1360,16 +1387,6 @@ class Fleet:
                 srv.public_port = public
                 srv.config_served_at = stamp
                 srv.record_probe(True, now=stamp, grace_s=grace, fail_threshold=threshold, reached=True)
-
-    def _stamp_public_ports(self, host: str, by_listen: Any) -> None:
-        for srv in self.servers:
-            if srv.host != host or srv.public_port_pinned:
-                continue
-            if not _listen_port_allowed(srv.host, srv.listen_port):
-                continue
-            public = by_listen.get(str(srv.listen_port))
-            if public is not None:
-                srv.public_port = int(public)
 
     async def _model_for_live_port(self, client: httpx.AsyncClient, host: str, listen: int, public: int) -> Any | None:
         """The models.yaml row whose HF id is what this port is serving, else None."""

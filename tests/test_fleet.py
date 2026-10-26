@@ -547,13 +547,12 @@ def test_from_row_requires_salt():
         config_for_host("10.0.0.1", models=load_models(EXAMPLE), cfg=cfg)
 
 
-def test_host_row_pins_public_port():
-    """[model, port, name, public_port] survives a provider lookup.
+def test_host_row_still_reads_the_deprecated_fourth_element():
+    """[model, port, name, public_port] loads: a stale row warns, it does not stop llmao.
 
-    Vast exposes its container->public mapping through an API; RunPod does
-    not. Without a way to state the public port in config, a RunPod box gets
-    no api_base, never goes healthy, and shows unavailable with nothing in
-    the UI to say why.
+    The fourth element pinned a RunPod box's public port while RunPod's
+    mapping was not read. Both listings carry the port now; the element is
+    read so the loader can warn and seed, and it goes away in config.
     """
     assert parse_host_row(["qwen3-8b", 8003], "h", 0) == ("qwen3-8b", 8003, "qwen3-8b", None)
     assert parse_host_row(["qwen3-8b", 8003, "b"], "h", 0) == ("qwen3-8b", 8003, "b", None)
@@ -566,7 +565,7 @@ def test_host_row_pins_public_port():
 
 
 def test_host_row_null_name_reaches_the_fourth_slot():
-    """null for name is how you pin a port without renaming the server."""
+    """null for name was how a port got pinned without renaming the server."""
     _, _, name, public = parse_host_row(["qwen3-8b", 8003, None, 15601], "h", 0)
     assert name == "qwen3-8b"  # falls back to the model name
     assert public == 15601
@@ -579,32 +578,32 @@ def test_host_row_rejects_bad_public_port():
         parse_host_row(["qwen3-8b", 8003, "b", 1, 2], "h", 0)
 
 
-def test_pinned_port_survives_apply_port_map():
-    """A provider map must not overwrite what config stated.
+def test_a_fourth_element_warns_seeds_the_port_and_yields_to_the_listing(caplog):
+    """A stale pinned row is a warning at load, not a refusal, and the listing wins over it.
 
-    apply_port_map runs on every refresh. Without the guard it would log
-    "no instance for fleet host" against a RunPod box on every cycle, and a
-    future resolver could replace a correct pinned value with a guess.
+    The seed keeps a RunPod box dialable from startup until its listing is
+    first read; after that the listing's port is the port, as for Vast.
     """
     cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003, None, 15601]]})
-    fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
+    with caplog.at_level("WARNING", logger="llmao.fleet"):
+        fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
+    assert "fleet.hosts.1.2.3.4[0]: the fourth element (public port 15601) is deprecated" in caplog.text
     srv = fleet.servers[0]
     assert srv.public_port == 15601
-    assert srv.public_port_pinned is True
     assert srv.api_base == "http://1.2.3.4:15601/v1"
 
-    # A map that knows nothing about this host, then one that disagrees.
+    # A map that knows nothing about this host leaves the seed; one that does, replaces it.
     fleet.apply_port_map({})
     assert srv.public_port == 15601
-    fleet.apply_port_map({"1.2.3.4": {"8003": 99999}})
-    assert srv.public_port == 15601
+    fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})
+    assert srv.public_port == 12711
 
 
-def test_unpinned_port_still_follows_the_provider_map():
+def test_a_port_follows_the_provider_map():
     cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003]]})
     fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
     srv = fleet.servers[0]
-    assert srv.public_port_pinned is False
+    assert srv.public_port == 8003, "no GPU provider configured: a local fleet, public is listen"
     fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})
     assert srv.public_port == 12711
 

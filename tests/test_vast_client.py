@@ -30,6 +30,7 @@ from llmao.vast_client import port_map_from_body, ports_from_instance
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS
 
 INSTANCE = {
+    "id": 55406468,
     "public_ipaddr": "203.0.113.10",
     "ports": {
         "8001/tcp": [{"HostIp": "0.0.0.0", "HostPort": "41234"}],
@@ -223,4 +224,7 @@ def test_refresh_uses_dotted_api_key():
             return _Resp()
 
     asyncio.run(fleet.refresh_public_ports(_Client()))
+    # The refresh reads; the lifecycle's placement stamps the port from the box.
+    assert fleet.servers[0].public_port is None
+    fleet.place_servers()
     assert fleet.servers[0].public_port == 41234

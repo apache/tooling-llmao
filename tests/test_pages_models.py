@@ -662,6 +662,7 @@ def test_each_deployment_says_where_to_find_it():
         usd_per_hour=0.14,
         host="10.0.0.1",
         status="running",
+        ports=edict({"8001": 41234}),
     )
     runpod.box = edict(
         provider="RunPod",
@@ -671,6 +672,7 @@ def test_each_deployment_says_where_to_find_it():
         usd_per_hour=0.89,
         host="",
         status="exited",
+        ports=edict(),
     )
     rows = pages.model_catalog_rows(_fleet(vast, runpod, lost), [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
@@ -696,6 +698,7 @@ def test_where_a_deployment_lives_is_for_admins_only():
         usd_per_hour=0.14,
         host="10.0.0.1",
         status="running",
+        ports=edict({"8001": 41234}),
     )
     out = _render(pages.model_catalog_rows(_fleet(srv), [_catalog("gemma")], admin=False))
     assert "53865410" not in out
