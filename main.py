@@ -121,24 +121,8 @@ def create_app():
     app.seam = seam
     app.backend = backend
 
-    from quart import jsonify
-    from quart import request as quart_request
-
-    @app.errorhandler(500)
-    async def _on_500(exc):
-        if quart_request.path.startswith("/v1/"):
-            resp = jsonify(
-                {
-                    "error": {
-                        "message": "internal error in gateway; check the server log",
-                        "type": "llmao_error",
-                        "code": 500,
-                    }
-                }
-            )
-            resp.status_code = 500
-            return resp
-        return exc
+    # The 500 handler (JSON under /v1/, a flash and the home page elsewhere)
+    # is registered in pages.py.
 
     @app.before_serving
     async def _warm_backend():

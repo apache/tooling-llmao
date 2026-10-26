@@ -135,8 +135,12 @@ async def _server_error(_error):
     Quart has already logged it with the traceback by the time this runs
     (and in tests it propagates instead, so nothing is hidden there). The
     person gets a flash and the home page, not a bare "Internal Server
-    Error". The home page itself failing cannot bounce to itself.
+    Error". The home page itself failing cannot bounce to itself. An API
+    client under /v1/ gets a JSON error, not a redirect to a web page.
     """
+    if quart.request.path.startswith("/v1/"):
+        message = "internal error in gateway; check the server log"
+        return quart.jsonify(edict(error=edict(message=message, type="llmao_error", code=500))), 500
     if quart.request.path == "/":
         return "Something went wrong. It has been logged.", 500
     await flash_danger("Something went wrong on that page. It has been logged.")

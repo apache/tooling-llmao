@@ -78,6 +78,23 @@ def test_a_refusal_straight_after_login_goes_home_not_back_to_the_callback(monke
     assert response.headers["Location"] == "/"
 
 
+def test_an_api_client_gets_a_json_500_not_a_web_page():
+    pages = _app()
+
+    async def run():
+        async with pages.APP.test_request_context("/v1/projects/tooling/usage"):
+            response, status = await pages._server_error(None)
+            return status, await response.get_json()
+
+    status, body = asyncio.run(run())
+    assert status == 500
+    assert body["error"] == {
+        "message": "internal error in gateway; check the server log",
+        "type": "llmao_error",
+        "code": 500,
+    }
+
+
 def test_an_uncaught_exception_goes_home_with_a_flash(monkeypatch):
     pages = _app()
     _signed_in(monkeypatch)
