@@ -35,11 +35,13 @@ host's **box** (`srv.box`: provider, instance or pod id, label, price).
 The **placing provider** is the one whose listing supplied the box; it
 is read off the box and remembered nowhere. A public port is not a field
 of `fleet.hosts`. Both listings carry the listen-port to public-port
-map, and that map is the dial address. **Foreign** is a lifecycle added
-here: the address answers vLLM's `/health`, which takes no key, but
-rejects the key `_working_api_key` returns on `/v1/models`
-(`fleet.selfhost_api_key` for `LEGACY_SERVERS`, the derived key
-otherwise). Something else is serving there, or the salt changed.
+map, and that map is the dial address. **Rejected** and **Foreign** are
+lifecycles added here. Rejected: the address answers vLLM's `/health`,
+which takes no key, but rejects the key `working_api_key` returns on
+`/v1/models` (`fleet.selfhost_api_key` for `LEGACY_SERVERS`, the derived
+key otherwise). Our box with the wrong key, or the salt changed; a person
+fixes it. Foreign: Rejected for `REJECTED_PASSES` passes running at an
+address no listing names. Something else is serving there.
 
 A commercial model provider (OpenRouter, xAI) has no GPU listing; it is
 intended plus the two LiteLLM sources. A GPU host listing is the inventory
@@ -142,7 +144,7 @@ is observed, rather than updating state step by step from many places.
      presence among the LiteLLM deployments, LiteLLM health, instance id,
      and the verdicts reconcile reached on this pass: lifecycle
      (`Awaiting`, `Loading`, `Healthy`, `Unhealthy`, `Stalled`, the names
-     `model_status.py` uses today, plus `Foreign`), skew badges,
+     `model_status.py` uses today, plus `Rejected` and `Foreign`), skew badges,
      unlisted. Those are
      **computed once per pass, by reconcile, and written on the record**;
      reconcile needs them to plan (delete when Stalled), and the pages
@@ -252,9 +254,23 @@ is observed, rather than updating state step by step from many places.
    plain function in `fleet.py` of host, listen port and config, which
    the deployment body and the `/v1/models` fetch both call. Under
    reconcile the fetch sends that key, the status is kept, and the call
-   is repeated on each probe pass while the host is unlisted. A 401 makes the lifecycle **Foreign**: the deployment is
-   deleted by the probe gate, and the sentence shows. A wrong
-   `vllm_api_salt` shows up the same way, which is right.
+   is repeated on every probe pass while the last answer was a 401 or
+   the host is unlisted. A 401 makes the lifecycle **Rejected** (ruled
+   2026-10-25): the deployment is deleted by the probe gate on the first
+   401, because no request through it could succeed; the record stays
+   and is probed on; the attention item says the box is up but rejects
+   our key, and asks for the key on the box to be checked. Rejected has
+   no clock. It ends when a later `/v1/models` accepts the key (Healthy,
+   and the add fires on that pass), when `/health` stops answering (the
+   ordinary probe rules), or when the host is also unlisted and the 401s
+   have run for `REJECTED_PASSES` passes, which is **Foreign**: the
+   sentence shows. A host a listing still names is ours whatever it
+   answers, so it is never Foreign. `REJECTED_PASSES` is a debounce
+   against a transient 401 (vLLM restarting before its key is in
+   place): three passes, about two minutes at the 45-second interval.
+   The time an admin needs to notice and fix the key comes from Rejected
+   having no clock, not from the count. A wrong `vllm_api_salt` shows up
+   as Rejected on every box, which is right.
 
    **Unlisted is computed from both listings.** Production config
    provides the Vast key and the RunPod key, so every pass reads both.
@@ -405,8 +421,8 @@ canonical listen URL. The last step is unconditional: it is what a
 laptop with neither key dials, and what our own box dials in a fleet
 with both keys, a host neither listing names and so never maps. A dead
 rental after a restart is probed at its listen port on an address the
-provider may have reassigned; that fails or goes Foreign, and is
-harmless. Unplaced, a record with no address, is therefore only a
+provider may have reassigned; that fails, or goes Rejected and then
+Foreign, and is harmless. Unplaced, a record with no address, is therefore only a
 record with no host. For commercial providers the dialable URL is the
 canonical one. A public port written on the `fleet.hosts` row is not a
 dial address.
@@ -458,7 +474,9 @@ self-hosted and commercial are different gates:
 
 - **Auto, self-hosted:** add when Healthy, dialable, and absent from the
   LiteLLM deployments. Delete when the deployment exists and vLLM is
-  Unhealthy, Stalled or Foreign. A failed probe under
+  Unhealthy, Stalled, Rejected or Foreign; Rejected deletes on the
+  first 401, with no hold, because the refusal is deterministic and
+  every request through the deployment would fail. A failed probe under
   `health_fail_threshold`, with `last_ok` set, stays Healthy and is not
   deleted. Prune unmatched orphans after `ORPHAN_PASSES`.
 - **Unlisted is not a delete gate.** Today `sync_selfhost` also deletes
@@ -664,7 +682,8 @@ badges, unlisted (host-level), and the plan actions.
 | Loading | anchor set (config fetch or first reached probe), probe not ok, inside `health_grace_s` of it | Loading | none |
 | Stalled, in LiteLLM | anchor set, never `last_ok`, past grace | Stalled | delete_litellm |
 | Approved after a restart, answering 503 | no config fetch this process; probe reached | anchor = first reached probe; Loading, then Stalled past grace | none, then delete_litellm (the adopt stamp this replaces) |
-| Foreign | `/health` ok, `/v1/models` with our key 401 | Foreign | delete_litellm; sentence if unlisted, else attention: not our key at this address |
+| Rejected | `/health` ok, `/v1/models` with our key 401 | Rejected | delete_litellm on the first 401; attention: up but rejects our key, check the key on the box. No clock; a 200 clears it |
+| Foreign | Rejected on `REJECTED_PASSES` passes running, and unlisted | Foreign | sentence: remove from `fleet.hosts`. A listed host never goes Foreign |
 | Healthy, absent | probe ok, dialable, no LiteLLM deployment | Healthy; skew intended_not_in_litellm | add_litellm |
 | Probe failed, under threshold | `last_ok` set, `fails` < `health_fail_threshold` | stays Healthy | none |
 | Healthy, present, api_base matches | probe ok, the deployment's api_base == dialable | Healthy | none |
@@ -702,7 +721,7 @@ badges, unlisted (host-level), and the plan actions.
 | Restart, probe ok, no config_served | `probe_ok` true | Healthy (current `self_hosted_lifecycle`) | add if absent |
 | Restart, deployment present, probe failed, no config_served | | Unhealthy | delete_litellm |
 | Rental died before a restart | after the restart both listings are read; neither names the host, `UNLISTED_PASSES` times; probe does not reach | Unhealthy while the deployment is present, then unlisted; after the delete, Awaiting, then Stalled past `health_grace_s` of the first attempt | delete_litellm from the probe; the sentence from unlisted once Stalled, about thirty minutes after the restart. (Today's `ever_listed` would never fire here, so the sentence never showed) |
-| Address reassigned to another tenant's vLLM | rental ended; `/health` at the last-known URL still ok; `/v1/models` 401 | Foreign, unlisted once the count is reached | delete_litellm from the probe; sentence from unlisted |
+| Address reassigned to another tenant's vLLM | rental ended; `/health` at the last-known URL still ok; `/v1/models` 401 | Rejected at the first 401; Foreign once unlisted and `REJECTED_PASSES` 401s have run | delete_litellm from the probe at the first 401; the sentence from Foreign |
 
 ## Early work, independent of the rest
 
@@ -723,10 +742,12 @@ real gap on its own. In order:
    config, and call it from the deployment body and from
    `fetch_max_model_len`. Today the fetch sends the derived key, so a
    legacy box 401s on every pass and never reports its context window.
-6. **Keep the `/v1/models` status, and re-check it when unlisted.** A
-   401 with the working key is Foreign: delete the deployment and say
-   so. Today the status is thrown away and an unlisted-but-answering
-   host is trusted.
+6. **Keep the `/v1/models` status, and re-check it while rejected or
+   unlisted.** A 401 with the working key is Rejected: delete the
+   deployment, keep probing, say the box rejects our key. Unlisted and
+   `REJECTED_PASSES` 401s running is Foreign, and the sentence shows.
+   Today the status is thrown away and an unlisted-but-answering host
+   is trusted.
 7. **Carry the pod status in the RunPod inventory** instead of filtering
    to `RUNNING` with a `publicIp` in `boxes_from_pods`, so "listed, not
    running" stops counting as an absence.
