@@ -112,16 +112,20 @@ is observed, rather than updating state step by step from many places.
    (configured, never read) does not count as an absence.
 
    An inventory snapshot keeps every instance the provider reports, with
-   its status, not only the ones llmao would use. Today `boxes_from_pods`
-   keeps a RunPod pod only when its `desiredStatus` is `RUNNING` and it
-   has a `publicIp`, so a pod in any other status, or briefly without an
-   address, is absent from llmao's view while vLLM on it may still be
-   answering. That is one way a serving box "leaves the list". A host
-   that is in the listing with another status is **listed, not running**:
-   it has no usable address from the listing, but it is not a miss for
-   the unlisted count. Only absence from the listing is a miss. The same
-   fields, including the port map, and the same listed-not-running rule,
-   for Vast and for RunPod.
+   its status, not only the ones llmao would use. Until e4a5d6b,
+   `boxes_from_pods` kept a RunPod pod only when its `desiredStatus` was
+   `RUNNING` and it had a `publicIp`, so a pod in any other status, or
+   briefly without an address, was absent from llmao's view while vLLM
+   on it may still have been answering. That was one way a serving box
+   "left the list". A host that is in the listing with another status
+   is **listed, not running**: it has no usable address from the
+   listing, but it is not a miss for the unlisted count. Only absence
+   from the listing is a miss. The same fields, including the port map,
+   and the same listed-not-running rule, for Vast and for RunPod. Both
+   inventories are keyed by the provider's instance or pod id and carry
+   `host` and `status`; a server is placed by address first, then by the
+   id of the box it was on, which is what keeps it on a stopped pod with
+   no address, or on a restarted one under a new address.
 
    **Staleness is one rule.** A snapshot kept past its fetch failing
    ages, so a snapshot older than `health_fail_threshold` times its own
@@ -752,7 +756,13 @@ real gap on its own. In order:
    `REJECTED_PASSES` lives in `model_status.py`, where the rule is.
 7. **Carry the pod status in the RunPod inventory** instead of filtering
    to `RUNNING` with a `publicIp` in `boxes_from_pods`, so "listed, not
-   running" stops counting as an absence.
+   running" stops counting as an absence. Done: e4a5d6b. Both
+   inventories keyed by id with `host` and `status` on every box (Vast's
+   `actual_status` too); `Fleet.apply_boxes` matches by address, then by
+   the box's id, and returns the placed servers; the location label on
+   /models carries the status when it is not running. A box with every
+   field guaranteed (a `Box` type, instead of the edict the two clients
+   and the test fixtures build) is a follow-up after item 8.
 8. **Read RunPod's `portMappings`** into the same inventory, so the
    listing is the dial address for a RunPod box as it is for a Vast
    box. Then drop the fourth element of a `fleet.hosts` row (p6 first,
