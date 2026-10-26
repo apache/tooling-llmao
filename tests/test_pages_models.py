@@ -712,3 +712,39 @@ def test_a_gone_box_has_no_buttons():
     for in_litellm in (True, False):
         dep.in_litellm = in_litellm
         assert pages.admin_actions(fleet, dep) == []
+
+
+def test_an_unlisted_host_still_serving_gets_no_remove_sentence():
+    # A listing gap with the box answering: the listing is in doubt, not the
+    # rental. The item shows, the deployment stays, nothing says "remove".
+    pages = _app()
+    srv = _server("gemma", host="10.0.0.9", ok=True)
+    srv.unlisted = True
+    fleet = _fleet(srv)
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    assert item.kind == "unlisted"
+    assert item.detail == "No Vast or RunPod instance has this address, but it is serving; the listing may be behind."
+    assert pages.admin_actions(fleet, fleet.deployments[0]) == []
+
+
+def test_an_unlisted_host_never_reached_gets_the_sentence_once_the_grace_is_out():
+    pages = _app()
+    srv = _server("gemma", host="10.0.0.9")
+    srv.config_served_at = None
+    srv.last_ok = None
+    srv.last_probe_ok = None
+    srv.unlisted = True
+    fleet = _fleet(srv)
+    dep = fleet.deployments[0]
+    dep.in_litellm = False  # the deployment is already gone
+    reason = "No Vast or RunPod instance has this address; the rental may have ended."
+
+    srv.record_probe(False, now=time.time() - 60, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    assert "awaiting" in item.rest
+    assert item.detail == reason
+
+    srv.first_probed_at = time.time() - 1801
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    assert "stalled" in item.rest
+    assert item.detail == reason + " If it has, remove it from fleet.hosts."

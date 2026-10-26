@@ -580,3 +580,34 @@ def test_litellm_is_not_compared_with_the_fleet_before_its_first_pass():
             task.cancel()
 
     asyncio.run(scenario())
+
+
+def test_the_first_probe_starts_the_not_reached_clock():
+    s = _server()
+    assert s.first_probed_at is None
+    s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    assert (s.state, s.first_probed_at) == (AWAITING, 10.0)
+    s.record_probe(False, now=1000.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    assert (s.state, s.first_probed_at) == (AWAITING, 10.0)
+    s.record_probe(False, now=1810.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    assert s.state == STALLED
+
+
+def test_an_unlisted_host_with_no_address_is_still_an_attempt():
+    """Nothing to dial counts as not reached: the clock runs and Stalled follows."""
+    s = _server(public_port=None)
+    s.unlisted = True
+    cfg = edict({"fleet": edict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+
+    class _Boom:
+        async def get(self, url):
+            raise AssertionError(f"must not probe {url}")
+
+        async def aclose(self):
+            return None
+
+    fleet = Fleet(cfg=cfg, servers=[s])
+    asyncio.run(fleet.probe_all(client=_Boom(), now=1.0))
+    assert (s.state, s.first_probed_at, s.last_error) == (AWAITING, 1.0, "no address to dial")
+    asyncio.run(fleet.probe_all(client=_Boom(), now=1801.0))
+    assert s.state == STALLED

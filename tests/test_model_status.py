@@ -207,9 +207,9 @@ def test_healthy_probe_wins_without_config_served():
     assert view.lifecycle == HEALTHY
 
 
-def test_reached_does_not_change_lifecycle():
-    # 503 while the model loads versus no connection: both are Loading; the
-    # detail only changes what the page says.
+def test_reached_does_not_change_lifecycle_once_anchored():
+    # 503 while the model loads versus no connection: with the config fetch as
+    # anchor both are Loading; the detail only changes what the page says.
     for reached in (True, False):
         view = deployment_status(
             _self(probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=reached),
@@ -306,3 +306,22 @@ def test_vllm_down_litellm_up():
     )
     assert view.lifecycle == UNHEALTHY
     assert view.skew == (SKEW_VLLM_DOWN_LITELLM_UP,)
+
+
+def test_not_reached_with_no_anchor_runs_out_of_grace():
+    # No config fetch, not in LiteLLM, and nothing answers at the address: a
+    # rental that died before a restart, or one whose deployment is already
+    # gone. Awaiting until health_grace_s after the first attempt, then
+    # Stalled, so the unlisted sentence has a lifecycle to hang on.
+    def view(**kw):
+        base = dict(config_served_at=None, probe_ok=False, fails=3, last_ok=None, in_litellm=False, reached=False)
+        base.update(kw)
+        return deployment_status(_self(**base), CFG, NOW)
+
+    assert view(first_probed_at=None).lifecycle == AWAITING
+    assert view(first_probed_at=NOW - CFG.health_grace_s + 1).lifecycle == AWAITING
+    assert view(first_probed_at=NOW - CFG.health_grace_s).lifecycle == STALLED
+    # A 503 reaches: the box is there, so it is not on this clock.
+    assert view(first_probed_at=NOW - CFG.health_grace_s, reached=True).lifecycle == AWAITING
+    # In LiteLLM and down is Unhealthy at once, as before; the clock is for after the delete.
+    assert view(first_probed_at=NOW - 1, in_litellm=True).lifecycle == UNHEALTHY

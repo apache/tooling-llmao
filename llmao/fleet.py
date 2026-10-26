@@ -420,6 +420,9 @@ class VllmServer:
         self.last_probe_ok: bool | None = None
         self.vllm_probed_at: float | None = None
         self.reached: bool | None = None
+        # The first probe attempt in this process: the grace clock for a server
+        # with no config fetch that never answers (see self_hosted_lifecycle).
+        self.first_probed_at: float | None = None
 
     @classmethod
     def from_row(
@@ -595,6 +598,8 @@ class VllmServer:
             self.last_error = err or "unhealthy"
         self.last_probe_ok = ok
         self.vllm_probed_at = now
+        if self.first_probed_at is None:
+            self.first_probed_at = now
         if reached is not None:
             self.reached = reached
         # The counters above are the observation. The name comes from one place.
@@ -609,6 +614,7 @@ class VllmServer:
             in_litellm=in_litellm,
             config_served_at=self.config_served_at,
             reached=self.reached,
+            first_probed_at=self.first_probed_at,
         )
         self.state = self_hosted_lifecycle(snap, cfg, now)
         if self.state == HEALTHY and was != HEALTHY:
@@ -1080,8 +1086,20 @@ class Fleet:
                 if url is None:
                     # No public port: nothing to probe. Leave the state alone.
                     # An unlisted host has no port because it has no instance,
-                    # which place_servers has already said once.
+                    # which place_servers has already said once. Nothing to
+                    # dial is the strongest form of not reached, so it still
+                    # counts as an attempt: the grace clock runs, and the host
+                    # reads Stalled once it is out, as a dead rental should.
                     if srv.unlisted:
+                        srv.record_probe(
+                            False,
+                            now=stamp,
+                            grace_s=grace,
+                            fail_threshold=threshold,
+                            err="no address to dial",
+                            reached=False,
+                            in_litellm=bool(in_litellm_by_srv.get(srv, False)),
+                        )
                         continue
                     _LOGGER.warning(
                         "fleet: no health url for %s@%s listen %s",
@@ -1380,6 +1398,7 @@ def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> Deployment
         at_listen_port=dep.at_listen_port,
         config_served_at=srv.config_served_at,
         reached=srv.reached,
+        first_probed_at=srv.first_probed_at,
     )
 
 

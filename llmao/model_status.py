@@ -123,9 +123,14 @@ class DeploymentSnapshot:
     # succeeded for it since we started. Anchors the Loading window.
     config_served_at: float | None = None
     # Did the last health probe reach vLLM's HTTP server (an answer, e.g. a
-    # 503 while the model loads) as opposed to no connection at all? Display
-    # only; it does not change the lifecycle. None until the first probe.
+    # 503 while the model loads) as opposed to no connection at all? None
+    # until the first probe. Mostly display; with no anchor it decides
+    # between Awaiting and Stalled once the grace has run out.
     reached: bool | None = None
+    # When this process first tried to probe the server. The clock for a
+    # server that has no anchor and never answers: Awaiting until
+    # health_grace_s after this, then Stalled. None until the first attempt.
+    first_probed_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -178,10 +183,19 @@ def self_hosted_lifecycle(
     A passing probe: Healthy, always -- including the first probe after a
     control-plane restart. No config served yet (``config_served_at`` is None):
     Unhealthy if it is in LiteLLM and the probe failed (it was serving before
-    a restart, now down), otherwise Awaiting contact. Config served but not
-    yet up: Loading while inside ``health_grace_s`` of the config answer,
-    Stalled past it. After it has been Healthy, ``health_fail_threshold``
-    failures: Unhealthy; fewer keep Healthy (hold-over-the-threshold).
+    a restart, now down); Stalled if nothing has answered at all for
+    ``health_grace_s`` after the first probe attempt (a rental that died, with
+    no deployment left to say so); otherwise Awaiting contact. Config served
+    but not yet up: Loading while inside ``health_grace_s`` of the config
+    answer, Stalled past it. After it has been Healthy,
+    ``health_fail_threshold`` failures: Unhealthy; fewer keep Healthy
+    (hold-over-the-threshold).
+
+    The not-reached clock runs from the first attempt, not from unlisted's
+    listing count: a new RunPod box is unlisted within minutes but fetches
+    its config only after its image pull, and must not read Stalled five
+    minutes after the admin created it. A probe that reaches (a 503) is not
+    on this clock; it stays Awaiting until the config fetch anchors Loading.
     """
     grace = float(cfg.health_grace_s)
     threshold = int(cfg.health_fail_threshold)
@@ -190,6 +204,9 @@ def self_hosted_lifecycle(
     if snap.config_served_at is None:
         if snap.in_litellm and snap.probe_ok is False:
             return UNHEALTHY
+        not_reached = snap.probe_ok is False and snap.reached is False
+        if not_reached and snap.first_probed_at is not None and (now - snap.first_probed_at) >= grace:
+            return STALLED
         return AWAITING
     if snap.last_ok is not None:
         return UNHEALTHY if snap.fails >= threshold else HEALTHY

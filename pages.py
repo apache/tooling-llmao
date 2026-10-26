@@ -608,7 +608,10 @@ def _deployment_reason(dep) -> str:
     if srv is None:
         return ""
     if srv.unlisted:
-        # Said first: whatever else is true, this is why.
+        # Said first: whatever else is true, this is why. While the box still
+        # answers, the listing is what is in doubt, not the rental.
+        if srv.state == HEALTHY:
+            return "No Vast or RunPod instance has this address, but it is serving; the listing may be behind."
         return "No Vast or RunPod instance has this address; the rental may have ended."
     if srv.state == AWAITING:
         if srv.probe_display:
@@ -780,8 +783,10 @@ def attention_items(fleet) -> list:
         ident = _dep_ident(dep)
         rest = f"{dep.model_name} — {view.lifecycle.replace('_', ' ')}"
         reason = _deployment_reason(dep)
-        if unlisted:
+        if unlisted and view.lifecycle in (STALLED, UNHEALTHY):
             # What to do about it: nothing in llmao clears a host that is gone.
+            # Only once the box is also down. A listing gap with the box still
+            # serving, loading, or not yet tried is not a rental that ended.
             reason += " If it has, remove it from fleet.hosts."
         if phrases:
             reason = "; ".join(p for p in (reason, "; ".join(phrases)) if p)
