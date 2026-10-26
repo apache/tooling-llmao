@@ -697,24 +697,69 @@ onto the server is the probe's read now (a need, asked once).
 
 ## Where the code goes
 
-No new swarm of modules. The sources stay where they are: `vast_client`,
-`runpod_client`, the proxy client, the vLLM probe. `fleet.py` keeps the
-box protocol: host rows, HMAC, `GET /vllm/config` JSON, listen-port
-rules, `LEGACY_SERVERS`, materialize and approve.
+Settled 2026-10-26. No swarm of modules: three new, one removed, each
+with a job of its own. A source's snapshot type lives next to the
+fetcher that produces it; a stateful thing lives alone.
 
-The snapshots, key, record, plan and `reconcile()` are a new
-`llmao/reconcile.py` — pure, table-tested. It absorbs `model_status.py`:
-`self_hosted_lifecycle`, `commercial_lifecycle` and `deployment_status`
-become the part of reconcile that writes the verdicts on the record, and
-`DeploymentSnapshot` becomes the record. `model_rollup` and privacy,
-including a `litellm_only` row forcing MIXED, stay pure functions over
-the records of one model name. They are not fields of one record. One
-status layer, computed once per pass, not a compute layer the pages
-call again on the same data. The loop stores the history the pure
-function returns; nothing in this design writes the memory store.
-`proxy/deployments.py` becomes the executor (`add_deployment` /
-`delete_deployment` / `update_deployment`, and the fetch of the LiteLLM
-deployments that follows each).
+- **`rental.py`** (new) knows machines we rent: `Rental`, the frozen row;
+  `ProviderRentals`, one provider's set with its fetch time and the
+  unread and stale distinctions; the matching rule, a host to its Rental
+  by address first and then by the id it matched last time; and the
+  host-side verdict, listed, stopped or unlisted, with its one counter.
+  `vast_client` and `runpod_client` import `Rental` and return Rentals;
+  they keep their parsing of each provider's JSON. `fleet.py` loses
+  placement.
+- **`vllm_client.py`** (new) knows vLLM: `/health` and its 200 versus
+  503, `/v1/models` and the `max_model_len` field, `/metrics` and the
+  `cache_config_info` line and the gauges. It produces `VllmProbe`, and
+  the metrics `Sample` the sampler hands to the rollup. The window and
+  cache-line parsers now in `fleet.py` and `sampler.py` move here; the
+  sampler keeps its runner and its rollup. Another engine gets its own
+  client module, not an `if` in this one.
+- **`fleet.py`** keeps the box protocol: host rows, HMAC, `GET
+  /vllm/config` JSON, listen-port rules, `LEGACY_SERVERS`, materialize
+  and approve. It produces `ConfigFetch` (host to time, replacing the
+  per-server copies of `config_served_at`) and `IntendedDeployment` (one
+  function over `fleet.hosts`, the approvals and the provider lines,
+  replacing the ad hoc construction in `from_cfg`). It loses the probe,
+  the parsers, the lifecycle counters on `VllmServer`, and in the end
+  `VllmServer` itself.
+- **`proxy/deployments.py`** produces `LiteLLMDeployment` (one per
+  `/model/info` entry, found by the stamp; replaces the route tuples,
+  the index and `ExtraLiteLLM`) and `LiteLLMHealth` (replaces the two
+  fields written onto each deployment), and becomes the executor
+  (`add_deployment` / `delete_deployment` / `update_deployment`, and
+  the fetch of the LiteLLM deployments that follows each). Renaming it
+  `proxy/executor.py` then ends the clash with `deployment.py`.
+- **`deployment.py`** (new) is the one class with state: `Deployment`,
+  its transition table, verdicts, reasons and needs, and nothing else.
+  The only file that knows what Loading or Rejected means. It absorbs
+  `model_status.py`, which is deleted: `self_hosted_lifecycle`,
+  `commercial_lifecycle` and `deployment_status` become the table and
+  the verdict.
+- **`reconcile.py`** keeps the key and gains the join and the plan:
+  `reconcile(snapshots, history) -> (view, plan)` feeds each Deployment
+  its observations and collects the verdicts and actions. `model_rollup`
+  and privacy, including a `litellm_only` row forcing MIXED, stay pure
+  functions over the records of one model name; they are not fields of
+  one record. One status layer, computed once per pass, not a compute
+  layer the pages call again on the same data. The loop stores the
+  history the pure function returns; nothing in this design writes the
+  memory store.
+
+The order of work: the six sources first, each one commit that
+produces its snapshot type beside its fetcher, switches the consumers to
+read it and deletes the old copy of the fact in the same commit, so no
+fact has two homes. Then `deployment.py` against six known shapes.
+
+1. Rental. **Done:** 92798c9 (`llmao/rental.py`: `Rental`,
+   `ProviderRentals`, `match_rental`; the host-side verdict still sits
+   in `place_servers` and moves with the Deployment work).
+2. ConfigFetch.
+3. LiteLLMHealth.
+4. LiteLLMDeployment.
+5. VllmProbe (with `vllm_client.py`).
+6. IntendedDeployment.
 
 Pages, capacity, the sampler, and the action log read the view. They stop
 calling `add_refusal` / `remove_refusal` once the plan is the gate.
