@@ -833,7 +833,8 @@ fact has two homes. Then `deployment.py` against six known shapes.
    and `working_api_key` deleted), pulled forward from sixth: the
    payload and the observed server are both built from it, and moving
    the payload first would have moved the row parsing with it.
-   **In progress.**
+   **Done:** c75256a (`llmao/intent.py`; `config_for_host` already
+   renders from `provisioning.py`; the approvals stay on `Fleet`).
 4. The rest of provisioning: the naming rule, the key check and the
    payload over IntendedDeployment; the route in `api.py` thins to a
    few lines; `ProvisioningRecord` is built in `main.py`.
