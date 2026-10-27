@@ -55,11 +55,28 @@ def test_normalizes_v4mapped_host():
     assert derive_vllm_api_key("test-vllm-salt", "::ffff:203.0.113.10", 8001) == _GOLDEN
 
 
-def test_missing_salt_raises():
-    with pytest.raises(ValueError, match="not defined"):
-        derive_vllm_api_key(None, "203.0.113.10", 8001)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="missing or CHANGE_ME"):
-        derive_vllm_api_key("CHANGE_ME_VLLM_API_SALT", "203.0.113.10", 8001)
+def test_the_salt_is_checked_at_startup_not_at_mint():
+    """validate_fleet refuses a missing or placeholder salt; the mint then trusts it."""
+    from llmao.fleet import validate_fleet
+
+    models = load_models(EXAMPLE)
+    for bad in (None, "", "  ", "CHANGE_ME_VLLM_API_SALT"):
+        cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8001]]})
+        cfg.fleet.vllm_api_salt = bad
+        with pytest.raises(ValueError, match="vllm_api_salt is missing or CHANGE_ME"):
+            validate_fleet(cfg, models=models)
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8001]]})
+    del cfg.fleet["vllm_api_salt"]
+    with pytest.raises(ValueError, match="vllm_api_salt is missing or CHANGE_ME"):
+        validate_fleet(cfg, models=models)
+    assert derive_vllm_api_key("CHANGE_ME_VLLM_API_SALT", "203.0.113.10", 8001).startswith("sk-vllm-")
+
+
+def test_the_mint_still_refuses_a_bad_host_or_port():
+    with pytest.raises(ValueError, match="host is empty"):
+        derive_vllm_api_key("test-vllm-salt", "", 8001)
+    with pytest.raises(ValueError, match="positive int"):
+        derive_vllm_api_key("test-vllm-salt", "203.0.113.10", 0)
 
 
 def test_host_row_still_reads_the_deprecated_fourth_element():

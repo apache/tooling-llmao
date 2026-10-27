@@ -169,12 +169,7 @@ def test_the_key_in_both_places_is_refused():
 
 
 def test_validate_fleet_requires_vast_api_key():
-    cfg = edict(
-        {
-            "fleet": {"hosts": {"127.0.0.1": [["gemma4-26b", 8001]]}, "vast": {}, **FLEET_KNOBS},
-            "models_path": str(EXAMPLE),
-        }
-    )
+    cfg = _vast_cfg(fleet_vast={})
     with pytest.raises(ValueError, match=r"fleet\.vast\.api_key"):
         validate_fleet(cfg, models=load_models(EXAMPLE))
 

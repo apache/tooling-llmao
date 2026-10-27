@@ -165,14 +165,11 @@ _LABEL = "llmao.vllm.api_key"
 def derive_vllm_api_key(salt: str, host: str, listen_port: int) -> str:
     """sk-vllm- + urlsafe-b64(HMAC-SHA256(salt, label\\nhost\\nport)), no pad.
 
-    TODO: the salt checks below belong in validate_fleet, once at startup;
-    then every mint trusts cfg.fleet.vllm_api_salt and this takes the salt.
+    The salt was checked by validate_fleet at startup (present, not the
+    placeholder); this trusts it. Host and port are checked because the
+    CLI hands them in by hand.
     """
-    if not isinstance(salt, str):
-        raise ValueError("fleet.vllm_api_salt is not defined")
     key = salt.strip()
-    if not key or key.startswith("CHANGE_ME"):
-        raise ValueError("fleet.vllm_api_salt is missing or CHANGE_ME")
     ip = normalize_peer_ip(host)
     if not ip:
         raise ValueError("host is empty")
@@ -193,10 +190,9 @@ def vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
     The wrong key 401s, and the next probe says so (Rejected).
 
     Not fleet.key (boxes have that). Not a models.yaml field. The salt is
-    required: a missing attribute raises here. Do not substitute "" --
-    derive_vllm_api_key would then be the only check, and a future edit
-    could HMAC an empty salt and ship a public bearer, starting vLLM with
-    no auth on a public port.
+    required and validate_fleet checked it at startup; read it as an
+    attribute, never with a default, so a config that skipped validation
+    raises here rather than HMAC an empty salt into a public bearer.
     """
     if (normalize_peer_ip(host), int(listen_port)) in LEGACY_SERVERS:
         return str(cfg.fleet.selfhost_api_key).strip()

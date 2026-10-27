@@ -743,9 +743,9 @@ used to build the observed server, three modules reading one list.
   `vllm_api_key.py`, which is deleted, and the `LEGACY_SERVERS` rule is
   applied at mint time, so `api_key` on the record is the key that
   deployment uses and `working_api_key` goes away: the payload, the
-  probe and the executor read the field and derive nothing. (Still to
-  do: validate the salt once in `validate_fleet` and drop the checks
-  from the mint.) `VLLM_LISTEN_PORTS` lives here too: the intent must
+  probe and the executor read the field and derive nothing. The salt is
+  checked once, in `validate_fleet`; the mint trusts it.
+  `VLLM_LISTEN_PORTS` lives here too: the intent must
   know which ports it may assign, and the box templates honor the same
   three; `vllm_client.py` dials whatever URL it is handed and knows no
   port plan. The row parser moves here from `fleet.py`; no other module

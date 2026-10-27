@@ -208,7 +208,13 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             raise ValueError(f"config.yaml: fleet.{key} must be a number") from e
         if val <= 0:
             raise ValueError(f"config.yaml: fleet.{key} must be > 0")
-    models = models if models is not None else load_models(cfg=cfg)
+    # The bearer salt is checked here, once; every mint after this trusts it
+    # (intent.derive_vllm_api_key). An empty or placeholder salt would HMAC
+    # to a public bearer and start vLLM with no auth on a public port.
+    salt = cfg.fleet.get("vllm_api_salt")
+    if not isinstance(salt, str) or not salt.strip() or salt.strip().startswith("CHANGE_ME"):
+        raise ValueError("config.yaml: fleet.vllm_api_salt is missing or CHANGE_ME")
+    models = models or load_models(cfg=cfg)
     validate_models(models)
     warn_deprecated(models)
     validate_providers(cfg, models)
@@ -689,7 +695,7 @@ class Fleet:
         self.deployments = deployments if deployments is not None else [FleetDeployment.from_vllm(s) for s in servers]
         # model_name → models.yaml row. POST /model/new copies litellm_params
         # from here; LiteLLM /model/info encrypts them on the way back.
-        self.models = models if models is not None else {}
+        self.models = models or {}
         # Awaitable after each vLLM probe tick (DeploymentManager.sync_selfhost).
         # Wired from create_app so this module does not import the LiteLLM client.
         self.after_probe = after_probe
