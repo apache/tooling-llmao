@@ -29,7 +29,9 @@ from asfquart.auth import Requirements
 from quart import jsonify, request
 
 from llmao.auth import current_identity
-from llmao.fleet import HOST_HEADER, UnknownHostError, client_ip, config_for_host
+from llmao.fleet import HOST_HEADER, client_ip
+from llmao.intent import UnknownHostError
+from llmao.provisioning import config_for_host
 from llmao.seam import AuthzError
 
 APP = asfquart.APP

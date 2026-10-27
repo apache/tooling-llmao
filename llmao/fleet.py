@@ -38,6 +38,19 @@ from typing import Any
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao.intent import (
+    ADOPTED,
+    LEGACY_SERVERS,
+    VLLM_LISTEN_PORTS,
+    IntendedDeployment,
+    gpu_host_api_key,
+    host_intents,
+    intended_deployments,
+    parse_host_row,
+    validate_providers,
+    vllm_api_key,
+    vllm_intent,
+)
 from llmao.model_status import (
     ADMIN_LABELS,
     APPROVED,
@@ -52,8 +65,7 @@ from llmao.model_status import (
     model_status,
     self_hosted_lifecycle,
 )
-from llmao.models import load_models, served_model_name, validate_models, vllm_recipe, warn_deprecated
-from llmao.providers import ProviderDeployment, gpu_host_api_key, provider_deployments, validate_providers
+from llmao.models import load_models, validate_models, vllm_recipe, warn_deprecated
 from llmao.provisioning import ProvisioningRecord
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
@@ -70,10 +82,6 @@ _FLEET_NUMBERS = (
     "skew_interval_s",
     "litellm_health_interval_s",
 )
-
-
-class UnknownHostError(KeyError):
-    """No fleet.hosts entry for this client IP."""
 
 
 def _ago(ts: float | None) -> str:
@@ -121,18 +129,10 @@ def client_ip(
     return normalize_peer_ip(remote_addr)
 
 
-# Vast publishes these three container ports for vLLM, in order. A box does
-# not get a fourth. RunPod stops at three as well. Either provider's listing
-# maps each one to the public port a server is dialed on.
-VLLM_LISTEN_PORTS = (8001, 8002, 8003)
-
 # How often RunPod's list of our pods is read. Placing a box is not urgent: a
 # new pod is still provisioning when the next read comes round.
 RUNPOD_LISTING_INTERVAL_S = 600
 
-# Boxes already up on other ports. Delete a pair when that box is replaced.
-# Not a template for new hosts. These use the shared selfhost_api_key; every
-# other server uses the key derived from the salt.
 # Two hysteresis counts, one per clock. Each is a constant rather than a config
 # key: no p6 change, no eyaml round-trip. Both mirror fleet.health_fail_threshold,
 # which exists for the same reason: one failed vLLM probe does not mean a box
@@ -156,13 +156,6 @@ UNLISTED_PASSES = 3
 # empty on restart, so a proxy full of stale deployments is cleared after this
 # many passes rather than on the first.
 ORPHAN_PASSES = 3
-
-LEGACY_SERVERS = {
-    ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
-    ("103.196.86.105", 8004),  # qwen3.8-27b, public port from RunPod
-    # 8003 is a normal listen port. This box still runs the shared key.
-    ("213.173.110.78", 8003),
-}
 
 
 def _listen_port_allowed(host: str, port: int) -> bool:
@@ -189,59 +182,11 @@ def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
         srv.public_port = public
 
 
-def working_api_key(cfg: Any, srv: Any) -> str:
-    """The bearer this vLLM process accepts: what LiteLLM registers and what /v1/models is asked with.
-
-    LEGACY_SERVERS were launched with the shared fleet.selfhost_api_key, which
-    validate_fleet already required when one of those hosts is configured.
-    Every other box uses the key derived from the salt (srv.api_key). One
-    rule, read by the deployment body and by the served-window fetch alike;
-    the fetch used to send the derived key to every box, so a legacy box
-    answered 401 on every pass and never reported its context window.
-    No probe: the wrong key 401s, and the next pass says so.
-    """
-    if (normalize_peer_ip(srv.host), int(srv.listen_port)) in LEGACY_SERVERS:
-        return str(cfg.fleet.selfhost_api_key).strip()
-    return str(srv.api_key or "")
-
-
 def _require_listen_port(host: str, port: int) -> None:
     if _listen_port_allowed(host, port):
         return
     allowed = ", ".join(str(p) for p in VLLM_LISTEN_PORTS)
     raise ValueError(f"{host}: listen port {port} is not one of {allowed}")
-
-
-def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int | None]:
-    """[model, port] | [model, port, name] | [model, port, name, public_port]
-
-    The fourth element is deprecated. It pinned the public port for RunPod
-    boxes while their mapping could not be looked up; now both providers'
-    listings carry it (Vast's HostPort, RunPod's portMappings). A row that
-    still has one loads, with a warning from Fleet.from_cfg, and the value
-    only seeds public_port until a listing names the box. Drop it from
-    config; it is not refused so that a config change never stops llmao.
-    """
-    if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3, 4):
-        raise ValueError(
-            f"fleet.hosts.{host}[{index}] must be [model, port], "
-            f"[model, port, name] or [model, port, name, public_port]"
-        )
-    model_name = str(raw[0]).strip()
-    try:
-        port = int(raw[1])
-    except (TypeError, ValueError) as e:
-        raise ValueError(f"fleet.hosts.{host}[{index}] port must be an int") from e
-    name = str(raw[2]).strip() if len(raw) >= 3 and raw[2] is not None else model_name
-    public_port = None
-    if len(raw) == 4 and raw[3] is not None:
-        try:
-            public_port = int(raw[3])
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"fleet.hosts.{host}[{index}] public_port must be an int") from e
-    if not model_name or not name:
-        raise ValueError(f"fleet.hosts.{host}[{index}] needs model and name")
-    return model_name, port, name, public_port
 
 
 def validate_fleet(cfg: Any, models: list | None = None) -> None:
@@ -301,58 +246,8 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
                 raise ValueError(f"config.yaml: fleet.selfhost_api_key is required while {host} is still a legacy box")
 
 
-def _vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
-    # Not a top-level import. vllm_api_key.py imports normalize_peer_ip from
-    # this module. Importing derive_vllm_api_key up here would make each file
-    # load the other before either finished initializing.
-    #
-    # cfg.fleet.vllm_api_salt is required. A missing attribute raises here.
-    # Do not substitute "" — derive_vllm_api_key would then be the only check,
-    # and a future edit could HMAC an empty salt and ship a public bearer.
-    from llmao.vllm_api_key import derive_vllm_api_key
-
-    return derive_vllm_api_key(cfg.fleet.vllm_api_salt, host, listen_port)
-
-
-def config_for_host(
-    host: str,
-    *,
-    models: list | None = None,
-    cfg: Any = None,
-    approved: list[str] | None = None,
-) -> dict[str, Any]:
-    """JSON for one host IP. Requires validate_fleet() already ran on cfg.
-
-    A host absent from fleet.hosts is served from ``approved``: one server
-    per model, listen ports 8001 upward, named after the model. That list
-    is the in-memory approval; config.yaml is not consulted and not written.
-    """
-    host = normalize_peer_ip(host)
-    known = bool(host) and host in cfg.fleet.hosts
-    if not host or (not known and not approved):
-        raise UnknownHostError(host)
-    models = models if models is not None else load_models(cfg=cfg)
-    by_name = {model.model_name: model for model in models}
-    if known:
-        rows = list(cfg.fleet.hosts[host])
-    else:
-        if len(approved) > len(VLLM_LISTEN_PORTS):
-            raise ValueError(f"{host}: at most {len(VLLM_LISTEN_PORTS)} servers")
-        rows = [[name, VLLM_LISTEN_PORTS[i]] for i, name in enumerate(approved)]
-    servers = []
-    for i, raw in enumerate(rows):
-        # The box is told its listen port; the public port is ours, not its
-        # business -- it binds inside the container.
-        model_name, port, name, _ = parse_host_row(raw, host, i)
-        servers.append(VllmServer.from_row(host, model_name, port, name, by_name[model_name], cfg).box_json())
-    return {
-        "host": host,
-        "servers": servers,
-    }
-
-
 class VllmServer:
-    """One vLLM process from fleet.hosts (live health + box JSON)."""
+    """One vLLM process we observe, built from its IntendedDeployment (live health)."""
 
     def __init__(
         self,
@@ -451,43 +346,25 @@ class VllmServer:
         self.rejected_passes = 0
 
     @classmethod
-    def from_row(
-        cls,
-        host: str,
-        model_name: str,
-        port: int,
-        name: str,
-        model: Any,
-        cfg: Any = None,
-    ) -> VllmServer:
-        vllm = model.model_info.vllm
-        args = vllm.get("args") or []
-        if isinstance(args, str):
-            args = args.split()
-        util = vllm.get("gpu_memory_utilization")
-        maxlen = vllm.get("max_model_len")
-        vram = vllm.get("vram_gb")
-        disk = vllm.get("disk_gb")
-        kv = vllm.get("kv_bytes_per_token")
+    def from_intended(cls, intended: IntendedDeployment) -> VllmServer:
+        """The observed record for one intended vLLM process; its public port comes later, from a listing."""
+        recipe = intended.recipe
         return cls(
-            model_name=model_name,
-            name=name,
-            host=host,
-            listen_port=port,
-            hf_model=str(vllm.model),
-            # Bearer for `vllm serve --api-key` and for LiteLLM at /model/new.
-            # HMAC of fleet.vllm_api_salt plus this host and listen port.
-            # Not fleet.key (boxes have that). Not a models.yaml field.
-            # Not selfhost_api_key. Missing salt raises; an empty bearer
-            # would start vLLM with no auth on a public port.
-            api_key=_vllm_api_key(cfg, host, port),
-            args=[str(a) for a in args],
-            gpu_memory_utilization=float(util) if util is not None else None,
-            max_model_len=int(maxlen) if maxlen is not None else None,
-            vram_gb=float(vram) if vram is not None else None,
-            disk_gb=float(disk) if disk is not None else None,
-            served_name=served_model_name(model),
-            kv_bytes_per_token=int(kv) if kv is not None else None,
+            model_name=intended.model_name,
+            name=intended.name,
+            host=intended.host,
+            listen_port=intended.listen_port,
+            hf_model=recipe.hf_model,
+            # Minted with the intent (intent.vllm_api_key): what the box runs
+            # with, what /v1/models is asked with, what LiteLLM registers.
+            api_key=intended.api_key,
+            args=list(recipe.args),
+            gpu_memory_utilization=recipe.gpu_memory_utilization,
+            max_model_len=recipe.max_model_len,
+            vram_gb=recipe.vram_gb,
+            disk_gb=recipe.disk_gb,
+            served_name=recipe.served_name,
+            kv_bytes_per_token=recipe.kv_bytes_per_token,
         )
 
     @property
@@ -579,29 +456,6 @@ class VllmServer:
         if served is None:
             return False
         return served > self.kv_cache_tokens
-
-    def box_json(self) -> dict[str, Any]:
-        """Wire payload for GET /vllm/config (servers[].model is the HF weights id)."""
-        out: dict[str, Any] = {
-            "name": self.name,
-            "model": self.hf_model,
-            "served_model_name": self.served_name,
-            "host": self.host,
-            "port": self.listen_port,
-            "api_key": self.api_key,
-            "args": list(self.args),
-        }
-        if self.gpu_memory_utilization is not None:
-            out["gpu_memory_utilization"] = self.gpu_memory_utilization
-        if self.max_model_len is not None:
-            out["max_model_len"] = self.max_model_len
-        if self.vram_gb is not None:
-            out["vram_gb"] = self.vram_gb
-        if self.disk_gb is not None:
-            out["disk_gb"] = self.disk_gb
-        if self.kv_bytes_per_token is not None:
-            out["kv_bytes_per_token"] = self.kv_bytes_per_token
-        return out
 
     def record_probe(
         self,
@@ -740,16 +594,15 @@ class FleetDeployment:
         )
 
     @classmethod
-    def from_provider(cls, pd: ProviderDeployment) -> FleetDeployment:
+    def from_intended(cls, intended: IntendedDeployment) -> FleetDeployment:
+        """A provider-line deployment. Our boxes go through from_vllm, with their observed server."""
         return cls(
-            model_name=pd.model_name,
-            # Unique where the model name is not: grok-4 can come from xAI
-            # and from OpenRouter.
-            name=f"{pd.model_name}@{pd.provider}",
+            model_name=intended.model_name,
+            name=intended.name,
             self_hosted=False,
-            api_base=pd.api_base,
-            provider=pd.provider,
-            litellm_model=pd.litellm_model,
+            api_base=intended.api_base,
+            provider=intended.provider,
+            litellm_model=intended.litellm_model,
         )
 
     @property
@@ -868,37 +721,35 @@ class Fleet:
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
-        models = models if models is not None else load_models(cfg=cfg)
+        """The fleet config intends: one server and one deployment per intended vLLM process,
+        one deployment per provider line. Requires validate_fleet() already ran on cfg."""
+        models = models or load_models(cfg=cfg)
         by_name = {model.model_name: model for model in models}
         local = not gpu_host_api_key(cfg, "vast")
-        servers = []
-        for host, rows in cfg.fleet.hosts.items():
-            host = str(host).strip()
-            seen_ports: set[int] = set()
-            for i, raw in enumerate(rows):
-                model_name, port, name, public = parse_host_row(raw, host, i)
-                _require_listen_port(host, port)
-                if port in seen_ports:
-                    raise ValueError(f"fleet.hosts.{host}: duplicate port {port}")
-                seen_ports.add(port)
-                srv = VllmServer.from_row(host, model_name, port, name, by_name[model_name], cfg)
-                if public is not None:
-                    # Deprecated: the listing supplies the public port now.
-                    # The value seeds it until the box is placed; it is not
-                    # refused, so a stale row never stops llmao.
-                    _LOGGER.warning(
-                        "fleet.hosts.%s[%s]: the fourth element (public port %s) is deprecated; "
-                        "the provider listing supplies it. Drop it from the row.",
-                        host,
-                        i,
-                        public,
-                    )
-                    srv.public_port = public
-                elif local:
-                    srv.public_port = srv.listen_port
-                servers.append(srv)
-        deployments = [FleetDeployment.from_vllm(s) for s in servers]
-        deployments.extend(FleetDeployment.from_provider(pd) for pd in provider_deployments(cfg))
+        servers: list[VllmServer] = []
+        deployments = []
+        for intended in intended_deployments(cfg, models):
+            if not intended.self_hosted:
+                deployments.append(FleetDeployment.from_intended(intended))
+                continue
+            srv = VllmServer.from_intended(intended)
+            if intended.public_port is not None:
+                # Deprecated: the listing supplies the public port now.
+                # The value seeds it until the box is placed; it is not
+                # refused, so a stale row never stops llmao.
+                index = sum(1 for s in servers if s.host == srv.host)
+                _LOGGER.warning(
+                    "fleet.hosts.%s[%s]: the fourth element (public port %s) is deprecated; "
+                    "the provider listing supplies it. Drop it from the row.",
+                    srv.host,
+                    index,
+                    intended.public_port,
+                )
+                srv.public_port = intended.public_port
+            elif local:
+                srv.public_port = srv.listen_port
+            servers.append(srv)
+            deployments.append(FleetDeployment.from_vllm(srv))
         return cls(cfg, servers, deployments, models=by_name)
 
     def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
@@ -936,13 +787,10 @@ class Fleet:
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
         if host in members:
             return
-        by_name = self._models_by_name()
         have = {s.listen_port for s in self.servers if s.host == host}
-        for i, name in enumerate(names):
-            port = VLLM_LISTEN_PORTS[i]
-            if port in have:
-                continue
-            self._add_server(host, by_name[name], port, name)
+        for intended in host_intents(self.cfg, self._models_by_name(), host, approved=names):
+            if intended.listen_port not in have:
+                self._add_server(intended)
 
     def _materialize_approved_hosts(self) -> None:
         """Servers for every approved host, before the port map and the probe.
@@ -954,8 +802,8 @@ class Fleet:
         for host in list(self.approved_models):
             self._materialize_approved(host)
 
-    def _add_server(self, host: str, model: Any, port: int, name: str) -> VllmServer:
-        srv = VllmServer.from_row(host, str(model.model_name), port, name, model, self.cfg)
+    def _add_server(self, intended: IntendedDeployment) -> VllmServer:
+        srv = VllmServer.from_intended(intended)
         self.servers.append(srv)
         self.deployments.append(FleetDeployment.from_vllm(srv))
         return srv
@@ -1157,7 +1005,7 @@ class Fleet:
                 key_rejected = None
                 ask = was != HEALTHY or srv.observed_max_model_len is None or srv.key_rejected or srv.unlisted
                 if ok and ask:
-                    served = await fetch_served_models(client, srv.root_url, working_api_key(self.cfg, srv))
+                    served = await fetch_served_models(client, srv.root_url, srv.api_key)
                     if served.status == 401:
                         key_rejected = True
                     elif served.status == 200:
@@ -1360,14 +1208,14 @@ class Fleet:
                 model = await self._model_for_live_port(client, ip, listen, public)
                 if model is None:
                     continue
-                srv = self._add_server(ip, model, listen, str(model.model_name))
+                srv = self._add_server(vllm_intent(self.cfg, ip, listen, str(model.model_name), model, origin=ADOPTED))
                 srv.public_port = public
                 srv.config_served_at = stamp
                 srv.record_probe(True, now=stamp, grace_s=grace, fail_threshold=threshold, reached=True)
 
     async def _model_for_live_port(self, client: httpx.AsyncClient, host: str, listen: int, public: int) -> Any | None:
         """The models.yaml row whose HF id is what this port is serving, else None."""
-        key = _vllm_api_key(self.cfg, host, listen)
+        key = vllm_api_key(self.cfg, host, listen)
         try:
             resp = await client.get(
                 f"http://{host}:{public}/v1/models",

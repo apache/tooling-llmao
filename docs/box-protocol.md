@@ -156,8 +156,9 @@ HMAC-SHA256(fleet.vllm_api_salt, "llmao.vllm.api_key\n" + host + "\n" + listen_p
 → "sk-vllm-" + urlsafe-base64, no padding
 ```
 
-`llmao/vllm_api_key.py` is the derivation; `bin/llmao-vllm-api-key`
-computes one by hand. The box needs it before `vllm serve` and LiteLLM
+`llmao/intent.py` is the derivation, run once when the box's
+`IntendedDeployment` is minted; `bin/llmao-vllm-api-key` computes one by
+hand. The box needs it before `vllm serve` and LiteLLM
 needs the same value at `/model/new` after the box is Healthy, so it has to
 be computable on both sides from the host and listen port alone. llmao
 keeps no key table and never reads the bearer back from LiteLLM, which
@@ -167,7 +168,8 @@ means a new bearer on every box, a vLLM restart, and a new `/model/new`
 each. Instance env injection was tried on Vast and does not work, which is
 why the JSON is how a box learns `--api-key`. The pairs in
 `LEGACY_SERVERS` predate the salt and still run the shared
-`fleet.selfhost_api_key`; `fleet.working_api_key` picks the right one.
+`fleet.selfhost_api_key`; `intent.vllm_api_key` picks the right one at
+mint time, so the payload, the probe and LiteLLM all carry the same key.
 
 **Who can mint.** The salt never leaves llmao, so a third party cannot
 compute a bearer, including a box that copied `FLEET_KEY`. Host and listen

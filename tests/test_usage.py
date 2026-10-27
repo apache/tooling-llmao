@@ -25,7 +25,7 @@ import asyncio
 import datetime as dt
 
 from llmao.fleet import Fleet, FleetDeployment
-from llmao.providers import ProviderDeployment
+from llmao.intent import provider_intent
 from llmao.proxy.client import PROJECT_FREE_TIER, UsageManager
 from tests.fake_transport import FakeTransport
 
@@ -410,9 +410,9 @@ def _bought_usage(days):
         None,
         [],
         deployments=[
-            FleetDeployment.from_provider(ProviderDeployment("xai", "grok-4", "xai/grok-4", "https://api.x.ai/v1")),
-            FleetDeployment.from_provider(
-                ProviderDeployment("openrouter", "grok-4", "openrouter/x-ai/grok-4", "https://openrouter.ai/api/v1")
+            FleetDeployment.from_intended(provider_intent("xai", "grok-4", "xai/grok-4", "https://api.x.ai/v1")),
+            FleetDeployment.from_intended(
+                provider_intent("openrouter", "grok-4", "openrouter/x-ai/grok-4", "https://openrouter.ai/api/v1")
             ),
         ],
     )

@@ -109,8 +109,8 @@ remembered nowhere. A public port is not a field of `fleet.hosts`; both
 providers' Rentals carry the port map, and that map is the dial address.
 **Rejected** and **Foreign** are fine states added here. Rejected: the
 address answers vLLM's `/health`, which takes no key, but rejects the key
-`working_api_key` returns on `/v1/models` (`fleet.selfhost_api_key` for
-`LEGACY_SERVERS`, the derived key otherwise). Our box with the wrong key,
+its intent was minted with on `/v1/models` (`fleet.selfhost_api_key` for
+`LEGACY_SERVERS`, the derived key otherwise; `intent.vllm_api_key`). Our box with the wrong key,
 or the salt changed; a person fixes it. Foreign: Rejected for
 `REJECTED_PASSES` passes running at an address no Rental names.
 Something else is serving there.
@@ -342,10 +342,11 @@ is observed, rather than updating state step by step from many places.
    legacy box answered 401 on every pass and never got
    `observed_max_model_len`; under the Foreign rule the derived key
    would have deleted those boxes. Both are fixed (items 5 and 6): the
-   rule that picks the key is `working_api_key` in `fleet.py`, a function
-   of host, listen port and config, which the deployment body and the
-   `/v1/models` fetch (`fetch_served_models`) both call. The fetch sends
-   that key, the status is kept, and the call
+   rule that picks the key is `vllm_api_key` in `intent.py`, applied
+   once when the IntendedDeployment is minted, and the deployment body
+   and the `/v1/models` fetch (`fetch_served_models`) both read the
+   server's `api_key`. The fetch sends that key, the status is kept, and
+   the call
    is repeated on every probe pass while the last answer was a 401 or
    the host is unlisted. A 401 makes the lifecycle **Rejected** (ruled
    2026-10-25): the deployment is deleted by the probe gate on the first
@@ -697,10 +698,64 @@ onto the server is the probe's read now (a need, asked once).
 
 ## Where the code goes
 
-Settled 2026-10-26. No swarm of modules: three new, one removed, each
-with a job of its own. A source's snapshot type lives next to the
-fetcher that produces it; a stateful thing lives alone.
+Settled 2026-10-26. No swarm of modules: three new, one renamed and
+grown, two removed, each with a job of its own. A source's snapshot
+type lives next to the fetcher that produces it; a stateful thing lives
+alone.
 
+**Import direction.** The modules are layered, and an import only ever
+points down. At the bottom: `models.py`, `reconcile.py` (the key) and
+the six source modules (`intent.py`, `provisioning.py`, `rental.py`,
+`vllm_client.py`, `proxy/deployments.py`), each a leaf that imports
+only `models.py`, `reconcile.py` and, where one source carries
+another's product, a source below it (`provisioning.py` renders
+`intent.py`'s records; `intent.py` imports no source).
+Then `deployment.py` and `reconcile.py`'s join, which read six snapshot
+shapes. Then `fleet.py`, the runners and the view. At the top `main.py`,
+`pages.py` and `api.py`. A source never imports `fleet.py`: the day one
+needs to, the thing it wants is in the wrong module. Where a lower
+module needs something a higher one owns, the higher one is not
+imported; `main.py` constructs the thing once and hands it down (as it
+already hands the `Fleet` to the LiteLLM client and the sampler), so
+the `ProvisioningRecord` is built in `main.py` and given to the route
+and to the reconcile step rather than reached through `Fleet`. This is
+the rule that keeps the raw shapes (a `fleet.hosts` row, a provider's
+JSON, a LiteLLM `/model/info` entry) inside one module each; before
+it, a config row was parsed in `fleet.py`, rendered by the payload and
+used to build the observed server, three modules reading one list.
+
+- **`intent.py`** (`providers.py` renamed and grown) is the sixth
+  source, pulled forward because the payload and the observed server
+  are both built from it. `providers.py` was already half of it: the
+  provider-line origin and the account keys, all read from
+  `config.yaml`. It produces `IntendedDeployment`, one per intended
+  LiteLLM deployment, from three origins: a `fleet.hosts` row, an
+  in-memory approval (one deployment per approved model, listen ports
+  8001 upward), and a `config.yaml` provider line. One function over
+  all three replaces the ad hoc construction in `from_cfg` and
+  `_materialize_approved`. The record carries everything derivable from
+  config at parse time: the key, the model name and label, the origin,
+  and for our boxes the host, listen port, the `VllmRecipe` (the parsed
+  `model_info.vllm` block, a frozen record in `models.py`) and the
+  bearer; for a provider line the provider, its model string and
+  `api_base`. **The bearer is minted here, once.** The derivation (an
+  HMAC of the salt over host and listen port) moves in from
+  `vllm_api_key.py`, which is deleted, and the `LEGACY_SERVERS` rule is
+  applied at mint time, so `api_key` on the record is the key that
+  deployment uses and `working_api_key` goes away: the payload, the
+  probe and the executor read the field and derive nothing. (Still to
+  do: validate the salt once in `validate_fleet` and drop the checks
+  from the mint.) `VLLM_LISTEN_PORTS` lives here too: the intent must
+  know which ports it may assign, and the box templates honor the same
+  three; `vllm_client.py` dials whatever URL it is handed and knows no
+  port plan. The row parser moves here from `fleet.py`; no other module
+  sees a row. The
+  approvals themselves, the only intent that changes at runtime, stay
+  on `Fleet` for now and are handed in; a later commit may move them
+  here as a record of their own. Adoption (a Vast address serving a
+  model nobody intended) makes a record of origin `adopted` so the rest
+  of the code sees one shape; the Deployment work decides whether
+  adoption survives at all.
 - **`rental.py`** (new) knows machines we rent: `Rental`, the frozen row;
   `ProviderRentals`, one provider's set with its fetch time and the
   unread and stale distinctions; the matching rule, a host to its Rental
@@ -718,27 +773,28 @@ fetcher that produces it; a stateful thing lives alone.
   client module, not an `if` in this one.
 - **`provisioning.py`** (new) is the server side of a box provisioning
   itself, the one request a box makes (`hosting/provision.sh` →
-  `install_set.py` → `GET /vllm/config`) and what it gets back: the
-  endpoint handler, bound to `asfquart.APP` like `pages.py` and
-  `api.py` and imported after them in `main.py`; how a box names itself
-  (`X-LLMAO-Host`, else the forwarded address, else the peer); the
-  payload, host rows or approval to servers JSON; the bearer derivation
-  the payload carries and `working_api_key` also calls; `ConfigFetch`,
-  host to time of the last fetch; and the unknown-box record (first
-  seen, last seen, count, the cap). It replaces `docs/box-protocol.md`'s
-  "box" with the box's own verb. Two commits: ConfigFetch and the
-  unknown-box record first, then the endpoint, the naming rule, the
-  payload and the bearer move in.
-- **`fleet.py`** keeps the runners, the view, placement, approvals as
-  intent, the host-row parsing and listen-port rules, `LEGACY_SERVERS`,
-  and materialize. It produces `IntendedDeployment` (one function over
-  `fleet.hosts`, the approvals and the provider lines, replacing the ad
-  hoc construction in `from_cfg`). It loses the protocol half to
-  `provisioning.py`, the probe and the parsers to `vllm_client.py`, the
-  lifecycle counters on `VllmServer`, and in the end `VllmServer` itself.
-  `config_served_at` on a server is the Loading anchor, a lifecycle fact
-  set from a ConfigFetch or from Vast adoption; it is not the fetch
-  record and moves into `deployment.py` with the rest of the history.
+  `install_set.py` → `GET /vllm/config`) and what it gets back: how a
+  box names itself (`X-LLMAO-Host`, else the forwarded address, else
+  the peer); the fleet-key check; the payload, a host's
+  `IntendedDeployment`s rendered as servers JSON, deriving nothing
+  itself; `ConfigFetch`, host to time of the last fetch; and the
+  unknown-box record (first seen, last seen, count, the cap). The route
+  itself stays in `api.py` as a few lines calling these: `api.py` is
+  the JSON route module, and a module-level `@APP.get` only works in a
+  module nothing imports before the app exists, which a source module
+  is not. Commits: ConfigFetch and the unknown-box record first; then
+  IntendedDeployment (above); then the naming rule, the key check and
+  the payload move in, the route thins, and the `ProvisioningRecord`
+  is built in `main.py`.
+- **`fleet.py`** keeps the runners, the view, placement, the approvals,
+  the listen-port rules and materialize. It loses the row parser,
+  `LEGACY_SERVERS` and `from_cfg`'s construction to `intent.py`, the
+  protocol half to `provisioning.py`, the probe and the parsers to
+  `vllm_client.py`, the lifecycle counters on `VllmServer`, and in the
+  end `VllmServer` itself. `config_served_at` on a server is the
+  Loading anchor, a lifecycle fact set from a ConfigFetch or from Vast
+  adoption; it is not the fetch record and moves into `deployment.py`
+  with the rest of the history.
 - **`proxy/deployments.py`** produces `LiteLLMDeployment` (one per
   `/model/info` entry, found by the stamp; replaces the route tuples,
   the index and `ExtraLiteLLM`) and `LiteLLMHealth` (replaces the two
@@ -771,13 +827,19 @@ fact has two homes. Then `deployment.py` against six known shapes.
    `ProviderRentals`, `match_rental`; the host-side verdict still sits
    in `place_servers` and moves with the Deployment work).
 2. ConfigFetch. **Done:** 57aff8b (`llmao/provisioning.py`:
-   `ConfigFetch`, `UnknownFetch`, `ProvisioningRecord`; the endpoint,
-   the naming rule, the payload and the bearer derivation follow in
-   their own commit).
-3. LiteLLMHealth.
-4. LiteLLMDeployment.
-5. VllmProbe (with `vllm_client.py`).
-6. IntendedDeployment.
+   `ConfigFetch`, `UnknownFetch`, `ProvisioningRecord`).
+3. IntendedDeployment (`providers.py` becomes `intent.py`; `VllmRecipe`
+   in `models.py`; the bearer minted on the record, `vllm_api_key.py`
+   and `working_api_key` deleted), pulled forward from sixth: the
+   payload and the observed server are both built from it, and moving
+   the payload first would have moved the row parsing with it.
+   **In progress.**
+4. The rest of provisioning: the naming rule, the key check and the
+   payload over IntendedDeployment; the route in `api.py` thins to a
+   few lines; `ProvisioningRecord` is built in `main.py`.
+5. LiteLLMHealth.
+6. LiteLLMDeployment.
+7. VllmProbe (with `vllm_client.py`).
 
 Pages, capacity, the sampler, and the action log read the view. They stop
 calling `add_refusal` / `remove_refusal` once the plan is the gate.
@@ -952,7 +1014,8 @@ real gap on its own. In order:
 5. **One working-key function.** `working_api_key(cfg, srv)` in
    `fleet.py`, called from the deployment body and from the `/v1/models`
    fetch, so a legacy box no longer 401s on every pass and reports its
-   context window. Done: 039c403.
+   context window. Done: 039c403. Since folded into `intent.vllm_api_key`,
+   applied once at mint time; the callers read the server's `api_key`.
 6. **Keep the `/v1/models` status, and re-check it while rejected or
    unlisted.** A 401 with the working key is Rejected: delete the
    deployment, keep probing, say the box rejects our key. Unlisted and

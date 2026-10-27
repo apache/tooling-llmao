@@ -60,7 +60,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 CONFIG = os.environ.get("LLMAO_CONFIG", "/opt/llmao/config.yaml")
-_LABEL = "llmao.vllm.api_key"  # must match llmao/vllm_api_key.py
+_LABEL = "llmao.vllm.api_key"  # must match llmao/intent.py
 
 NO_ENDPOINTS_HELP = (
     "  on the gateway host: run it with sudo -- config.yaml is 0440 and\n"
@@ -78,7 +78,7 @@ def derive_vllm_api_key(salt: str, host: str, listen_port: int) -> str:
 
     Reimplemented rather than imported: these scripts run from bin/ on a
     managed host with the system python, outside llmao's venv. Must stay
-    byte-identical to llmao/vllm_api_key.py -- a drift here reports a working
+    byte-identical to llmao/intent.py -- a drift here reports a working
     box as mis-keyed.
     """
     key = (salt or "").strip()

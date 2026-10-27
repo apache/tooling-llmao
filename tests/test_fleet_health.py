@@ -283,12 +283,9 @@ def test_add_calls_deployment_only_when_serving():
     assert added == [dep]
 
 
-def test_box_json_listen_not_public():
-    s = _server(gpu_memory_utilization=0.5, public_port=41234)
-    body = s.box_json()
-    assert body["model"] == "google/gemma"
-    assert body["port"] == 8001
-    assert body["gpu_memory_utilization"] == 0.5
+def test_the_server_is_dialed_on_its_public_port():
+    s = _server(public_port=41234)
+    assert s.listen_port == 8001
     assert s.api_base == "http://10.0.0.1:41234/v1"
 
 

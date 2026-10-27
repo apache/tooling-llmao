@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 
 import yaml  # noqa: E402
 
-from llmao.vllm_api_key import derive_vllm_api_key  # noqa: E402
+from llmao.intent import derive_vllm_api_key  # noqa: E402
 
 
 def salt_from_config(path: pathlib.Path) -> str:

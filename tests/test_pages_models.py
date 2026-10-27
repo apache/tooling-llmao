@@ -32,6 +32,7 @@ import ezt
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment, VllmServer, remove_refusal
+from llmao.intent import provider_intent
 from llmao.model_status import (
     AVAILABLE,
     AWAITING,
@@ -45,7 +46,6 @@ from llmao.model_status import (
     UNHEALTHY,
     UNKNOWN,
 )
-from llmao.providers import ProviderDeployment
 from llmao.provisioning import UnknownFetch
 from llmao.rental import Rental
 
@@ -165,9 +165,7 @@ def test_unavailable_self_hosted_has_no_concurrency():
 
 def test_commercial_is_external_and_has_no_concurrency():
     pages = _app()
-    dep = FleetDeployment.from_provider(
-        ProviderDeployment("example", "claude", "anthropic/claude", "https://api.example")
-    )
+    dep = FleetDeployment.from_intended(provider_intent("example", "claude", "anthropic/claude", "https://api.example"))
     dep.in_litellm = True
     dep.litellm_healthy = True
     dep.litellm_health_at = time.time()
@@ -566,8 +564,8 @@ def test_mixed_card_and_unavailable_card():
     pages = _app()
     box = _server("gemma")
     fleet = _fleet(box)
-    commercial = FleetDeployment.from_provider(
-        ProviderDeployment("example", "gemma", "example/gemma", "https://api.example")
+    commercial = FleetDeployment.from_intended(
+        provider_intent("example", "gemma", "example/gemma", "https://api.example")
     )
     fleet.deployments.append(commercial)
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("missing")])

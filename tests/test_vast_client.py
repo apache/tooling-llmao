@@ -103,7 +103,7 @@ def test_apply_port_map():
     fleet = Fleet(cfg=None, servers=[s])
     fleet.apply_port_map(port_map_from_body({"instances": [INSTANCE], "total_instances": 1}))
     assert s.public_port == 41234
-    assert s.box_json()["port"] == 8001
+    assert s.listen_port == 8001
     assert s.api_base == "http://203.0.113.10:41234/v1"
 
 
@@ -156,7 +156,7 @@ def test_a_gpu_host_needs_its_key():
 
 def test_the_old_place_still_works_with_a_warning(caplog):
     cfg = _vast_cfg(fleet_vast={"api_key": "abc"})
-    with caplog.at_level(logging.WARNING, logger="llmao.providers"):
+    with caplog.at_level(logging.WARNING, logger="llmao.intent"):
         validate_fleet(cfg, models=load_models(EXAMPLE))
     assert "fleet.vast.api_key is deprecated; move it to providers.vast.api_key" in caplog.text
     assert Fleet.from_cfg(cfg, models=load_models(EXAMPLE)).servers[0].public_port is None

@@ -28,18 +28,15 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.fleet import (
     HOST_HEADER,
     Fleet,
-    UnknownHostError,
     client_ip,
-    config_for_host,
     normalize_peer_ip,
-    parse_host_row,
     snapshot_for_status,
     validate_fleet,
-    working_api_key,
 )
+from llmao.intent import UnknownHostError, derive_vllm_api_key, vllm_api_key
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models, vllm_recipe
-from llmao.vllm_api_key import derive_vllm_api_key
+from llmao.provisioning import config_for_host
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
@@ -388,24 +385,27 @@ def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
         validate_fleet(_cfg({"10.0.0.1": [["qwen3-8b", 8004]]}), models=models)
 
 
-def test_working_api_key_follows_the_legacy_set():
-    """One rule for the bearer a box accepts: shared for LEGACY_SERVERS, derived for every other."""
+def test_the_bearer_is_minted_once_with_the_intent():
+    """One rule for the bearer a box runs with, applied when the intent is minted.
+
+    Shared for LEGACY_SERVERS, derived from the salt for every other box.
+    The server carries it, so the probe asks /v1/models with it and the
+    executor registers it; neither derives anything.
+    """
     from llmao.proxy.client import LiteLLMBackend
 
-    cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
+    cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]], "10.0.0.1": [["qwen3-8b", 8001]]})
     cfg.fleet.selfhost_api_key = "sk-shared"
     cfg.litellm = edict(base_url="http://127.0.0.1:4000", master_key="sk-m", request_timeout_s=5)
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    legacy = fleet.deployments[0]
-    other = edict(host="10.0.0.1", listen_port=8001, api_key="sk-derived")
-    in_range = edict(host="213.173.110.78", listen_port=8003, api_key="sk-derived")
-    assert working_api_key(cfg, legacy.vllm) == "sk-shared"
-    assert working_api_key(cfg, in_range) == "sk-shared"
-    assert working_api_key(cfg, other) == "sk-derived"
+    legacy, other = fleet.deployments
+    assert legacy.vllm.api_key == "sk-shared"
+    assert other.vllm.api_key == derive_vllm_api_key("test-vllm-salt", "10.0.0.1", 8001)
+    assert vllm_api_key(cfg, "213.173.110.78", 8003) == "sk-shared"
 
-    # The executor asks the same function, and has no answer off our boxes.
+    # The executor reads the server's key, and has no answer off our boxes.
     backend = LiteLLMBackend(cfg, fleet)
     assert backend.deployments._working_api_key(legacy) == "sk-shared"
     assert backend.deployments._working_api_key(edict(self_hosted=False, vllm=None)) is None
@@ -525,8 +525,8 @@ def test_client_ip_claimed_host_not_peer():
     assert HOST_HEADER == "X-LLMAO-Host"
 
 
-def test_from_row_api_key_is_salt_hmac():
-    """Box JSON carries the salt HMAC, not the legacy shared bearer."""
+def test_the_payload_carries_the_salt_hmac():
+    """The payload carries the salt HMAC, not the legacy shared bearer."""
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003]]})
     cfg.fleet.selfhost_api_key = "sk-fleet"
     models = load_models(EXAMPLE)  # definitions carry no api_key
@@ -535,7 +535,7 @@ def test_from_row_api_key_is_salt_hmac():
     assert payload["servers"][0]["api_key"] != "sk-fleet"
 
 
-def test_from_row_requires_salt():
+def test_the_payload_requires_the_salt():
     """A fleet config that never defines the salt fails at attribute access."""
     cfg = edict(
         {
@@ -545,37 +545,6 @@ def test_from_row_requires_salt():
     )
     with pytest.raises(AttributeError):
         config_for_host("10.0.0.1", models=load_models(EXAMPLE), cfg=cfg)
-
-
-def test_host_row_still_reads_the_deprecated_fourth_element():
-    """[model, port, name, public_port] loads: a stale row warns, it does not stop llmao.
-
-    The fourth element pinned a RunPod box's public port while RunPod's
-    mapping was not read. Both listings carry the port now; the element is
-    read so the loader can warn and seed, and it goes away in config.
-    """
-    assert parse_host_row(["qwen3-8b", 8003], "h", 0) == ("qwen3-8b", 8003, "qwen3-8b", None)
-    assert parse_host_row(["qwen3-8b", 8003, "b"], "h", 0) == ("qwen3-8b", 8003, "b", None)
-    assert parse_host_row(["qwen3-8b", 8003, "b", 15601], "h", 0) == (
-        "qwen3-8b",
-        8003,
-        "b",
-        15601,
-    )
-
-
-def test_host_row_null_name_reaches_the_fourth_slot():
-    """null for name was how a port got pinned without renaming the server."""
-    _, _, name, public = parse_host_row(["qwen3-8b", 8003, None, 15601], "h", 0)
-    assert name == "qwen3-8b"  # falls back to the model name
-    assert public == 15601
-
-
-def test_host_row_rejects_bad_public_port():
-    with pytest.raises(ValueError, match="public_port must be an int"):
-        parse_host_row(["qwen3-8b", 8003, None, "nope"], "h", 0)
-    with pytest.raises(ValueError, match="must be"):
-        parse_host_row(["qwen3-8b", 8003, "b", 1, 2], "h", 0)
 
 
 def test_a_fourth_element_warns_seeds_the_port_and_yields_to_the_listing(caplog):

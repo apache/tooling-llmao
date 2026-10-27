@@ -29,18 +29,72 @@ llmao keeps of that request. Today, the records:
   first seen, last seen and a count, so the /models attention strip can
   show it and an admin can approve it. Capped; the oldest last-seen go.
 
-The endpoint, how a box names itself, the payload and the bearer
-derivation join these from ``fleet.py`` in the next step.
+And the payload, ``config_for_host``: the host's IntendedDeployments
+(llmao/intent.py) rendered as the servers JSON the box installs. It
+derives nothing; the bearer and the recipe are on the record. How a box
+names itself and the fleet-key check join from ``fleet.py`` and ``api.py``
+next.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from typing import Any
+
+from easydict import EasyDict as edict  # noqa: N813
+
+from llmao.intent import IntendedDeployment, host_intents
+from llmao.models import load_models
+from llmao.reconcile import normalize_peer_ip
 
 # How many unknown hosts are remembered. A scan of the fleet key's port
 # from strangers must not grow without bound; the oldest last-seen go.
 UNKNOWN_FETCH_CAP = 50
+
+
+def server_json(intended: IntendedDeployment) -> edict:
+    """One vLLM process as the box installs it: the wire shape of ``servers[]``.
+
+    ``model`` is the HF weights id, ``served_model_name`` what vLLM answers
+    to, ``port`` the listen port (the public port is ours, not the box's
+    business; it binds inside the container), ``api_key`` the bearer the
+    intent was minted with. A requirement the recipe does not declare is
+    left out, so the box's fit check knows it was not stated.
+    """
+    recipe = intended.recipe
+    out = edict(
+        name=intended.name,
+        model=recipe.hf_model,
+        served_model_name=recipe.served_name,
+        host=intended.host,
+        port=intended.listen_port,
+        api_key=intended.api_key,
+        args=list(recipe.args),
+    )
+    for field in ("gpu_memory_utilization", "max_model_len", "vram_gb", "disk_gb", "kv_bytes_per_token"):
+        value = getattr(recipe, field)
+        if value is not None:
+            out[field] = value
+    return out
+
+
+def config_for_host(
+    host: str,
+    *,
+    models: list | None = None,
+    cfg: Any = None,
+    approved: list[str] | None = None,
+) -> edict:
+    """The payload for one host: its IntendedDeployments as servers JSON.
+
+    Raises intent.UnknownHostError when the host has neither rows nor an
+    approval. Requires validate_fleet() already ran on cfg.
+    """
+    models = models or load_models(cfg=cfg)
+    by_name = {str(model.model_name): model for model in models}
+    servers = [server_json(i) for i in host_intents(cfg, by_name, host, approved=approved)]
+    return edict(host=normalize_peer_ip(host), servers=servers)
 
 
 @dataclass(frozen=True)

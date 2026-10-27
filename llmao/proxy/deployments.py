@@ -36,8 +36,8 @@ from llmao.fleet import (
     ExtraLiteLLM,
     normalize_peer_ip,
     snapshot_for_status,
-    working_api_key,
 )
+from llmao.intent import provider_api_key
 from llmao.model_status import (
     FOREIGN,
     HEALTHY,
@@ -49,7 +49,6 @@ from llmao.model_status import (
     DeploymentSnapshot,
     deployment_status,
 )
-from llmao.providers import provider_api_key
 from llmao.proxy.errors import BackendUnavailableError
 from llmao.reconcile import norm_base
 
@@ -166,10 +165,10 @@ class DeploymentManager:
         return None
 
     def _working_api_key(self, dep) -> str | None:
-        """The bearer to register for this server: fleet.working_api_key, or None off our boxes."""
+        """The bearer to register for this server: the key its intent was minted with, or None off our boxes."""
         if not dep.self_hosted or dep.vllm is None:
             return None
-        return working_api_key(self._cfg, dep.vllm) or None
+        return dep.vllm.api_key or None
 
     async def _deployment_present(self, dep) -> bool:
         routes = _routes_from_model_info(await self._model_info_rows())

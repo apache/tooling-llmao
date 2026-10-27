@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+from dataclasses import dataclass
 from typing import Any
 
 import ezt
@@ -65,6 +66,56 @@ def vllm_recipe(model: Any) -> Any:
     """How to run this model on one of our own boxes, or None if it says nothing."""
     info = model.get("model_info") if hasattr(model, "get") else None
     return (info.get("vllm") if hasattr(info, "get") else None) or None
+
+
+@dataclass(frozen=True)
+class VllmRecipe:
+    """How to run a model on one of our boxes: the parsed ``model_info.vllm`` block.
+
+    ``hf_model`` is the Hugging Face weights id, ``served_name`` what vLLM
+    must answer to (see served_model_name). The declared requirements
+    (``vram_gb``, ``disk_gb``, ``kv_bytes_per_token`` with
+    ``max_model_len``) let a box refuse before pulling tens of GB of
+    weights. They are NOT host capacity, which the box reads from
+    nvidia-smi: a hand-typed figure is wrong the first time a provider
+    supplies a different card than was ordered. None: not declared.
+    """
+
+    hf_model: str
+    served_name: str
+    args: tuple[str, ...] = ()
+    gpu_memory_utilization: float | None = None
+    max_model_len: int | None = None
+    vram_gb: float | None = None
+    disk_gb: float | None = None
+    # KV cache per token of context, from the model's architecture. With
+    # max_model_len it is memory the box needs before serving anything.
+    kv_bytes_per_token: int | None = None
+
+    @classmethod
+    def from_model(cls, model: Any) -> VllmRecipe | None:
+        """The recipe of one models.yaml row, or None when it has none."""
+        vllm = vllm_recipe(model)
+        if vllm is None:
+            return None
+        args = vllm.get("args") or []
+        if isinstance(args, str):
+            args = args.split()
+        util = vllm.get("gpu_memory_utilization")
+        maxlen = vllm.get("max_model_len")
+        vram = vllm.get("vram_gb")
+        disk = vllm.get("disk_gb")
+        kv = vllm.get("kv_bytes_per_token")
+        return cls(
+            hf_model=str(vllm.model),
+            served_name=served_model_name(model),
+            args=tuple(str(a) for a in args),
+            gpu_memory_utilization=util and float(util),
+            max_model_len=maxlen and int(maxlen),
+            vram_gb=vram and float(vram),
+            disk_gb=disk and float(disk),
+            kv_bytes_per_token=kv and int(kv),
+        )
 
 
 def served_model_name(model: Any) -> str:

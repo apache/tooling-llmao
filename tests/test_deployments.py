@@ -22,8 +22,8 @@ import asyncio
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, ORPHAN_PASSES, Fleet, FleetDeployment
+from llmao.intent import provider_intent
 from llmao.model_status import AWAITING, HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
-from llmao.providers import ProviderDeployment
 from llmao.proxy.deployments import DeploymentManager
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
@@ -403,9 +403,9 @@ def test_other_port_is_not_this_deployment():
     assert "model/new" in _paths(be)
 
 
-XAI = ProviderDeployment("xai", "grok-4", "xai/grok-4", "https://api.x.ai/v1")
-OR_GROK = ProviderDeployment("openrouter", "grok-4", "openrouter/x-ai/grok-4", "https://openrouter.ai/api/v1")
-OR_GEMMA = ProviderDeployment("openrouter", "gemma", "openrouter/google/gemma", "https://openrouter.ai/api/v1")
+XAI = provider_intent("xai", "grok-4", "xai/grok-4", "https://api.x.ai/v1")
+OR_GROK = provider_intent("openrouter", "grok-4", "openrouter/x-ai/grok-4", "https://openrouter.ai/api/v1")
+OR_GEMMA = provider_intent("openrouter", "gemma", "openrouter/google/gemma", "https://openrouter.ai/api/v1")
 ACCOUNTS = edict(
     fleet=edict(FLEET_KNOBS),
     providers=edict(
@@ -416,7 +416,7 @@ ACCOUNTS = edict(
 
 
 def _bought(*pds):
-    deps = [FleetDeployment.from_provider(pd) for pd in pds]
+    deps = [FleetDeployment.from_intended(pd) for pd in pds]
     models = {pd.model_name: edict(model_name=pd.model_name, model_info=edict()) for pd in pds}
     return Fleet(None, [], deployments=deps, models=models), deps
 
