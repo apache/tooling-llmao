@@ -618,7 +618,8 @@ self-hosted and commercial are different gates:
   first 401, with no hold, because the refusal is deterministic and
   every request through the deployment would fail. A failed probe under
   `health_fail_threshold`, with `last_ok` set, stays Healthy and is not
-  deleted. Prune unmatched orphans after `ORPHAN_PASSES`.
+  deleted. An orphan is never pruned unattended (ruled 2026-10-28; see
+  Human below).
 - **Unlisted is not a delete gate.** Today `sync_selfhost` also deletes
   when unlisted and not Healthy. Once `last_ok` is set, a box that is not
   Healthy is Unhealthy, and the probe gate already deletes that. The
@@ -645,7 +646,17 @@ self-hosted and commercial are different gates:
   report keys, it does not revert, and reconcile does not take it over.
 - **Human:** approve, and anything that spends money or destroys a box.
   Reboot is by hand in the provider's console until a provider API is
-  verified to do it (and to report box state); then a button. "Remove it from `fleet.hosts`" is a sentence on the attention
+  verified to do it (and to report box state); then a button.
+- **An orphan is skew, and a human decides** (ruled 2026-10-28). A
+  LiteLLM deployment nothing intends got there by an instruction:
+  llmao added it before a restart that lost the approval (the row
+  carries the `llmao_key` stamp), or someone added it by hand in
+  LiteLLM's UI (no stamp). Either way something meant it, and llmao
+  does not know why, so it is shown, not pruned: the "In LiteLLM, not
+  in config" item says which of the two it is, with Stop tracking to
+  delete it and, when a listing names the host, Approve to intend it
+  again. `ORPHAN_PASSES` only debounces the item against a transient
+  read; there is no prune action in the plan. "Remove it from `fleet.hosts`" is a sentence on the attention
   item, not a POST.
 - No v1 switch that holds production LiteLLM writes for approval. The
   read-only alongside phase is that net.
@@ -669,17 +680,16 @@ Also:
   `adopt_vast_instances` adds a server on sight when `/v1/models`
   answers with our key; that path goes with the reconcile work. It is
   not in `fleet.hosts`, so the unlisted sentence never applies to it;
-  when the listing drops it, its record goes. **Consequence to settle:**
-  an approved box's LiteLLM deployment outlives a restart while the
-  approval does not, so until the admin approves again it reads as an
-  orphan and `ORPHAN_PASSES` would prune it. Either the orphan rule
-  spares a stamped row whose host the listing still names, or approvals
-  persist (open question 4 calls that a product question).
+  when the listing drops it, its record goes. An approved box's LiteLLM
+  deployment outlives a restart while the approval does not; it then
+  reads as an orphan, which is a skew item for a human and never a
+  prune (Policy), so the route stays until the admin approves again or
+  stops tracking it.
 - Two LiteLLM ids for one key: keep the stamped row if there is one,
   else the row whose `api_base` matches the dialable URL. Two stamped
   rows (a double add that slipped past the confirm rule): keep the one
-  with the lower LiteLLM id. Any further id is an orphan and follows
-  `ORPHAN_PASSES`.
+  with the lower LiteLLM id. Any further id is an orphan: skew, a human
+  decides.
 - Unknown fleet-key fetches stay an onboarding strip: still 404 until
   approved, still not a LiteLLM row. The fetch is the box's one ask: on
   a 404 the installer exits and the box idles, so the unknown record and
@@ -902,14 +912,15 @@ the button.
    Log every disagreement between the computed plan and what
    `sync_selfhost` / `_prune_extras` did, and with stored `srv.state` /
    `dep.skew`.
-4. Flip auto actions one kind at a time (add, then delete, then
-   orphan-prune), deleting each old path as it goes.
+4. Flip auto actions one kind at a time (add, then delete), deleting
+   each old path as it goes. The orphan prune (`_prune_extras`) is
+   retired, not flipped: an orphan becomes a skew item for a human.
 5. Point `/models` and `/admin` at the view and the plan.
 
-Restart-empty hysteresis is a feature: `_prune_extras` starts its counter
-at 0 so a portal coming up to stale deployments clears them after
-`ORPHAN_PASSES` rather than on the first pass. All counters stay in
-process memory; the memory store holds nothing of this design.
+Restart-empty hysteresis is a feature: the orphan counter starts at 0
+so a portal coming up to deployments it does not know shows them as
+skew after `ORPHAN_PASSES` rather than on the first pass. All counters
+stay in process memory; the memory store holds nothing of this design.
 
 ## Open questions
 
@@ -997,10 +1008,10 @@ badges, unlisted (host-level), and the plan actions.
 | Unlisted, deployment already absent | host verdict true; row is in `fleet.hosts`; lifecycle Unhealthy, Stalled or Foreign | unlisted | sentence, no POST: remove from `fleet.hosts`. A Healthy absent row is the add row, not this one |
 | Listed, not running | either listing has the host with a non-running status, or with no public address | listed, not running: not a miss; no address from that listing; dialable is last-known | keep probing last-known; the unlisted count does not move |
 | #29 orphan, early | not intended, a LiteLLM deployment exists, orphan_passes < `ORPHAN_PASSES` | litellm_only skew | none (count) |
-| #29 orphan, persisted | orphan_passes ≥ `ORPHAN_PASSES` | litellm_only | prune_orphan |
+| #29 orphan, persisted | orphan_passes ≥ `ORPHAN_PASSES` | litellm_only skew item | none; `needs_human`. The item says who meant it: stamped (`llmao_key`) is llmao's own add, intent lost in a restart; unstamped is a hand add in LiteLLM's UI. Stop tracking deletes; Approve, when a listing names the host, intends it again |
 | Orphan that is our listen port | a LiteLLM deployment matches a key's listen URL | at_listen_port | update_api_base, not prune |
 | Hand edit in LiteLLM's UI | intended row; its deployment is gone, or its api_base differs | skew | add when the add gate is open; update_api_base when api_base differs. Body fields are not reverted in v1. Action log records the revert |
-| Two LiteLLM ids, one key | two rows for one key | keep the stamped id, else the api_base that matches the dialable URL; two stamped: the lower id | the other id is an orphan (`ORPHAN_PASSES`) |
+| Two LiteLLM ids, one key | two rows for one key | keep the stamped id, else the api_base that matches the dialable URL; two stamped: the lower id | the other id is an orphan: skew, a human decides |
 | Confirm fetch failed | a write just happened; the follow-up GET of the LiteLLM deployments failed | that source is unread, not "still absent" | no add, no delete, no prune |
 | Same snapshot, reconcile woken again | taken-at unchanged | counters do not move | none |
 | New rental, same address | instance id changed under the same key | history reset | probe afresh; add/delete from new observations |
@@ -1012,7 +1023,7 @@ badges, unlisted (host-level), and the plan actions.
 | Discovered | inventory host not in `fleet.hosts`, no approval; the probe found nothing listening, or `/v1/models` serving a `models.yaml` model with our key, or a refusal | a record reconcile computed, never a Deployment | none. Attention item "rented, nobody intends it" with the probe's finding and Approve (adoption requires approval: the account's inventory may hold another department's machine). Recomputed every pass while the listing names it; the unlisted sentence never applies |
 | Inventory unread or stale | that snapshot `None`, or older than the threshold × its interval, or the same taken-at as the last count | last unlisted verdict stands; do not increment | no unlisted transition |
 | LiteLLM deployments unread or stale | that snapshot `None`, or past the staleness rule | do not invent orphans or absences | no add/delete/prune |
-| Restart, orphans present | empty orphan_passes, deployments still there | orphans at pass 1 | no prune until `ORPHAN_PASSES` |
+| Restart, orphans present | empty orphan_passes, deployments still there | orphans at pass 1 | no skew item until `ORPHAN_PASSES`; never a prune |
 | One listing stale or unread | one of the two listings is stale or unread; the other is fresh | not a miss for any host: the count needs both fresh | no unlisted transition until both have been read again |
 | Two public names, one provider model | two keys, same canonical provider URL, different `model_name` | two records | two add/delete lives |
 | `LEGACY_SERVERS` | listen 10100 / 8004 / 8003 as in the set | key from that listen port | executor uses shared `selfhost_api_key` |
