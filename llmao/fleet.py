@@ -42,6 +42,7 @@ from llmao.intent import (
     ADOPTED,
     LEGACY_SERVERS,
     VLLM_LISTEN_PORTS,
+    Approval,
     IntendedDeployment,
     gpu_host_api_key,
     host_intents,
@@ -52,8 +53,6 @@ from llmao.intent import (
     vllm_intent,
 )
 from llmao.model_status import (
-    ADMIN_LABELS,
-    APPROVED,
     AWAITING,
     FOREIGN,
     HEALTHY,
@@ -707,14 +706,9 @@ class Fleet:
         # What boxes have fetched (llmao/provisioning.py): the last config
         # fetch per known host, and the strangers that presented the fleet key.
         self.provisioning = ProvisioningRecord()
-        # Admin labels (Approved, Reboot requested), keyed by normalized host IP.
-        # In-memory only: cleared on process restart, and they never affect the
-        # computed lifecycle -- the page reads them for display. See admin_label.
-        self.admin_labels: dict[str, str] = {}
-        self.admin_label_at: dict[str, float] = {}
-        # Models an unknown box was told to load. Process memory only, same
-        # lifetime as the unknown-fetch record. config.yaml is not written.
-        self.approved_models: dict[str, list[str]] = {}
+        # What an admin told an unknown box to load (intent.Approval), keyed by
+        # normalized host. Process memory only; config.yaml is not written.
+        self.approvals: dict[str, Approval] = {}
         # LiteLLM routes that match no deployment. Rebuilt each config skew pass.
         # Identity is host, port, and model name. api_base is not a primary key:
         # one host serves several ports, and one host:port can report more than one model.
@@ -787,14 +781,14 @@ class Fleet:
         host already has is left alone, so a later approval can add the next one.
         """
         host = normalize_peer_ip(host)
-        names = self.approved_models.get(host)
-        if not names:
+        approval = self.approvals.get(host)
+        if not approval:
             return
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
         if host in members:
             return
         have = {s.listen_port for s in self.servers if s.host == host}
-        for intended in host_intents(self.cfg, self._models_by_name(), host, approved=names):
+        for intended in host_intents(self.cfg, self._models_by_name(), host, approved=list(approval.models)):
             if intended.listen_port not in have:
                 self._add_server(intended)
 
@@ -805,7 +799,7 @@ class Fleet:
         after adopt saw a port answer. The other listen ports on that instance
         were then absent from ``probe_all`` and stayed Awaiting.
         """
-        for host in list(self.approved_models):
+        for host in list(self.approvals):
             self._materialize_approved(host)
 
     def _add_server(self, intended: IntendedDeployment) -> VllmServer:
@@ -814,43 +808,10 @@ class Fleet:
         self.deployments.append(FleetDeployment.from_vllm(srv))
         return srv
 
-    def set_admin_label(self, host: str, label: str | None, *, now: float | None = None) -> None:
-        """Set, change, or clear a host's current admin label.
-
-        ``label`` is ``APPROVED`` / ``REBOOT_REQUESTED``, or ``None`` to clear.
-        The value is display-only: it is never read by the lifecycle, and it is
-        lost when the process restarts (docs/box-lifecycle.md says what
-        losing one costs). One label per host -- these are phases of one
-        onboarding, so a host is in at most one at a time.
-        """
-        if label is not None and label not in ADMIN_LABELS:
-            raise ValueError(f"Unknown admin label: {label!r}")
-        host = normalize_peer_ip(host)
-        if label is None:
-            self.admin_labels.pop(host, None)
-            self.admin_label_at.pop(host, None)
-            return
-        stamp = now or time.time()
-        self.admin_labels[host] = label
-        self.admin_label_at[host] = stamp
-
-    def admin_label(self, host: str) -> edict:
-        """The host's admin label, ready for display.
-
-        ``label`` is the stored value ("" when unset), ``display`` is the
-        underscored value with spaces, ``at`` is the age of the label
-        ("never" when unset). No post-processing at the call site.
-        """
-        host = normalize_peer_ip(host)
-        label = self.admin_labels.get(host)
-        at = self.admin_label_at.get(host) if label is not None else None
-        return edict(
-            {
-                "label": label or "",
-                "display": (label or "").replace("_", " "),
-                "at": _ago(at),
-            }
-        )
+    def approval_display(self, host: str) -> str:
+        """'Approved · 15h ago' beside the rows of an approved host; "" for a fleet.hosts member."""
+        approval = self.approvals.get(normalize_peer_ip(host))
+        return (approval and f"Approved · {_ago(approval.at)} ago") or ""
 
     def config_fetch_display(self, host: str) -> str:
         """Human-readable age of the last config fetch for a host, "—" if never."""
@@ -864,18 +825,17 @@ class Fleet:
         seen = self.provisioning.unknown.get(host)
         if seen is None:
             return ""
-        line = f"seen {_ago(seen.last_seen)} · {seen.count} requests"
-        names = self.approved_models.get(normalize_peer_ip(host))
-        if names:
-            line += " · " + ", ".join(names)
-        return line
+        return f"seen {_ago(seen.last_seen)} · {seen.count} requests"
 
-    def approve_models(self, host: str, names: list[str]) -> None:
-        """Remember which models an unknown box should load, and mark it approved.
+    def approve_models(self, host: str, names: list[str], *, now: float | None = None) -> Approval:
+        """An admin names the models an unknown box loads: the host is intended from here on.
 
-        Replaces any previous list. Raises, changing nothing, when the host is
-        already in fleet.hosts, the selection is empty, or a name is unknown or
-        not self-hosted. Lost on restart.
+        It leaves the unknown record and gets its servers at once (Awaiting,
+        one per model on VLLM_LISTEN_PORTS in order), so it reads with the
+        other deployments; its next config fetch is served. Replaces any
+        previous approval. Raises, changing nothing, when the host is already
+        in fleet.hosts, the selection is empty, or a name is unknown or not
+        self-hosted. Lost on restart.
         """
         host = normalize_peer_ip(host)
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
@@ -893,8 +853,10 @@ class Fleet:
                 raise ValueError(f"Unknown model: {name}")
             if vllm_recipe(model) is None:
                 raise ValueError(f"{name} has no vLLM recipe, so a box cannot load it")
-        self.approved_models[host] = chosen
-        self.set_admin_label(host, APPROVED)
+        approval = self.approvals[host] = Approval(host, tuple(chosen), now or time.time())
+        self.provisioning.unknown.pop(host, None)
+        self._materialize_approved(host)
+        return approval
 
     def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
         """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.
@@ -907,13 +869,13 @@ class Fleet:
         # A stranger that has since joined config is neither unknown nor
         # approved; its approval, if any, is spent.
         self.provisioning.forget_unknown(members)
-        for known in list(self.approved_models):
+        for known in list(self.approvals):
             if known in members:
-                self.approved_models.pop(known, None)
+                self.approvals.pop(known, None)
         if host in members:
             return
         for evicted in self.provisioning.note_unknown(host, now=now):
-            self.approved_models.pop(evicted, None)
+            self.approvals.pop(evicted, None)
 
     def apply_port_map(self, mapping: Any) -> None:
         """Set public_port from a host → {listen: public} map such as port_map_from_body's. Leave unset if missing.
@@ -928,11 +890,6 @@ class Fleet:
                 _LOGGER.info("listing: no instance for fleet host %s", srv.host)
                 continue
             _set_public_port(srv, by_listen, "listing")
-
-    def _stamp_public_ports(self, host: str, by_listen: Any) -> None:
-        for srv in self.servers:
-            if srv.host == host:
-                _set_public_port(srv, by_listen, "vast")
 
     def model_rollup(self, model_name: str, *, now: float | None = None):
         """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
@@ -1160,12 +1117,13 @@ class Fleet:
         return placed
 
     async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:
-        """Probe Vast instances that are not in fleet.hosts.
+        """Probe Vast instances that nothing intends: not in fleet.hosts, not approved.
 
-        Connection refused leaves the IP unknown. A 503 with an approval
-        materializes the servers as Loading. A 200 with no approval left in
-        memory (a restart) reads /v1/models and materializes the matching
-        model as Healthy, so sync_selfhost can create the Deployment.
+        An approved host has its servers already and is the probe pass's,
+        not adoption's. Connection refused leaves the IP unknown. A 200
+        reads /v1/models and materializes the matching model as Healthy
+        (a restart lost the approval), so sync_selfhost can create the
+        Deployment.
         """
         stamp = now or time.time()
         grace = float(self.cfg.fleet.health_grace_s)
@@ -1187,26 +1145,6 @@ class Fleet:
                 ok, reached, err = await _get_health(client, f"http://{ip}:{int(public)}/health")
                 probes.append((listen, int(public), ok, reached, err))
             if not any(reached for _, _, _, reached, _ in probes):
-                continue
-            if self.approved_models.get(ip):
-                self._materialize_approved(ip)
-                self._stamp_public_ports(ip, by_listen)
-                for srv in self.servers:
-                    if srv.host != ip:
-                        continue
-                    hit = next((p for p in probes if p[0] == srv.listen_port), None)
-                    if hit is None:
-                        continue
-                    _, _, ok, reached, err = hit
-                    srv.config_served_at = srv.config_served_at or stamp
-                    srv.record_probe(
-                        ok,
-                        now=stamp,
-                        grace_s=grace,
-                        fail_threshold=threshold,
-                        err=err,
-                        reached=reached,
-                    )
                 continue
             for listen, public, ok, _reached, _err in probes:
                 if not ok:

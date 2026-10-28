@@ -89,11 +89,10 @@ document.addEventListener("DOMContentLoaded", function () {
       var btn = event.relatedTarget;
       if (!btn) return;
       var host = btn.getAttribute("data-host") || "";
-      var picked = (btn.getAttribute("data-models") || "").split(",");
       document.getElementById("approve-host").value = host;
       document.getElementById("approveBoxModalLabel").textContent = "Approve " + host;
       approveModal.querySelectorAll("input[name=model]").forEach(function (cb) {
-        cb.checked = picked.indexOf(cb.value) !== -1;
+        cb.checked = false;
       });
     });
   }

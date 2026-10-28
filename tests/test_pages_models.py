@@ -32,7 +32,7 @@ import ezt
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import Fleet, FleetDeployment, VllmServer, remove_refusal
-from llmao.intent import provider_intent
+from llmao.intent import Approval, provider_intent
 from llmao.model_status import (
     AVAILABLE,
     AWAITING,
@@ -46,8 +46,10 @@ from llmao.model_status import (
     UNHEALTHY,
     UNKNOWN,
 )
+from llmao.models import load_models
 from llmao.provisioning import UnknownFetch
 from llmao.rental import Rental
+from tests.test_fleet import EXAMPLE
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -296,74 +298,63 @@ def test_awaiting_row_shows_the_last_probe():
     assert rows["10.0.0.6:8001"].last_ok == "never"
 
 
-def test_admin_rows_carry_the_host_label():
+def test_admin_rows_of_an_approved_host_say_so():
+    """The one mark an approval leaves on a row: why it is here when fleet.hosts does not name it."""
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    fleet.set_admin_label("10.0.0.1", "approved", now=time.time() - 20)
+    fleet.approvals["10.0.0.1"] = Approval("10.0.0.1", ("gemma",), time.time() - 20)
     rows = pages.deployment_rows(fleet, admin=True)
-    assert rows[0].label == "approved"
-    assert rows[0].label_at == "20s"
-    # Non-admin rows never expose the label.
+    assert rows[0].flag == "Approved · 20s ago"
+    # Non-admin rows never expose it.
     for r in pages.deployment_rows(fleet, admin=False):
-        assert r.label == ""
-        assert r.label_at == ""
+        assert r.flag == ""
 
 
-def test_apply_admin_label_sets_clears_and_rejects():
+def test_apply_box_approval_reports_the_models_and_refuses_a_bad_form():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-
-    ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "approved")
-    assert ok and "approved" in msg
-    assert fleet.admin_label("10.0.0.1").label == "approved"
-
-    # A garbled value is rejected, and must not wipe the existing vouch.
-    ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "bogus")
-    assert not ok and "Unknown admin label" in msg
-    assert fleet.admin_label("10.0.0.1").label == "approved"
-
-    # Empty host is rejected.
-    ok, msg = pages.apply_admin_label(fleet, "", "approved")
+    fleet.cfg.fleet.hosts = {}
+    fleet.cfg.fleet.vllm_api_salt = "test-vllm-salt"
+    fleet.models = {m.model_name: m for m in load_models(EXAMPLE)}
+    ok, msg = pages.apply_box_approval(fleet, "", ["gemma4-26b"])
     assert not ok and "No host" in msg
+    ok, msg = pages.apply_box_approval(fleet, "192.0.2.7", [])
+    assert not ok and "at least one" in msg
+    ok, msg = pages.apply_box_approval(fleet, "192.0.2.7", ["gemma4-26b"])
+    assert ok and msg == "Approved 192.0.2.7 to load gemma4-26b."
+    assert [s.host for s in fleet.servers] == ["10.0.0.1", "192.0.2.7"]
 
-    # An empty label clears.
-    ok, msg = pages.apply_admin_label(fleet, "10.0.0.1", "")
-    assert ok and "Cleared" in msg
-    assert fleet.admin_label("10.0.0.1").label == ""
 
-
-def test_admin_drill_down_renders_deployments_and_label_controls():
+def test_admin_drill_down_renders_deployments_without_label_controls():
     pages = _app()
     healthy = _server("gemma")
     down = _server("gemma", host="10.0.0.2", port=8002, ok=False)
     fleet = _fleet(healthy, down)
-    # A vouch on the healthy box, so the label select pre-selects Approved.
-    fleet.set_admin_label("10.0.0.1", "approved", now=time.time() - 20)
+    fleet.approvals["10.0.0.1"] = Approval("10.0.0.1", ("gemma",), time.time() - 20)
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
 
     # The per-model deployment table is present, with one row per replica.
-    assert "Admin flags reset when the control plane restarts." in out
+    assert "Approvals reset when the control plane restarts." in out
     assert "1 healthy / 1 unhealthy" in out
     assert "Approved ·" in out
-    assert 'name="host" value="10.0.0.1"' in out
-    assert 'value="reboot_requested"' in out
-    assert "/do-set-admin-label" in out
+    # Reboot is manual until a provider API can do it; there is no label to set or clear.
+    assert "reboot" not in out.lower()
+    assert "Clear flag" not in out
+    assert "/do-set-admin-label" not in out
 
 
-def test_attention_strip_renders_the_label_form_for_unknown_boxes():
+def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.provisioning.unknown["192.0.2.7"] = UnknownFetch("192.0.2.7", time.time() - 100, time.time() - 5, 3)
-    fleet.set_admin_label("192.0.2.7", "approved", now=time.time() - 5)
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, attention=pages.attention_items(fleet), admin=True)
-    # The unknown-box item carries the set/clear form, pre-selected on its vouch.
-    assert 'name="host" value="192.0.2.7"' in out
-    assert "Approved ·" in out
-    assert "Request reboot" in out
-    assert "/do-set-admin-label" in out
+    assert "Fleet key presented from 192.0.2.7" in out
+    assert "seen 5s · 3 requests" in out
+    assert 'data-host="192.0.2.7"' in out
     assert 'data-bs-target="#approveBoxModal"' in out
+    assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Approve"]
     out = _render(
         rows,
         attention=pages.attention_items(fleet),
@@ -486,7 +477,7 @@ def test_healthy_row_has_one_menu_entry_and_no_clutter():
     fleet = _fleet(_server("gemma"))
     row = pages.deployment_rows(fleet, admin=True)[0]
     assert row.primary == []
-    assert [a.label for a in row.menu] == ["Request reboot"]
+    assert row.menu == []
     assert row.badge_class == "text-bg-success"
     # The diagnostics line leaves out anything it has no value for.
     assert all(d.value and d.value != "—" for d in row.diags)

@@ -94,8 +94,8 @@ source said, with the time it was read, and nothing of ours on it.
 
 **Not objects.** The machine itself is not one: everything true of it is
 either a Rental (the provider's) or a per-host observation a Deployment
-reads through its host. The admin labels (Approved, Reboot requested)
-stay a host-keyed annotation on `Fleet`, outside the machine. The
+reads through its host. An approval (`intent.Approval`, on `Fleet`) is
+intent, not a mark on the machine; there are no admin labels. The
 metrics sampler is a consumer of the view, not a source: it reads
 `/metrics` for the Serving deployments on its own interval and hands
 samples to the capacity rollup, and it no longer writes the cache size
@@ -273,9 +273,8 @@ is observed, rather than updating state step by step from many places.
    plan actions and does not write history: **every write to LiteLLM is
    followed at once by a fetch of the LiteLLM deployments**, which publishes a new
    snapshot and wakes reconcile. That is how a write is confirmed, and
-   how a button changes state by the next page load. Admin labels and
-   `approved_models` are intended, not history. The action log stays its
-   own store.
+   how a button changes state by the next page load. Approvals are
+   intended, not history. The action log stays its own store.
 
    Hysteresis is one **pattern**: consecutive misses, reset on a hit, and
    an unread or stale snapshot is not a miss. A miss is a new snapshot.
@@ -408,7 +407,7 @@ is observed, rather than updating state step by step from many places.
    strip, the reason text, and the action buttons all come from it. The
    pages no longer reason for themselves, so the automatic path and the
    button cannot drift apart. `needs_human` is not always a button.
-   Add, Stop tracking, Approve, and the labels post. "Remove it from
+   Add, Stop tracking and Approve post. "Remove it from
    `fleet.hosts`" is a sentence when the host is unlisted and the
    lifecycle is Unhealthy, Stalled, or Foreign. Awaiting, Loading, and
    Healthy stay quiet. The page does not write config.yaml.
@@ -644,8 +643,9 @@ self-hosted and commercial are different gates:
   not rewrite them. `watch_outside_edits` keeps reporting pretend-project
   team drift, which is all `check_outside_edits` does today. It does not
   report keys, it does not revert, and reconcile does not take it over.
-- **Human:** approve, labels, and anything that spends money or destroys
-  a box. "Remove it from `fleet.hosts`" is a sentence on the attention
+- **Human:** approve, and anything that spends money or destroys a box.
+  Reboot is by hand in the provider's console until a provider API is
+  verified to do it (and to report box state); then a button. "Remove it from `fleet.hosts`" is a sentence on the attention
   item, not a POST.
 - No v1 switch that holds production LiteLLM writes for approval. The
   read-only alongside phase is that net.
@@ -672,7 +672,22 @@ Also:
   with the lower LiteLLM id. Any further id is an orphan and follows
   `ORPHAN_PASSES`.
 - Unknown fleet-key fetches stay an onboarding strip: still 404 until
-  approved, still not a LiteLLM row.
+  approved, still not a LiteLLM row. The fetch is the box's one ask: on
+  a 404 the installer exits and the box idles, so the unknown record and
+  any approval die with a restart and the box is invisible until a
+  listing names it. **A rental nobody intends** (an inventory host with
+  no `fleet.hosts` row, no approval, and nothing serving) is therefore
+  its own attention item under reconcile, with Approve on it, so an
+  idle box we pay for is seen without a second fetch. The same item
+  gets a Reboot button once a provider API is verified to reboot a box
+  (and, better, to report its state); until then the admin reboots it
+  by hand after approving. Both of these are over the inventory
+  snapshot, so they cover RunPod as well as Vast: a RunPod pod serving
+  with the bearer we minted is discovered the same way (today
+  `adopt_vast_instances` is Vast-only; RunPod's listing is read and not
+  adopted). One wrinkle: the bearer is minted from the name the box
+  sent, which for a RunPod pod is its pod id, so the discovery probe
+  must mint with the pod id from the listing, not the public address.
 - Served-model skew (GET `/v1/models` vs the intended HF id) stays
   deferred. The dialable field makes that fetch honest; it is not model
   list skew.
@@ -749,10 +764,11 @@ used to build the observed server, three modules reading one list.
   know which ports it may assign, and the box templates honor the same
   three; `vllm_client.py` dials whatever URL it is handed and knows no
   port plan. The row parser moves here from `fleet.py`; no other module
-  sees a row. The
-  approvals themselves, the only intent that changes at runtime, stay
-  on `Fleet` for now and are handed in; a later commit may move them
-  here as a record of their own. Adoption (a Vast address serving a
+  sees a row. `Approval` (host, models, when) is the record of the only
+  intent that changes at runtime; the live set stays on `Fleet` and is
+  handed in. Approving makes the host intended at once: it leaves the
+  unknown record, its servers exist from then on, and its rows say
+  "Approved"; the admin labels that once marked it are gone. Adoption (a Vast address serving a
   model nobody intended) makes a record of origin `adopted` so the rest
   of the code sees one shape; the Deployment work decides whether
   adoption survives at all.
@@ -920,8 +936,8 @@ process memory; the memory store holds nothing of this design.
    returns the next history and the loop stores it. Nothing in the
    memory store: the one candidate, which listing placed a host, was
    dropped along with `ever_listed` (see History above), and with it the
-   restart hole it was meant to close. Approvals and labels persisting is
-   a separate product question.
+   restart hole it was meant to close. Approvals persisting is a separate
+   product question.
 
 5. **The decision table itself:** worked out from today's real states and
    transitions, before any code.

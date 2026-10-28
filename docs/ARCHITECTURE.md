@@ -178,7 +178,7 @@ the retired models-dashboard design, whose two passes shipped as
 - **What admins see** in addition: the attention strip (unknown boxes,
   Stalled, Unhealthy, Rejected, Foreign, unlisted, skew), a replica summary
   per model, and the deployments drill-down with one primary action and a
-  menu. Admin labels are shown, never counted.
+  menu. An approved host's rows say so; the approval is never counted.
 - **Single source of intent:** `fleet.hosts` plus in-memory approvals say
   what should run; servers and LiteLLM deployments are derived from it. A
   deployment config intends but LiteLLM lacks is a visible skew badge, not

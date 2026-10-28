@@ -160,22 +160,26 @@ has ever named is unknown, not unlisted: it may be rented from a provider
 whose key is not configured. A pod that the listing still names in any
 status, stopped or initializing, is listed; only absence is a miss.
 
-**Admin labels** (Approved, Reboot requested) are set by a person on a
-host, shown beside its rows, never read by the lifecycle, and lost on
-restart. Approval does feed the machine in one way: an approved host that
-is not in `fleet.hosts` gets its servers created (Awaiting), and Vast
-adoption may anchor them and probe them in the same pass.
+**An approval** (`intent.Approval`, kept on `Fleet`) is a person vouching
+for a host that `fleet.hosts` does not name and choosing its models. It is
+intent, like a `fleet.hosts` row: the host leaves the attention strip the
+moment it is approved, its servers are created (Awaiting, one per model on
+the listen ports in order) and read with the other deployments, and its
+next config fetch is served. Vast adoption may anchor and probe them in
+the same pass. The rows carry "Approved · 5m ago" so an admin can see why
+they are there. An approval never changes a computed state.
 
-The labels are annotations on top of the computed states, kept in process
-memory on `Fleet`, keyed by the normalized host, one per host because the
-two are phases of one onboarding. *Approved* means "I vouched for this box
-and chose its models"; *Reboot requested* means "I started a reboot by
-hand and am watching for it to re-request config". Losing a label on a
-restart costs little: the admin re-applies Approved, and a reboot shows
-itself the moment the box re-requests config and reads Loading. Whether a
-reboot was ever requested is lost, and that is accepted. Membership in
-`fleet.hosts` is the durable gate; a label never controls anything, so a
-recycled address gains nothing from a stale one.
+Approvals are process memory, lost on restart, and so is the record of
+the unknown box that asked. A box asks for its config once: on a 404 the
+installer exits and the box sits idle, so after a restart there is
+nothing in the strip to re-approve, and the box is invisible until the
+Vast or RunPod inventory shows it as a rental nobody intends (the
+reconcile work's job; `fleet-reconcile-design.md`). Until then the way
+back is by hand: reboot the box so it asks again. Membership in
+`fleet.hosts` is the durable gate, so a recycled address gains nothing
+from a stale approval. There are no other admin marks on a host: a box
+that failed to provision is rebooted by hand and shows itself the moment
+it re-requests config and reads Loading.
 
 ## Skew badges
 
@@ -206,8 +210,11 @@ accident.
   it from `fleet.hosts`; the orphan prune removes its deployment. Once off
   the fleet the row disappears rather than accumulating in Stalled.
 - **Reboot is observed, not assumed.** Rebooting through a provider's API
-  gave unclear results once; the label marks the intent and the lifecycle
-  reports what it sees. There is no timeout on the label.
+  gave unclear results once, so a reboot is done by hand in the provider's
+  console and the lifecycle reports what it sees. A "Reboot requested"
+  label was tried and removed (2026-10-27): the probes already say what
+  the box is doing. A Reboot button is a TODO for when a provider API is
+  verified to reboot a box and, better, to report its state.
 - **One grace window.** `health_grace_s` is the only loading timeout, from
   the anchor (or the first attempt) to Stalled. Big models load slowly, so
   it is config, not a constant.

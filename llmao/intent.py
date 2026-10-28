@@ -113,6 +113,20 @@ class UnknownHostError(KeyError):
 
 
 @dataclass(frozen=True)
+class Approval:
+    """An admin vouched for a host not in fleet.hosts and named the models it loads.
+
+    The one intent that changes at runtime. Process memory on ``Fleet``,
+    lost on restart; ``fleet.hosts`` is the durable gate. ``models`` take
+    ``VLLM_LISTEN_PORTS`` in order.
+    """
+
+    host: str
+    models: tuple[str, ...]
+    at: float
+
+
+@dataclass(frozen=True)
 class IntendedDeployment:
     """One intended LiteLLM deployment, as config says it.
 

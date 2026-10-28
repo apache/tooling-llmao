@@ -33,7 +33,7 @@ from llmao.fleet import (
     snapshot_for_status,
     validate_fleet,
 )
-from llmao.intent import UnknownHostError, derive_vllm_api_key, vllm_api_key
+from llmao.intent import Approval, UnknownHostError, derive_vllm_api_key, vllm_api_key
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import load_models, vllm_recipe
 from llmao.provisioning import config_for_host
@@ -104,13 +104,14 @@ def test_approved_unknown_host_is_served():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
-    fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
-    assert fleet.admin_label("198.51.100.8").label == "approved"
+    approval = fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"], now=100.0)
+    assert approval.models == ("qwen3-8b", "gemma4-26b")
+    assert fleet.approvals["198.51.100.8"] == approval
     payload = config_for_host(
         "198.51.100.8",
         models=models,
         cfg=cfg,
-        approved=fleet.approved_models["198.51.100.8"],
+        approved=list(approval.models),
     )
     assert [s["name"] for s in payload["servers"]] == ["qwen3-8b", "gemma4-26b"]
     assert [s["port"] for s in payload["servers"]] == [8001, 8002]
@@ -127,28 +128,48 @@ def test_approve_rejects_bad_selections():
     for names in ([], ["nope"], ["claude"]):
         with pytest.raises(ValueError):
             fleet.approve_models("198.51.100.8", names)
-    assert fleet.approved_models == {}
-    assert fleet.admin_labels == {}
+    assert fleet.approvals == {}
+    assert fleet.servers == []
     with pytest.raises(ValueError, match="already in fleet"):
         fleet.approve_models("127.0.0.1", ["gemma4-26b"])
 
 
-def test_config_fetch_materializes_an_approved_host():
+def test_an_approval_leaves_the_strip_and_joins_the_deployments_at_once():
+    """Approved is intent: the host stops being unknown and its servers read Awaiting with the rest."""
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    fleet = _approvable(cfg, models)
+    fleet.note_unknown_config_fetch("198.51.100.8", now=40.0)
+    assert "198.51.100.8" in fleet.provisioning.unknown
+    fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"], now=45.0)
+    assert "198.51.100.8" not in fleet.provisioning.unknown
+    assert [(s.name, s.listen_port, s.state) for s in fleet.servers] == [
+        ("qwen3-8b", 8001, AWAITING),
+        ("gemma4-26b", 8002, AWAITING),
+    ]
+    assert len(fleet.deployments) == 2
+    assert all(not d.in_litellm for d in fleet.deployments)
+    assert fleet.approval_display("::ffff:198.51.100.8").startswith("Approved · ")
+    assert fleet.approval_display("127.0.0.1") == ""
+    # A second approval replaces the first; the servers it already has stay.
+    fleet.approve_models("198.51.100.8", ["qwen3-8b"], now=46.0)
+    assert fleet.approvals["198.51.100.8"].models == ("qwen3-8b",)
+    assert len(fleet.servers) == 2
+
+
+def test_config_fetch_anchors_the_approved_host():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
     fleet.note_config_fetch("198.51.100.8", now=50.0)
     fleet.note_config_fetch("198.51.100.8", now=60.0)
-    assert [s.name for s in fleet.servers] == ["qwen3-8b", "gemma4-26b"]
     assert [s.listen_port for s in fleet.servers] == [8001, 8002]
-    assert len(fleet.deployments) == 2
-    assert all(not d.in_litellm for d in fleet.deployments)
     assert all(s.config_served_at == 60.0 for s in fleet.servers)
     view = deployment_status(snapshot_for_status(fleet.deployments[0], cfg, 60.0), cfg.fleet, 60.0)
     assert view.lifecycle == LOADING
     # A host config.yaml already names is not built from an approval.
-    fleet.approved_models["127.0.0.1"] = ["qwen3-8b"]
+    fleet.approvals["127.0.0.1"] = Approval("127.0.0.1", ("qwen3-8b",), 65.0)
     fleet.note_config_fetch("127.0.0.1", now=70.0)
     assert [s.host for s in fleet.servers] == ["198.51.100.8", "198.51.100.8"]
 
@@ -184,10 +205,12 @@ def test_vast_refused_port_stays_unknown():
             await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
 
     asyncio.run(run())
-    assert fleet.servers == []
+    # The approval's server is there, untouched: no probe was recorded.
+    assert [(s.state, s.last_ok, s.public_port) for s in fleet.servers] == [(AWAITING, None, None)]
 
 
-def test_vast_503_with_approval_is_loading():
+def test_adoption_leaves_an_approved_host_to_the_probe():
+    """An approved host has its servers; adoption neither re-adds nor probes them (the lifecycle's probe does)."""
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
@@ -201,9 +224,8 @@ def test_vast_503_with_approval_is_loading():
             await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
 
     asyncio.run(run())
-    assert len(fleet.servers) == 1
-    assert fleet.servers[0].public_port == 18001
-    assert fleet.servers[0].state == LOADING
+    (srv,) = fleet.servers
+    assert (srv.state, srv.public_port, srv.config_served_at, srv.vllm_probed_at) == (AWAITING, None, None, None)
     assert not fleet.deployments[0].in_litellm
 
 
@@ -330,7 +352,7 @@ def test_approval_drops_when_the_host_joins_config():
     fleet.approve_models("198.51.100.8", ["qwen3-8b"])
     cfg.fleet.hosts["198.51.100.8"] = [["qwen3-8b", 8001]]
     fleet.note_unknown_config_fetch("203.0.113.9", now=40)
-    assert "198.51.100.8" not in fleet.approved_models
+    assert "198.51.100.8" not in fleet.approvals
 
 
 def test_optional_name_two_copies():

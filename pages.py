@@ -47,7 +47,6 @@ from llmao.auth import current_identity
 from llmao.capacity import days_to_read, summarise_capacity, summarise_spend
 from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
 from llmao.model_status import (
-    ADMIN_LABELS,
     AVAILABLE,
     AWAITING,
     CONFIGURED,
@@ -598,16 +597,6 @@ def _replica_summary(model_name: str, fleet) -> str:
     return " / ".join(parts)
 
 
-def _flag_text(info) -> str:
-    """'Approved · 15h ago'. Empty when the host has no label."""
-    if not info.label:
-        return ""
-    title = info.display[:1].upper() + info.display[1:]
-    if info.at and info.at != "never":
-        return f"{title} · {info.at} ago"
-    return title
-
-
 def _deployment_reason(dep) -> str:
     """Plain reason for one deployment. The probe result wins over 'never asked'."""
     srv = dep.vllm
@@ -648,7 +637,6 @@ def _deployment_reason(dep) -> str:
 def _action(**kwargs):
     kind = kwargs.get("kind", "")
     kwargs["is_approve"] = ezt.boolean(kind == "approve")
-    kwargs["is_label"] = ezt.boolean(kind == "label")
     kwargs["is_add"] = ezt.boolean(kind == "add")
     kwargs["is_remove"] = ezt.boolean(kind == "remove")
     kwargs.setdefault("port", "")
@@ -658,12 +646,12 @@ def _action(**kwargs):
     return edict(**kwargs)
 
 
-def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, approved: str = "") -> list:
+def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> list:
     """Buttons shared by the attention strip and the deployment rows.
 
     Add and Stop tracking use the existing refusal gates. A disabled action
     carries the reason as visible text. Approve is only for an unknown host.
-    Labels are host-scoped; Add and Stop tracking act on one host:port.
+    Add and Stop tracking act on one host:port.
     """
     actions = []
     if approve and host:
@@ -673,46 +661,14 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
                 label="Approve",
                 host=host,
                 name="",
-                label_value="",
-                approved=approved,
                 post="",
                 enabled=ezt.boolean(True),
                 reason="",
             )
         )
-    target = host
-    if dep is not None and dep.vllm is not None:
-        target = dep.vllm.host
-    if target:
-        actions.append(
-            _action(
-                kind="label",
-                label="Request reboot",
-                host=target,
-                name="",
-                label_value="reboot_requested",
-                approved="",
-                post="/do-set-admin-label",
-                enabled=ezt.boolean(True),
-                reason="",
-            )
-        )
-        if fleet.admin_label(target).label:
-            actions.append(
-                _action(
-                    kind="label",
-                    label="Clear flag",
-                    host=target,
-                    name="",
-                    label_value="",
-                    approved="",
-                    post="/do-set-admin-label",
-                    enabled=ezt.boolean(True),
-                    reason="",
-                )
-            )
     if dep is None:
         return actions
+    target = dep.vllm.host if dep.vllm is not None else host
     ident = _dep_ident(dep)
     port = str(dep.vllm.listen_port) if dep.vllm is not None else ""
     if dep.self_hosted and not dep.in_litellm:
@@ -726,8 +682,6 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
                 port=port,
                 aria=f"Add {ident}",
                 title="Register this server in LiteLLM now, so it gets traffic",
-                label_value="",
-                approved="",
                 post="/do-add-deployment",
                 enabled=ezt.boolean(reason == ""),
                 reason=reason,
@@ -744,8 +698,6 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False, app
                 port=port,
                 aria=f"Stop tracking {ident}",
                 confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The instance keeps running.",
-                label_value="",
-                approved="",
                 post="/do-remove-deployment",
                 enabled=ezt.boolean(reason == ""),
                 reason=reason,
@@ -776,13 +728,8 @@ def attention_items(fleet) -> list:
                 anchor="",
                 rest="",
                 detail=fleet.unknown_fetch_detail(host),
-                flag=_flag_text(fleet.admin_label(host)),
-                actions=admin_actions(
-                    fleet,
-                    host=host,
-                    approve=True,
-                    approved=",".join(fleet.approved_models.get(host, [])),
-                ),
+                flag="",
+                actions=admin_actions(fleet, host=host, approve=True),
             )
         )
     cfg = fleet.cfg.fleet
@@ -818,7 +765,7 @@ def attention_items(fleet) -> list:
                 anchor=_dep_anchor(dep),
                 rest=rest,
                 detail=reason,
-                flag=_flag_text(fleet.admin_label(host)) if host else "",
+                flag=(host and fleet.approval_display(host)) or "",
                 actions=admin_actions(fleet, dep),
             )
         )
@@ -939,17 +886,6 @@ def deployment_rows(fleet, *, admin: bool) -> list:
     cfg = fleet.cfg.fleet
     for dep in fleet.deployments:
         srv = dep.vllm
-        # The admin label is a host-scoped annotation; unknown-fetch rows
-        # above already carry the host and are labeled separately.
-        if admin and srv is not None:
-            label_info = fleet.admin_label(srv.host)
-            label = label_info.display
-            label_value = label_info.label
-            label_at = label_info.at
-        else:
-            label = ""
-            label_value = ""
-            label_at = ""
         if srv is not None:
             last_ok = srv.last_ok_display
             no_deployment = srv.state == HEALTHY and not dep.in_litellm
@@ -1066,10 +1002,8 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 add_enabled=ezt.boolean(admin and add_refusal(dep) is None),
                 show_remove=ezt.boolean(admin and dep.self_hosted and dep.in_litellm),
                 remove_enabled=ezt.boolean(admin and remove_refusal(dep) is None),
-                label=label,
-                label_value=label_value,
-                label_at=label_at,
-                flag=_flag_text(fleet.admin_label(srv.host)) if admin and srv is not None else "",
+                # Why an approved host's rows are here: not fleet.hosts, a vouch.
+                flag=(admin and srv is not None and fleet.approval_display(srv.host)) or "",
                 actions=actions,
                 primary=primary,
                 menu=menu,
@@ -1164,35 +1098,16 @@ async def do_remove_deployment():
     return _see_other("/models")
 
 
-def apply_admin_label(fleet, host: str, label: str) -> tuple[bool, str]:
-    """Parse and apply a host's admin label; the testable core of /do-set-admin-label.
-
-    ``label`` is a member of ``ADMIN_LABELS``, or ``""`` to clear; any other
-    non-empty value is rejected rather than silently treated as a clear (a
-    garbled form must not wipe a vouch). Returns ``(ok, message)``.
-    """
-    host = (host or "").strip()
-    label = (label or "").strip()
-    if not host:
-        return False, "No host to label."
-    if label and label not in ADMIN_LABELS:
-        return False, f"Unknown admin label: {label!r}."
-    fleet.set_admin_label(host, label or None)
-    if not label:
-        return True, f"Cleared the label for {host}."
-    return True, f"Marked {host} as {label.replace('_', ' ')}."
-
-
 def apply_box_approval(fleet, host: str, names: list[str]) -> tuple[bool, str]:
     """Remember the models for an unknown box. The testable core of /do-approve-box."""
     host = (host or "").strip()
     if not host:
         return False, "No host to approve."
     try:
-        fleet.approve_models(host, names)
+        approval = fleet.approve_models(host, names)
     except ValueError as e:
         return False, str(e)
-    return True, f"Approved {host} to load {', '.join(fleet.approved_models[host])}."
+    return True, f"Approved {host} to load {', '.join(approval.models)}."
 
 
 @APP.post("/do-approve-box")
@@ -1207,28 +1122,6 @@ async def do_approve_box():
     ok, message = apply_box_approval(APP.fleet, form.get("host"), form.getlist("model"))
     if ok:
         await _done(ident, "approve_box", (form.get("host") or "").strip(), message)
-    else:
-        await flash_danger(message)
-    return _see_other("/models")
-
-
-@APP.post("/do-set-admin-label")
-@asfquart.auth.require
-async def do_set_admin_label():
-    """Site admin sets, changes, or clears a host's admin label.
-
-    The label is an in-memory, host-scoped annotation (see
-    ``Fleet.set_admin_label`` and docs/box-lifecycle.md); it is
-    never read by the lifecycle and is lost on a control-plane restart.
-    """
-    ident = await current_identity(APP.cfg)
-    if not ident.is_site_admin:
-        await flash_danger("Only site admins can set an admin label.")
-        return _see_other("/models")
-    form = await quart.request.form
-    ok, message = apply_admin_label(APP.fleet, form.get("host"), form.get("label"))
-    if ok:
-        await _done(ident, "admin_label", (form.get("host") or "").strip(), message)
     else:
         await flash_danger(message)
     return _see_other("/models")
@@ -1568,7 +1461,7 @@ _WORK_ICONS = {
     "add_deployment": "bi-plus-circle",
     "remove_deployment": "bi-dash-circle",
     "approve_box": "bi-hdd-network",
-    "admin_label": "bi-flag",
+    "admin_label": "bi-flag",  # logged before admin labels were removed; old rows still render
     "restrict_project": "bi-shield-lock",
     "revoke_key": "bi-slash-circle",
 }
