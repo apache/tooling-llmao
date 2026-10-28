@@ -657,15 +657,24 @@ Also:
 - First cut diffs presence among the LiteLLM deployments and dialable `api_base`. Body fields
   (`access_groups`, `order`, `hosted_vllm/` prefix, working API key) are
   later skew, not v1.
-- `adopt_vast_instances` materializing a server from live `/v1/models`
-  with no approval is **discovered**, not `fleet.hosts`. Reconcile
-  computes the record; it does not add a server. While the record is
-  Healthy and dialable, add runs, as it does today. A restart does not
-  forget it: the next pass recomputes it while the listing and the probe
-  still match. The attention sentence is that it is not in `fleet.hosts`,
-  not "remove it". It is not in `fleet.hosts`, so the unlisted sentence
-  never applies to it; when the listing drops it, its record goes and
-  its deployment is an orphan.
+- **Adoption requires an admin's approval** (ruled 2026-10-28). An
+  inventory host with no `fleet.hosts` row and no approval is
+  **discovered**: a record reconcile computes from the listing and the
+  probe, never a Deployment, and never an add. The account's inventory
+  is not the fleet: another ASF department may rent a machine on the
+  same Vast or RunPod account, and it is listed like ours. So a
+  discovered host is an attention item, "rented, nobody intends it",
+  with what the probe found (nothing listening; serving `<model>` with
+  our key; refuses our key) and Approve on it. Today's
+  `adopt_vast_instances` adds a server on sight when `/v1/models`
+  answers with our key; that path goes with the reconcile work. It is
+  not in `fleet.hosts`, so the unlisted sentence never applies to it;
+  when the listing drops it, its record goes. **Consequence to settle:**
+  an approved box's LiteLLM deployment outlives a restart while the
+  approval does not, so until the admin approves again it reads as an
+  orphan and `ORPHAN_PASSES` would prune it. Either the orphan rule
+  spares a stamped row whose host the listing still names, or approvals
+  persist (open question 4 calls that a product question).
 - Two LiteLLM ids for one key: keep the stamped row if there is one,
   else the row whose `api_base` matches the dialable URL. Two stamped
   rows (a double add that slipped past the confirm rule): keep the one
@@ -770,8 +779,9 @@ used to build the observed server, three modules reading one list.
   unknown record, its servers exist from then on, and its rows say
   "Approved"; the admin labels that once marked it are gone. Adoption (a Vast address serving a
   model nobody intended) makes a record of origin `adopted` so the rest
-  of the code sees one shape; the Deployment work decides whether
-  adoption survives at all.
+  of the code sees one shape until the reconcile work retires it:
+  adoption requires an approval (Policy below), so `adopted` becomes
+  `approval` and the on-sight add goes.
 - **`rental.py`** (new) knows machines we rent: `Rental`, the frozen row;
   `ProviderRentals`, one provider's set with its fetch time and the
   unread and stale distinctions; the matching rule, a host to its Rental
@@ -999,7 +1009,7 @@ badges, unlisted (host-level), and the plan actions.
 | Commercial listing | no GPU inventory for that key | never unlisted | LiteLLM deployment and health only |
 | Neither GPU key | a laptop; production configures both | both inventory sources not configured; dialable is the canonical listen URL | probe and add as a self-hosted row. Unlisted is never computed |
 | Our own box | `fleet.hosts` row that neither listing names; both keys are configured | counted as a miss on every fresh pass of both listings; dialable is the canonical listen URL (no map, no last-known) | unlisted after `UNLISTED_PASSES`; the sentence shows once it is Unhealthy, Stalled, or Foreign, and is wrong for this host. Accepted: a sentence, never an action. Probe and add on the listen URL |
-| Discovered, Healthy | inventory host not in `fleet.hosts`, no approval, live `/v1/models` matched a `models.yaml` row, probe ok, dialable | a record reconcile computed, not a server it added; Healthy | add_litellm. Sentence: not in `fleet.hosts`. A restart recomputes it on the next pass while the listing and the probe still match. The unlisted sentence never applies |
+| Discovered | inventory host not in `fleet.hosts`, no approval; the probe found nothing listening, or `/v1/models` serving a `models.yaml` model with our key, or a refusal | a record reconcile computed, never a Deployment | none. Attention item "rented, nobody intends it" with the probe's finding and Approve (adoption requires approval: the account's inventory may hold another department's machine). Recomputed every pass while the listing names it; the unlisted sentence never applies |
 | Inventory unread or stale | that snapshot `None`, or older than the threshold × its interval, or the same taken-at as the last count | last unlisted verdict stands; do not increment | no unlisted transition |
 | LiteLLM deployments unread or stale | that snapshot `None`, or past the staleness rule | do not invent orphans or absences | no add/delete/prune |
 | Restart, orphans present | empty orphan_passes, deployments still there | orphans at pass 1 | no prune until `ORPHAN_PASSES` |

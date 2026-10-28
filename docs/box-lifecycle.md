@@ -165,8 +165,8 @@ for a host that `fleet.hosts` does not name and choosing its models. It is
 intent, like a `fleet.hosts` row: the host leaves the attention strip the
 moment it is approved, its servers are created (Awaiting, one per model on
 the listen ports in order) and read with the other deployments, and its
-next config fetch is served. Vast adoption may anchor and probe them in
-the same pass. The rows carry "Approved · 5m ago" so an admin can see why
+next config fetch is served; the lifecycle's probe pass takes them from
+there. The rows carry "Approved · 5m ago" so an admin can see why
 they are there. An approval never changes a computed state.
 
 Approvals are process memory, lost on restart, and so is the record of
