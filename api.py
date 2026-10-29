@@ -132,8 +132,9 @@ async def vllm_config():
         forwarded_for=request.headers.get("X-Forwarded-For"),
         claimed_host=request.headers.get(HOST_HEADER),
     )
+    approval = APP.fleet.approvals.get(host)
     try:
-        payload = config_for_host(host, cfg=APP.cfg, approved=APP.fleet.approved_models.get(host))
+        payload = config_for_host(host, cfg=APP.cfg, approved=approval and list(approval.models))
     except UnknownHostError:
         APP.fleet.note_unknown_config_fetch(host)
         raise HttpError(404, f"unknown fleet host: {host}") from None
