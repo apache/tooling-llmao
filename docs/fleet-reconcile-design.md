@@ -25,7 +25,8 @@ today they are folded into flags on shared objects.
 Two of the six are per host, not per key: `ConfigFetch` and `Rental`.
 Every deployment on the same machine reads the same values through its
 host. Nothing else is host-level; the machine is not an object of its
-own (see Vocabulary).
+own (see Vocabulary), but its name is a join key (see "What joins
+nothing").
 
 Terms. "Deployment" is LiteLLM's word (`Router.get_deployment`), and
 ours. LiteLLM calls the whole set its `model_list`; this doc does not,
@@ -100,6 +101,31 @@ metrics sampler is a consumer of the view, not a source: it reads
 `/metrics` for the Serving deployments on its own interval and hands
 samples to the capacity rollup, and it no longer writes the cache size
 onto anything; the probe owns that read.
+
+**What joins nothing** (settled 2026-10-29). Observations join by key
+when they carry one (a LiteLLM deployment, a probe) and by name when
+they are machine-level (a config fetch, a Rental); the name is what the
+box sends as its host, the provider's id for the machine. An observation
+that joins no intent is skew, shown under the name or key it carries,
+as it came from its source, with the observation's own detail. Nothing
+new is recorded for it: a stranger is a ConfigFetch whose name nothing
+intends; a rental nobody intends is a Rental with that name plus the
+probe of its listen ports; an orphan is a LiteLLMDeployment whose key no
+intent has. Unmatched observations that share a name are one strip
+item, and the two admin actions follow the axis: Approve acts on a
+name and makes it intended; Stop tracking acts on a key and deletes the
+deployment. The machine is still not an object, and nothing is stored
+per machine; the name only groups what the sources said. This rule is
+what the ad hoc records of 2026-10-27 to 29 stood in for, and each is
+retired as its source lands: `UnknownFetch` and the known/unknown split
+inside the provisioning record (the fetch handler deciding membership
+is the join running inside a source; provisioning records every fetch
+by name, and whether the name is intended is reconcile's call) go with
+the rest of provisioning; `ExtraLiteLLM` goes with LiteLLMDeployment;
+`Discovered`'s finding string becomes a VllmProbe rendered; the
+`Unintended` join becomes the grouping reconcile does. The fleet-key
+host claim narrows by the same join: a fetch whose name no Rental has
+is a claim with no machine behind it.
 
 **Placing** a host is matching it to a Rental, by address first and then
 by the id of the Rental it matched last time, which is what keeps a
