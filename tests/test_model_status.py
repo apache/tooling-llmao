@@ -321,10 +321,30 @@ def test_not_reached_with_no_loading_start_runs_out_of_grace():
     assert view(first_probed_at=None).lifecycle == AWAITING
     assert view(first_probed_at=NOW - CFG.health_grace_s + 1).lifecycle == AWAITING
     assert view(first_probed_at=NOW - CFG.health_grace_s).lifecycle == STALLED
-    # A 503 reaches: the box is there, so it is not on this clock.
-    assert view(first_probed_at=NOW - CFG.health_grace_s, reached=True).lifecycle == AWAITING
+    # A 503 reaches: the box is there, so it is not on this clock. That probe
+    # is a loading start, and the grace runs from it instead.
+    reached = dict(first_probed_at=NOW - CFG.health_grace_s, reached=True)
+    assert view(first_reached_at=NOW - 1, **reached).lifecycle == LOADING
+    assert view(first_reached_at=NOW - CFG.health_grace_s, **reached).lifecycle == STALLED
     # In LiteLLM and down is Unhealthy at once, as before; the clock is for after the delete.
     assert view(first_probed_at=NOW - 1, in_litellm=True).lifecycle == UNHEALTHY
+
+
+def test_a_reached_probe_starts_loading_without_a_config_fetch():
+    # An approved host that fetched its config before a restart never fetches
+    # again. Its 503 is the loading start: Loading inside the grace of it,
+    # Stalled past it. With both starts, the earlier one is the start.
+    def view(**kw):
+        base = dict(config_served_at=None, probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=True)
+        base.update(kw)
+        return deployment_status(_self(**base), CFG, NOW)
+
+    assert view(first_reached_at=NOW - 10).lifecycle == LOADING
+    assert view(first_reached_at=NOW - CFG.health_grace_s).lifecycle == STALLED
+    assert view(first_reached_at=NOW - 10, config_served_at=NOW - CFG.health_grace_s).lifecycle == STALLED
+    assert view(first_reached_at=NOW - CFG.health_grace_s, config_served_at=NOW - 10).lifecycle == STALLED
+    # In LiteLLM too: a box that answers is loading, not down; Stalled deletes it later.
+    assert view(first_reached_at=NOW - 10, in_litellm=True).lifecycle == LOADING
 
 
 def test_a_refused_key_is_rejected_until_unlisted_and_the_passes_run():

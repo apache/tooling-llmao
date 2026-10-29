@@ -286,6 +286,7 @@ def test_awaiting_row_shows_the_last_probe():
     refused.record_probe(
         False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="no connection", reached=False
     )
+    # A 503 reaches vLLM, so that probe is the loading start: the row is Loading, not Awaiting.
     loading = fresh("10.0.0.5", 8001)
     loading.record_probe(False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="HTTP 503", reached=True)
     quiet = fresh("10.0.0.6", 8001)
@@ -294,7 +295,8 @@ def test_awaiting_row_shows_the_last_probe():
     assert rows["10.0.0.4:8001"].last_ok == "never"
     assert rows["10.0.0.4:8001"].detail.startswith("probed ")
     assert rows["10.0.0.4:8001"].detail.endswith(", no connection")
-    assert rows["10.0.0.5:8001"].detail.endswith(", HTTP 503")
+    assert rows["10.0.0.5:8001"].state == LOADING
+    assert rows["10.0.0.5:8001"].detail == "vLLM up, model loading"
     assert rows["10.0.0.6:8001"].detail == "has not requested its config"
     assert rows["10.0.0.6:8001"].last_ok == "never"
 

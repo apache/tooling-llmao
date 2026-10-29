@@ -20,9 +20,10 @@ Everything the lifecycle reads, and where it comes from.
 
 | Observation | Set by | Meaning |
 |---|---|---|
-| `config_served_at` | `Fleet.note_config_fetch`, when the box fetches `GET /vllm/config`; also by Vast adoption | The **loading start**. The box has been told what to run, so a loading window has started. `None` until then. |
+| `config_served_at` | `Fleet.note_config_fetch`, when the box fetches `GET /vllm/config` | A **loading start**. The box has been told what to run, so a loading window has started. `None` until then. |
 | `probe_ok` | each `/health` probe | `True` on a 200: vLLM says it is serving. Not "all is well": `/health` takes no key. |
 | `reached` | each probe | Any HTTP answer at all, a 503 included. `False` is no connection or a timeout. |
+| `first_reached_at` | the first probe in this process that vLLM answered | The other **loading start**: vLLM is listening, so the model is loading, whether or not this process served the config (an approved host that fetched before a restart never fetches again). The loading start is the earlier of the two. |
 | `first_probed_at` | the first probe attempt in this process | The clock for a server that has no loading start and never answers. "No address to dial" counts as an attempt when the host is unlisted. |
 | `last_ok`, `fails` | each probe | When `/health` last passed, and the consecutive failures since. |
 | `key_rejected`, `rejected_passes` | `/v1/models` with the working key, asked only when `/health` passed | `True` on a 401. The passes count runs while refused; a 200 or a failed probe resets it. |
@@ -120,8 +121,9 @@ refused passes to read Foreign. Unhealthy is reached from Rejected or
 Foreign only through the hold-over: three failures running.
 
 The loading start matters more than the diagram can show: the same observation
-names a different state depending on whether `config_served_at` is set.
-The decision order in `self_hosted_lifecycle` is:
+names a different state depending on whether loading has started
+(`config_served_at` or `first_reached_at`). The decision order in
+`self_hosted_lifecycle` is:
 
 1. `/health` passed: Rejected if the key was refused (Foreign if also
    unlisted past the passes), else **Healthy**. Always, including the
@@ -136,9 +138,9 @@ The decision order in `self_hosted_lifecycle` is:
 A control-plane restart loses every observation: each server starts
 Awaiting with no loading start, and the first pass names it again from what it
 sees. A serving box is Healthy at once; a box in LiteLLM that does not
-answer is Unhealthy at once; a box still pulling its image is Awaiting
-until it fetches its config again, or Stalled after the grace if it
-never answers.
+answer is Unhealthy at once; a box answering 503 is Loading from that
+answer; a box still pulling its image is Awaiting until it fetches its
+config, or Stalled after the grace if it never answers.
 
 ## Two overlays that are not states
 
@@ -240,12 +242,13 @@ reconcile migration.
    to two passes. `sync_selfhost` adds its deployment back, and the
    pass after that deletes it again when the 401 returns. A blip on a
    Rejected box flaps the route.
-2. **Servers that have not started loading have no hold-over.** After a control-plane
-   restart, a box that was adopted Healthy on sight is Unhealthy on its
-   first failed probe, not its third, because the not-started branch
-   checks `in_litellm and probe failed` before anything else. Once
-   `sync_selfhost` has deleted the route it reads Awaiting, so the box
-   shows "awaiting" while down rather than "unhealthy".
+2. **A never-reached box in LiteLLM has no hold-over.** After a
+   control-plane restart, a box LiteLLM still has that never answers is
+   Unhealthy on its first failed probe, not its third, because the
+   not-started branch checks `in_litellm and probe failed` before
+   anything else. Once `sync_selfhost` has deleted the route it reads
+   Awaiting, then Stalled after the grace. A box that answered once in
+   this process has a loading start and the ordinary hold-over.
 3. **A Healthy, listed box is never re-asked for its key.** `/v1/models`
    is asked on the way into Healthy and again only while refused or
    unlisted. A key rotated on a box that stays up is caught by LiteLLM's
@@ -254,8 +257,8 @@ reconcile migration.
 4. **Stalled has two meanings.** Started-and-never-up past the grace,
    and never-reached-with-no-start past the grace from the first
    attempt. Both delete the deployment and show the same attention item.
-   The second can read Awaiting again the moment a probe reaches (a
-   503), because the first reached probe is not yet a loading start.
+   The second becomes the first the moment a probe reaches (a 503): that
+   probe is a loading start, and the grace runs from it.
 5. **The unlisted delete gate reaches Awaiting and Loading.** A box in
    its loading window whose listing is behind loses its deployment,
    which is harmless (it had nothing to serve) but is a different rule

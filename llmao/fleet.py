@@ -343,8 +343,11 @@ class VllmServer:
         self.vllm_probed_at: float | None = None
         self.reached: bool | None = None
         # The first probe attempt in this process: the grace clock for a server
-        # with no config fetch that never answers (see self_hosted_lifecycle).
+        # with no loading start that never answers (see self_hosted_lifecycle).
         self.first_probed_at: float | None = None
+        # The first probe in this process that vLLM answered (a 503 counts):
+        # the other loading start, beside config_served_at.
+        self.first_reached_at: float | None = None
         # The last /v1/models answer with the working key (True: 401) and how
         # many passes running it has been refused. Rejected and Foreign.
         self.key_rejected: bool | None = None
@@ -495,6 +498,8 @@ class VllmServer:
             self.first_probed_at = now
         if reached is not None:
             self.reached = reached
+        if reached and self.first_reached_at is None:
+            self.first_reached_at = now
         if key_rejected is not None:
             self.key_rejected = key_rejected
         if ok and self.key_rejected:
@@ -514,6 +519,7 @@ class VllmServer:
             config_served_at=self.config_served_at,
             reached=self.reached,
             first_probed_at=self.first_probed_at,
+            first_reached_at=self.first_reached_at,
             key_rejected=self.key_rejected,
             rejected_passes=self.rejected_passes,
             unlisted=self.unlisted,
@@ -1132,7 +1138,8 @@ class Fleet:
         not adoption's. Connection refused leaves the IP unknown. A 200
         reads /v1/models and materializes the matching model as Healthy
         (a restart lost the approval), so sync_selfhost can create the
-        Deployment.
+        Deployment. The recorded probe is the server's loading start; no
+        config fetch is pretended.
         """
         stamp = now or time.time()
         grace = float(self.cfg.fleet.health_grace_s)
@@ -1163,7 +1170,6 @@ class Fleet:
                     continue
                 srv = self._add_server(vllm_intent(self.cfg, ip, listen, str(model.model_name), model, origin=ADOPTED))
                 srv.public_port = public
-                srv.config_served_at = stamp
                 srv.record_probe(True, now=stamp, grace_s=grace, fail_threshold=threshold, reached=True)
 
     async def _model_for_live_port(self, client: httpx.AsyncClient, host: str, listen: int, public: int) -> Any | None:
@@ -1258,6 +1264,7 @@ def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> Deployment
         config_served_at=srv.config_served_at,
         reached=srv.reached,
         first_probed_at=srv.first_probed_at,
+        first_reached_at=srv.first_reached_at,
         key_rejected=srv.key_rejected,
         rejected_passes=srv.rejected_passes,
         unlisted=srv.unlisted,

@@ -611,6 +611,32 @@ def test_the_first_probe_starts_the_not_reached_clock():
     assert s.state == STALLED
 
 
+def test_the_first_reached_probe_is_a_loading_start():
+    """A 503 with no config fetch: Loading from that answer, Stalled past the grace of it."""
+    s = _server()
+    s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="503", reached=True)
+    assert (s.state, s.first_reached_at, s.config_served_at) == (LOADING, 10.0, None)
+    # The start does not move with later answers, nor with a lost connection.
+    s.record_probe(False, now=1000.0, grace_s=1800, fail_threshold=3, err="503", reached=True)
+    assert (s.state, s.first_reached_at) == (LOADING, 10.0)
+    s.record_probe(False, now=1810.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    assert (s.state, s.first_reached_at) == (STALLED, 10.0)
+
+
+def test_a_box_healthy_once_in_this_process_has_the_hold_over():
+    """After a restart the first Healthy probe is a loading start, so a blip is held over the threshold."""
+    s = _server()
+    s.record_probe(True, now=10.0, grace_s=1800, fail_threshold=3, reached=True, in_litellm=True)
+    assert s.state == HEALTHY
+    s.record_probe(False, now=55.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False, in_litellm=True)
+    assert s.state == HEALTHY
+    for now in (100.0, 145.0):
+        s.record_probe(
+            False, now=now, grace_s=1800, fail_threshold=3, err="no connection", reached=False, in_litellm=True
+        )
+    assert s.state == UNHEALTHY
+
+
 def test_an_unlisted_host_with_no_address_is_still_an_attempt():
     """Nothing to dial counts as not reached: the clock runs and Stalled follows."""
     s = _server(public_port=None)

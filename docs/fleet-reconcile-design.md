@@ -137,18 +137,19 @@ The box protocol is an edge, not a level: a host fetches its config once.
 It still gets a snapshot of its own (host → stamp of the last fetch),
 replaced by the handler and folded by reconcile, so the HTTP handler
 never writes history. Today that stamp is `config_served_at` on the
-server object, set from three places: the handler, and
-`adopt_vast_instances` for an approved host answering 503 and for a
-discovered Healthy port. Those two adopt stamps go away with adopt.
+server object, set by the handler alone; the adopt stamps that once
+pretended a fetch are gone (Early work item 11).
 
-The stamp is the loading start: Loading is inside `health_grace_s`
-of it, Stalled is past it. One of the adopt stamps existed because an
-approved host that fetched its config before an llmao restart never
-fetches again, so without a stamp it would read Awaiting for ever and
-never Stalled. The loading start is therefore **the config fetch or the first
-probe that reached the box (`reached`, a 503 counts), whichever is
-earlier**. A host that has done neither reads Awaiting. The loading start is a
-value reconcile computes from two snapshots; it is not kept in history.
+The stamp is a loading start: Loading is inside `health_grace_s` of
+it, Stalled is past it. It is not the only one, because an approved
+host that fetched its config before an llmao restart never fetches
+again, and with the fetch as the only start it would read Awaiting for
+ever and never Stalled. The loading start is therefore **the config
+fetch or the first probe that reached the box (`reached`, a 503
+counts), whichever is earlier**. A host that has done neither reads
+Awaiting. Today the second is `first_reached_at` on the server; under
+reconcile the loading start is a value computed from two snapshots, not
+kept in history.
 
 The work of keeping them in step is spread around and tightly coupled.
 Different runners set mutable flags on shared objects: `srv.state`,
@@ -991,7 +992,7 @@ badges, unlisted (host-level), and the plan actions.
 | Not reached, grace run out | as above, past `health_grace_s` of the first attempt | Stalled | sentence if unlisted. No deployment to delete |
 | Loading | loading started (config fetch or first reached probe), probe not ok, inside `health_grace_s` of it | Loading | none |
 | Stalled, in LiteLLM | loading started, never `last_ok`, past grace | Stalled | delete_litellm |
-| Approved after a restart, answering 503 | no config fetch this process; probe reached | loading start = first reached probe; Loading, then Stalled past grace | none, then delete_litellm (the adopt stamp this replaces) |
+| Approved after a restart, answering 503 | no config fetch this process; probe reached | loading start = first reached probe; Loading, then Stalled past grace | none, then delete_litellm (the adopt stamp it replaced) |
 | Rejected | `/health` ok, `/v1/models` with our key 401 | Rejected | delete_litellm on the first 401; attention: up but rejects our key, check the key on the box. No clock; a 200 clears it |
 | Foreign | Rejected on `REJECTED_PASSES` passes running, and unlisted | Foreign | sentence: remove from `fleet.hosts`. A listed host never goes Foreign |
 | Healthy, absent | probe ok, dialable, no LiteLLM deployment | Healthy; skew intended_not_in_litellm | add_litellm |
@@ -1088,8 +1089,7 @@ real gap on its own. In order:
    c2e3c14 (Unhealthy or Stalled; Foreign follows with item 6). The
    clock runs from the first probe attempt, `first_probed_at` on the
    server; an unlisted host with no address to dial counts as an attempt.
-   A reached probe (a 503) with no config fetch has not started loading yet and
-   stays Awaiting: the first-reached-probe loading start is reconcile's.
+   The first-reached-probe loading start followed as item 11.
 10. **Retire the orphan prune.** `_prune_extras` deleted a LiteLLM
     deployment nothing claimed after `ORPHAN_PASSES`; by the 2026-10-28
     ruling an orphan is skew for a human. Done 2026-10-28: the skew pass
@@ -1100,3 +1100,12 @@ real gap on its own. In order:
     `/do-remove-deployment`) and, when a listing names a host that is
     not in `fleet.hosts`, Approve. The skew log warns once, on the pass
     the item appears.
+11. **The first reached probe is a loading start.** Done 2026-10-28.
+    `first_reached_at` on the server and the snapshot; `loading_start`
+    in `model_status.py` is the earlier of it and `config_served_at`,
+    and the lifecycle runs the Loading/Stalled grace from that. A 503
+    with no config fetch reads Loading, then Stalled, instead of
+    Awaiting for ever; a box Healthy once in this process has the
+    ordinary hold-over after a restart. Vast adoption no longer stamps
+    `config_served_at` to pretend a fetch: its recorded probe is the
+    start.

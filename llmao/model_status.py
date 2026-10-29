@@ -25,8 +25,9 @@ The lifecycle splits into two kinds of thing:
 - **Computed state** -- derived here from probes, ``in_litellm`` and
   ``config_served_at``. Recomputed after a control-plane restart; that is what
   this module owns. "Config served" is one of those facts: it is recorded as
-  the in-memory ``config_served_at`` timestamp, which is the loading start of the Loading
-  window and separates it from the Awaiting pre-state.
+  the in-memory ``config_served_at`` timestamp. It and ``first_reached_at``
+  (the first probe vLLM answered) are the loading starts, which separate the
+  Loading window from the Awaiting pre-state.
 - **Intent** -- ``fleet.hosts`` and the in-memory approvals (``Fleet.approvals``,
   ``intent.Approval``) say what should run. An approval creates servers; it
   never changes a computed state. Retirement is the manual removal of a box
@@ -138,13 +139,18 @@ class DeploymentSnapshot:
     # LiteLLM has this server at its listen port, which is unreachable off-box.
     at_listen_port: bool = False
     # When we last handed this box its config. None until a GET /vllm/config
-    # succeeded for it since we started. The loading start.
+    # succeeded for it since we started. One of the two loading starts.
     config_served_at: float | None = None
     # Did the last health probe reach vLLM's HTTP server (an answer, e.g. a
     # 503 while the model loads) as opposed to no connection at all? None
     # until the first probe. Mostly display; with no loading start it decides
     # between Awaiting and Stalled once the grace has run out.
     reached: bool | None = None
+    # When a probe first reached vLLM's HTTP server in this process. The
+    # other loading start: a box answering 503 is loading whether or not it
+    # fetched its config from this process (an approved host that fetched
+    # before a restart never fetches again). None until a probe reaches.
+    first_reached_at: float | None = None
     # When this process first tried to probe the server. The clock for a
     # server that has no loading start and never answers: Awaiting until
     # health_grace_s after this, then Stalled. None until the first attempt.
@@ -201,6 +207,20 @@ def _signal(up: bool | None, stale: bool) -> str:
     return SIGNAL_UP if up else SIGNAL_DOWN
 
 
+def loading_start(snap: DeploymentSnapshot) -> float | None:
+    """When the loading window began, or None when it has not.
+
+    The config fetch or the first probe that reached vLLM, whichever is
+    earlier. Either alone is a start: a box that fetched its config is
+    loading before vLLM listens, and a box answering 503 is loading whether
+    or not this process served its config.
+    """
+    starts = [t for t in (snap.config_served_at, snap.first_reached_at) if t is not None]
+    if not starts:
+        return None
+    return min(starts)
+
+
 def self_hosted_lifecycle(
     snap: DeploymentSnapshot,
     cfg: object,
@@ -211,21 +231,21 @@ def self_hosted_lifecycle(
     A passing probe: Healthy, always -- including the first probe after a
     control-plane restart -- unless /v1/models refused the working key:
     Rejected, and Foreign once the refusal has run ``REJECTED_PASSES`` passes
-    at a host no listing names. No config served yet (``config_served_at`` is None):
-    Unhealthy if it is in LiteLLM and the probe failed (it was serving before
-    a restart, now down); Stalled if nothing has answered at all for
-    ``health_grace_s`` after the first probe attempt (a rental that died, with
-    no deployment left to say so); otherwise Awaiting contact. Config served
-    but not yet up: Loading while inside ``health_grace_s`` of the config
-    answer, Stalled past it. After it has been Healthy,
-    ``health_fail_threshold`` failures: Unhealthy; fewer keep Healthy
-    (hold-over-the-threshold).
+    at a host no listing names. Loading not started (no config fetch and no
+    probe has reached vLLM, see ``loading_start``): Unhealthy if it is in
+    LiteLLM and the probe failed (it was serving before a restart, now down);
+    Stalled if nothing has answered at all for ``health_grace_s`` after the
+    first probe attempt (a rental that died, with no deployment left to say
+    so); otherwise Awaiting contact. Loading started but not yet up: Loading
+    while inside ``health_grace_s`` of the start, Stalled past it. After it
+    has been Healthy, ``health_fail_threshold`` failures: Unhealthy; fewer
+    keep Healthy (hold-over-the-threshold).
 
     The not-reached clock runs from the first attempt, not from unlisted's
     listing count: a new RunPod box is unlisted within minutes but fetches
     its config only after its image pull, and must not read Stalled five
     minutes after the admin created it. A probe that reaches (a 503) is not
-    on this clock; it stays Awaiting until the config fetch starts Loading.
+    on this clock: it is a loading start, and the grace runs from it.
     """
     grace = float(cfg.health_grace_s)
     threshold = int(cfg.health_fail_threshold)
@@ -235,7 +255,8 @@ def self_hosted_lifecycle(
                 return FOREIGN
             return REJECTED
         return HEALTHY
-    if snap.config_served_at is None:
+    start = loading_start(snap)
+    if start is None:
         if snap.in_litellm and snap.probe_ok is False:
             return UNHEALTHY
         not_reached = snap.probe_ok is False and snap.reached is False
@@ -246,7 +267,7 @@ def self_hosted_lifecycle(
         return UNHEALTHY if snap.fails >= threshold else HEALTHY
     if snap.probe_ok is None:
         return LOADING
-    return LOADING if (now - snap.config_served_at) < grace else STALLED
+    return LOADING if (now - start) < grace else STALLED
 
 
 def commercial_lifecycle(snap: DeploymentSnapshot) -> str:
