@@ -278,7 +278,14 @@ class VllmServer:
         # max_model_len it is memory the box needs before serving anything;
         # sent so the box's fit check can count it. None: not declared.
         self.kv_bytes_per_token = kv_bytes_per_token
+        # The server's name: its fleet.hosts key, what the box sends as its
+        # host, what the bearer is minted from. An address on Vast, a pod
+        # id on RunPod; llmao does not care which.
         self.host = host
+        # Where it is dialed. The name until the provider's listing places
+        # the server on a Rental with an address, then that address (a pod
+        # id is never dialable; an address names itself). apply_rentals.
+        self.address = host
         self.listen_port = int(listen_port)
         # The port this server is dialed on: from the listing of the
         # provider that places it (Vast's HostPort, RunPod's portMappings),
@@ -405,7 +412,7 @@ class VllmServer:
     def root_url(self) -> str | None:
         if self.public_port is None:
             return None
-        return f"http://{self.host}:{self.public_port}"
+        return f"http://{self.address}:{self.public_port}"
 
     @property
     def health_url(self) -> str | None:
@@ -423,7 +430,7 @@ class VllmServer:
         """True when this LiteLLM deployment is this server, reachable: on its public port."""
         if port is None or port != self.public_port or model_name != self.model_name:
             return False
-        return normalize_peer_ip(host) == normalize_peer_ip(self.host)
+        return normalize_peer_ip(host) == normalize_peer_ip(self.address)
 
     def on_listen_port(self, host: str, port: int | None, model_name: str) -> bool:
         """True when this LiteLLM deployment is this server, but at its listen port.
@@ -436,7 +443,7 @@ class VllmServer:
         """
         if port is None or port != self.listen_port or port == self.public_port:
             return False
-        return model_name == self.model_name and normalize_peer_ip(host) == normalize_peer_ip(self.host)
+        return model_name == self.model_name and normalize_peer_ip(host) == normalize_peer_ip(self.address)
 
     @property
     def rental_usd_per_hour(self) -> float | None:
@@ -707,8 +714,9 @@ class Discovered:
     at: float
 
     @property
-    def host(self) -> str:
-        return self.rental.host
+    def name(self) -> str:
+        """What the box sends as its host, and so what an approval is keyed by."""
+        return self.rental.name
 
 
 class Fleet:
@@ -751,7 +759,7 @@ class Fleet:
         # from its own runner (run_runpod_listing).
         self.vast_rentals: ProviderRentals | None = None
         self.runpod_rentals: ProviderRentals | None = None
-        # Rentals nobody intends, by address (discover_rentals, every pass).
+        # Rentals nobody intends, by the name the box sends (discover_rentals, every pass).
         self.discovered: dict[str, Discovered] = {}
 
     @classmethod
@@ -1124,9 +1132,12 @@ class Fleet:
             if rental is None:
                 continue
             placed.append(srv)
-            # The provider's report is where the public port comes from. A
-            # Rental with no map (a stopped pod) says nothing; the last port
-            # stands until the report has one again.
+            # The provider's report is where the address and the public port
+            # come from. A Rental with no address or no map (a stopped pod)
+            # says nothing; the last values stand until the report has them
+            # again.
+            if rental.host:
+                srv.address = rental.host
             if rental.ports:
                 _set_public_port(srv, rental.ports, rental.provider.lower())
             if srv.rental != rental:
@@ -1146,22 +1157,27 @@ class Fleet:
     async def discover_rentals(self, client: httpx.AsyncClient, *, now: float | None = None) -> None:
         """Rentals nobody intends, with what a probe finds on each: Fleet.discovered, rebuilt every pass.
 
-        A listed machine whose address is not in fleet.hosts, not approved,
-        and carries none of our servers. Adoption requires an admin's
-        approval, so nothing here adds a server: the /models strip shows
-        the finding with Approve. A rental with no address yet (stopped,
-        initializing) has nothing to probe or approve and is not listed.
+        A listed machine that no server sits on and whose name (what its box
+        sends as its host) and address are neither in fleet.hosts nor
+        approved. Adoption requires an admin's approval, so nothing here
+        adds a server: the /models strip shows the finding with Approve,
+        keyed by the name. A rental with no name yet (a Vast instance
+        without an address) has nothing to approve and is not listed.
         """
         stamp = now or time.time()
-        members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
-        intended = members | set(self.approvals) | {s.host for s in self.servers}
+        names = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts} | set(self.approvals)
+        names |= {s.host for s in self.servers}
+        on = {(s.rental.provider, s.rental.id) for s in self.servers if s.rental is not None}
         found: dict[str, Discovered] = {}
         for rentals in (self.vast_rentals, self.runpod_rentals):
             for rental in rentals or ():
-                host = normalize_peer_ip(rental.host)
-                if not host or host in intended:
+                # The name is the provider client's word, not a peer address:
+                # it is compared as given. Only an address is normalized.
+                name = rental.name
+                address = normalize_peer_ip(rental.host)
+                if not name or name in names or (address and address in names) or (rental.provider, rental.id) in on:
                     continue
-                found[host] = Discovered(rental, await self._discovery_finding(client, rental, host), stamp)
+                found[name] = Discovered(rental, await self._discovery_finding(client, rental, address), stamp)
         if set(found) != set(self.discovered):
             _LOGGER.info("fleet: rentals nobody intends: %s", sorted(found) or "none")
         self.discovered = found
@@ -1170,6 +1186,8 @@ class Fleet:
         """One line on a rental nobody intends: its status when not running, else what its vLLM ports answered."""
         if rental.status and not rental.running:
             return rental.status
+        if not host:
+            return "no address yet"
         ports = sorted(
             (int(listen), int(public)) for listen, public in rental.ports.items() if int(listen) in VLLM_LISTEN_PORTS
         )
@@ -1193,10 +1211,10 @@ class Fleet:
     async def _served_with_our_key(
         self, client: httpx.AsyncClient, rental: Rental, host: str, listen: int, public: int
     ) -> str:
-        # The bearer is minted from the name the box sent: a RunPod pod's
-        # pod id, a Vast box's address.
-        name = rental.id if rental.provider.lower() == "runpod" else host
-        served = await fetch_served_models(client, f"http://{host}:{public}", vllm_api_key(self.cfg, name, listen))
+        # The bearer is minted from the name the box sends, not from where it is dialed.
+        served = await fetch_served_models(
+            client, f"http://{host}:{public}", vllm_api_key(self.cfg, rental.name, listen)
+        )
         if served.status == 401:
             return "refuses our key"
         if served.status != 200:

@@ -708,10 +708,10 @@ Also:
   with the bearer we minted is discovered the same way. One wrinkle:
   the bearer is minted from the name the box sent, which for a RunPod
   pod is its pod id, so the discovery probe mints with the pod id from
-  the listing, not the public address (done). The other half of that
-  wrinkle is Approve: an approval is by address, and a pod's config
-  fetch names its pod id, so a RunPod item is listed without Approve
-  until the parked pod-id keying lands; the item says so.
+  the listing, not the public address. Both halves are done (Early work
+  item 13): a Rental carries the name its box sends beside its address,
+  a server is placed by name and dialed at the Rental's address, and
+  the discovered item is keyed by name with Approve for every provider.
 - Served-model skew (GET `/v1/models` vs the intended HF id) stays
   deferred. The dialable field makes that fetch honest; it is not model
   list skew.
@@ -1119,6 +1119,19 @@ real gap on its own. In order:
     vLLM port "nothing listening", "vLLM answering, not serving",
     "serving `<model>` with our key" or "refuses our key"; the RunPod
     bearer is minted from the pod id). The strip shows "rented, nobody
-    intends it" with the finding and Approve; a RunPod item has no
-    Approve until the pod-id keying lands, and says so. A rental with
-    no address (stopped, initializing) is not listed.
+    intends it" with the finding and Approve. Item 13 keyed it by name.
+13. **A server has a name and an address.** Done 2026-10-29. The name
+    is the `fleet.hosts` key, what the box sends as its host and what
+    the bearer is minted from: an address on Vast, a pod id on RunPod,
+    and llmao does not care which. `Rental.name` is what a box on that
+    machine sends, set by each provider's client to mirror its
+    provision.sh. `match_rental` places by name, then by address (the
+    boxes set up by hand are keyed by address), then by the last
+    machine; `VllmServer.address` is the name until a Rental with an
+    address places it, and the dial URL, the LiteLLM presence checks and
+    the public column read the address. Discovery keys its records by
+    name, so Approve works for a pod, and a pod is listed by its id
+    before it has an address. This is the dialable field of migration
+    step 3, on the server for now. Vast can send its instance id as the
+    name with one line in its provision.sh and a re-keyed row at that
+    box's next rebuild; not done.

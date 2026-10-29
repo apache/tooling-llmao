@@ -47,7 +47,9 @@ def rentals_from_pods(pods: Any) -> edict:
     """pod id → Rental: where it is (pod name and id), its status, its address, its ports and its price.
 
     Every pod, in any status. ``host`` is the public IP, "" while the pod
-    initializes or once it has stopped; ``status`` is ``desiredStatus`` in
+    initializes or once it has stopped; ``name`` is the pod id, which
+    hosting/runpod/provision.sh sends as the box's host (RUNPOD_POD_ID),
+    since a pod's address is not known until it runs; ``status`` is ``desiredStatus`` in
     lower case; ``ports`` is portMappings as container port → public port
     (``{"8002": 16643}``), empty when the pod has none. A stopped pod still
     reports a price.
@@ -69,6 +71,7 @@ def rentals_from_pods(pods: Any) -> edict:
             url="",
             usd_per_hour=price(pod.get("costPerHr")),
             host=str(pod.get("publicIp") or "").strip(),
+            name=pod_id,
             status=str(pod.get("desiredStatus") or "").lower(),
             ports=ports_from_pod(pod),
         )

@@ -194,8 +194,18 @@ def _client(handler) -> httpx.AsyncClient:
 
 def _rental(host="198.51.100.8", *, provider="Vast", id="1", status="running", ports=None) -> Rental:
     ports = {"8001": 18001, "22": 19022} if ports is None else ports
+    # The name is what the provider's provision.sh sends: the address on Vast, the pod id on RunPod.
+    name = host if provider == "Vast" else id
     return Rental(
-        provider=provider, id=id, label="1x RTX 4090", url="", usd_per_hour=0.4, host=host, status=status, ports=ports
+        provider=provider,
+        id=id,
+        label="1x RTX 4090",
+        url="",
+        usd_per_hour=0.4,
+        host=host,
+        name=name,
+        status=status,
+        ports=ports,
     )
 
 
@@ -242,9 +252,13 @@ def test_a_rental_nobody_intends_is_discovered_not_added():
         raise httpx.ConnectError("connection refused")
 
     assert _discover(fleet, dead, vast=[_rental()])["198.51.100.8"].finding == "nothing listening"
-    # Not running: the provider's word, no probe. No address: not listed at all.
+    # Not running: the provider's word, no probe. A Vast instance with no
+    # address has no name yet and is not listed; a pod is named by its id
+    # before it has an address.
     assert _discover(fleet, dead, vast=[_rental(status="exited")])["198.51.100.8"].finding == "exited"
     assert _discover(fleet, dead, vast=[_rental(host="", status="loading")]) == {}
+    starting = _rental("", provider="RunPod", id="pod-2", ports={})
+    assert _discover(fleet, dead, runpod=[starting])["pod-2"].finding == "no address yet"
     assert _discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["198.51.100.8"].finding == (
         "no vLLM port published"
     )
@@ -263,6 +277,10 @@ def test_intended_hosts_are_not_discovered():
     # The approval's server is there, untouched: discovery never probes it.
     (srv,) = fleet.servers
     assert (srv.state, srv.public_port, srv.vllm_probed_at) == (AWAITING, None, None)
+    # A pod a server sits on is intended, even when the row is keyed by its address.
+    pod = _rental("127.0.0.1", provider="RunPod", id="pod-9")
+    fleet.apply_rentals(ProviderRentals("RunPod", {"pod-9": pod}))
+    assert _discover(fleet, handler, runpod=[pod]) == {}
 
 
 def test_a_runpod_rental_is_discovered_with_the_bearer_minted_from_its_pod_id():
@@ -278,7 +296,8 @@ def test_a_runpod_rental_is_discovered_with_the_bearer_minted_from_its_pod_id():
 
     pod = _rental(host="203.0.113.7", provider="RunPod", id="pod-1")
     found = _discover(fleet, handler, runpod=[pod])
-    assert found["203.0.113.7"].finding == "8001: serving org/unlisted-weights with our key"
+    assert list(found) == ["pod-1"]
+    assert found["pod-1"].finding == "8001: serving org/unlisted-weights with our key"
     assert bearers == [f"Bearer {vllm_api_key(cfg, 'pod-1', 8001)}"]
 
 

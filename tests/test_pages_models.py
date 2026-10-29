@@ -420,7 +420,14 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     # No listing names the host: nothing to approve, the box is invisible.
     assert [a.label for a in item.actions] == ["Stop tracking"]
     rental = Rental(
-        provider="vast", id="1", label="x", url="", usd_per_hour=None, host="198.51.100.9", status="running"
+        provider="vast",
+        id="1",
+        label="x",
+        url="",
+        usd_per_hour=None,
+        host="198.51.100.9",
+        name="198.51.100.9",
+        status="running",
     )
     fleet.vast_rentals = ProviderRentals("vast", by_id={"1": rental})
     (item,) = pages.attention_items(fleet)
@@ -430,35 +437,48 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Stop tracking"]
 
 
-def test_the_strip_shows_a_rental_nobody_intends_with_approve_for_vast_only():
+def test_the_strip_shows_a_rental_nobody_intends_with_approve_by_name():
     from llmao.fleet import Discovered
 
     pages = _app()
     fleet = _fleet(_server("gemma"))
     vast = Rental(
-        provider="Vast", id="1", label="1x RTX 4090", url="", usd_per_hour=0.4, host="198.51.100.8", status="running"
+        provider="Vast",
+        id="1",
+        label="1x RTX 4090",
+        url="",
+        usd_per_hour=0.4,
+        host="198.51.100.8",
+        name="198.51.100.8",
+        status="running",
     )
     pod = Rental(
-        provider="RunPod", id="pod-1", label="llmao-q", url="", usd_per_hour=0.6, host="203.0.113.7", status="running"
+        provider="RunPod",
+        id="pod-1",
+        label="llmao-q",
+        url="",
+        usd_per_hour=0.6,
+        host="203.0.113.7",
+        name="pod-1",
+        status="running",
     )
     fleet.discovered = {
         "198.51.100.8": Discovered(vast, "8001: serving gemma with our key", time.time()),
-        "203.0.113.7": Discovered(pod, "nothing listening", time.time()),
+        "pod-1": Discovered(pod, "nothing listening", time.time()),
     }
     items = pages.attention_items(fleet)
     assert [i.what for i in items] == [
         "198.51.100.8 · rented, nobody intends it",
-        "203.0.113.7 · rented, nobody intends it",
+        "pod-1 · rented, nobody intends it",
     ]
     assert items[0].detail == "Vast · 1x RTX 4090 (1) — 8001: serving gemma with our key"
-    assert [a.label for a in items[0].actions] == ["Approve"]
-    assert items[0].flag == ""
-    # A pod names itself by its id; an approval by address would not reach it.
-    assert items[1].actions == []
-    assert items[1].flag.startswith("Approve waits for pod-id keying")
+    assert items[1].detail == "RunPod · llmao-q (pod-1) — nothing listening"
+    # Approve is by the name the box sends: the address on Vast, the pod id on RunPod.
+    assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
-    assert out.count('data-bs-target="#approveBoxModal"') == 1
+    assert out.count('data-bs-target="#approveBoxModal"') == 2
     assert 'data-host="198.51.100.8"' in out
+    assert 'data-host="pod-1"' in out
 
 
 def test_remove_refusal_gate():
@@ -739,6 +759,7 @@ def test_each_deployment_says_where_to_find_it():
         url="https://cloud.vast.ai/instances/",
         usd_per_hour=0.14,
         host="10.0.0.1",
+        name="10.0.0.1",
         status="running",
         ports=edict({"8001": 41234}),
     )
@@ -749,6 +770,7 @@ def test_each_deployment_says_where_to_find_it():
         url="",
         usd_per_hour=0.89,
         host="",
+        name="6jqrsngxdor2mc",
         status="exited",
     )
     rows = pages.model_catalog_rows(_fleet(vast, runpod, lost), [_catalog("gemma")], admin=True)
@@ -774,6 +796,7 @@ def test_where_a_deployment_lives_is_for_admins_only():
         url="https://cloud.vast.ai/instances/",
         usd_per_hour=0.14,
         host="10.0.0.1",
+        name="10.0.0.1",
         status="running",
         ports=edict({"8001": 41234}),
     )

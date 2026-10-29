@@ -45,7 +45,11 @@ class Rental:
 
     ``id`` is the provider's id for it (a Vast instance id, a RunPod pod
     id). ``host`` is its public address, "" while it initializes or once
-    it has stopped. ``status`` is the provider's own word, lower case
+    it has stopped. ``name`` is what a box on it sends as its host when it
+    fetches its config (``X-LLMAO-Host``, set by that provider's
+    provision.sh): its address on Vast, its pod id on RunPod. A
+    ``fleet.hosts`` key, an approval and the bearer are all by name; the
+    address is only ever dialed. ``status`` is the provider's own word, lower case
     (Vast's actual_status, RunPod's desiredStatus), "" when not given.
     ``ports`` maps a container listen port, as a string, to the public
     port it is published on; empty when the provider gives none.
@@ -60,6 +64,7 @@ class Rental:
     url: str
     usd_per_hour: float | None
     host: str
+    name: str
     status: str
     ports: dict[str, int] = field(default_factory=edict)
 
@@ -87,13 +92,19 @@ class ProviderRentals:
 
 
 def match_rental(host: str, last: Rental | None, *sets: ProviderRentals | None) -> Rental | None:
-    """The Rental a host is on, from the given provider sets, or None.
+    """The Rental a server is on, from the given provider sets, or None.
 
-    By address first. Failing that, the machine ``last`` names, by
-    provider and id, in whatever state and at whatever address it has
-    now. An unread set (``None``) contributes nothing.
+    ``host`` is the server's name, its ``fleet.hosts`` key. By the name the
+    box sends first (a pod id, or an address); then by address, for a row
+    keyed by the address of a box that sends something else; failing both,
+    the machine ``last`` names, by provider and id, in whatever state and
+    at whatever address it has now. An unread set (``None``) contributes
+    nothing.
     """
     rentals: list[Rental] = [r for s in sets if s is not None for r in s]
+    by_name = next((r for r in rentals if r.name and r.name == host), None)
+    if by_name is not None:
+        return by_name
     by_host = next((r for r in rentals if r.host and r.host == host), None)
     if by_host is not None:
         return by_host

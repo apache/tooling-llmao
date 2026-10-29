@@ -745,18 +745,18 @@ def attention_items(fleet) -> list:
                 actions=admin_actions(fleet, host=host, approve=True),
             )
         )
-    for host, found in sorted(fleet.discovered.items()):
+    for name, found in sorted(fleet.discovered.items()):
         rental = found.rental
         items.append(
             edict(
                 kind="discovered",
-                what=f"{host} · rented, nobody intends it",
+                what=f"{name} · rented, nobody intends it",
                 ident="",
                 anchor="",
                 rest="",
                 detail=f"{rental.provider} · {rental.label} ({rental.id}) — {found.finding}",
-                flag=_discovery_flag(rental),
-                actions=admin_actions(fleet, host=host, approve=rental.provider.lower() != "runpod"),
+                flag="",
+                actions=admin_actions(fleet, host=name, approve=True),
             )
         )
     cfg = fleet.cfg.fleet
@@ -814,13 +814,6 @@ def attention_items(fleet) -> list:
             )
         )
     return items
-
-
-def _discovery_flag(rental) -> str:
-    """Why a discovered RunPod pod has no Approve yet: it names itself by pod id, and approvals are by address."""
-    if rental.provider.lower() == "runpod":
-        return "Approve waits for pod-id keying: the pod names itself by its id, and an approval is by address."
-    return ""
 
 
 def _orphan_detail(extra) -> str:
@@ -969,7 +962,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             detail = _deployment_reason(dep)
             listen = f"{srv.host}:{srv.listen_port}" if admin else ""
             public = (
-                f"{srv.host}:{srv.public_port}" if admin and srv.public_port is not None else ("—" if admin else "")
+                f"{srv.address}:{srv.public_port}" if admin and srv.public_port is not None else ("—" if admin else "")
             )
             host = srv.host if admin else ""
             config_ago = fleet.config_fetch_display(srv.host) if admin else ""
