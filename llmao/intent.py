@@ -102,10 +102,6 @@ LEGACY_SERVERS = {
 HOSTS = "hosts"  # a fleet.hosts row
 APPROVAL = "approval"  # an admin approved an unknown box for these models
 PROVIDER = "provider"  # a config.yaml provider line
-# A Vast address found serving a model nobody intended, taken in as if it
-# had been (Fleet.adopt_vast_instances). Whether adoption survives is the
-# Deployment work's call; until then it is one shape with the rest.
-ADOPTED = "adopted"
 
 
 class UnknownHostError(KeyError):

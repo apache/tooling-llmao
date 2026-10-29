@@ -243,15 +243,16 @@ is observed, rather than updating state step by step from many places.
      converted into. The state diagram becomes a transition table that
      can be read in one place: previous state, observation, next state
      (the appendix's decision table gains that first column).
-   - **Discovered servers are computed, not added.** Today
-     `adopt_vast_instances` probes inventory hosts that are not in
-     `fleet.hosts` and, on a match, mutates the server list. Under
-     reconcile, the vLLM health fetcher probes those hosts too, from the
-     inventory snapshot's listen-port to public-port map, and
-     "discovered" is a record reconcile makes from an inventory entry
-     with no intended row and a probe that named a `models.yaml` model.
-     The view cannot be the target list for that probe: the host has no
-     record until the probe has named the model.
+   - **Discovered servers are computed, not added.** Done ahead of the
+     rewrite (Early work item 12): `Fleet.discover_rentals` probes the
+     listed machines nothing intends, from each Rental's listen-port to
+     public-port map, and keeps a `Discovered` record (the Rental and a
+     one-line finding) per address, rebuilt every pass; nothing mutates
+     the server list. Under reconcile the vLLM health fetcher does that
+     probe and "discovered" is the record reconcile makes from an
+     inventory entry with no intended row and the probe's finding. The
+     view cannot be the target list for that probe: the host has no
+     record until the probe has run.
    - The **plan** is a list of actions. Each action names a kind, a key
      and a reason. A **policy table** then marks each kind `auto` or
      `needs_human`. Reconcile does not embed that policy.
@@ -678,9 +679,9 @@ Also:
   same Vast or RunPod account, and it is listed like ours. So a
   discovered host is an attention item, "rented, nobody intends it",
   with what the probe found (nothing listening; serving `<model>` with
-  our key; refuses our key) and Approve on it. Today's
-  `adopt_vast_instances` adds a server on sight when `/v1/models`
-  answers with our key; that path goes with the reconcile work. It is
+  our key; refuses our key) and Approve on it. **Done 2026-10-29**
+  (Early work item 12): the on-sight add is gone, and the item is on
+  the strip. It is
   not in `fleet.hosts`, so the unlisted sentence never applies to it;
   when the listing drops it, its record goes. An approved box's LiteLLM
   deployment outlives a restart while the approval does not; it then
@@ -704,11 +705,13 @@ Also:
   (and, better, to report its state); until then the admin reboots it
   by hand after approving. Both of these are over the inventory
   snapshot, so they cover RunPod as well as Vast: a RunPod pod serving
-  with the bearer we minted is discovered the same way (today
-  `adopt_vast_instances` is Vast-only; RunPod's listing is read and not
-  adopted). One wrinkle: the bearer is minted from the name the box
-  sent, which for a RunPod pod is its pod id, so the discovery probe
-  must mint with the pod id from the listing, not the public address.
+  with the bearer we minted is discovered the same way. One wrinkle:
+  the bearer is minted from the name the box sent, which for a RunPod
+  pod is its pod id, so the discovery probe mints with the pod id from
+  the listing, not the public address (done). The other half of that
+  wrinkle is Approve: an approval is by address, and a pod's config
+  fetch names its pod id, so a RunPod item is listed without Approve
+  until the parked pod-id keying lands; the item says so.
 - Served-model skew (GET `/v1/models` vs the intended HF id) stays
   deferred. The dialable field makes that fetch honest; it is not model
   list skew.
@@ -789,11 +792,10 @@ used to build the observed server, three modules reading one list.
   intent that changes at runtime; the live set stays on `Fleet` and is
   handed in. Approving makes the host intended at once: it leaves the
   unknown record, its servers exist from then on, and its rows say
-  "Approved"; the admin labels that once marked it are gone. Adoption (a Vast address serving a
-  model nobody intended) makes a record of origin `adopted` so the rest
-  of the code sees one shape until the reconcile work retires it:
-  adoption requires an approval (Policy below), so `adopted` becomes
-  `approval` and the on-sight add goes.
+  "Approved"; the admin labels that once marked it are gone. The
+  `adopted` origin is gone with the on-sight add: adoption requires an
+  approval (Policy below), so a discovered host that an admin approves
+  is an `approval` like any other.
 - **`rental.py`** (new) knows machines we rent: `Rental`, the frozen row;
   `ProviderRentals`, one provider's set with its fetch time and the
   unread and stale distinctions; the matching rule, a host to its Rental
@@ -829,10 +831,9 @@ used to build the observed server, three modules reading one list.
   `LEGACY_SERVERS` and `from_cfg`'s construction to `intent.py`, the
   protocol half to `provisioning.py`, the probe and the parsers to
   `vllm_client.py`, the lifecycle counters on `VllmServer`, and in the
-  end `VllmServer` itself. `config_served_at` on a server is the
-  loading start, a lifecycle fact set from a ConfigFetch or from Vast
-  adoption; it is not the fetch record and moves into `deployment.py`
-  with the rest of the history.
+  end `VllmServer` itself. `config_served_at` on a server is a loading
+  start, a lifecycle fact set from a ConfigFetch; it is not the fetch
+  record and moves into `deployment.py` with the rest of the history.
 - **`proxy/deployments.py`** produces `LiteLLMDeployment` (one per
   `/model/info` entry, found by the stamp; replaces the route tuples,
   the index and `ExtraLiteLLM`) and `LiteLLMHealth` (replaces the two
@@ -1077,9 +1078,9 @@ real gap on its own. In order:
    f76a42f. Every box carries `ports` (container port → public port,
    Vast's HostPort and RunPod's portMappings alike); `apply_boxes`
    stamps `public_port` from the box a server is placed on, through
-   the one stamp function `apply_port_map` and Vast adoption also use;
+   the one stamp function `apply_port_map` also uses;
    `refresh_public_ports` no longer applies the map itself (it still
-   materializes approved hosts and runs Vast adoption). The fourth
+   materializes approved hosts). The fourth
    element is deprecated,
    not refused: `from_cfg` warns and the value seeds the port until the
    box is placed; `public_port_pinned` is gone. The p6 node data drops
@@ -1109,3 +1110,15 @@ real gap on its own. In order:
     ordinary hold-over after a restart. Vast adoption no longer stamps
     `config_served_at` to pretend a fetch: its recorded probe is the
     start.
+12. **A rental nobody intends is discovered, not adopted.** Done
+    2026-10-29. `adopt_vast_instances` and the `adopted` origin are
+    gone. `Fleet.discover_rentals` runs every lifecycle pass over both
+    rental sets: a listed address not in `fleet.hosts`, not approved and
+    carrying no server gets a `Discovered` record (its Rental and a
+    one-line finding: the provider's status when not running, else per
+    vLLM port "nothing listening", "vLLM answering, not serving",
+    "serving `<model>` with our key" or "refuses our key"; the RunPod
+    bearer is minted from the pod id). The strip shows "rented, nobody
+    intends it" with the finding and Approve; a RunPod item has no
+    Approve until the pod-id keying lands, and says so. A rental with
+    no address (stopped, initializing) is not listed.

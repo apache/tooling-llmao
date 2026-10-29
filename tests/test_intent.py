@@ -21,7 +21,6 @@ import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.intent import (
-    ADOPTED,
     APPROVAL,
     HOSTS,
     PROVIDER,
@@ -31,7 +30,6 @@ from llmao.intent import (
     intended_deployments,
     parse_host_row,
     provider_intent,
-    vllm_intent,
 )
 from llmao.models import VllmRecipe, load_models
 from tests.test_fleet import EXAMPLE, _cfg
@@ -168,14 +166,6 @@ def test_intended_deployments_is_rows_then_approvals_then_provider_lines():
         (APPROVAL, "gemma4-26b"),
         (PROVIDER, "qwen3-8b@xai"),
     ]
-
-
-def test_an_adopted_server_is_minted_like_any_other():
-    cfg = _cfg({})
-    model = _by_name()["qwen3-8b"]
-    one = vllm_intent(cfg, "203.0.113.10", 8002, "qwen3-8b", model, origin=ADOPTED)
-    assert one.origin == ADOPTED
-    assert one.api_key == derive_vllm_api_key("test-vllm-salt", "203.0.113.10", 8002)
 
 
 def test_a_recipe_leaves_undeclared_requirements_as_none():

@@ -430,6 +430,37 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Stop tracking"]
 
 
+def test_the_strip_shows_a_rental_nobody_intends_with_approve_for_vast_only():
+    from llmao.fleet import Discovered
+
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    vast = Rental(
+        provider="Vast", id="1", label="1x RTX 4090", url="", usd_per_hour=0.4, host="198.51.100.8", status="running"
+    )
+    pod = Rental(
+        provider="RunPod", id="pod-1", label="llmao-q", url="", usd_per_hour=0.6, host="203.0.113.7", status="running"
+    )
+    fleet.discovered = {
+        "198.51.100.8": Discovered(vast, "8001: serving gemma with our key", time.time()),
+        "203.0.113.7": Discovered(pod, "nothing listening", time.time()),
+    }
+    items = pages.attention_items(fleet)
+    assert [i.what for i in items] == [
+        "198.51.100.8 · rented, nobody intends it",
+        "203.0.113.7 · rented, nobody intends it",
+    ]
+    assert items[0].detail == "Vast · 1x RTX 4090 (1) — 8001: serving gemma with our key"
+    assert [a.label for a in items[0].actions] == ["Approve"]
+    assert items[0].flag == ""
+    # A pod names itself by its id; an approval by address would not reach it.
+    assert items[1].actions == []
+    assert items[1].flag.startswith("Approve waits for pod-id keying")
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
+    assert out.count('data-bs-target="#approveBoxModal"') == 1
+    assert 'data-host="198.51.100.8"' in out
+
+
 def test_remove_refusal_gate():
     # self-hosted, in LiteLLM, still healthy: too early to drop.
     healthy = _fleet(_server("gemma"))

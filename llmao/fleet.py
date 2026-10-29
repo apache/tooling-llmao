@@ -39,7 +39,6 @@ import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.intent import (
-    ADOPTED,
     LEGACY_SERVERS,
     VLLM_LISTEN_PORTS,
     Approval,
@@ -50,7 +49,6 @@ from llmao.intent import (
     parse_host_row,
     validate_providers,
     vllm_api_key,
-    vllm_intent,
 )
 from llmao.model_status import (
     AWAITING,
@@ -69,7 +67,7 @@ from llmao.provisioning import ProvisioningRecord
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
-from llmao.vast_client import fetch_instances, port_map_from_body, rentals_from_body
+from llmao.vast_client import fetch_instances, rentals_from_body
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -692,6 +690,27 @@ class ExtraLiteLLM:
     llmao_key: str = ""
 
 
+@dataclass(frozen=True)
+class Discovered:
+    """A rental nobody intends: a listed machine with no fleet.hosts row, no approval, no server.
+
+    The account's inventory is not the fleet (another department may rent
+    on the same account), so it is never added on sight. It is an attention
+    item with what a probe found on it, and Approve. Recomputed every pass
+    from the listings; gone when no listing names it.
+    """
+
+    rental: Rental
+    # One line: the provider's status when it is not running, else what the
+    # vLLM listen ports answered ("8001: serving qwen3-8b with our key").
+    finding: str
+    at: float
+
+    @property
+    def host(self) -> str:
+        return self.rental.host
+
+
 class Fleet:
     """Live fleet: vLLM servers, intended deployments, lifecycle probes."""
 
@@ -732,6 +751,8 @@ class Fleet:
         # from its own runner (run_runpod_listing).
         self.vast_rentals: ProviderRentals | None = None
         self.runpod_rentals: ProviderRentals | None = None
+        # Rentals nobody intends, by address (discover_rentals, every pass).
+        self.discovered: dict[str, Discovered] = {}
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list) -> Fleet:
@@ -804,9 +825,9 @@ class Fleet:
     def _materialize_approved_hosts(self) -> None:
         """Servers for every approved host, before the port map and the probe.
 
-        An approval used to create servers only on the next config fetch, or
-        after adopt saw a port answer. The other listen ports on that instance
-        were then absent from ``probe_all`` and stayed Awaiting.
+        An approval used to create servers only on the next config fetch.
+        The other listen ports on that instance were then absent from
+        ``probe_all`` and stayed Awaiting.
         """
         for host in list(self.approvals):
             self._materialize_approved(host)
@@ -1003,13 +1024,11 @@ class Fleet:
         if not key:
             return
         body = await fetch_instances(key, client=client)
-        mapping = port_map_from_body(body)
         # Servers must exist before place_servers stamps ports from the
         # boxes, or a newly approved listen port never receives its
         # HostPort and probe_all skips it.
         self._materialize_approved_hosts()
         self.vast_rentals = ProviderRentals("Vast", rentals_from_body(body))
-        await self.adopt_vast_instances(mapping, client)
 
     async def read_runpod_listing(self, client: httpx.AsyncClient) -> None:
         """Read RunPod's pod list into runpod_rentals. Raises if RunPod does not answer."""
@@ -1124,75 +1143,73 @@ class Fleet:
                 srv.rental = rental
         return placed
 
-    async def adopt_vast_instances(self, mapping: Any, client: httpx.AsyncClient, *, now: float | None = None) -> None:
-        """Probe Vast instances that nothing intends: not in fleet.hosts, not approved.
+    async def discover_rentals(self, client: httpx.AsyncClient, *, now: float | None = None) -> None:
+        """Rentals nobody intends, with what a probe finds on each: Fleet.discovered, rebuilt every pass.
 
-        An approved host has its servers already and is the probe pass's,
-        not adoption's. Connection refused leaves the IP unknown. A 200
-        reads /v1/models and materializes the matching model as Healthy
-        (a restart lost the approval), so sync_selfhost can create the
-        Deployment. The recorded probe is the server's loading start; no
-        config fetch is pretended.
+        A listed machine whose address is not in fleet.hosts, not approved,
+        and carries none of our servers. Adoption requires an admin's
+        approval, so nothing here adds a server: the /models strip shows
+        the finding with Approve. A rental with no address yet (stopped,
+        initializing) has nothing to probe or approve and is not listed.
         """
         stamp = now or time.time()
-        grace = float(self.cfg.fleet.health_grace_s)
-        threshold = int(self.cfg.fleet.health_fail_threshold)
         members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
-        for raw_ip, by_listen in mapping.items():
-            ip = normalize_peer_ip(str(raw_ip))
-            if not ip or ip in members:
-                continue
-            # Identity is host + listen port. A sibling port is still new when
-            # this host already has the other one. SSH and the rest of the
-            # Vast map are not vLLM and answer 401.
-            known = {(s.host, s.listen_port) for s in self.servers}
-            probes = []
-            for listen_s, public in by_listen.items():
-                listen = int(listen_s)
-                if listen not in VLLM_LISTEN_PORTS or (ip, listen) in known:
+        intended = members | set(self.approvals) | {s.host for s in self.servers}
+        found: dict[str, Discovered] = {}
+        for rentals in (self.vast_rentals, self.runpod_rentals):
+            for rental in rentals or ():
+                host = normalize_peer_ip(rental.host)
+                if not host or host in intended:
                     continue
-                ok, reached, err = await _get_health(client, f"http://{ip}:{int(public)}/health")
-                probes.append((listen, int(public), ok, reached, err))
-            if not any(reached for _, _, _, reached, _ in probes):
-                continue
-            for listen, public, ok, _reached, _err in probes:
-                if not ok:
-                    continue
-                model = await self._model_for_live_port(client, ip, listen, public)
-                if model is None:
-                    continue
-                srv = self._add_server(vllm_intent(self.cfg, ip, listen, str(model.model_name), model, origin=ADOPTED))
-                srv.public_port = public
-                srv.record_probe(True, now=stamp, grace_s=grace, fail_threshold=threshold, reached=True)
+                found[host] = Discovered(rental, await self._discovery_finding(client, rental, host), stamp)
+        if set(found) != set(self.discovered):
+            _LOGGER.info("fleet: rentals nobody intends: %s", sorted(found) or "none")
+        self.discovered = found
 
-    async def _model_for_live_port(self, client: httpx.AsyncClient, host: str, listen: int, public: int) -> Any | None:
-        """The models.yaml row whose HF id is what this port is serving, else None."""
-        key = vllm_api_key(self.cfg, host, listen)
-        try:
-            resp = await client.get(
-                f"http://{host}:{public}/v1/models",
-                headers={"Authorization": f"Bearer {key}"},
-            )
-        except httpx.HTTPError:
-            return None
-        if resp.status_code != 200:
-            return None
-        try:
-            rows = resp.json().get("data") or []
-        except ValueError:
-            return None
-        hf_id = ""
-        for row in rows:
-            if isinstance(row, dict) and row.get("id"):
-                hf_id = str(row["id"])
-                break
-        if not hf_id:
-            return None
+    async def _discovery_finding(self, client: httpx.AsyncClient, rental: Rental, host: str) -> str:
+        """One line on a rental nobody intends: its status when not running, else what its vLLM ports answered."""
+        if rental.status and not rental.running:
+            return rental.status
+        ports = sorted(
+            (int(listen), int(public)) for listen, public in rental.ports.items() if int(listen) in VLLM_LISTEN_PORTS
+        )
+        if not ports:
+            return "no vLLM port published"
+        parts = []
+        reached_any = False
+        for listen, public in ports:
+            ok, reached, err = await _get_health(client, f"http://{host}:{public}/health")
+            reached_any = reached_any or reached
+            if not reached:
+                parts.append(f"{listen}: {err}")
+            elif not ok:
+                parts.append(f"{listen}: vLLM answering, not serving ({err})")
+            else:
+                parts.append(f"{listen}: {await self._served_with_our_key(client, rental, host, listen, public)}")
+        if not reached_any:
+            return "nothing listening"
+        return "; ".join(parts)
+
+    async def _served_with_our_key(
+        self, client: httpx.AsyncClient, rental: Rental, host: str, listen: int, public: int
+    ) -> str:
+        # The bearer is minted from the name the box sent: a RunPod pod's
+        # pod id, a Vast box's address.
+        name = rental.id if rental.provider.lower() == "runpod" else host
+        served = await fetch_served_models(client, f"http://{host}:{public}", vllm_api_key(self.cfg, name, listen))
+        if served.status == 401:
+            return "refuses our key"
+        if served.status != 200:
+            return f"up, /v1/models answered {served.status or 'nothing usable'}"
+        return f"serving {self._model_name_for(served.hf_id) or served.hf_id or 'an unnamed model'} with our key"
+
+    def _model_name_for(self, hf_id: str) -> str:
+        """The models.yaml name whose recipe runs these weights, or ""."""
         for model in self.models.values():
-            vllm = getattr(model.model_info, "vllm", None)
-            if vllm is not None and str(getattr(vllm, "model", "")) == hf_id:
-                return model
-        return None
+            recipe = VllmRecipe.from_model(model)
+            if recipe is not None and recipe.hf_model == hf_id:
+                return str(model.model_name)
+        return ""
 
     async def run_lifecycle(self) -> None:
         interval = float(self.cfg.fleet.health_interval_s)
@@ -1206,6 +1223,7 @@ class Fleet:
                         _LOGGER.exception("vast port map failed")
                     self.place_servers()
                     self._materialize_approved_hosts()
+                    await self.discover_rentals(client)
                     await self.probe_all(client=client)
                     if self.after_probe is not None:
                         await self.after_probe()
@@ -1326,11 +1344,12 @@ def parse_max_model_len(models_json: Any) -> int | None:
 
 
 async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
-    """GET /v1/models with the key we believe this vLLM has: (status, max_model_len).
+    """GET /v1/models with the key we believe this vLLM has: (status, max_model_len, hf_id).
 
     ``status`` is the HTTP status, or None when nothing usable came back. A
     401 is the box refusing the key (Rejected); a 200 carries the served
-    context window, ``max_model_len``, which is None when the body has none.
+    context window, ``max_model_len``, which is None when the body has none,
+    and ``hf_id``, the first served model's id ("" when the body names none).
 
     base is the server root, not api_base: a /v1-suffixed base would ask for
     /v1/v1/models and 404. The KV cache size, the other half of the oversized
@@ -1341,12 +1360,15 @@ async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str
     unknown and the UX shows them as such.
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    served = edict(status=None, max_model_len=None)
+    served = edict(status=None, max_model_len=None, hf_id="")
     try:
         resp = await client.get(f"{base}/v1/models", headers=headers)
         served.status = resp.status_code
         if resp.status_code == 200:
-            served.max_model_len = parse_max_model_len(resp.json())
+            body = resp.json()
+            served.max_model_len = parse_max_model_len(body)
+            rows = body.get("data") if isinstance(body, dict) else None
+            served.hf_id = next((str(r["id"]) for r in rows or () if isinstance(r, dict) and r.get("id")), "")
     except (httpx.HTTPError, ValueError):
         pass
     return served

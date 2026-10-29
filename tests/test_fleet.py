@@ -37,6 +37,7 @@ from llmao.intent import Approval, UnknownHostError, derive_vllm_api_key, vllm_a
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import VllmRecipe, load_models
 from llmao.provisioning import config_for_host
+from llmao.rental import ProviderRentals, Rental
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
@@ -191,62 +192,94 @@ def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def test_vast_refused_port_stays_unknown():
-    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    models = load_models(EXAMPLE)
-    fleet = _approvable(cfg, models)
-    fleet.approve_models("198.51.100.8", ["qwen3-8b"])
+def _rental(host="198.51.100.8", *, provider="Vast", id="1", status="running", ports=None) -> Rental:
+    ports = {"8001": 18001, "22": 19022} if ports is None else ports
+    return Rental(
+        provider=provider, id=id, label="1x RTX 4090", url="", usd_per_hour=0.4, host=host, status=status, ports=ports
+    )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
+
+def _discover(fleet, handler, *, vast=(), runpod=()):
+    fleet.vast_rentals = ProviderRentals("Vast", {r.id: r for r in vast})
+    fleet.runpod_rentals = ProviderRentals("RunPod", {r.id: r for r in runpod}) if runpod else None
 
     async def run():
         async with _client(handler) as client:
-            await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
+            await fleet.discover_rentals(client, now=10.0)
 
     asyncio.run(run())
-    # The approval's server is there, untouched: no probe was recorded.
-    assert [(s.state, s.last_ok, s.public_port) for s in fleet.servers] == [(AWAITING, None, None)]
+    return fleet.discovered
 
 
-def test_adoption_leaves_an_approved_host_to_the_probe():
-    """An approved host has its servers; adoption neither re-adds nor probes them (the lifecycle's probe does)."""
+def test_a_rental_nobody_intends_is_discovered_not_added():
+    """Adoption requires an approval: the finding is shown, and no server appears on sight."""
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    models = load_models(EXAMPLE)
-    fleet = _approvable(cfg, models)
+    fleet = _approvable(cfg, load_models(EXAMPLE))
+
+    def serving(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "Qwen/Qwen3-8B-FP8"}]})
+        return httpx.Response(200)
+
+    found = _discover(fleet, serving, vast=[_rental()])
+    assert list(found) == ["198.51.100.8"]
+    assert found["198.51.100.8"].finding == "8001: serving qwen3-8b with our key"
+    assert found["198.51.100.8"].rental.id == "1"
+    assert fleet.servers == []
+
+    def refusing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401 if request.url.path == "/v1/models" else 200)
+
+    assert _discover(fleet, refusing, vast=[_rental()])["198.51.100.8"].finding == "8001: refuses our key"
+
+    def loading(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    finding = _discover(fleet, loading, vast=[_rental()])["198.51.100.8"].finding
+    assert finding == "8001: vLLM answering, not serving (HTTP 503)"
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    assert _discover(fleet, dead, vast=[_rental()])["198.51.100.8"].finding == "nothing listening"
+    # Not running: the provider's word, no probe. No address: not listed at all.
+    assert _discover(fleet, dead, vast=[_rental(status="exited")])["198.51.100.8"].finding == "exited"
+    assert _discover(fleet, dead, vast=[_rental(host="", status="loading")]) == {}
+    assert _discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["198.51.100.8"].finding == (
+        "no vLLM port published"
+    )
+
+
+def test_intended_hosts_are_not_discovered():
+    """A fleet.hosts member, an approved host, or any host with a server is intended already."""
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    fleet = _approvable(cfg, load_models(EXAMPLE))
     fleet.approve_models("198.51.100.8", ["qwen3-8b"])
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 
-    async def run():
-        async with _client(handler) as client:
-            await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
-
-    asyncio.run(run())
+    assert _discover(fleet, handler, vast=[_rental(), _rental(host="127.0.0.1", id="2")]) == {}
+    # The approval's server is there, untouched: discovery never probes it.
     (srv,) = fleet.servers
-    assert (srv.state, srv.public_port, srv.config_served_at, srv.vllm_probed_at) == (AWAITING, None, None, None)
-    assert not fleet.deployments[0].in_litellm
+    assert (srv.state, srv.public_port, srv.vllm_probed_at) == (AWAITING, None, None)
 
 
-def test_vast_200_rebuilds_without_an_approval():
+def test_a_runpod_rental_is_discovered_with_the_bearer_minted_from_its_pod_id():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    models = load_models(EXAMPLE)
-    fleet = _approvable(cfg, models)
+    fleet = _approvable(cfg, load_models(EXAMPLE))
+    bearers = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
-            return httpx.Response(200, json={"data": [{"id": "Qwen/Qwen3-8B-FP8"}]})
+            bearers.append(request.headers["Authorization"])
+            return httpx.Response(200, json={"data": [{"id": "org/unlisted-weights"}]})
         return httpx.Response(200)
 
-    async def run():
-        async with _client(handler) as client:
-            await fleet.adopt_vast_instances({"198.51.100.8": {"8001": 18001}}, client, now=10.0)
-
-    asyncio.run(run())
-    assert [s.model_name for s in fleet.servers] == ["qwen3-8b"]
-    assert fleet.servers[0].state == "healthy"
-    assert fleet.deployments[0].api_base == "http://198.51.100.8:18001/v1"
+    pod = _rental(host="203.0.113.7", provider="RunPod", id="pod-1")
+    found = _discover(fleet, handler, runpod=[pod])
+    assert found["203.0.113.7"].finding == "8001: serving org/unlisted-weights with our key"
+    assert bearers == [f"Bearer {vllm_api_key(cfg, 'pod-1', 8001)}"]
 
 
 def test_probe_hits_both_vllm_ports_and_skips_the_rest():

@@ -745,6 +745,20 @@ def attention_items(fleet) -> list:
                 actions=admin_actions(fleet, host=host, approve=True),
             )
         )
+    for host, found in sorted(fleet.discovered.items()):
+        rental = found.rental
+        items.append(
+            edict(
+                kind="discovered",
+                what=f"{host} · rented, nobody intends it",
+                ident="",
+                anchor="",
+                rest="",
+                detail=f"{rental.provider} · {rental.label} ({rental.id}) — {found.finding}",
+                flag=_discovery_flag(rental),
+                actions=admin_actions(fleet, host=host, approve=rental.provider.lower() != "runpod"),
+            )
+        )
     cfg = fleet.cfg.fleet
     for dep in fleet.deployments:
         view = deployment_status(snapshot_for_status(dep, cfg), cfg)
@@ -800,6 +814,13 @@ def attention_items(fleet) -> list:
             )
         )
     return items
+
+
+def _discovery_flag(rental) -> str:
+    """Why a discovered RunPod pod has no Approve yet: it names itself by pod id, and approvals are by address."""
+    if rental.provider.lower() == "runpod":
+        return "Approve waits for pod-id keying: the pod names itself by its id, and an approval is by address."
+    return ""
 
 
 def _orphan_detail(extra) -> str:
