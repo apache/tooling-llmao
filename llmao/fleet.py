@@ -382,11 +382,6 @@ class VllmServer:
         return f"probed {age}"
 
     @property
-    def config_served_display(self) -> str:
-        """Human-readable 'config_served_at' timestamp."""
-        return _ago(self.config_served_at)
-
-    @property
     def key(self) -> DeploymentKey:
         """This server's identity everywhere: its listen URL and model name. Never the public port."""
         return deployment_key(self.model_name, host=self.host, listen_port=self.listen_port)

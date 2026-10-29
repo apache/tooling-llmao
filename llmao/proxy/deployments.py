@@ -70,15 +70,13 @@ class DeploymentManager:
         # one never reaches ORPHAN_PASSES and the attention strip.
         self._extra_passes: dict[tuple[str, str], int] = {}
 
-    def deployment_body(self, dep, *, api_key: str | None = None) -> dict:
+    def deployment_body(self, dep) -> dict:
         """POST /model/new payload for one deployment.
 
         Our boxes: models.yaml litellm_params as the template, plus this
-        server's api_base and key. A provider: all of it from config.yaml
-        providers, since models.yaml says nothing about who serves a model.
-
-        `api_key` overrides the deployment's own. Callers that can probe the
-        box pass what it actually accepts; see _working_api_key.
+        server's api_base and the key its intent was minted with. A provider:
+        all of it from config.yaml providers, since models.yaml says nothing
+        about who serves a model.
         """
         entry = self.fleet.models.get(dep.model_name)
         if entry is None:
@@ -96,7 +94,7 @@ class DeploymentManager:
             params = dict(entry.litellm_params)
             params["api_base"] = dep.api_base
             if dep.self_hosted and dep.vllm is not None and dep.vllm.api_key:
-                params["api_key"] = api_key or dep.vllm.api_key
+                params["api_key"] = dep.vllm.api_key
             params["order"] = ORDER_SELF_HOSTED
 
         info: dict[str, Any] = {
@@ -152,12 +150,6 @@ class DeploymentManager:
             return None
         return str(info.get("id") or row.get("model_id") or "") or None
 
-    def _working_api_key(self, dep) -> str | None:
-        """The bearer to register for this server: the key its intent was minted with, or None off our boxes."""
-        if not dep.self_hosted or dep.vllm is None:
-            return None
-        return dep.vllm.api_key or None
-
     async def _deployment_present(self, dep) -> bool:
         routes = _routes_from_model_info(await self._model_info_rows())
         if dep.provider is not None:
@@ -181,7 +173,7 @@ class DeploymentManager:
             dep.in_litellm = True
             _LOGGER.info("model/new already present %s@%s", dep.name, dep.key.display)
             return False
-        body = self.deployment_body(dep, api_key=self._working_api_key(dep))
+        body = self.deployment_body(dep)
         resp = await self._transport.request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
             dep.in_litellm = True

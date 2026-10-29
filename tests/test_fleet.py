@@ -492,10 +492,9 @@ def test_the_bearer_is_minted_once_with_the_intent():
 
     Shared for LEGACY_SERVERS, derived from the salt for every other box.
     The server carries it, so the probe asks /v1/models with it and the
-    executor registers it; neither derives anything.
+    executor registers it (deployment_body reads dep.vllm.api_key); neither
+    derives anything.
     """
-    from llmao.proxy.client import LiteLLMBackend
-
     cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]], "10.0.0.1": [["qwen3-8b", 8001]]})
     cfg.fleet.selfhost_api_key = "sk-shared"
     cfg.litellm = edict(base_url="http://127.0.0.1:4000", master_key="sk-m", request_timeout_s=5)
@@ -506,12 +505,6 @@ def test_the_bearer_is_minted_once_with_the_intent():
     assert legacy.vllm.api_key == "sk-shared"
     assert other.vllm.api_key == derive_vllm_api_key("test-vllm-salt", "10.0.0.1", 8001)
     assert vllm_api_key(cfg, "213.173.110.78", 8003) == "sk-shared"
-
-    # The executor reads the server's key, and has no answer off our boxes.
-    backend = LiteLLMBackend(cfg, fleet)
-    assert backend.deployments._working_api_key(legacy) == "sk-shared"
-    assert backend.deployments._working_api_key(edict(self_hosted=False, vllm=None)) is None
-    asyncio.run(backend.aclose())
 
 
 def test_served_window_is_asked_for_with_the_working_key():

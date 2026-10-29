@@ -41,7 +41,6 @@ from llmao.model_status import (
     DeploymentSnapshot,
     deployment_status,
     model_status,
-    unknown_fetch_status,
 )
 
 # Same keys config.yaml fleet.* already has. Not the design doc's round numbers.
@@ -75,7 +74,7 @@ def _self(**kw) -> DeploymentSnapshot:
 
 
 def test_fleet_fixture_rollup_is_degraded():
-    """3 healthy, 3 loading, 1 unhealthy, one unknown fetch. One healthy row is skewed."""
+    """3 healthy, 3 loading, 1 unhealthy. One healthy row is skewed."""
     views = []
     for i in range(3):
         extra = {}
@@ -112,7 +111,6 @@ def test_fleet_fixture_rollup_is_degraded():
     assert lifecycles.count(UNHEALTHY) == 1
     assert views[0].skew == (SKEW_VLLM_UP_LITELLM_DOWN,)
     assert all(not v.skew for v in views[1:4])
-    assert unknown_fetch_status() == UNKNOWN
 
     summary = model_status(MODEL, views)
     assert summary.rollup == DEGRADED

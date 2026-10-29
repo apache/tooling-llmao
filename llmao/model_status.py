@@ -350,11 +350,6 @@ def _privacy(rows: list[DeploymentStatus]) -> str:
     return EXTERNAL
 
 
-def unknown_fetch_status() -> str:
-    """A fleet key presented from an IP that is not in config.yaml."""
-    return UNKNOWN
-
-
 def model_status(
     model_name: str,
     views: list[DeploymentStatus],
