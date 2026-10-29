@@ -902,17 +902,17 @@ async def models_page(result):
     """Gateway model inventory (public fields; supply path for site admins)."""
     admin = bool(result.is_site_admin)
     result.reveal_supply = admin
-    catalog = ux_models(list(APP.fleet.models.values()), reveal_supply=admin)
+    catalog = ux_models(APP.models, reveal_supply=admin)
     result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
     result.attention = attention_items(APP.fleet) if admin else []
-    result.approve_choices = _approve_choices(APP.fleet) if admin else []
+    result.approve_choices = _approve_choices(APP.models) if admin else []
     return result
 
 
-def _approve_choices(fleet) -> list:
+def _approve_choices(models: list) -> list:
     """Self-hosted models an unknown box can be told to load, from the models loaded at startup."""
     choices = []
-    for model in fleet.models.values():
+    for model in models:
         info = model.model_info
         if VllmRecipe.from_model(model) is None:
             continue

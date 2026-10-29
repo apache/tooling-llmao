@@ -50,6 +50,7 @@ def test_the_config_route_serves_members_and_approved_hosts_and_404s_a_stranger(
     fleet = Fleet(cfg=cfg, servers=[], models={m.model_name: m for m in models})
     fleet.approve_models("198.51.100.8", ["qwen3-8b"])
     monkeypatch.setattr(app, "cfg", cfg)
+    monkeypatch.setattr(app, "models", models, raising=False)
     monkeypatch.setattr(app, "fleet", fleet, raising=False)
     client = app.test_client()
 

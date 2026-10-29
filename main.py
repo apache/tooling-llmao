@@ -81,6 +81,10 @@ def create_app():
 
     definitions = load_models(cfg=app.cfg)
     validate_fleet(app.cfg, models=definitions)
+    # The model definitions, loaded and validated once. Beside app.cfg: the
+    # pages and the config route read them here; the fleet is built from the
+    # same list. Nothing reads models.yaml again.
+    app.models = definitions
     # Required, and checked before anything starts.
     interval = sample_interval(app.cfg)
     keep_days = retention_days(app.cfg)
