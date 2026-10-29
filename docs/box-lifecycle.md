@@ -28,7 +28,7 @@ Everything the lifecycle reads, and where it comes from.
 | `last_ok`, `fails` | each probe | When `/health` last passed, and the consecutive failures since. |
 | `key_rejected`, `rejected_passes` | `/v1/models` with the working key, asked only when `/health` passed | `True` on a 401. The passes count runs while refused; a 200 or a failed probe resets it. |
 | `in_litellm` | the LiteLLM deployments read | Whether LiteLLM has this server's deployment. |
-| `unlisted` | `Fleet.place_servers`, from the Vast and RunPod listings | Host-level: every configured provider has answered, none names this host, for `UNLISTED_PASSES` passes running, and some listing named it before. |
+| `unlisted` | `Fleet.place_servers`, from the Vast and RunPod listings | Host-level: every configured provider has answered and none names this host, for `UNLISTED_PASSES` passes running. |
 
 The clocks: `health_interval_s` (45 s between passes), `health_grace_s`
 (1800 s, the loading window), `health_fail_threshold` (3, both the
@@ -158,9 +158,10 @@ what a state means rather than which state it is:
 Unlisted also clears the server's box (its provider, price and listing
 status), and a host with no public port and no listing records a
 "no address to dial" probe so the Stalled clock runs. A host no listing
-has ever named is unknown, not unlisted: it may be rented from a provider
-whose key is not configured. A pod that the listing still names in any
-status, stopped or initializing, is listed; only absence is a miss.
+has ever named is unlisted like any other once the passes run, so a
+rental that ended while llmao was down is said after the restart. A pod
+that the listing still names in any status, stopped or initializing, is
+listed; only absence is a miss.
 
 **An approval** (`intent.Approval`, kept on `Fleet`) is a person vouching
 for a host that `fleet.hosts` does not name and choosing its models. It is

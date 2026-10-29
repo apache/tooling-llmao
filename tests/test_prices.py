@@ -321,19 +321,22 @@ def test_a_host_no_provider_reports_is_unlisted_and_said_once(caplog):
     assert "203.0.113.30 is listed again" in caplog.text
 
 
-def test_a_host_no_configured_provider_could_report_is_not_unlisted():
-    """A live machine rented from a provider whose key is not configured.
+def test_a_host_no_listing_has_ever_named_is_unlisted_once_the_passes_run():
+    """A rental that ended while llmao was down, read after the restart.
 
-    An unconfigured provider is not a missing report, so `complete` goes true
-    as soon as Vast answers and every host of the other provider looks
-    absent. A host no provider has ever named is unknown, not gone.
+    No listing in this process has ever named it, and that is no guard: an
+    unconfigured provider is not a missing report, so `complete` goes true
+    as soon as Vast answers, and the count runs from the first pass. The
+    verdict is a sentence; nothing Healthy is deleted on it.
     """
     never = _server("203.0.113.40")
     fleet = Fleet(edict(providers=edict(vast=edict(api_key="v"))), [never])
     fleet.vast_rentals = _reported()
-    for _ in range(UNLISTED_PASSES + 2):
+    for _ in range(UNLISTED_PASSES - 1):
         fleet.place_servers()
     assert never.unlisted is False
+    fleet.place_servers()
+    assert never.unlisted is True
 
 
 def test_a_provisioning_gap_shorter_than_the_threshold_is_not_a_dead_rental():

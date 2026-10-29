@@ -405,7 +405,7 @@ is observed, rather than updating state step by step from many places.
    never computed; it is not a mode, only two sources that are not
    configured.
 
-   This drops `ever_listed`. That guard existed for a host rented from a
+   This drops `ever_listed` (**Done** 2026-10-29). That guard existed for a host rented from a
    provider with no key, which would be absent from every listing and
    called unlisted for ever. Production has both keys, so that host does
    not exist. The guard is not worth what it costs on the hosts that do:

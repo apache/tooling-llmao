@@ -307,10 +307,6 @@ class VllmServer:
         # none has this host, for UNLISTED_PASSES passes running: the rental
         # has most likely ended. See Fleet.place_servers.
         self.unlisted = False
-        # Whether a provider has ever placed this host. A host no listing has
-        # EVER named is unknown, not gone: it may be rented from a provider
-        # whose key is not configured, so no list of ours could contain it.
-        self.ever_listed = False
         # Consecutive listings that have omitted this host. Reset by any
         # sighting, so a host that flaps never reaches the threshold.
         self.unlisted_passes = 0
@@ -1036,26 +1032,31 @@ class Fleet:
         """Put each server on its Rental from the latest provider sets, and decide which are unlisted.
 
         Unlisted means every provider we rent from has answered with its
-        list, none has this host for UNLISTED_PASSES passes running, and some
-        listing placed this host before. With a list missing (an outage, or
-        RunPod not read yet) nothing is concluded, and the last verdict
-        stands. Logged when the verdict changes, not on every pass.
+        list and none has this host for UNLISTED_PASSES passes running. With
+        a list missing (an outage, or RunPod not read yet) nothing is
+        concluded, and the last verdict stands. Logged when the verdict
+        changes, not on every pass.
 
-        Two guards, both learned from one incident. A host no list has EVER
-        named is unknown rather than gone: a provider with no key configured
-        is not a missing list, it is not a provider we rent from, so
-        `complete` goes true once the OTHER provider answers and every host of
-        the unconfigured one looks absent. And a single absence is not a
-        conclusion: a RunPod pod is missing from the pod list while it
-        provisions, over 90 minutes in the case measured.
+        A single absence is not a conclusion, learned from one incident: a
+        RunPod pod is missing from the pod list while it provisions, over 90
+        minutes in the case measured. Before unlisted drove deletion that was
+        cosmetic. Then it deleted the route of a box that was up and serving,
+        which the next pass re-added -- the add fires on healthy-and-absent,
+        the delete on unlisted -- so the two alternated for as long as the
+        listing gap lasted. Observed on qwen3.8-27b at 47 seconds a cycle, 33
+        times in an hour, unroutable through the gateway for half of each
+        cycle while /fleet showed it serving and a direct completion against
+        the box passed.
 
-        Before unlisted drove deletion, either mistake was cosmetic. Now it
-        deletes the route of a box that is up and serving, which the next pass
-        re-adds -- the add fires on healthy-and-absent, the delete on unlisted
-        -- so the two alternate for as long as the listing gap lasts. Observed
-        on qwen3.8-27b at 47 seconds a cycle, 33 times in an hour, unroutable
-        through the gateway for half of each cycle while /fleet showed it
-        serving and a direct completion against the box passed.
+        A host no list has ever named is unlisted like any other once the
+        passes run. A provider with no key configured is not one we rent
+        from, so a host rented there would be called unlisted for ever; the
+        cost is a sentence on the attention strip, never a deletion, since
+        the delete fires on unlisted-and-not-Healthy and a box that is
+        Unhealthy, Stalled, Rejected or Foreign is deleted by the probe gate
+        anyway. Guarding against it cost a restart hole: a rental that ended
+        while llmao was down was, after the restart, a host no listing had
+        ever named, and the sentence never showed.
         """
         vast_wanted = bool(gpu_host_api_key(self.cfg, "vast"))
         runpod_wanted = bool(gpu_host_api_key(self.cfg, "runpod"))
@@ -1069,12 +1070,8 @@ class Fleet:
             return
         for srv in self.servers:
             listed = srv in placed
-            # Read before the branch below clears srv.rental, which would
-            # otherwise destroy the evidence and let the verdict flap.
-            if listed or srv.rental is not None:
-                srv.ever_listed = True
             srv.unlisted_passes = 0 if listed else srv.unlisted_passes + 1
-            unlisted = srv.ever_listed and srv.unlisted_passes >= UNLISTED_PASSES
+            unlisted = srv.unlisted_passes >= UNLISTED_PASSES
             if unlisted != srv.unlisted:
                 if unlisted:
                     _LOGGER.warning("fleet: no provider lists %s; the rental may have ended", srv.host)
