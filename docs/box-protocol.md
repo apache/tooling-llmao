@@ -43,15 +43,15 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
   address is used, else the peer. The header is a claim, not a proof; the
   fleet key is what is checked.
 - **Which name a box sends** is the provider's business, set in that
-  provider's `provision.sh` as `LLMAO_HOST`: the public IP on Vast
-  (`PUBLIC_IPADDR`), the pod id on RunPod (`RUNPOD_POD_ID`). `install_set.py`
+  provider's `provision.sh` as `LLMAO_HOST`: the instance id on Vast
+  (`CONTAINER_ID`), the pod id on RunPod (`RUNPOD_POD_ID`). `install_set.py`
   knows no provider's names. llmao only matches the name against the keys
-  of `fleet.hosts`, and never dials it: a server's address comes from the
-  provider's listing, whose rows carry both the address and the name a
-  box on them sends, so a row keyed by a pod id is placed by that name
-  and dialed at the pod's public address. A row keyed by an address, as
-  the boxes set up by hand are, still places by address. (The RunPod
-  image has not yet run on a real pod.)
+  of `fleet.hosts`, and never dials it: a server's address is unknown
+  until the provider's listing places it on a machine with an address,
+  since the listing carries both the address and the name a box on that
+  machine sends. A row keyed by an address, as the legacy boxes and those
+  provisioned before names were ids are, is its own address and still
+  places by it. (The RunPod image has not yet run on a real pod.)
 - **An unknown host** gets 404, and the fetch is remembered in memory (the
   host, first and last seen, a count), so the `/models` attention strip can
   show "fleet key presented from a host not in `fleet.hosts`" and an admin

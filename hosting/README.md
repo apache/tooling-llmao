@@ -36,9 +36,10 @@ Required:
   and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
 - `LLMAO_HOST` — the box's name in `fleet.hosts`, sent as `X-LLMAO-Host`.
   Each provider's `provision.sh` sets it from that provider's own variable,
-  so `install_set.py` knows no provider's names. Vast: the public IP,
-  `PUBLIC_IPADDR`. RunPod: the pod id, `RUNPOD_POD_ID`, since a pod need
-  not have a public IP of its own
+  so `install_set.py` knows no provider's names. Vast: the instance id,
+  `CONTAINER_ID`. RunPod: the pod id, `RUNPOD_POD_ID`. Both are the
+  provider's id for the machine; llmao dials the address its listing
+  reports, never the name
 - `PROVISIONING_SCRIPT` — Vast only: raw URL of `provision.sh`
 
 ## Boot

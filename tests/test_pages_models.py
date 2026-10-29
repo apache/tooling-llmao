@@ -426,7 +426,7 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
         url="",
         usd_per_hour=None,
         host="198.51.100.9",
-        name="198.51.100.9",
+        name="1",
         status="running",
     )
     fleet.vast_rentals = ProviderRentals("vast", by_id={"1": rental})
@@ -449,7 +449,7 @@ def test_the_strip_shows_a_rental_nobody_intends_with_approve_by_name():
         url="",
         usd_per_hour=0.4,
         host="198.51.100.8",
-        name="198.51.100.8",
+        name="1",
         status="running",
     )
     pod = Rental(
@@ -463,21 +463,21 @@ def test_the_strip_shows_a_rental_nobody_intends_with_approve_by_name():
         status="running",
     )
     fleet.discovered = {
-        "198.51.100.8": Discovered(vast, "8001: serving gemma with our key", time.time()),
+        "1": Discovered(vast, "8001: serving gemma with our key", time.time()),
         "pod-1": Discovered(pod, "nothing listening", time.time()),
     }
     items = pages.attention_items(fleet)
     assert [i.what for i in items] == [
-        "198.51.100.8 · rented, nobody intends it",
+        "1 · rented, nobody intends it",
         "pod-1 · rented, nobody intends it",
     ]
     assert items[0].detail == "Vast · 1x RTX 4090 (1) — 8001: serving gemma with our key"
     assert items[1].detail == "RunPod · llmao-q (pod-1) — nothing listening"
-    # Approve is by the name the box sends: the address on Vast, the pod id on RunPod.
+    # Approve is by the name the box sends: the provider's id for the machine.
     assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
     assert out.count('data-bs-target="#approveBoxModal"') == 2
-    assert 'data-host="198.51.100.8"' in out
+    assert 'data-host="1"' in out
     assert 'data-host="pod-1"' in out
 
 
@@ -759,7 +759,7 @@ def test_each_deployment_says_where_to_find_it():
         url="https://cloud.vast.ai/instances/",
         usd_per_hour=0.14,
         host="10.0.0.1",
-        name="10.0.0.1",
+        name="53865410",
         status="running",
         ports=edict({"8001": 41234}),
     )
@@ -796,7 +796,7 @@ def test_where_a_deployment_lives_is_for_admins_only():
         url="https://cloud.vast.ai/instances/",
         usd_per_hour=0.14,
         host="10.0.0.1",
-        name="10.0.0.1",
+        name="53865410",
         status="running",
         ports=edict({"8001": 41234}),
     )

@@ -510,16 +510,19 @@ The URL that can actually be reached, `http://host:public_port/v1` on a
 Vast box, is **a field reconcile computes** on each record, from, in
 order: the current port map from the listing that has the host and is
 running (Vast or RunPod; both are configured in production), else the
-last-known dialable URL, which history carries forward, else the
-canonical listen URL. The last step is unconditional: it is what a
-laptop with neither key dials, and what our own box dials in a fleet
-with both keys, a host neither listing names and so never maps. A dead
-rental after a restart is probed at its listen port on an address the
-provider may have reassigned; that fails, or goes Rejected and then
-Foreign, and is harmless. Unplaced, a record with no address, is therefore only a
-record with no host. For commercial providers the dialable URL is the
-canonical one. A public port written on the `fleet.hosts` row is not a
-dial address.
+last-known dialable URL, which history carries forward, else, for a
+name that is an IP literal, the canonical listen URL. That last step is
+what a laptop with neither key dials, and what a legacy box dials in a
+fleet with both keys, a host neither listing names and so never maps.
+It is not unconditional: a name that is a provider's id (a Vast
+instance id, a RunPod pod id) is not dialable, so a record with such a
+name and no listing has no address, and is unplaced (Early work item
+13 put this rule on `VllmServer.address`). A dead legacy rental after a
+restart is probed at its listen port on an address the provider may
+have reassigned; that fails, or goes Rejected and then Foreign, and is
+harmless. For commercial providers the dialable URL is the canonical
+one. A public port written on the `fleet.hosts` row is not a dial
+address.
 
 It is a field and not a function so that the decision is made in one
 place and tested as table rows, and so that fetchers never consult
@@ -1120,18 +1123,24 @@ real gap on its own. In order:
     "serving `<model>` with our key" or "refuses our key"; the RunPod
     bearer is minted from the pod id). The strip shows "rented, nobody
     intends it" with the finding and Approve. Item 13 keyed it by name.
-13. **A server has a name and an address.** Done 2026-10-29. The name
-    is the `fleet.hosts` key, what the box sends as its host and what
-    the bearer is minted from: an address on Vast, a pod id on RunPod,
-    and llmao does not care which. `Rental.name` is what a box on that
-    machine sends, set by each provider's client to mirror its
-    provision.sh. `match_rental` places by name, then by address (the
-    boxes set up by hand are keyed by address), then by the last
-    machine; `VllmServer.address` is the name until a Rental with an
-    address places it, and the dial URL, the LiteLLM presence checks and
-    the public column read the address. Discovery keys its records by
-    name, so Approve works for a pod, and a pod is listed by its id
-    before it has an address. This is the dialable field of migration
-    step 3, on the server for now. Vast can send its instance id as the
-    name with one line in its provision.sh and a re-keyed row at that
-    box's next rebuild; not done.
+13. **A server has a name and an address.** Done 2026-10-29, in two
+    commits. The name is the `fleet.hosts` key, what the box sends as
+    its host and what the bearer is minted from: the provider's id for
+    the machine, a Vast instance id (`CONTAINER_ID`, sent by
+    hosting/vast/provision.sh) or a RunPod pod id, and llmao does not
+    care which. `Rental.name` is what a box on that machine sends, set
+    by each provider's client to mirror its provision.sh. The address is
+    where the server is dialed, and `VllmServer.address` is None until
+    known: a name that is an IP literal (a legacy or local box) is its
+    own address, any other name gets one only when a Rental with an
+    address places the server. `match_rental` places by name, then by
+    address (rows keyed by address: the legacy boxes, and boxes
+    provisioned before names were ids), then by the last machine. The
+    dial URL, the LiteLLM presence checks and the public column read
+    the address. Discovery keys its records by name, so Approve works
+    for every provider, and a machine is listed by its id before it has
+    an address. This is the dialable field of migration step 3, on the
+    server for now. A running box provisioned under its address keeps
+    its address-keyed row (its bearer was minted from that) until it is
+    rebuilt, when its row is re-keyed to the instance id; nothing in
+    llmao needs that to happen.

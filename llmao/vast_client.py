@@ -109,8 +109,8 @@ def rentals_from_body(body: Any) -> edict:
     """instance id → Rental: where it is (instance id, GPUs), its status, its address, its ports and its price.
 
     Every instance, in any status: ``host`` is public_ipaddr, "" when Vast
-    has not given one, and ``name`` is the same address, since
-    hosting/vast/provision.sh sends PUBLIC_IPADDR as the box's host;
+    has not given one; ``name`` is the instance id, which
+    hosting/vast/provision.sh sends as the box's host (CONTAINER_ID);
     ``status`` is actual_status (running, loading,
     exited, ...), the observed state; ``ports`` is container listen port →
     public HostPort, as ports_from_instance reads it.
@@ -128,15 +128,14 @@ def rentals_from_body(body: Any) -> edict:
             continue
         gpus = inst.get("num_gpus") or 1
         gpu = str(inst.get("gpu_name") or "GPU")
-        host = _ip(inst.get("public_ipaddr"))
         rentals[instance_id] = Rental(
             provider="Vast",
             id=instance_id,
             label=f"{gpu} x{gpus}",
             url=VAST_CONSOLE_URL,
             usd_per_hour=price(inst.get("dph_total")),
-            host=host,
-            name=host,
+            host=_ip(inst.get("public_ipaddr")),
+            name=instance_id,
             status=str(inst.get("actual_status") or "").lower(),
             ports=ports_from_instance(inst),
         )

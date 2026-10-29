@@ -74,10 +74,12 @@ built at startup.
 - `GET /vllm/config` (Bearer `fleet.key`) maps `X-LLMAO-Host` to a
   `fleet.hosts` row, else the leftmost `X-Forwarded-For`, else the peer.
   The header is whatever the provider's `provision.sh` sets: Vast's
-  `PUBLIC_IPADDR`, RunPod's pod id. That name is the server's key, what
-  the bearer is minted from, and what an approval is by; where the
-  server is dialed (`VllmServer.address`) comes from the provider's
-  listing, which also carries the name a box on it sends (`Rental.name`).
+  instance id (`CONTAINER_ID`), RunPod's pod id. That name is the
+  server's key, what the bearer is minted from, and what an approval is
+  by; where the server is dialed (`VllmServer.address`) is unknown until
+  the provider's listing places it, since the listing carries both the
+  address and the name a box on it sends (`Rental.name`). A name that is
+  an IP literal (a legacy or local box) is its own address.
 - The JSON is `{host, servers[]}`. `servers[].port` is the **container
   listen** port, never the public port. Both providers' listings supply the
   public port; it is never sent to the box.

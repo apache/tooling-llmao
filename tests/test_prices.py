@@ -53,8 +53,8 @@ def _rental(price, provider="Vast", id="1", label="GB10 x1", host="", status="ru
         url="",
         usd_per_hour=price,
         host=host,
-        # What the box sends as its host: the address on Vast, the pod id on RunPod.
-        name=host if provider == "Vast" else id,
+        # What the box sends as its host: the provider's id for the machine.
+        name=id,
         status=status,
         ports=edict(ports or {}),
     )
@@ -90,7 +90,7 @@ def test_a_vast_rental_is_its_instance_gpus_status_address_and_price():
         url=VAST_CONSOLE_URL,
         usd_per_hour=0.2059,
         host="203.0.113.10",
-        name="203.0.113.10",
+        name="55406468",
         status="running",
         ports={"8001": 41234},
     )

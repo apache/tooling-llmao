@@ -341,7 +341,7 @@ class DeploymentManager:
         # the provider's lookup failed. A LiteLLM deployment on the same host
         # and model may well be theirs, so it is not called an extra.
         unplaced = {
-            (normalize_peer_ip(d.vllm.address), d.model_name)
+            (d.vllm.address or "", d.model_name)
             for d in self.fleet.deployments
             if d.provider is None and d.vllm is not None and not d.api_base
         }

@@ -3,15 +3,20 @@
 Custom **template** (on-start, env), Vast’s **stock vLLM container**. Do not
 maintain a derived image for Vast.
 
-`provision.sh` sets `LLMAO_HOST` from `PUBLIC_IPADDR` and curls the shared
-[`../install_set.py`](../install_set.py), which fetches host JSON
-(`X-LLMAO-Host: $LLMAO_HOST`) and writes one Supervisor program per model.
-supervisord runs `vllm serve`. There is no Python process manager.
+`provision.sh` sets `LLMAO_HOST` from `CONTAINER_ID`, the instance id, and
+curls the shared [`../install_set.py`](../install_set.py), which fetches host
+JSON (`X-LLMAO-Host: $LLMAO_HOST`) and writes one Supervisor program per
+model. supervisord runs `vllm serve`. There is no Python process manager.
 
 Vast instances often reach `llm.apache.org` through a transparent HTTP proxy:
 the TCP peer is not the instance and there is no `X-Forwarded-For`. Vast sets
-`PUBLIC_IPADDR` in the container; the installer sends that as `X-LLMAO-Host`.
-That value must match a `fleet.hosts` key. There is no `?host=` query.
+`CONTAINER_ID` in the container (the bare instance id; `VAST_CONTAINERLABEL`
+is the same with a `C.` prefix); the installer sends that as `X-LLMAO-Host`.
+That value must match a `fleet.hosts` key. There is no `?host=` query. llmao
+dials the instance at the address Vast's listing reports, never at its name,
+so a row keyed by the instance id needs no address anywhere. A row keyed by
+the public IP, as boxes provisioned before this were, still works: the
+listing places it by address.
 
 ## Instance
 
@@ -29,10 +34,10 @@ That value must match a `fleet.hosts` key. There is no `?host=` query.
   ```bash
   FLEET_KEY=<shared-secret>   # bake into the template
   ASFQUART_URL=https://llm.apache.org
-  # PUBLIC_IPADDR is set by Vast; provision.sh requires it and passes it on as LLMAO_HOST
+  # CONTAINER_ID is set by Vast; provision.sh requires it and passes it on as LLMAO_HOST
   ```
 
-  Put the instance public IP under `fleet.hosts` in `config.yaml`. Do not set
+  Put the instance id under `fleet.hosts` in `config.yaml`. Do not set
   per-instance docker env for the fleet key or a set id.
 
 ## On-create

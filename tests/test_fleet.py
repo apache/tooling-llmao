@@ -194,8 +194,7 @@ def _client(handler) -> httpx.AsyncClient:
 
 def _rental(host="198.51.100.8", *, provider="Vast", id="1", status="running", ports=None) -> Rental:
     ports = {"8001": 18001, "22": 19022} if ports is None else ports
-    # The name is what the provider's provision.sh sends: the address on Vast, the pod id on RunPod.
-    name = host if provider == "Vast" else id
+    # The name is what the provider's provision.sh sends: the provider's id for the machine.
     return Rental(
         provider=provider,
         id=id,
@@ -203,7 +202,7 @@ def _rental(host="198.51.100.8", *, provider="Vast", id="1", status="running", p
         url="",
         usd_per_hour=0.4,
         host=host,
-        name=name,
+        name=id,
         status=status,
         ports=ports,
     )
@@ -232,36 +231,34 @@ def test_a_rental_nobody_intends_is_discovered_not_added():
         return httpx.Response(200)
 
     found = _discover(fleet, serving, vast=[_rental()])
-    assert list(found) == ["198.51.100.8"]
-    assert found["198.51.100.8"].finding == "8001: serving qwen3-8b with our key"
-    assert found["198.51.100.8"].rental.id == "1"
+    # Keyed by the name the box sends, the instance id; the address is only dialed.
+    assert list(found) == ["1"]
+    assert found["1"].finding == "8001: serving qwen3-8b with our key"
+    assert found["1"].rental.host == "198.51.100.8"
     assert fleet.servers == []
 
     def refusing(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401 if request.url.path == "/v1/models" else 200)
 
-    assert _discover(fleet, refusing, vast=[_rental()])["198.51.100.8"].finding == "8001: refuses our key"
+    assert _discover(fleet, refusing, vast=[_rental()])["1"].finding == "8001: refuses our key"
 
     def loading(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 
-    finding = _discover(fleet, loading, vast=[_rental()])["198.51.100.8"].finding
+    finding = _discover(fleet, loading, vast=[_rental()])["1"].finding
     assert finding == "8001: vLLM answering, not serving (HTTP 503)"
 
     def dead(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    assert _discover(fleet, dead, vast=[_rental()])["198.51.100.8"].finding == "nothing listening"
-    # Not running: the provider's word, no probe. A Vast instance with no
-    # address has no name yet and is not listed; a pod is named by its id
-    # before it has an address.
-    assert _discover(fleet, dead, vast=[_rental(status="exited")])["198.51.100.8"].finding == "exited"
-    assert _discover(fleet, dead, vast=[_rental(host="", status="loading")]) == {}
+    assert _discover(fleet, dead, vast=[_rental()])["1"].finding == "nothing listening"
+    # Not running: the provider's word, no probe. A machine is named by its
+    # id before it has an address, on either provider.
+    assert _discover(fleet, dead, vast=[_rental(status="exited")])["1"].finding == "exited"
+    assert _discover(fleet, dead, vast=[_rental(host="", status="loading")])["1"].finding == "loading"
     starting = _rental("", provider="RunPod", id="pod-2", ports={})
     assert _discover(fleet, dead, runpod=[starting])["pod-2"].finding == "no address yet"
-    assert _discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["198.51.100.8"].finding == (
-        "no vLLM port published"
-    )
+    assert _discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["1"].finding == "no vLLM port published"
 
 
 def test_intended_hosts_are_not_discovered():

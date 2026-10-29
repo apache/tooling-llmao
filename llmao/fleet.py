@@ -30,6 +30,7 @@ static api_base). The LiteLLM **Router** is the whole proxy. Box JSON
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 from dataclasses import dataclass
@@ -92,8 +93,18 @@ def _ago(ts: float | None) -> str:
     return f"{sec // 3600}h"
 
 
-# Box-claimed public IP (Vast PUBLIC_IPADDR). Not X-Forwarded-For.
+# The box's name, as its provider's provision.sh sets it (a Vast instance
+# id, a RunPod pod id). Not X-Forwarded-For.
 HOST_HEADER = "X-LLMAO-Host"
+
+
+def _is_ip_literal(name: str) -> bool:
+    """Whether a server's name is itself an address (a legacy or local box), so it can be dialed as given."""
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
 
 
 def client_ip(
@@ -279,13 +290,15 @@ class VllmServer:
         # sent so the box's fit check can count it. None: not declared.
         self.kv_bytes_per_token = kv_bytes_per_token
         # The server's name: its fleet.hosts key, what the box sends as its
-        # host, what the bearer is minted from. An address on Vast, a pod
-        # id on RunPod; llmao does not care which.
+        # host, what the bearer is minted from. A provider's id for the
+        # machine (a Vast instance id, a RunPod pod id), or an address for
+        # a legacy or local box; llmao does not care which.
         self.host = host
-        # Where it is dialed. The name until the provider's listing places
-        # the server on a Rental with an address, then that address (a pod
-        # id is never dialable; an address names itself). apply_rentals.
-        self.address = host
+        # Where it is dialed, or None while unknown. A name that is an IP
+        # literal is its own address; any other name has none until the
+        # provider's listing places the server on a Rental with an address
+        # (apply_rentals). Never the name: a pod id is not dialable.
+        self.address: str | None = host if _is_ip_literal(host) else None
         self.listen_port = int(listen_port)
         # The port this server is dialed on: from the listing of the
         # provider that places it (Vast's HostPort, RunPod's portMappings),
@@ -410,7 +423,7 @@ class VllmServer:
 
     @property
     def root_url(self) -> str | None:
-        if self.public_port is None:
+        if self.public_port is None or self.address is None:
             return None
         return f"http://{self.address}:{self.public_port}"
 
@@ -430,7 +443,7 @@ class VllmServer:
         """True when this LiteLLM deployment is this server, reachable: on its public port."""
         if port is None or port != self.public_port or model_name != self.model_name:
             return False
-        return normalize_peer_ip(host) == normalize_peer_ip(self.address)
+        return self.address is not None and normalize_peer_ip(host) == self.address
 
     def on_listen_port(self, host: str, port: int | None, model_name: str) -> bool:
         """True when this LiteLLM deployment is this server, but at its listen port.
@@ -443,7 +456,7 @@ class VllmServer:
         """
         if port is None or port != self.listen_port or port == self.public_port:
             return False
-        return model_name == self.model_name and normalize_peer_ip(host) == normalize_peer_ip(self.address)
+        return model_name == self.model_name and self.address is not None and normalize_peer_ip(host) == self.address
 
     @property
     def rental_usd_per_hour(self) -> float | None:
