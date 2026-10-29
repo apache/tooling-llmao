@@ -281,9 +281,11 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
    leave the old deployment behind for good (one model had accumulated
    twelve identical rows). Now every deployment is stamped with its
    identity (`model_info.llmao_key`), every write is confirmed by
-   re-reading `/model/info`, and a deployment no server claims is pruned
-   after `ORPHAN_PASSES` skew passes. The rest of the clean-up is the
-   reconcile migration (`docs/fleet-reconcile-design.md`).
+   re-reading `/model/info`, and a deployment no server claims is an
+   orphan on the /models strip after `ORPHAN_PASSES` skew passes, with
+   Stop tracking; it is never deleted unattended (2026-10-28). The rest
+   of the clean-up is the reconcile migration
+   (`docs/fleet-reconcile-design.md`).
 3. **`models.yaml` does not record `reasoning_effort` levels** per model
    (Qwen 3.8 lists them; not a uniform field).
 4. Harden PAT against LiteLLM pagination / delete ids

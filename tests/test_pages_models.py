@@ -31,7 +31,7 @@ import asfquart
 import ezt
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import Fleet, FleetDeployment, VllmServer, remove_refusal
+from llmao.fleet import ORPHAN_PASSES, ExtraLiteLLM, Fleet, FleetDeployment, VllmServer, remove_refusal
 from llmao.intent import Approval, provider_intent
 from llmao.model_status import (
     AVAILABLE,
@@ -40,6 +40,7 @@ from llmao.model_status import (
     DEGRADED,
     HEALTHY,
     LOADING,
+    SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_VLLM_UP_LITELLM_DOWN,
     STALLED,
     UNAVAILABLE,
@@ -48,7 +49,7 @@ from llmao.model_status import (
 )
 from llmao.models import load_models
 from llmao.provisioning import UnknownFetch
-from llmao.rental import Rental
+from llmao.rental import ProviderRentals, Rental
 from tests.test_fleet import EXAMPLE
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -364,6 +365,67 @@ def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
     assert 'action="/do-approve-box"' in out
     assert 'value="gemma"' in out
     assert ">Gemma<" in out
+
+
+def _orphan(passes: int, *, stamp: str = "", route_id: str = "orphan-1") -> ExtraLiteLLM:
+    return ExtraLiteLLM(
+        host="198.51.100.9",
+        port=18490,
+        model_name="gemma",
+        skew=(SKEW_IN_LITELLM_NOT_IN_CONFIG,),
+        route_id=route_id,
+        api_base="http://198.51.100.9:18490",
+        passes=passes,
+        llmao_key=stamp,
+    )
+
+
+def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    fleet.cfg.fleet.hosts = {}
+    # A debounce: one read is not an item.
+    fleet.extra_litellm = [_orphan(ORPHAN_PASSES - 1)]
+    assert pages.attention_items(fleet) == []
+    fleet.extra_litellm = [_orphan(ORPHAN_PASSES)]
+    (item,) = pages.attention_items(fleet)
+    assert item.what == "198.51.100.9:18490 · gemma — in LiteLLM, not in config"
+    assert item.detail == "not added by llmao; someone added it in LiteLLM"
+    assert [a.label for a in item.actions] == ["Stop tracking"]
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=[item], admin=True)
+    assert out.count("/do-remove-deployment") == 1
+    assert 'name="host" value="198.51.100.9"' in out
+    assert 'name="name" value="gemma"' in out
+    assert 'name="port" value="18490"' in out
+    assert 'data-confirm="Stop tracking 198.51.100.9:18490?' in out
+    # The post finds the orphan the way the form named it.
+    assert pages._match_extra(fleet, "gemma", "198.51.100.9", "18490") is fleet.extra_litellm[0]
+    assert pages._match_extra(fleet, "gemma", "198.51.100.9", "8001") is None
+    # No id to delete by: the button is there, disabled, with the reason as text.
+    fleet.extra_litellm = [_orphan(ORPHAN_PASSES, route_id="")]
+    out = _render([], attention=pages.attention_items(fleet), admin=True)
+    assert "LiteLLM reported it without an id" in out
+    assert "disabled" in out
+
+
+def test_a_stamped_orphan_on_a_listed_host_offers_approve():
+    pages = _app()
+    fleet = _fleet(_server("gemma"))
+    fleet.cfg.fleet.hosts = {}
+    fleet.extra_litellm = [_orphan(ORPHAN_PASSES, stamp="http://198.51.100.9:8001")]
+    (item,) = pages.attention_items(fleet)
+    assert item.detail.startswith("llmao added it")
+    # No listing names the host: nothing to approve, the box is invisible.
+    assert [a.label for a in item.actions] == ["Stop tracking"]
+    rental = Rental(
+        provider="vast", id="1", label="x", url="", usd_per_hour=None, host="198.51.100.9", status="running"
+    )
+    fleet.vast_rentals = ProviderRentals("vast", by_id={"1": rental})
+    (item,) = pages.attention_items(fleet)
+    assert [a.label for a in item.actions] == ["Approve", "Stop tracking"]
+    # A host in fleet.hosts is intended already; this is a route for a model it does not run.
+    fleet.cfg.fleet.hosts = {"198.51.100.9": 8001}
+    assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Stop tracking"]
 
 
 def test_remove_refusal_gate():

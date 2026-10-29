@@ -230,29 +230,50 @@ def _orphan(model_id="orphan-1"):
     return fleet, _info("198.51.100.9", 18490, model_id=model_id)
 
 
-def test_an_orphan_route_is_deleted_once_it_has_persisted():
+def test_an_orphan_is_counted_and_never_deleted():
     """tooling-llmao#29: a host that changed address leaves its route behind.
 
     Routes are made on the transition into SERVING and dropped on the one into
     DOWN; a server removed from fleet.hosts makes neither, so check_config_skew
-    is the only thing that sees the leftover. It used to only report it.
+    is the only thing that sees the leftover. The first fix deleted it after
+    ORPHAN_PASSES. That prune is retired: something instructed LiteLLM to
+    serve it, so it is counted, shown, and a human decides.
     """
     fleet, info = _orphan()
     be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
-    for expected in range(1, ORPHAN_PASSES):
+    for expected in range(1, ORPHAN_PASSES + 2):
         asyncio.run(be.check_config_skew())
         assert [row.passes for row in fleet.extra_litellm] == [expected]
-        assert "model/delete" not in _paths(be), "not on the strength of one pass"
+    assert "model/delete" not in _paths(be)
+    # No stamp: not llmao's own add.
+    assert fleet.extra_litellm[0].llmao_key == ""
+
+
+def test_an_orphan_says_whether_llmao_added_it():
+    """The stamp is llmao's own add, whose intent has gone since; no stamp is a hand add in LiteLLM."""
+    fleet, info = _orphan()
+    info["data"][0]["model_info"]["llmao_key"] = "http://198.51.100.9:8001"
+    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
     asyncio.run(be.check_config_skew())
-    assert "model/delete" in _paths(be)
-    sent = [c.json["id"] for c in be._transport.calls if c.path == "model/delete"]
-    assert sent == ["orphan-1"]
-    # A write, then the read that confirms it.
+    assert fleet.extra_litellm[0].llmao_key == "http://198.51.100.9:8001"
+
+
+def test_stop_tracking_an_orphan_deletes_it_by_id():
+    fleet, info = _orphan()
+    be = _manager(fleet, _litellm(info["data"]), cfg=edict(fleet=edict(FLEET_KNOBS)))
+    asyncio.run(be.check_config_skew())
+    (row,) = fleet.extra_litellm
+    asyncio.run(be.delete_extra(row))
+    assert [c.json["id"] for c in be._transport.calls if c.path == "model/delete"] == ["orphan-1"]
+    # A write, then the read that confirms it; the row is gone before the next pass.
     assert _paths(be)[-2:] == ["model/delete", "model/info"]
+    assert fleet.extra_litellm == []
+    asyncio.run(be.check_config_skew())
+    assert fleet.extra_litellm == []
 
 
-def test_an_orphan_that_is_claimed_again_is_never_deleted():
-    """A provider lookup that failed one pass must not cost a live route."""
+def test_an_orphan_that_is_claimed_again_starts_its_count_over():
+    """A provider lookup that failed one pass must not make an item of a live route."""
     fleet, info = _orphan()
     # A callable answer, so what LiteLLM reports can change between passes.
     reply = {"body": info}
@@ -269,17 +290,6 @@ def test_an_orphan_that_is_claimed_again_is_never_deleted():
         asyncio.run(be.check_config_skew())
         assert [row.passes for row in fleet.extra_litellm] == [expected]
     assert "model/delete" not in _paths(be)
-
-
-def test_an_orphan_with_no_litellm_id_is_reported_not_deleted(caplog):
-    """LiteLLM answered without an id, so there is nothing to delete by."""
-    fleet, info = _orphan(model_id=None)
-    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
-    with caplog.at_level("WARNING", logger="llmao.proxy.deployments"):
-        for _ in range(ORPHAN_PASSES + 1):
-            asyncio.run(be.check_config_skew())
-    assert "model/delete" not in _paths(be)
-    assert "has no LiteLLM id" in caplog.text
 
 
 def _info(host: str, port: int, *, model_id: str | None = None):

@@ -45,7 +45,14 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.access_requests import APPROVAL_TTL_DAYS
 from llmao.auth import current_identity
 from llmao.capacity import days_to_read, summarise_capacity, summarise_spend
-from llmao.fleet import add_refusal, remove_refusal, snapshot_for_status
+from llmao.fleet import (
+    ORPHAN_PASSES,
+    add_refusal,
+    extra_refusal,
+    normalize_peer_ip,
+    remove_refusal,
+    snapshot_for_status,
+)
 from llmao.model_status import (
     AVAILABLE,
     AWAITING,
@@ -74,6 +81,7 @@ from llmao.proxy.client import (
     KeyInfo,
     pinned_litellm_version,
 )
+from llmao.rental import match_rental
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.
@@ -570,6 +578,11 @@ def _match_deployments(fleet, name: str, host: str, port: str = "") -> list:
     return matches
 
 
+def _match_extra(fleet, name: str, host: str, port: str = ""):
+    """The orphan (in LiteLLM, not in config) serving ``name`` at ``host``:``port``, or None."""
+    return next((x for x in fleet.extra_litellm if (x.model_name, x.host, str(x.port)) == (name, host, port)), None)
+
+
 def _modality_chips(modality: str) -> list[edict]:
     """Labeled capability chips. models.yaml stores 'text' or 'text+vision'."""
     chips = []
@@ -770,20 +783,54 @@ def attention_items(fleet) -> list:
             )
         )
     for extra in fleet.extra_litellm:
+        if extra.passes < ORPHAN_PASSES:
+            # A debounce: absence has innocent causes, and one read is not an item.
+            continue
         phrases = [SKEW_PHRASE.get(n, n) for n in extra.skew]
         items.append(
             edict(
                 kind="skew",
-                what=f"{extra.host}:{extra.port} · {extra.model_name} — not in config",
+                what=f"{extra.host}:{extra.port} · {extra.model_name} — {'; '.join(phrases)}",
                 ident="",
                 anchor="",
                 rest="",
-                detail="; ".join(phrases),
+                detail=_orphan_detail(extra),
                 flag="",
-                actions=[],
+                actions=_orphan_actions(fleet, extra),
             )
         )
     return items
+
+
+def _orphan_detail(extra) -> str:
+    """Who meant an orphan: the stamp is llmao's own add, no stamp is a hand add in LiteLLM."""
+    if extra.llmao_key:
+        return "llmao added it; its approval or fleet.hosts row has gone since (a restart loses approvals)"
+    return "not added by llmao; someone added it in LiteLLM"
+
+
+def _orphan_actions(fleet, extra) -> list:
+    """Stop tracking deletes an orphan. Approve, when a listing names a host not in fleet.hosts, intends it again."""
+    hosts = {normalize_peer_ip(str(ip)) for ip in fleet.cfg.fleet.hosts}
+    listed = match_rental(extra.host, None, fleet.vast_rentals, fleet.runpod_rentals) is not None
+    actions = admin_actions(fleet, host=extra.host, approve=listed and extra.host not in hosts)
+    reason = extra_refusal(extra) or ""
+    ident = f"{extra.host}:{extra.port}"
+    actions.append(
+        _action(
+            kind="remove",
+            label="Stop tracking",
+            host=extra.host,
+            name=extra.model_name,
+            port=str(extra.port),
+            aria=f"Stop tracking {ident}",
+            confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The box keeps running.",
+            post="/do-remove-deployment",
+            enabled=ezt.boolean(reason == ""),
+            reason=reason,
+        )
+    )
+    return actions
 
 
 def _hosting_label(ours: int, bought: int) -> str:
@@ -1070,7 +1117,8 @@ async def do_add_deployment():
 @APP.post("/do-remove-deployment")
 @asfquart.auth.require
 async def do_remove_deployment():
-    """Site admin drops one self-hosted LiteLLM route. remove_refusal is the gate."""
+    """Site admin drops one LiteLLM route: a self-hosted deployment (remove_refusal is the
+    gate) or an orphan the skew pass reported (extra_refusal is)."""
     ident = await current_identity(APP.cfg)
     if not ident.is_site_admin:
         await flash_danger("Only site admins can remove a fleet deployment.")
@@ -1081,6 +1129,9 @@ async def do_remove_deployment():
     # Optional: one host can run the same model on two ports.
     port = (form.get("port") or "").strip()
     matches = _match_deployments(APP.fleet, name, host, port)
+    extra = not matches and _match_extra(APP.fleet, name, host, port)
+    if extra:
+        return await _stop_tracking_extra(ident, extra)
     if len(matches) != 1:
         await flash_danger(f"No deployment {name} on {host}:{port}." if port else f"No deployment {name} on {host}.")
         return _see_other("/models")
@@ -1095,6 +1146,27 @@ async def do_remove_deployment():
         return _see_other("/models")
     ident_s = _dep_ident(matches[0])
     await _done(ident, "remove_deployment", ident_s, f"Stopped tracking {matches[0].name} on {ident_s}.")
+    return _see_other("/models")
+
+
+async def _stop_tracking_extra(ident, extra):
+    """Stop tracking an orphan: delete the LiteLLM route nothing intends."""
+    reason = extra_refusal(extra)
+    if reason:
+        await flash_danger(reason)
+        return _see_other("/models")
+    try:
+        await APP.backend.deployments.delete_extra(extra)
+    except BackendUnavailableError as e:
+        await flash_danger(str(e))
+        return _see_other("/models")
+    ident_s = f"{extra.host}:{extra.port}"
+    await _done(
+        ident,
+        "remove_deployment",
+        ident_s,
+        f"Stopped tracking {extra.model_name} on {ident_s}; nothing in config intended it.",
+    )
     return _see_other("/models")
 
 

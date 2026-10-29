@@ -149,11 +149,11 @@ RUNPOD_LISTING_INTERVAL_S = 600
 UNLISTED_PASSES = 3
 
 # Consecutive skew passes (skew_interval_s, 180s) a LiteLLM deployment that no
-# fleet deployment claims must persist before it is pruned (the skew clock).
-# Absence has innocent causes -- a provider lookup that failed this pass, a box
-# mid-recreate, a deployment llmao is about to claim -- and the counter starts
-# empty on restart, so a proxy full of stale deployments is cleared after this
-# many passes rather than on the first.
+# fleet deployment claims must persist before the attention strip shows it
+# (the skew clock). Absence has innocent causes -- a provider lookup that
+# failed this pass, a box mid-recreate, a deployment llmao is about to claim
+# -- so the item waits this many passes. It is never deleted unattended:
+# something instructed LiteLLM to serve it, and a human decides.
 ORPHAN_PASSES = 3
 
 
@@ -662,7 +662,15 @@ class FleetDeployment:
 
 @dataclass(frozen=True)
 class ExtraLiteLLM:
-    """One LiteLLM route that config.yaml does not list."""
+    """One LiteLLM route that nothing in config.yaml or an approval intends: an orphan.
+
+    Something instructed LiteLLM to serve it, so it is shown, never deleted
+    unattended. ``llmao_key`` says who: the stamp llmao writes on its own
+    adds (``model_info.llmao_key``, the listen URL), so a stamped orphan is
+    llmao's own add whose intent has gone since (an approval lost in a
+    restart, a ``fleet.hosts`` row removed), and an unstamped one was added
+    by hand in LiteLLM's UI. Stop tracking on /models deletes it.
+    """
 
     host: str
     port: int | None
@@ -673,9 +681,10 @@ class ExtraLiteLLM:
     # shown but not removed.
     route_id: str = ""
     api_base: str = ""
-    # Consecutive skew passes this route has been an extra. Shown so an
-    # admin can see a removal coming rather than only its result.
+    # Consecutive skew passes this route has been an orphan. The strip
+    # shows it from ORPHAN_PASSES on, so a transient read is not an item.
     passes: int = 0
+    llmao_key: str = ""
 
 
 class Fleet:
@@ -1293,6 +1302,11 @@ def remove_refusal(dep) -> str | None:
     if dep.vllm.state not in (UNHEALTHY, STALLED, REJECTED, FOREIGN):
         return "vLLM is still healthy"
     return None
+
+
+def extra_refusal(row: ExtraLiteLLM) -> str | None:
+    """Why Stop tracking must not delete an orphan: only when LiteLLM reported it without an id."""
+    return (not row.route_id and "LiteLLM reported it without an id") or None
 
 
 def parse_max_model_len(models_json: Any) -> int | None:

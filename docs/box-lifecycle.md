@@ -34,8 +34,8 @@ The clocks: `health_interval_s` (45 s between passes), `health_grace_s`
 failures that turn Healthy into Unhealthy and the missed passes after
 which a signal is stale). The pass counts: `UNLISTED_PASSES` 3 (the
 listing clock), `REJECTED_PASSES` 3 (the Rejected-to-Foreign debounce),
-`ORPHAN_PASSES` 3 (the skew clock, for LiteLLM deployments no server
-claims; not part of this machine).
+`ORPHAN_PASSES` 3 (the skew clock: passes before a LiteLLM deployment no
+server claims is shown as an orphan; not part of this machine).
 
 When `/v1/models` is asked: on every pass in which `/health` passed and
 the server was not already Healthy, or its served window has never been
@@ -193,7 +193,7 @@ lifecycle emits these six badges and nothing else (`SKEW_PHRASE` in
 | Intended, not in LiteLLM | A deployment config intends, and LiteLLM lacks. Emitted only for Healthy, or for a commercial deployment that is Configured. | `sync_selfhost` adds it, or Add does. |
 | vLLM up, LiteLLM down | The probe passes but LiteLLM's own `/health` reports the endpoint down. The two signals carry their own ages, so a difference reads as two snapshots, not a contradiction. | LiteLLM's next health pass agrees. |
 | vLLM down, LiteLLM up | The reverse. | likewise |
-| In LiteLLM, not in config | A LiteLLM deployment whose `api_base` matches no server (kept beside the fleet as host, port and model name). Pruned after `ORPHAN_PASSES` skew passes. | the prune, or a config row that claims it |
+| In LiteLLM, not in config | An orphan: a LiteLLM deployment whose `api_base` matches no server (kept beside the fleet as host, port and model name). On the strip after `ORPHAN_PASSES` skew passes, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Stop tracking; an approval of the host, or a config row, that claims it |
 | Config and LiteLLM disagree | The server's `api_base` is in LiteLLM under a different model name. Kept across the health pass. | a matching name |
 | In LiteLLM at the listen port | LiteLLM has the server at its listen port where that differs from its public port. Unreachable off-box, so it does not count as "in LiteLLM"; the server is registered at its public port as well and the listen-port entry is left for an admin. | the entry is removed |
 
@@ -207,8 +207,9 @@ Rulings that shaped the machine, kept so they are not relitigated by
 accident.
 
 - **Retirement is not a state.** Retiring a box is manual teardown: remove
-  it from `fleet.hosts`; the orphan prune removes its deployment. Once off
-  the fleet the row disappears rather than accumulating in Stalled.
+  it from `fleet.hosts`; its deployment then reads as an orphan on the
+  strip, and Stop tracking removes it. Once off the fleet the row
+  disappears rather than accumulating in Stalled.
 - **Reboot is observed, not assumed.** Rebooting through a provider's API
   gave unclear results once, so a reboot is done by hand in the provider's
   console and the lifecycle reports what it sees. A "Reboot requested"

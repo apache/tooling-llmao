@@ -66,9 +66,9 @@ class DeploymentManager:
         self._cfg = cfg
         self.fleet = fleet
         self._transport = transport
-        # (api_base, model_name) -> consecutive skew passes seen as an extra.
+        # (api_base, model_name) -> consecutive skew passes seen as an orphan.
         # A route absent from one pass is dropped from the dict, so a flapping
-        # one never accumulates. See _prune_extras.
+        # one never reaches ORPHAN_PASSES and the attention strip.
         self._extra_passes: dict[tuple[str, str], int] = {}
 
     def deployment_body(self, dep, *, api_key: str | None = None) -> dict:
@@ -132,12 +132,7 @@ class DeploymentManager:
     async def _model_info_rows(self) -> list:
         resp = await self._transport.request("GET", "model/info")
         self._transport.raise_http(resp)
-        body = resp.json()
-        if isinstance(body, list):
-            return body
-        if isinstance(body, dict):
-            return body.get("data") or body.get("models") or []
-        return []
+        return _rows_of(resp.json())
 
     def _litellm_id(self, row: dict, dep) -> str | None:
         """This deployment's LiteLLM id from one /model/info row, or None when the row is not it.
@@ -333,7 +328,9 @@ class DeploymentManager:
     async def check_config_skew(self) -> None:
         resp = await self._transport.request("GET", "model/info")
         self._transport.raise_http(resp)
-        routes = _routes_from_model_info(resp.json())
+        body = resp.json()
+        routes = _routes_from_model_info(body)
+        stamps = _stamps_from_model_info(body)
         by_base, pairs = _index_deployments(routes)
         # One of our boxes serves one model, so its api_base identifies it. A
         # provider's api_base is shared by every model on the account, so a
@@ -367,91 +364,43 @@ class DeploymentManager:
                 self._cfg.fleet,
                 now,
             )
+            # An orphan: something instructed LiteLLM to serve it, and llmao
+            # does not know why, so it is shown and never deleted unattended
+            # (an admin stops tracking it, or approves the host again). The
+            # pass count is a debounce: absence has innocent causes, so the
+            # strip waits ORPHAN_PASSES. The stamp says who added it.
             seen = self._extra_passes.get((norm, model_name), 0) + 1
-            extra.append(
-                ExtraLiteLLM(
-                    host=host,
-                    port=port,
-                    model_name=model_name,
-                    skew=view.skew,
-                    route_id=route_id,
-                    api_base=norm,
-                    passes=seen,
-                )
+            row = ExtraLiteLLM(
+                host=host,
+                port=port,
+                model_name=model_name,
+                skew=view.skew,
+                route_id=route_id,
+                api_base=norm,
+                passes=seen,
+                llmao_key=stamps.get(route_id, ""),
             )
+            extra.append(row)
+            if seen == ORPHAN_PASSES:
+                _LOGGER.warning(
+                    "skew: %s %s:%s %s (%s)",
+                    SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG],
+                    host,
+                    port,
+                    model_name,
+                    (row.llmao_key and "llmao added it") or "not added by llmao",
+                )
         self.fleet.extra_litellm = extra
         self._extra_passes = {(row.api_base, row.model_name): row.passes for row in extra}
-        if extra:
-            _LOGGER.warning(
-                "skew: %s %s",
-                SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG],
-                [(row.host, row.port, row.model_name, row.passes) for row in extra],
-            )
-        if await self._prune_extras(extra):
-            await self._confirm()
 
-    async def _prune_extras(self, extra: list[ExtraLiteLLM]) -> int:
-        """Delete a route no deployment claims, once it has persisted. Returns how many were deleted.
-
-        This is the deregistration hole in tooling-llmao#29: routes are created
-        on the transition into SERVING and deleted on the transition into DOWN,
-        and a server removed from fleet.hosts makes neither transition -- so its
-        route outlives it, and the model is unreachable through the proxy while
-        /fleet shows it serving. check_config_skew has always computed exactly
-        this set; it only reported it.
-
-        Why a threshold and not the first sighting. An extra is inferred from
-        absence, and absence has innocent causes: a provider lookup that failed
-        this pass, a box mid-recreate, a route llmao itself is about to claim.
-        The guards above remove the ones that can be named (`unplaced` for a
-        server whose address is not known yet), but not the ones that cannot,
-        so ORPHAN_PASSES consecutive skew passes are required -- its own count
-        on its own clock, for the same reasoning as UNLISTED_PASSES on the
-        provider listings.
-
-        No probe gate. An orphan's credential is unknown -- derivation needs the
-        LISTEN port and a route only carries the public one -- and the one
-        endpoint needing no credential is vLLM's /health, which cannot see the
-        served model name. A /health gate would therefore spare precisely the
-        routes that 404 on real traffic, which are the ones worth deleting.
-
-        Deleting is also what makes a restart converge: the counter starts
-        empty, so a portal that comes up to a proxy full of stale routes clears
-        them after ORPHAN_PASSES skew passes rather than waiting for a
-        transition that already happened.
-        """
-        pruned = 0
-        for row in extra:
-            if row.passes < ORPHAN_PASSES:
-                continue
-            if not row.route_id:
-                _LOGGER.warning(
-                    "skew: %s:%s %s has no LiteLLM id; cannot remove it",
-                    row.host,
-                    row.port,
-                    row.model_name,
-                )
-                continue
-            resp = await self._transport.request("POST", "model/delete", json={"id": row.route_id})
-            if resp.status_code >= 400:
-                _LOGGER.warning(
-                    "model/delete orphan %s@%s id=%s failed: %s",
-                    row.model_name,
-                    row.api_base,
-                    row.route_id,
-                    resp.status_code,
-                )
-                continue
-            _LOGGER.info(
-                "model/delete orphan %s@%s id=%s after %d passes with no deployment",
-                row.model_name,
-                row.api_base,
-                row.route_id,
-                row.passes,
-            )
-            self._extra_passes.pop((row.api_base, row.model_name), None)
-            pruned += 1
-        return pruned
+    async def delete_extra(self, row: ExtraLiteLLM) -> None:
+        """POST /model/delete for an orphan, on an admin's Stop tracking. extra_refusal is the gate."""
+        resp = await self._transport.request("POST", "model/delete", json={"id": row.route_id})
+        self._transport.raise_http(resp)
+        _LOGGER.info("model/delete orphan %s@%s id=%s", row.model_name, row.api_base, row.route_id)
+        self._extra_passes.pop((row.api_base, row.model_name), None)
+        self.fleet.extra_litellm = [r for r in self.fleet.extra_litellm if r is not row]
+        await self._confirm()
 
     async def check_health_skew(self) -> None:
         resp = await self._transport.request("GET", "health")
@@ -512,6 +461,15 @@ def _index_deployments(rows) -> tuple[dict[str, list[str]], set[tuple[str, str]]
     return by_base, pairs
 
 
+def _rows_of(body: Any) -> list:
+    """The deployment rows of a GET /model/info answer, whichever shape LiteLLM gave it."""
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        return body.get("data") or body.get("models") or []
+    return []
+
+
 def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, str]]:
     """Each LiteLLM row as (normalised api_base, host, port, model_name, id).
 
@@ -520,13 +478,8 @@ def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, 
     /model/delete takes, so a route with no deployment behind it can be
     removed without a second lookup.
     """
-    rows = []
-    if isinstance(body, list):
-        rows = body
-    elif isinstance(body, dict):
-        rows = body.get("data") or body.get("models") or []
     out: list[tuple[str, str, int | None, str, str]] = []
-    for row in rows:
+    for row in _rows_of(body):
         if not isinstance(row, dict):
             continue
         params = row.get("litellm_params") or {}
@@ -537,4 +490,14 @@ def _routes_from_model_info(body: Any) -> list[tuple[str, str, int | None, str, 
         info = row.get("model_info") or {}
         route_id = str(info.get("id") or "") if isinstance(info, dict) else ""
         out.append((norm, parsed.hostname or "", parsed.port, str(row.get("model_name") or ""), route_id))
+    return out
+
+
+def _stamps_from_model_info(body: Any) -> dict[str, str]:
+    """LiteLLM id -> the ``llmao_key`` stamp, for the rows that carry one (llmao's own adds)."""
+    out: dict[str, str] = {}
+    for row in _rows_of(body):
+        info = isinstance(row, dict) and row.get("model_info")
+        if isinstance(info, dict) and info.get("id") and info.get("llmao_key"):
+            out[str(info["id"])] = str(info["llmao_key"])
     return out

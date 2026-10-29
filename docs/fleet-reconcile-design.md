@@ -656,8 +656,9 @@ self-hosted and commercial are different gates:
   in config" item says which of the two it is, with Stop tracking to
   delete it and, when a listing names the host, Approve to intend it
   again. `ORPHAN_PASSES` only debounces the item against a transient
-  read; there is no prune action in the plan. "Remove it from `fleet.hosts`" is a sentence on the attention
-  item, not a POST.
+  read; there is no prune action in the plan. **Done 2026-10-28** in
+  today's code (Early work item 10). "Remove it from `fleet.hosts`" is a
+  sentence on the attention item, not a POST.
 - No v1 switch that holds production LiteLLM writes for approval. The
   read-only alongside phase is that net.
 - vLLM-up / LiteLLM-down, and the reverse, are badges. LiteLLM `/health`
@@ -910,11 +911,10 @@ the button.
 3. Build the snapshots, the key, the record with its dialable field, and
    `reconcile()`, and run them **read only**, alongside the current code.
    Log every disagreement between the computed plan and what
-   `sync_selfhost` / `_prune_extras` did, and with stored `srv.state` /
-   `dep.skew`.
+   `sync_selfhost` did, and with stored `srv.state` / `dep.skew`.
 4. Flip auto actions one kind at a time (add, then delete), deleting
-   each old path as it goes. The orphan prune (`_prune_extras`) is
-   retired, not flipped: an orphan becomes a skew item for a human.
+   each old path as it goes. The orphan prune was retired ahead of this
+   step (Early work item 10): an orphan is a skew item for a human.
 5. Point `/models` and `/admin` at the view and the plan.
 
 Restart-empty hysteresis is a feature: the orphan counter starts at 0
@@ -1046,9 +1046,9 @@ real gap on its own. In order:
 3. **Two constants.** Split the one `UNLISTED_PASSES` into
    `UNLISTED_PASSES` (listing passes) and `ORPHAN_PASSES` (skew passes).
    Done: b9b5ce3.
-4. **Re-read `/model/info` after every write.** `sync_selfhost` and
-   `_prune_extras` do this, so a write is confirmed by the next pass and
-   not assumed. Done: 7bd46bc (`_confirm`).
+4. **Re-read `/model/info` after every write.** Every LiteLLM write
+   does this, so it is confirmed by the next pass and not assumed. Done:
+   7bd46bc (`_confirm`).
 5. **One working-key function.** `working_api_key(cfg, srv)` in
    `fleet.py`, called from the deployment body and from the `/v1/models`
    fetch, so a legacy box no longer 401s on every pass and reports its
@@ -1090,3 +1090,13 @@ real gap on its own. In order:
    server; an unlisted host with no address to dial counts as an attempt.
    A reached probe (a 503) with no config fetch is not anchored yet and
    stays Awaiting: the first-reached-probe anchor is reconcile's.
+10. **Retire the orphan prune.** `_prune_extras` deleted a LiteLLM
+    deployment nothing claimed after `ORPHAN_PASSES`; by the 2026-10-28
+    ruling an orphan is skew for a human. Done 2026-10-28: the skew pass
+    only counts, and the strip shows the orphan from `ORPHAN_PASSES` on,
+    saying who added it (the `llmao_key` stamp is llmao's own add whose
+    intent has gone; no stamp is a hand add in LiteLLM), with Stop
+    tracking (`DeploymentManager.delete_extra`, posted through
+    `/do-remove-deployment`) and, when a listing names a host that is
+    not in `fleet.hosts`, Approve. The skew log warns once, on the pass
+    the item appears.

@@ -84,7 +84,8 @@ built at startup.
     `DeploymentManager.sync_selfhost`: `/model/new` for a Healthy server,
     `/model/delete` for a down one.
   - `litellm-skew`: reads the LiteLLM deployments and LiteLLM's own
-    `/health`, prunes orphans.
+    `/health`; reports orphans (deployments nothing intends) for the
+    /models strip. Nothing deletes an orphan unattended.
   - `runpod-listing`: reads the RunPod pod list every 10 minutes.
 - `Fleet.models` is the YAML recipe. `FleetDeployment` is one intended
   LiteLLM deployment. `VllmServer` carries the lifecycle state: Awaiting,
