@@ -766,7 +766,7 @@ class Fleet:
 
         An approved host that is not in fleet.hosts becomes a server and a
         deployment here, the first time. The ConfigFetch is the record; the
-        ``config_served_at`` stamped on each server is the Loading anchor it
+        ``config_served_at`` stamped on each server is the loading start it
         sets, which moves them from awaiting contact into the Loading window
         (the next probe, or immediately for any probe running now,
         re-derives the state).

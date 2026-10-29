@@ -55,7 +55,7 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
   can approve it with its models. Every fetch, known or not, is logged with
   the claimed host, the peer and `X-Forwarded-For`.
 - **A known host's fetch is noted.** The time of the last config fetch is
-  the anchor for the Loading window: a box that fetched its config and is
+  the loading start: a box that fetched its config and is
   not yet answering is Loading until `fleet.health_grace_s` has passed, then
   Stalled. The whole state machine is `box-lifecycle.md`.
 

@@ -24,7 +24,7 @@ llmao keeps of that request. Today, the records:
 
 - ``ConfigFetch``: the last fetch each known host made, and when. One of
   the six reconcile sources (docs/fleet-reconcile-design.md, Vocabulary);
-  the Deployment reads it through its host as the Loading anchor.
+  the Deployment reads it through its host as the loading start.
 - ``UnknownFetch``: a host nobody intended presenting the fleet key, with
   first seen, last seen and a count, so the /models attention strip can
   show it and an admin can approve it. Capped; the oldest last-seen go.

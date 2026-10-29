@@ -25,7 +25,7 @@ The lifecycle splits into two kinds of thing:
 - **Computed state** -- derived here from probes, ``in_litellm`` and
   ``config_served_at``. Recomputed after a control-plane restart; that is what
   this module owns. "Config served" is one of those facts: it is recorded as
-  the in-memory ``config_served_at`` timestamp, which anchors the Loading
+  the in-memory ``config_served_at`` timestamp, which is the loading start of the Loading
   window and separates it from the Awaiting pre-state.
 - **Intent** -- ``fleet.hosts`` and the in-memory approvals (``Fleet.approvals``,
   ``intent.Approval``) say what should run. An approval creates servers; it
@@ -138,15 +138,15 @@ class DeploymentSnapshot:
     # LiteLLM has this server at its listen port, which is unreachable off-box.
     at_listen_port: bool = False
     # When we last handed this box its config. None until a GET /vllm/config
-    # succeeded for it since we started. Anchors the Loading window.
+    # succeeded for it since we started. The loading start.
     config_served_at: float | None = None
     # Did the last health probe reach vLLM's HTTP server (an answer, e.g. a
     # 503 while the model loads) as opposed to no connection at all? None
-    # until the first probe. Mostly display; with no anchor it decides
+    # until the first probe. Mostly display; with no loading start it decides
     # between Awaiting and Stalled once the grace has run out.
     reached: bool | None = None
     # When this process first tried to probe the server. The clock for a
-    # server that has no anchor and never answers: Awaiting until
+    # server that has no loading start and never answers: Awaiting until
     # health_grace_s after this, then Stalled. None until the first attempt.
     first_probed_at: float | None = None
     # The last /v1/models answer with the working key: True is a 401, False
@@ -225,7 +225,7 @@ def self_hosted_lifecycle(
     listing count: a new RunPod box is unlisted within minutes but fetches
     its config only after its image pull, and must not read Stalled five
     minutes after the admin created it. A probe that reaches (a 503) is not
-    on this clock; it stays Awaiting until the config fetch anchors Loading.
+    on this clock; it stays Awaiting until the config fetch starts Loading.
     """
     grace = float(cfg.health_grace_s)
     threshold = int(cfg.health_fail_threshold)

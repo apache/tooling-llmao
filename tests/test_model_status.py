@@ -207,9 +207,9 @@ def test_healthy_probe_wins_without_config_served():
     assert view.lifecycle == HEALTHY
 
 
-def test_reached_does_not_change_lifecycle_once_anchored():
+def test_reached_does_not_change_lifecycle_once_loading_started():
     # 503 while the model loads versus no connection: with the config fetch as
-    # anchor both are Loading; the detail only changes what the page says.
+    # the loading start both are Loading; the detail only changes what the page says.
     for reached in (True, False):
         view = deployment_status(
             _self(probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=reached),
@@ -308,7 +308,7 @@ def test_vllm_down_litellm_up():
     assert view.skew == (SKEW_VLLM_DOWN_LITELLM_UP,)
 
 
-def test_not_reached_with_no_anchor_runs_out_of_grace():
+def test_not_reached_with_no_loading_start_runs_out_of_grace():
     # No config fetch, not in LiteLLM, and nothing answers at the address: a
     # rental that died before a restart, or one whose deployment is already
     # gone. Awaiting until health_grace_s after the first attempt, then

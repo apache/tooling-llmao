@@ -157,7 +157,7 @@ def test_an_approval_leaves_the_strip_and_joins_the_deployments_at_once():
     assert len(fleet.servers) == 2
 
 
-def test_config_fetch_anchors_the_approved_host():
+def test_config_fetch_starts_loading_on_the_approved_host():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)

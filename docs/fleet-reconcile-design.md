@@ -51,7 +51,7 @@ source said, with the time it was read, and nothing of ours on it.
   (replaces `vast_boxes`, `runpod_boxes`). A Rental no deployment matches
   is just inventory; a deployment no Rental matches is **unlisted**.
 - **ConfigFetch**: the last `GET /vllm/config` a host made, and when. The
-  anchor for the loading window. Today a timestamp on each server.
+  loading start. Today a timestamp on each server.
 - **VllmProbe**: what one probe of one address found. It carries the
   engine's name because it is not engine-neutral: `/health` and its 200
   versus 503 are vLLM's, the served window is vLLM's `max_model_len`
@@ -141,13 +141,13 @@ server object, set from three places: the handler, and
 `adopt_vast_instances` for an approved host answering 503 and for a
 discovered Healthy port. Those two adopt stamps go away with adopt.
 
-The stamp anchors the Loading window: Loading is inside `health_grace_s`
+The stamp is the loading start: Loading is inside `health_grace_s`
 of it, Stalled is past it. One of the adopt stamps existed because an
 approved host that fetched its config before an llmao restart never
 fetches again, so without a stamp it would read Awaiting for ever and
-never Stalled. The anchor is therefore **the config fetch or the first
+never Stalled. The loading start is therefore **the config fetch or the first
 probe that reached the box (`reached`, a 503 counts), whichever is
-earlier**. A host that has done neither reads Awaiting. The anchor is a
+earlier**. A host that has done neither reads Awaiting. The loading start is a
 value reconcile computes from two snapshots; it is not kept in history.
 
 The work of keeping them in step is spread around and tightly coupled.
@@ -307,8 +307,8 @@ is observed, rather than updating state step by step from many places.
    the probe fails, the delete is the probe gate's and the sentence is
    unlisted's.
 
-   **A probe that does not reach, with no anchor, runs out of grace.**
-   Before item 9, a failed probe with no anchor read Unhealthy only while
+   **A probe that does not reach, with no loading start, runs out of grace.**
+   Before item 9, a failed probe with no loading start read Unhealthy only while
    the deployment existed (`model_status.py`); the moment the probe gate
    deleted it, the same box read Awaiting, and a rental that died before
    a restart never showed the sentence once the delete landed. Since
@@ -316,12 +316,12 @@ is observed, rather than updating state step by step from many places.
    first probe attempt (`first_probed_at`); the rest of this paragraph is
    the rule as reconcile keeps it.
    Under reconcile, Awaiting means no probe has been attempted in this
-   process. A record with no anchor whose probes do not reach (no
+   process. A record with no loading start whose probes do not reach (no
    connection, `reached` false) is Awaiting until `health_grace_s`
    after the first attempt, then **Stalled**. No new lifecycle, and the
-   sentence rule stays the three names. The first attempt is not an
-   anchor: a dead rental with its deployment still present reads
-   Unhealthy on the no-anchor rule, as today, and is deleted at once.
+   sentence rule stays the three names. The first attempt is not a
+   loading start: a dead rental with its deployment still present reads
+   Unhealthy on the not-started rule, as today, and is deleted at once.
    After that delete the record is Awaiting until the grace runs out,
    about thirty minutes after the restart, and the sentence shows then.
    That gap is accepted. The clock is the grace constant, and not
@@ -330,7 +330,7 @@ is observed, rather than updating state step by step from many places.
    absent from the listing for over ninety minutes and fetches
    `/vllm/config` only after its image pull; the sentence must not show
    for a box the admin created five minutes ago. A probe that reaches
-   (a 503) is the anchor and the row above.
+   (a 503) is the loading start and the row above.
 
    **An unlisted host is probed with the key we believe that process
    has.** `/health` takes no key, so a passing probe alone cannot tell
@@ -592,7 +592,7 @@ it. It moves into Deployment.
 not only logged.** History already holds the last verdict (rule 3 of
 the pattern, "so a change is logged once"), and the lifecycle function
 has never been handed it. Today the lifecycle is recomputed from a dozen
-counters on every pass, which is why the anchor makes the same
+counters on every pass, which is why the loading start makes the same
 observation name a different state, and why a Rejected deployment that
 misses one probe reads Healthy through the hold-over rule
 (`box-lifecycle.md`, quirk 1). The counters are history too; the one
@@ -627,7 +627,7 @@ self-hosted and commercial are different gates:
   produced 65e22c8. Unlisted is an attention verdict. The sentence, and
   no buttons, show when the lifecycle is Unhealthy, Stalled, or Foreign.
   Awaiting means not attempted yet, and a not-reached record with no
-  anchor becomes Stalled when the grace runs out. Loading stays quiet.
+  loading start becomes Stalled when the grace runs out. Loading stays quiet.
   While the probe passes with our key, a listing gap keeps the route
   and stays quiet.
 - **Auto, commercial:** add when absent from the LiteLLM deployments, including
@@ -829,7 +829,7 @@ used to build the observed server, three modules reading one list.
   protocol half to `provisioning.py`, the probe and the parsers to
   `vllm_client.py`, the lifecycle counters on `VllmServer`, and in the
   end `VllmServer` itself. `config_served_at` on a server is the
-  Loading anchor, a lifecycle fact set from a ConfigFetch or from Vast
+  loading start, a lifecycle fact set from a ConfigFetch or from Vast
   adoption; it is not the fetch record and moves into `deployment.py`
   with the rest of the history.
 - **`proxy/deployments.py`** produces `LiteLLMDeployment` (one per
@@ -986,12 +986,12 @@ badges, unlisted (host-level), and the plan actions.
 | Fixture | Given | Computed | Plan |
 |---|---|---|---|
 | Unplaced | a record with no host (every intended row dials at least its listen URL) | no probe | cannot add; reason: no address |
-| Awaiting, never probed | no anchor, no probe attempted, not in LiteLLM | Awaiting | none |
-| Not reached, no anchor | probe attempted, `reached` false, no config fetch, not in LiteLLM; inside `health_grace_s` of the first attempt | Awaiting | none |
+| Awaiting, never probed | no loading start, no probe attempted, not in LiteLLM | Awaiting | none |
+| Not reached, no loading start | probe attempted, `reached` false, no config fetch, not in LiteLLM; inside `health_grace_s` of the first attempt | Awaiting | none |
 | Not reached, grace run out | as above, past `health_grace_s` of the first attempt | Stalled | sentence if unlisted. No deployment to delete |
-| Loading | anchor set (config fetch or first reached probe), probe not ok, inside `health_grace_s` of it | Loading | none |
-| Stalled, in LiteLLM | anchor set, never `last_ok`, past grace | Stalled | delete_litellm |
-| Approved after a restart, answering 503 | no config fetch this process; probe reached | anchor = first reached probe; Loading, then Stalled past grace | none, then delete_litellm (the adopt stamp this replaces) |
+| Loading | loading started (config fetch or first reached probe), probe not ok, inside `health_grace_s` of it | Loading | none |
+| Stalled, in LiteLLM | loading started, never `last_ok`, past grace | Stalled | delete_litellm |
+| Approved after a restart, answering 503 | no config fetch this process; probe reached | loading start = first reached probe; Loading, then Stalled past grace | none, then delete_litellm (the adopt stamp this replaces) |
 | Rejected | `/health` ok, `/v1/models` with our key 401 | Rejected | delete_litellm on the first 401; attention: up but rejects our key, check the key on the box. No clock; a 200 clears it |
 | Foreign | Rejected on `REJECTED_PASSES` passes running, and unlisted | Foreign | sentence: remove from `fleet.hosts`. A listed host never goes Foreign |
 | Healthy, absent | probe ok, dialable, no LiteLLM deployment | Healthy; skew intended_not_in_litellm | add_litellm |
@@ -1002,8 +1002,8 @@ badges, unlisted (host-level), and the plan actions.
 | Unhealthy / Stalled, in LiteLLM | self-hosted; probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
 | 65e22c8 serving through a listing gap | both listings fresh, neither names the host; probe ok on last-known dialable | Healthy. The count may reach `UNLISTED_PASSES`. The route stays | none. No sentence while Healthy. Keep probing the last-known URL |
 | Unlisted, deployment present, down | host verdict true; lifecycle is Unhealthy, Stalled or Foreign | unlisted + lifecycle | no delete from this row (the probe rows delete); sentence, no POST, no buttons: remove from `fleet.hosts` |
-| Unlisted, not reached, no anchor | host verdict true; probes do not reach; deployment already absent | unlisted + Awaiting, then Stalled past `health_grace_s` of the first attempt | none, then the sentence, no POST: remove from `fleet.hosts`. No deployment to delete |
-| Unlisted, Loading | host verdict true; anchor set, inside `health_grace_s` | unlisted + Loading | none. No sentence |
+| Unlisted, not reached, no loading start | host verdict true; probes do not reach; deployment already absent | unlisted + Awaiting, then Stalled past `health_grace_s` of the first attempt | none, then the sentence, no POST: remove from `fleet.hosts`. No deployment to delete |
+| Unlisted, Loading | host verdict true; loading started, inside `health_grace_s` | unlisted + Loading | none. No sentence |
 | Unlisted, still Healthy with our key | host verdict true; `/health` ok and `/v1/models` accepts our key | unlisted + Healthy | none. No sentence, no buttons. The route stays |
 | Unlisted, deployment already absent | host verdict true; row is in `fleet.hosts`; lifecycle Unhealthy, Stalled or Foreign | unlisted | sentence, no POST: remove from `fleet.hosts`. A Healthy absent row is the add row, not this one |
 | Listed, not running | either listing has the host with a non-running status, or with no public address | listed, not running: not a miss; no address from that listing; dialable is last-known | keep probing last-known; the unlisted count does not move |
@@ -1088,8 +1088,8 @@ real gap on its own. In order:
    c2e3c14 (Unhealthy or Stalled; Foreign follows with item 6). The
    clock runs from the first probe attempt, `first_probed_at` on the
    server; an unlisted host with no address to dial counts as an attempt.
-   A reached probe (a 503) with no config fetch is not anchored yet and
-   stays Awaiting: the first-reached-probe anchor is reconcile's.
+   A reached probe (a 503) with no config fetch has not started loading yet and
+   stays Awaiting: the first-reached-probe loading start is reconcile's.
 10. **Retire the orphan prune.** `_prune_extras` deleted a LiteLLM
     deployment nothing claimed after `ORPHAN_PASSES`; by the 2026-10-28
     ruling an orphan is skew for a human. Done 2026-10-28: the skew pass
