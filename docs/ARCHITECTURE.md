@@ -91,7 +91,7 @@ built at startup.
   - `litellm-skew`: reads the LiteLLM deployments and LiteLLM's own
     `/health`; reports orphans (deployments nothing intends) for the
     /models strip. Nothing deletes an orphan unattended.
-  - `runpod-listing`: reads the RunPod pod list every 10 minutes.
+  - `runpod-rentals`: reads what RunPod reports about our pods every 10 minutes.
 - `Fleet.models` is the YAML recipe. `FleetDeployment` is one intended
   LiteLLM deployment. `VllmServer` carries the lifecycle state: Awaiting,
   Loading, Healthy, Unhealthy, Stalled, Rejected or Foreign.
@@ -208,7 +208,7 @@ flowchart LR
     PAGES[HTML pages: pages.py]
     JSON[JSON API: api.py]
     FLEET[Fleet control plane<br/>GET /vllm/config]
-    RUNNERS[runners: fleet-lifecycle,<br/>litellm-skew, runpod-listing]
+    RUNNERS[runners: fleet-lifecycle,<br/>litellm-skew, runpod-rentals]
   end
   subgraph litellm [LiteLLM proxy]
     ADMIN[admin API<br/>teams / budgets / PATs / model/*]

@@ -95,7 +95,7 @@ def create_app():
     fleet.after_probe = backend.deployments.sync_selfhost
     app.fleet = fleet
     app.add_runner(fleet.run_lifecycle, name="fleet-lifecycle")
-    app.add_runner(fleet.run_runpod_listing, name="runpod-listing")
+    app.add_runner(fleet.run_runpod_rentals, name="runpod-rentals")
     app.add_runner(backend.run_skew, name="litellm-skew")
     app.add_runner(backend.watch_outside_edits, name="litellm-outside-edits")
 

@@ -860,16 +860,6 @@ class Fleet:
             if intended.listen_port not in have:
                 self._add_server(intended)
 
-    def _materialize_approved_hosts(self) -> None:
-        """Servers for every approved host, before the port map and the probe.
-
-        An approval used to create servers only on the next config fetch.
-        The other listen ports on that instance were then absent from
-        ``probe_all`` and stayed Awaiting.
-        """
-        for host in list(self.approvals):
-            self._materialize_approved(host)
-
     def _add_server(self, intended: IntendedDeployment) -> VllmServer:
         srv = VllmServer.from_intended(intended)
         self.servers.append(srv)
@@ -956,20 +946,6 @@ class Fleet:
             return
         for evicted in self.provisioning.note_unknown(host, now=now):
             self.approvals.pop(evicted, None)
-
-    def apply_port_map(self, mapping: Any) -> None:
-        """Set public_port from a host → {listen: public} map such as port_map_from_body's. Leave unset if missing.
-
-        The lifecycle itself stamps ports from the box each server is placed
-        on (apply_rentals); this is the same stamp from a bare map, for the
-        operator CLI and for tests.
-        """
-        for srv in self.servers:
-            by_listen = mapping and mapping.get(srv.host)
-            if not by_listen:
-                _LOGGER.info("listing: no instance for fleet host %s", srv.host)
-                continue
-            _set_public_port(srv, by_listen, "listing")
 
     def model_rollup(self, model_name: str, *, now: float | None = None):
         """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
@@ -1070,24 +1046,20 @@ class Fleet:
             if own:
                 await client.aclose()
 
-    async def refresh_public_ports(self, client: httpx.AsyncClient) -> None:
+    async def read_vast_rentals(self, client: httpx.AsyncClient) -> None:
+        """Read what Vast reports about our instances into vast_rentals. Nothing when Vast is not configured."""
         key = gpu_host_api_key(self.cfg, "vast")
         if not key:
             return
-        body = await fetch_instances(key, client=client)
-        # Servers must exist before place_servers stamps ports from the
-        # boxes, or a newly approved listen port never receives its
-        # HostPort and probe_all skips it.
-        self._materialize_approved_hosts()
-        self.vast_rentals = ProviderRentals("Vast", rentals_from_body(body))
+        self.vast_rentals = ProviderRentals("Vast", rentals_from_body(await fetch_instances(key, client=client)))
 
-    async def read_runpod_listing(self, client: httpx.AsyncClient) -> None:
-        """Read RunPod's pod list into runpod_rentals. Raises if RunPod does not answer."""
+    async def read_runpod_rentals(self, client: httpx.AsyncClient) -> None:
+        """Read what RunPod reports about our pods into runpod_rentals. Raises if RunPod does not answer."""
         key = gpu_host_api_key(self.cfg, "runpod")
         self.runpod_rentals = ProviderRentals("RunPod", rentals_from_pods(await fetch_pods(key, client=client)))
 
-    async def run_runpod_listing(self) -> None:
-        """Runner: RunPod's list of our pods, every RUNPOD_LISTING_INTERVAL_S.
+    async def run_runpod_rentals(self) -> None:
+        """Runner: what RunPod reports about our pods, every RUNPOD_LISTING_INTERVAL_S.
 
         Kept apart from the lifecycle so that RunPod is asked on its own
         schedule rather than on every probe pass; the lifecycle applies the
@@ -1279,11 +1251,10 @@ class Fleet:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
                     try:
-                        await self.refresh_public_ports(client)
+                        await self.read_vast_rentals(client)
                     except Exception:
-                        _LOGGER.exception("vast port map failed")
+                        _LOGGER.exception("the Vast rentals could not be read")
                     self.place_servers()
-                    self._materialize_approved_hosts()
                     await self.discover_rentals(client)
                     await self.probe_all(client=client)
                     if self.after_probe is not None:

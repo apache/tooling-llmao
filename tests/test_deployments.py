@@ -182,7 +182,7 @@ def test_sync_selfhost_deletes_when_down():
     }
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
-    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc")["data"]))
+    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))
     asyncio.run(be.sync_selfhost())
     # The id lookup, the delete, and the read that confirms it.
     assert _paths(be) == ["model/info", "model/delete", "model/info"]
@@ -199,7 +199,7 @@ def test_sync_selfhost_deletes_a_box_no_provider_lists():
     }
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
-    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc")["data"]))
+    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
     assert "model/delete" in _paths(be)
@@ -292,13 +292,16 @@ def test_an_orphan_that_is_claimed_again_starts_its_count_over():
     assert "model/delete" not in _paths(be)
 
 
-def _info(host: str, port: int, *, model_id: str | None = None):
+def _info(host: str, port: int, *, model_id: str | None = None, stamp: str | None = None):
+    """One LiteLLM row at an address. ``stamp`` is the llmao_key of one of ours; without it, a hand add."""
     row = {
         "model_name": "gemma4-26b",
         "litellm_params": {"api_base": f"http://{host}:{port}/v1"},
     }
     if model_id is not None:
         row["model_info"] = {"id": model_id, "asf_api_base": f"http://{host}:{port}"}
+        if stamp is not None:
+            row["model_info"]["llmao_key"] = stamp
     return {"data": [row]}
 
 
@@ -352,9 +355,9 @@ def test_a_stamp_for_another_key_is_not_this_deployment():
         "model_info": {"id": "theirs", "llmao_key": "http://10.0.0.8:8001"},
     }
     assert be._litellm_id(row, dep) is None
-    # Unstamped, the address still decides, until the backfill.
+    # Unstamped: not one of ours, whatever its address says (the backfill stamped every row).
     del row["model_info"]["llmao_key"]
-    assert be._litellm_id(row, dep) == "theirs"
+    assert be._litellm_id(row, dep) is None
 
 
 def test_sync_selfhost_does_not_repost_the_same_deployment():
@@ -571,7 +574,7 @@ def test_sync_selfhost_drops_a_box_that_rejects_our_key():
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(None, [s], models=models)
     fleet.deployments[0].in_litellm = True
-    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc")["data"]))
+    be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
     assert "model/delete" in _paths(be)

@@ -46,7 +46,6 @@ from llmao.model_status import (
     SKEW_PHRASE,
     STALLED,
     UNHEALTHY,
-    DeploymentSnapshot,
     deployment_status,
 )
 from llmao.proxy.errors import BackendUnavailableError
@@ -137,27 +136,21 @@ class DeploymentManager:
     def _litellm_id(self, row: dict, dep) -> str | None:
         """This deployment's LiteLLM id from one /model/info row, or None when the row is not it.
 
-        The stamp decides when the row has one: a row stamped with this key
-        is this deployment at whatever address it was registered, including
-        a public port that has since been remapped. A row with no stamp is
-        from before stamping, and is matched by its address, as before. The
-        address match goes once the backfill has stamped every row.
+        The stamp decides: a row stamped with this key is this deployment at
+        whatever address it was registered, including a public port that has
+        since been remapped. Every row llmao adds is stamped, and the rows
+        from before stamping were stamped in place on 2026-10-22, so a row
+        with no stamp is not one of ours: an orphan, never this deployment.
         """
         if str(row.get("model_name") or "") != dep.model_name:
             return None
         info = row.get("model_info") or {}
         if not isinstance(info, dict):
             info = {}
-        row_id = str(info.get("id") or row.get("model_id") or "") or None
         stamp = info.get("llmao_key")
-        if stamp:
-            return row_id if norm_base(stamp) == dep.key.url else None
-        want = norm_base(dep.api_base)
-        params = row.get("litellm_params")
-        registered = params.get("api_base") if isinstance(params, dict) else ""
-        if want and (norm_base(info.get("asf_api_base")) == want or norm_base(registered) == want):
-            return row_id
-        return None
+        if not stamp or norm_base(stamp) != dep.key.url:
+            return None
+        return str(info.get("id") or row.get("model_id") or "") or None
 
     def _working_api_key(self, dep) -> str | None:
         """The bearer to register for this server: the key its intent was minted with, or None off our boxes."""
@@ -359,11 +352,6 @@ class DeploymentManager:
             # Reported on its server, as "in LiteLLM at the listen port".
             if any(srv.on_listen_port(host, port, model_name) for srv in servers):
                 continue
-            view = deployment_status(
-                DeploymentSnapshot(model_name=model_name, self_hosted=False, litellm_only=True),
-                self._cfg.fleet,
-                now,
-            )
             # An orphan: something instructed LiteLLM to serve it, and llmao
             # does not know why, so it is shown and never deleted unattended
             # (an admin stops tracking it, or approves the host again). The
@@ -374,7 +362,7 @@ class DeploymentManager:
                 host=host,
                 port=port,
                 model_name=model_name,
-                skew=view.skew,
+                skew=(SKEW_IN_LITELLM_NOT_IN_CONFIG,),
                 route_id=route_id,
                 api_base=norm,
                 passes=seen,

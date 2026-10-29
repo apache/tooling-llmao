@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Vast show-instances → listen/public port map (no live API)."""
+"""Vast show-instances → Rentals with their port maps (no live API)."""
 
 import asyncio
 import logging
@@ -26,7 +26,8 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.fleet import Fleet, VllmServer, validate_fleet
 from llmao.model_status import AWAITING
 from llmao.models import load_models
-from llmao.vast_client import port_map_from_body, ports_from_instance
+from llmao.rental import ProviderRentals
+from llmao.vast_client import ports_from_instance, rentals_from_body
 from tests.test_fleet import EXAMPLE, FLEET_KNOBS
 
 INSTANCE = {
@@ -45,80 +46,66 @@ def test_ports_from_instance():
     assert ports["22"] == 20000
 
 
-def test_port_map_from_body():
-    mapping = port_map_from_body(
-        {
-            "instances": [INSTANCE],
-            "total_instances": 1,
-        }
-    )
-    assert mapping["203.0.113.10"]["8001"] == 41234
+def test_rentals_from_body_carry_the_ports():
+    rentals = rentals_from_body({"instances": [INSTANCE], "total_instances": 1})
+    assert rentals["55406468"].ports["8001"] == 41234
+    assert rentals["55406468"].host == "203.0.113.10"
 
 
-def test_second_row_for_the_same_ip_keeps_both_ports():
+def test_two_instances_at_one_address_are_two_rentals_with_their_own_ports():
     other = {
+        "id": 55406469,
         "public_ipaddr": "203.0.113.10",
         "ports": {"8002/tcp": [{"HostIp": "0.0.0.0", "HostPort": "41235"}]},
     }
-    mapping = port_map_from_body({"instances": [INSTANCE, other], "total_instances": 2})
-    assert mapping["203.0.113.10"]["8001"] == 41234
-    assert mapping["203.0.113.10"]["8002"] == 41235
+    rentals = rentals_from_body({"instances": [INSTANCE, other], "total_instances": 2})
+    assert rentals["55406468"].ports == {"8001": 41234, "22": 20000}
+    assert rentals["55406469"].ports == {"8002": 41235}
 
 
-def test_skip_no_ip_or_ports():
-    mapping = port_map_from_body(
+def test_an_instance_without_an_address_or_ports_is_still_a_rental():
+    rentals = rentals_from_body(
         {
             "instances": [
-                {"public_ipaddr": "", "ports": INSTANCE["ports"]},
-                {"public_ipaddr": "203.0.113.11"},
+                {"id": 1, "public_ipaddr": "", "ports": INSTANCE["ports"]},
+                {"id": 2, "public_ipaddr": "203.0.113.11"},
             ],
             "total_instances": 2,
         }
     )
-    assert list(mapping.keys()) == []
+    assert (rentals["1"].host, rentals["1"].ports["8001"]) == ("", 41234)
+    assert (rentals["2"].host, rentals["2"].ports) == ("203.0.113.11", {})
 
 
 def test_truncated_page_still_returns_what_we_have(caplog):
-    mapping = port_map_from_body(
-        {
-            "instances": [INSTANCE],
-            "total_instances": 40,
-        }
-    )
-    assert mapping["203.0.113.10"]["8001"] == 41234
+    rentals = rentals_from_body({"instances": [INSTANCE], "total_instances": 40})
+    assert rentals["55406468"].ports["8001"] == 41234
     assert "not paginating" in caplog.text
 
 
-def test_apply_port_map():
+def _placed(host: str) -> VllmServer:
     s = VllmServer(
         model_name="gemma4-26b",
         name="gemma4-26b",
-        host="203.0.113.10",
+        host=host,
         listen_port=8001,
         hf_model="google/gemma",
         api_key="sk-x",
         args=[],
     )
-    assert s.public_port is None
     fleet = Fleet(cfg=None, servers=[s])
-    fleet.apply_port_map(port_map_from_body({"instances": [INSTANCE], "total_instances": 1}))
-    assert s.public_port == 41234
-    assert s.listen_port == 8001
+    fleet.apply_rentals(ProviderRentals("Vast", rentals_from_body({"instances": [INSTANCE], "total_instances": 1})))
+    return s
+
+
+def test_a_placed_server_gets_its_public_port_from_the_rental():
+    s = _placed("203.0.113.10")
+    assert (s.public_port, s.listen_port) == (41234, 8001)
     assert s.api_base == "http://203.0.113.10:41234/v1"
 
 
-def test_apply_port_map_missing_host_stays_awaiting():
-    s = VllmServer(
-        model_name="gemma4-26b",
-        name="gemma4-26b",
-        host="198.51.100.1",
-        listen_port=8001,
-        hf_model="google/gemma",
-        api_key="sk-x",
-        args=[],
-    )
-    fleet = Fleet(cfg=None, servers=[s])
-    fleet.apply_port_map(port_map_from_body({"instances": [INSTANCE], "total_instances": 1}))
+def test_a_server_no_rental_names_stays_awaiting():
+    s = _placed("198.51.100.1")
     assert s.public_port is None
     assert s.state == AWAITING
 
@@ -218,7 +205,7 @@ def test_refresh_uses_dotted_api_key():
 
             return _Resp()
 
-    asyncio.run(fleet.refresh_public_ports(_Client()))
+    asyncio.run(fleet.read_vast_rentals(_Client()))
     # The refresh reads; the lifecycle's placement stamps the port from the box.
     assert fleet.servers[0].public_port is None
     fleet.place_servers()

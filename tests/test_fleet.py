@@ -96,6 +96,24 @@ def test_a_runpod_host_is_keyed_by_pod_id():
     assert [s["port"] for s in payload["servers"]] == [8001]
 
 
+def _place(fleet, mapping) -> None:
+    """Place servers from a host → {listen: public} map, as a provider's rentals would (matched by address)."""
+    rentals = {}
+    for i, (host, ports) in enumerate(mapping.items()):
+        rentals[f"r{i}"] = Rental(
+            provider="Vast",
+            id=f"r{i}",
+            label="x",
+            url="",
+            usd_per_hour=None,
+            host=host,
+            name=f"r{i}",
+            status="running",
+            ports=edict({str(k): int(v) for k, v in ports.items()}),
+        )
+    fleet.apply_rentals(ProviderRentals("Vast", rentals))
+
+
 def _approvable(cfg, models):
     fleet = Fleet(cfg=cfg, servers=[], models={m.model_name: m for m in models})
     return fleet
@@ -334,7 +352,7 @@ def test_probe_hits_both_vllm_ports_and_skips_the_rest():
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    fleet.apply_port_map({"198.51.100.8": {"8001": 18001, "8002": 18002, "22": 19022}})
+    _place(fleet, {"198.51.100.8": {"8001": 18001, "8002": 18002, "22": 19022}})
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -366,7 +384,7 @@ def test_missing_hostport_stays_awaiting_while_sibling_is_healthy():
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    fleet.apply_port_map({"198.51.100.8": {"8001": 18001}})
+    _place(fleet, {"198.51.100.8": {"8001": 18001}})
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200)
@@ -389,8 +407,7 @@ def test_approved_siblings_are_probed_without_another_fetch():
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
     mapping = {"198.51.100.8": {"8001": 18001, "8002": 18002}}
-    fleet._materialize_approved_hosts()
-    fleet.apply_port_map(mapping)
+    _place(fleet, mapping)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200)
@@ -471,7 +488,7 @@ def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
     cfg.providers = edict(vast=edict(api_key="vast-test"))
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    fleet.apply_port_map({"80.188.223.202": {"10100": 40000, "22": 19022}})
+    _place(fleet, {"80.188.223.202": {"10100": 40000, "22": 19022}})
     by_host = {s.host: s for s in fleet.servers}
     assert by_host["80.188.223.202"].public_port == 40000
     assert by_host["103.196.86.105"].public_port == 15602
@@ -517,7 +534,7 @@ def test_served_window_is_asked_for_with_the_working_key():
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    fleet.apply_port_map({"80.188.223.202": {"10100": 40000}})
+    _place(fleet, {"80.188.223.202": {"10100": 40000}})
     (srv,) = fleet.servers
     bearers = []
 
@@ -656,9 +673,9 @@ def test_a_fourth_element_warns_seeds_the_port_and_yields_to_the_listing(caplog)
     assert srv.api_base == "http://1.2.3.4:15601/v1"
 
     # A map that knows nothing about this host leaves the seed; one that does, replaces it.
-    fleet.apply_port_map({})
+    _place(fleet, {})
     assert srv.public_port == 15601
-    fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})
+    _place(fleet, {"1.2.3.4": {"8003": 12711}})
     assert srv.public_port == 12711
 
 
@@ -667,7 +684,7 @@ def test_a_port_follows_the_provider_map():
     fleet = Fleet.from_cfg(cfg, models=load_models(EXAMPLE))
     srv = fleet.servers[0]
     assert srv.public_port == 8003, "no GPU provider configured: a local fleet, public is listen"
-    fleet.apply_port_map({"1.2.3.4": {"8003": 12711}})
+    _place(fleet, {"1.2.3.4": {"8003": 12711}})
     assert srv.public_port == 12711
 
 

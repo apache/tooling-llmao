@@ -17,8 +17,8 @@
 
 """Vast.ai show-instances: each box's public ports, where it is, and what it costs.
 
-httpx only (no vastai SDK). One GET, no pagination; the fleet reads the
-body twice, for ports (port_map_from_body) and rentals (rentals_from_body).
+httpx only (no vastai SDK). One GET, no pagination; rentals_from_body
+turns the body into Rentals, ports and all.
 """
 
 from __future__ import annotations
@@ -67,37 +67,17 @@ def ports_from_instance(inst: dict[str, Any]) -> edict:
     return out
 
 
-def port_map_from_body(body: Any) -> edict:
-    """public_ipaddr → {listen: HostPort}. Warn if the page is truncated."""
-    if not isinstance(body, dict):
-        raise ValueError("vast instances response must be an object")
-    instances = body.get("instances") or []
-    if not isinstance(instances, list):
-        raise ValueError("vast instances must be a list")
+def _warn_if_truncated(body: dict, instances: list) -> None:
+    """One GET, no pagination: say so when Vast reports more instances than the page holds."""
     total = body.get("total_instances")
-    if total is not None:
-        try:
-            ntotal = int(total)
-        except (TypeError, ValueError):
-            ntotal = None
-        if ntotal is not None and ntotal > len(instances):
-            _LOGGER.warning("vast: total_instances=%s but page has %s; not paginating", ntotal, len(instances))
-    mapping = edict()
-    for inst in instances:
-        if not isinstance(inst, dict):
-            continue
-        ip = _ip(inst.get("public_ipaddr"))
-        if not ip:
-            continue
-        ports = ports_from_instance(inst)
-        if not ports:
-            continue
-        # One IP can show up twice. Keep every listen port; do not replace.
-        if ip in mapping:
-            mapping[ip].update(ports)
-        else:
-            mapping[ip] = ports
-    return mapping
+    if total is None:
+        return
+    try:
+        ntotal = int(total)
+    except (TypeError, ValueError):
+        return
+    if ntotal > len(instances):
+        _LOGGER.warning("vast: total_instances=%s but page has %s; not paginating", ntotal, len(instances))
 
 
 # Where an admin finds Vast instances. Vast has no stable page per instance;
@@ -120,7 +100,10 @@ def rentals_from_body(body: Any) -> edict:
     Vast does not say, which is unknown, not free.
     """
     rentals = edict()
-    for inst in (body.get("instances") or []) if isinstance(body, dict) else []:
+    instances = (body.get("instances") or []) if isinstance(body, dict) else []
+    if isinstance(body, dict) and isinstance(instances, list):
+        _warn_if_truncated(body, instances)
+    for inst in instances if isinstance(instances, list) else []:
         if not isinstance(inst, dict):
             continue
         instance_id = str(inst.get("id") or "")
@@ -143,7 +126,7 @@ def rentals_from_body(body: Any) -> edict:
 
 
 async def fetch_instances(api_key: str, *, client: httpx.AsyncClient) -> Any:
-    """The show-instances body, for port_map_from_body and rentals_from_body."""
+    """The show-instances body, for rentals_from_body."""
     resp = await client.get(
         VAST_INSTANCES_URL,
         params={"limit": VAST_PAGE_LIMIT},

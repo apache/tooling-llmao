@@ -1114,7 +1114,7 @@ real gap on its own. In order:
    f76a42f. Every box carries `ports` (container port → public port,
    Vast's HostPort and RunPod's portMappings alike); `apply_boxes`
    stamps `public_port` from the box a server is placed on, through
-   the one stamp function `apply_port_map` also uses;
+   one stamp function;
    `refresh_public_ports` no longer applies the map itself (it still
    materializes approved hosts). The fourth
    element is deprecated,

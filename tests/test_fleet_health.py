@@ -562,7 +562,7 @@ def test_the_fleet_is_ready_after_its_first_pass_even_a_failed_one():
     async def fail(*_args, **_kwargs):
         raise RuntimeError("Vast API unreachable")
 
-    fleet.refresh_public_ports = fail
+    fleet.read_vast_rentals = fail
     fleet.probe_all = fail
 
     async def scenario():

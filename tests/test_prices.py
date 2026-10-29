@@ -280,7 +280,7 @@ def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
     async def read():
         transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[_pod("203.0.113.20")]))
         async with httpx.AsyncClient(transport=transport) as client:
-            await fleet.read_runpod_listing(client)
+            await fleet.read_runpod_rentals(client)
 
     asyncio.run(read())
     assert fleet.runpod_rentals.provider == "RunPod"
@@ -292,7 +292,7 @@ def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
 
 def test_without_a_runpod_key_the_runner_ends_at_once():
     fleet = Fleet(edict(), [_server("203.0.113.20")])
-    asyncio.run(asyncio.wait_for(fleet.run_runpod_listing(), timeout=1))
+    asyncio.run(asyncio.wait_for(fleet.run_runpod_rentals(), timeout=1))
 
 
 def _fleet_renting_from_both(servers):
