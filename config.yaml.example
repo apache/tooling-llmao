@@ -159,6 +159,7 @@ models_path: models.yaml
 
 # Shared secret GPU boxes present as Authorization: Bearer when fetching
 # GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
+# Required; a missing or CHANGE_ME value fails the fleet build at startup.
 # A box names itself with X-LLMAO-Host (what its provider's provision.sh
 # sets), else the leftmost X-Forwarded-For, else the peer; that name must be
 # a fleet.hosts key. The provider listings place a server on its box by

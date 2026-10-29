@@ -111,7 +111,12 @@ def test_a_server_no_rental_names_stays_awaiting():
 
 
 def _vast_cfg(*, providers=None, fleet_vast=None, host="127.0.0.1"):
-    fleet = {"hosts": {host: [["gemma4-26b", 8001]]}, "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS}
+    fleet = {
+        "hosts": {host: [["gemma4-26b", 8001]]},
+        "key": "test-fleet-key",
+        "vllm_api_salt": "test-vllm-salt",
+        **FLEET_KNOBS,
+    }
     if fleet_vast is not None:
         fleet["vast"] = fleet_vast
     cfg = {"fleet": fleet, "models_path": str(EXAMPLE)}
@@ -166,6 +171,7 @@ def test_validate_fleet_vast_ok():
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "key": "test-fleet-key",
                 "vllm_api_salt": "test-vllm-salt",
                 "vast": {"api_key": "abc"},
                 **FLEET_KNOBS,
@@ -183,6 +189,7 @@ def test_refresh_uses_dotted_api_key():
         {
             "fleet": {
                 "hosts": {"203.0.113.10": [["gemma4-26b", 8001]]},
+                "key": "test-fleet-key",
                 "vllm_api_salt": "test-vllm-salt",
                 **FLEET_KNOBS,
             },

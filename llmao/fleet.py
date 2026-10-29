@@ -64,7 +64,7 @@ from llmao.model_status import (
     self_hosted_lifecycle,
 )
 from llmao.models import VllmRecipe, validate_models, warn_deprecated
-from llmao.provisioning import ProvisioningRecord, UnknownFetch
+from llmao.provisioning import ConfigFetch, ProvisioningRecord
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
@@ -93,11 +93,6 @@ def _ago(ts: float | None) -> str:
     return f"{sec // 3600}h"
 
 
-# The box's name, as its provider's provision.sh sets it (a Vast instance
-# id, a RunPod pod id). Not X-Forwarded-For.
-HOST_HEADER = "X-LLMAO-Host"
-
-
 def _is_ip_literal(name: str) -> bool:
     """Whether a server's name is itself an address (a legacy or local box), so it can be dialed as given."""
     try:
@@ -105,36 +100,6 @@ def _is_ip_literal(name: str) -> bool:
     except ValueError:
         return False
     return True
-
-
-def client_ip(
-    *,
-    remote_addr: str | None,
-    forwarded_for: str | None,
-    claimed_host: str | None = None,
-) -> str:
-    """Lookup key for fleet.hosts.
-
-    If X-LLMAO-Host is present, it is the only key (Vast sits behind a
-    transparent proxy; the TCP peer is not the instance). Otherwise leftmost
-    X-Forwarded-For (one reverse proxy) or the peer. Werkzeug ProxyFix is WSGI
-    and cannot wrap Quart asgi_app (ASGI).
-    """
-    claimed = normalize_peer_ip(claimed_host)
-    if claimed:
-        _LOGGER.info(
-            "%s=%r remote_addr=%r X-Forwarded-For=%r",
-            HOST_HEADER,
-            claimed,
-            remote_addr,
-            forwarded_for,
-        )
-        return claimed
-    if forwarded_for and forwarded_for.strip():
-        chosen = normalize_peer_ip(forwarded_for.split(",")[0])
-        _LOGGER.info("X-Forwarded-For=%r remote_addr=%r client_ip=%s", forwarded_for, remote_addr, chosen)
-        return chosen
-    return normalize_peer_ip(remote_addr)
 
 
 # How often RunPod's list of our pods is read. Placing a box is not urgent: a
@@ -222,6 +187,11 @@ def validate_fleet(cfg: Any, *, models: list) -> None:
     salt = cfg.fleet.get("vllm_api_salt")
     if not isinstance(salt, str) or not salt.strip() or salt.strip().startswith("CHANGE_ME"):
         raise ValueError("config.yaml: fleet.vllm_api_salt is missing or CHANGE_ME")
+    # The fleet key likewise: provisioning.fetch_refusal compares against it
+    # on every config fetch and trusts that it is set.
+    key = cfg.fleet.get("key")
+    if not isinstance(key, str) or not key.strip() or key.strip().startswith("CHANGE_ME"):
+        raise ValueError("config.yaml: fleet.key is missing or CHANGE_ME")
     validate_models(models)
     warn_deprecated(models)
     validate_providers(cfg, models)
@@ -738,15 +708,20 @@ class Unintended:
 
     ``rental`` is what its provider reports about it (None when no provider
     reports a machine of that name), with ``finding`` what a probe found on
-    it; ``fetch`` is its ask for a config with the fleet key (None when it
-    has not asked). A machine seen from both sides is one record, with one
+    it; ``fetch`` is its config fetches with the fleet key (None when it has
+    not asked). A machine seen from both sides is one record, with one
     Approve. Fleet.unintended builds these; nothing stores them.
     """
 
     name: str
     rental: Rental | None
     finding: str
-    fetch: UnknownFetch | None
+    fetch: ConfigFetch | None
+
+
+def fetch_detail(fetch: ConfigFetch) -> str:
+    """The strip's line for a stranger's config fetches: 'seen 5s · 3 requests'."""
+    return f"seen {_ago(fetch.last_at)} · {fetch.count} requests"
 
 
 class Fleet:
@@ -759,6 +734,7 @@ class Fleet:
         deployments: list[FleetDeployment] | None = None,
         models: dict[str, Any] | None = None,
         after_probe=None,
+        provisioning: ProvisioningRecord | None = None,
     ):
         self.cfg = cfg
         self.servers = servers
@@ -774,9 +750,11 @@ class Fleet:
         # fleet with LiteLLM waits for it; before then no Vast server has an
         # address, and a comparison reads every one of them as missing.
         self.ready = asyncio.Event()
-        # What boxes have fetched (llmao/provisioning.py): the last config
-        # fetch per known host, and the strangers that presented the fleet key.
-        self.provisioning = ProvisioningRecord()
+        # Every name that fetched its config (llmao/provisioning.py). The
+        # config route writes it; main.py builds the one record and hands it
+        # to both. Each probe pass reads it (read_config_fetches), and
+        # unintended() shows the names nothing intends.
+        self.provisioning = provisioning or ProvisioningRecord()
         # What an admin told an unknown box to load (intent.Approval), keyed by
         # normalized host. Process memory only; config.yaml is not written.
         self.approvals: dict[str, Approval] = {}
@@ -793,7 +771,7 @@ class Fleet:
         self.discovered: dict[str, Discovered] = {}
 
     @classmethod
-    def from_cfg(cls, cfg: Any, models: list) -> Fleet:
+    def from_cfg(cls, cfg: Any, models: list, *, provisioning: ProvisioningRecord | None = None) -> Fleet:
         """The fleet config intends: one server and one deployment per intended vLLM process,
         one deployment per provider line. ``models`` is the list loaded at startup; the fleet
         keeps it, and nothing reads models.yaml again. Requires validate_fleet() already ran on cfg."""
@@ -823,24 +801,21 @@ class Fleet:
                 srv.public_port = srv.listen_port
             servers.append(srv)
             deployments.append(FleetDeployment.from_vllm(srv))
-        return cls(cfg, servers, deployments, models=by_name)
+        return cls(cfg, servers, deployments, models=by_name, provisioning=provisioning)
 
-    def note_config_fetch(self, host: str, *, now: float | None = None) -> None:
-        """Record that we handed this box its config.
+    def read_config_fetches(self) -> None:
+        """Each pass reads the ConfigFetch source: the last fetch by a server's name is its loading start.
 
-        An approved host that is not in fleet.hosts becomes a server and a
-        deployment here, the first time. The ConfigFetch is the record; the
-        ``config_served_at`` stamped on each server is the loading start it
-        sets, which moves them from awaiting contact into the Loading window
-        (the next probe, or immediately for any probe running now,
-        re-derives the state).
+        ``config_served_at`` on the server is the lifecycle fact the fetch
+        sets, moving it from awaiting contact into the Loading window; the
+        probe that follows re-derives the state from it. Copied, not
+        referenced: the record may drop the fetch under its cap, the start
+        once seen stands.
         """
-        fetch = self.provisioning.note(host, now=now)
-        self._materialize_approved(host)
         for srv in self.servers:
-            if srv.host == host:
-                srv.config_served_at = fetch.at
-        self.provisioning.unknown.pop(normalize_peer_ip(host), None)
+            at = self.provisioning.fetched_at(srv.host)
+            if at is not None:
+                srv.config_served_at = at
 
     def _materialize_approved(self, host: str) -> None:
         """Servers and deployments for an approved IP that config.yaml does not list.
@@ -878,19 +853,12 @@ class Fleet:
             return "—"
         return _ago(at)
 
-    def unknown_fetch_detail(self, host: str) -> str:
-        """The attention-strip line for one unknown box: 'seen 5s · 3 requests'."""
-        seen = self.provisioning.unknown.get(host)
-        if seen is None:
-            return ""
-        return f"seen {_ago(seen.last_seen)} · {seen.count} requests"
-
     def approve_models(self, host: str, names: list[str], *, now: float | None = None) -> Approval:
         """An admin names the models an unknown box loads: the host is intended from here on.
 
-        It leaves the unknown record and gets its servers at once (Awaiting,
-        one per model on VLLM_LISTEN_PORTS in order), so it reads with the
-        other deployments; its next config fetch is served. Replaces any
+        It leaves the strip and gets its servers at once (Awaiting, one per
+        model on VLLM_LISTEN_PORTS in order), so it reads with the other
+        deployments; its next config fetch is served. Replaces any
         previous approval. Raises, changing nothing, when the host is already
         in fleet.hosts, the selection is empty, or a name is unknown or not
         self-hosted. Lost on restart.
@@ -911,41 +879,29 @@ class Fleet:
             if VllmRecipe.from_model(model) is None:
                 raise ValueError(f"{name} has no vLLM recipe, so a box cannot load it")
         approval = self.approvals[host] = Approval(host, tuple(chosen), now or time.time())
-        self.provisioning.unknown.pop(host, None)
         self._materialize_approved(host)
         return approval
+
+    def intended_names(self) -> set[str]:
+        """Every name intent covers: the fleet.hosts keys, the approvals, and the hosts of the servers."""
+        names = {normalize_peer_ip(str(key)) for key in self.cfg.fleet.hosts} | set(self.approvals)
+        return names | {s.host for s in self.servers}
 
     def unintended(self) -> list[Unintended]:
         """Every machine nobody intends, one record per name: discovered rentals and stranger fetches, joined.
 
-        A name both sources know is one record. The ones that asked for
-        their config come first, latest ask first; then the rest by name.
+        A stranger is a ConfigFetch whose name nothing intends; the record
+        keeps every fetch and the split is made here. A name both sources
+        know is one record. The ones that asked for their config come
+        first, latest ask first; then the rest by name.
         """
+        names = self.intended_names()
+        strangers = {name: fetch for name, fetch in self.provisioning.fetches.items() if name not in names}
         out = []
-        for name in set(self.discovered) | set(self.provisioning.unknown):
+        for name in set(self.discovered) | set(strangers):
             found = self.discovered.get(name)
-            fetch = self.provisioning.unknown.get(name)
-            out.append(Unintended(name, found and found.rental, (found and found.finding) or "", fetch))
-        return sorted(out, key=lambda u: (u.fetch is None, -((u.fetch and u.fetch.last_seen) or 0.0), u.name))
-
-    def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
-        """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.
-
-        Membership comes from config already checked by validate_fleet. Cap is
-        50, dropping the oldest last-seen. A member IP is removed and not recorded.
-        """
-        host = normalize_peer_ip(host)
-        members = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts}
-        # A stranger that has since joined config is neither unknown nor
-        # approved; its approval, if any, is spent.
-        self.provisioning.forget_unknown(members)
-        for known in list(self.approvals):
-            if known in members:
-                self.approvals.pop(known, None)
-        if host in members:
-            return
-        for evicted in self.provisioning.note_unknown(host, now=now):
-            self.approvals.pop(evicted, None)
+            out.append(Unintended(name, found and found.rental, (found and found.finding) or "", strangers.get(name)))
+        return sorted(out, key=lambda u: (u.fetch is None, -((u.fetch and u.fetch.last_at) or 0.0), u.name))
 
     def model_rollup(self, model_name: str, *, now: float | None = None):
         """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
@@ -983,6 +939,7 @@ class Fleet:
         own = client is None
         if own:
             client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        self.read_config_fetches()
         try:
             in_litellm_by_srv = {dep.vllm: dep.in_litellm for dep in self.deployments if dep.vllm is not None}
             for srv in self.servers:
@@ -1180,8 +1137,7 @@ class Fleet:
         without an address) has nothing to approve and is not listed.
         """
         stamp = now or time.time()
-        names = {normalize_peer_ip(str(ip)) for ip in self.cfg.fleet.hosts} | set(self.approvals)
-        names |= {s.host for s in self.servers}
+        names = self.intended_names()
         on = {(s.rental.provider, s.rental.id) for s in self.servers if s.rental is not None}
         found: dict[str, Discovered] = {}
         for rentals in (self.vast_rentals, self.runpod_rentals):

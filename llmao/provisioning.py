@@ -15,29 +15,32 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""The server side of a box provisioning itself.
+"""The server side of a rental provisioning itself.
 
-A box provisions itself with one request: ``provision.sh`` runs,
+A rental provisions itself with one request: ``provision.sh`` runs,
 ``install_set.py`` fetches ``GET /vllm/config`` with the fleet key, and
-the box installs what it gets (docs/box-protocol.md). This module is what
-llmao keeps of that request. Today, the records:
+the rental installs what it gets (docs/box-protocol.md). This module is
+the whole server side of that request, and the route in ``api.py`` is a
+few lines calling it:
 
-- ``ConfigFetch``: the last fetch each known host made, and when. One of
-  the six reconcile sources (docs/fleet-reconcile-design.md, Vocabulary);
-  the Deployment reads it through its host as the loading start.
-- ``UnknownFetch``: a host nobody intended presenting the fleet key, with
-  first seen, last seen and a count, so the /models attention strip can
-  show it and an admin can approve it. Capped; the oldest last-seen go.
-
-And the payload, ``config_for_host``: the host's IntendedDeployments
-(llmao/intent.py) rendered as the servers JSON the box installs. It
-derives nothing; the bearer and the recipe are on the record. How a box
-names itself and the fleet-key check join from ``fleet.py`` and ``api.py``
-next.
+- ``fetch_refusal``: the fleet-key check.
+- ``rental_name``: how a rental names itself (``X-LLMAO-Host`` as given,
+  else the forwarded address, else the peer).
+- ``ProvisioningRecord``: one ``ConfigFetch`` per name that ever fetched,
+  intended or not. One of the six reconcile sources
+  (docs/fleet-reconcile-design.md, Vocabulary). Whether a name is
+  intended is the join's call, not this record's: the fleet reads the
+  record each pass, a Deployment takes its loading start from it, and a
+  name nothing intends is shown as a stranger.
+- ``config_for_host``: the payload, the host's IntendedDeployments
+  (llmao/intent.py) rendered as the servers JSON the rental installs. It
+  derives nothing; the bearer and the recipe are on the record.
 """
 
 from __future__ import annotations
 
+import hmac
+import logging
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -47,19 +50,64 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.intent import IntendedDeployment, host_intents
 from llmao.reconcile import normalize_peer_ip
 
-# How many unknown hosts are remembered. A scan of the fleet key's port
-# from strangers must not grow without bound; the oldest last-seen go.
-UNKNOWN_FETCH_CAP = 50
+_LOGGER = logging.getLogger(__name__)
+
+# The rental's name, as its provider's provision.sh sets it (a Vast
+# instance id, a RunPod pod id). Not X-Forwarded-For.
+HOST_HEADER = "X-LLMAO-Host"
+
+# How many names are remembered. A scan of the fleet key's port from
+# strangers must not grow without bound; the oldest last-seen go.
+FETCH_CAP = 50
+
+
+def fetch_refusal(cfg: Any, authorization: str | None) -> tuple[int, str] | None:
+    """Why a config fetch is refused, as (status, message); None when the bearer is the fleet key.
+
+    ``fleet.key`` is one shared secret, baked into every rental's template,
+    checked present by validate_fleet at startup. Missing from the request,
+    or wrong by a constant-time compare: 403.
+    """
+    auth = authorization or ""
+    prefix = "Bearer "
+    if not auth.startswith(prefix):
+        return 403, "missing fleet key"
+    if not hmac.compare_digest(auth[len(prefix) :].strip(), cfg.fleet.key.strip()):
+        return 403, "invalid fleet key"
+    return None
+
+
+def rental_name(*, claimed: str | None, forwarded_for: str | None, remote_addr: str | None) -> str:
+    """The name a config fetch is for.
+
+    ``X-LLMAO-Host`` is the rental's name as its provider's provision.sh
+    set it (a Vast instance id, a RunPod pod id; an address on a legacy
+    machine), compared as given: a name is never normalized. Vast sits
+    behind a transparent proxy, so the TCP peer is not the instance, and
+    with the header present nothing else is consulted. Without it the
+    rental is named by its address: the leftmost ``X-Forwarded-For`` (one
+    reverse proxy; Werkzeug ProxyFix is WSGI and cannot wrap Quart's ASGI
+    app), else the peer, normalized as addresses are.
+    """
+    name = (claimed or "").strip()
+    if name:
+        _LOGGER.info("%s=%r remote_addr=%r X-Forwarded-For=%r", HOST_HEADER, name, remote_addr, forwarded_for)
+        return name
+    if forwarded_for and forwarded_for.strip():
+        name = normalize_peer_ip(forwarded_for.split(",")[0])
+        _LOGGER.info("X-Forwarded-For=%r remote_addr=%r name=%s", forwarded_for, remote_addr, name)
+        return name
+    return normalize_peer_ip(remote_addr)
 
 
 def server_json(intended: IntendedDeployment) -> edict:
-    """One vLLM process as the box installs it: the wire shape of ``servers[]``.
+    """One vLLM process as the rental installs it: the wire shape of ``servers[]``.
 
     ``model`` is the HF weights id, ``served_model_name`` what vLLM answers
-    to, ``port`` the listen port (the public port is ours, not the box's
+    to, ``port`` the listen port (the public port is ours, not the rental's
     business; it binds inside the container), ``api_key`` the bearer the
     intent was minted with. A requirement the recipe does not declare is
-    left out, so the box's fit check knows it was not stated.
+    left out, so the installer's fit check knows it was not stated.
     """
     recipe = intended.recipe
     out = edict(
@@ -87,75 +135,51 @@ def config_for_host(
 ) -> edict:
     """The payload for one host: its IntendedDeployments as servers JSON.
 
-    ``models`` is the list loaded at startup. Raises intent.UnknownHostError
-    when the host has neither rows nor an approval. Requires
-    validate_fleet() already ran on cfg.
+    ``host`` is the name rental_name gave; ``models`` is the list loaded at
+    startup. Raises intent.UnknownHostError when the host has neither rows
+    nor an approval. Requires validate_fleet() already ran on cfg.
     """
     by_name = {str(model.model_name): model for model in models}
     servers = [server_json(i) for i in host_intents(cfg, by_name, host, approved=approved)]
-    return edict(host=normalize_peer_ip(host), servers=servers)
+    return edict(host=host, servers=servers)
 
 
 @dataclass(frozen=True)
 class ConfigFetch:
-    """A known host fetched its config at ``at``."""
+    """One name's config fetches: when first, when last, how many."""
 
-    host: str
-    at: float
-
-
-@dataclass(frozen=True)
-class UnknownFetch:
-    """A host not in the fleet presented the fleet key: when first, when last, how often."""
-
-    host: str
-    first_seen: float
-    last_seen: float
+    name: str
+    first_at: float
+    last_at: float
     count: int
 
 
 class ProvisioningRecord:
-    """What boxes have fetched: one ConfigFetch per known host, one UnknownFetch per stranger.
+    """Every name that fetched its config, intended or not: one ConfigFetch per name.
 
     Process memory only, lost on restart like the rest of the observed
-    state. Hosts are given normalized (``normalize_peer_ip``); this record
-    does not normalize.
+    state. Names are recorded as rental_name gave them. Capped at
+    FETCH_CAP names, the oldest last-seen going first; an intended name's
+    fetch can go that way under a scan, which costs its "config fetched"
+    age and nothing else, since the fleet copies the loading start it saw.
     """
 
     def __init__(self) -> None:
         self.fetches: dict[str, ConfigFetch] = {}
-        self.unknown: dict[str, UnknownFetch] = {}
 
-    def note(self, host: str, *, now: float | None = None) -> ConfigFetch:
-        """A known host fetched its config. Forgets it as a stranger, if it was one."""
-        fetch = ConfigFetch(host, now or time.time())
-        self.fetches[host] = fetch
-        self.unknown.pop(host, None)
+    def note(self, name: str, *, now: float | None = None) -> ConfigFetch:
+        """The rental named ``name`` fetched its config."""
+        stamp = now or time.time()
+        seen = self.fetches.get(name)
+        fetch = replace(seen, last_at=stamp, count=seen.count + 1) if seen else ConfigFetch(name, stamp, stamp, 1)
+        self.fetches[name] = fetch
+        extra = len(self.fetches) - FETCH_CAP
+        if extra > 0:
+            for old in sorted(self.fetches, key=lambda n: self.fetches[n].last_at)[:extra]:
+                del self.fetches[old]
         return fetch
 
-    def fetched_at(self, host: str) -> float | None:
-        fetch = self.fetches.get(host)
-        return fetch and fetch.at
-
-    def note_unknown(self, host: str, *, now: float | None = None) -> list[str]:
-        """A stranger presented the fleet key. Returns the hosts evicted by the cap, if any."""
-        stamp = now or time.time()
-        seen = self.unknown.get(host)
-        if seen is None:
-            self.unknown[host] = UnknownFetch(host, stamp, stamp, 1)
-        else:
-            self.unknown[host] = replace(seen, last_seen=stamp, count=seen.count + 1)
-        extra = len(self.unknown) - UNKNOWN_FETCH_CAP
-        if extra <= 0:
-            return []
-        oldest = sorted(self.unknown, key=lambda h: self.unknown[h].last_seen)[:extra]
-        for old in oldest:
-            del self.unknown[old]
-        return oldest
-
-    def forget_unknown(self, hosts) -> list[str]:
-        """Drop strangers that are now members. Returns the hosts dropped."""
-        dropped = [h for h in hosts if h in self.unknown]
-        for host in dropped:
-            del self.unknown[host]
-        return dropped
+    def fetched_at(self, name: str) -> float | None:
+        """When ``name`` last fetched its config; None if never."""
+        fetch = self.fetches.get(name)
+        return fetch and fetch.last_at

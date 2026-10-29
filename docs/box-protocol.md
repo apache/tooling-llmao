@@ -33,8 +33,9 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
 ```
 
 - **The fleet key** is the gate. `config.yaml` `fleet.key` is one shared
-  secret, baked into every box template. Missing: 403. Wrong, by a
-  constant-time compare: 403. Not configured on the server: 503.
+  secret, baked into every box template and checked present at startup
+  (`validate_fleet`, like the salt). Missing from the request: 403.
+  Wrong, by a constant-time compare: 403.
 - **The host** is the `fleet.hosts` key the answer is built for. When
   `X-LLMAO-Host` is present it is the only key: no fallback to the peer,
   and 404 if it is unknown. Vast instances reach llmao through a transparent
@@ -52,15 +53,17 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
   machine sends. A row keyed by an address, as the legacy boxes and those
   provisioned before names were ids are, is its own address and still
   places by it. (The RunPod image has not yet run on a real pod.)
-- **An unknown host** gets 404, and the fetch is remembered in memory (the
-  host, first and last seen, a count), so the `/models` attention strip can
-  show "fleet key presented from a host not in `fleet.hosts`" and an admin
-  can approve it with its models. Every fetch, known or not, is logged with
-  the claimed host, the peer and `X-Forwarded-For`.
-- **A known host's fetch is noted.** The time of the last config fetch is
-  the loading start: a box that fetched its config and is
-  not yet answering is Loading until `fleet.health_grace_s` has passed, then
-  Stalled. The whole state machine is `box-lifecycle.md`.
+- **Every fetch is recorded by name** (first and last seen, a count; the
+  `ProvisioningRecord` in `llmao/provisioning.py`, capped, oldest
+  last-seen first), whether or not the name is intended, and logged with
+  the claimed host, the peer and `X-Forwarded-For`. The record does not
+  know membership: that is the fleet's join. A name nothing intends gets
+  404 and shows on the `/models` attention strip as "fleet key presented
+  from a host not in `fleet.hosts`", with Approve.
+- **The last fetch by an intended name is its loading start.** Each probe
+  pass reads the record onto the name's servers: a box that fetched its
+  config and is not yet answering is Loading until `fleet.health_grace_s`
+  has passed, then Stalled. The whole state machine is `box-lifecycle.md`.
 
 Boxes fetch `https://llm.apache.org/vllm/config` with default TLS
 verification.

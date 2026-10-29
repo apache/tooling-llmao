@@ -48,7 +48,7 @@ from llmao.model_status import (
     UNKNOWN,
 )
 from llmao.models import load_models
-from llmao.provisioning import UnknownFetch
+from llmao.provisioning import ConfigFetch
 from llmao.rental import ProviderRentals, Rental
 from tests.test_fleet import EXAMPLE
 
@@ -95,6 +95,7 @@ def _fleet(*servers) -> Fleet:
     cfg = edict(
         {
             "fleet": {
+                "hosts": {},
                 "health_interval_s": 45,
                 "health_grace_s": 1800,
                 "health_fail_threshold": 3,
@@ -199,7 +200,8 @@ def test_attention_items_lists_only_actionable_items():
     down = _server("qwen", host="10.0.0.2", port=8002, ok=False)
     fleet = _fleet(healthy, down)
     next(d for d in fleet.deployments if d.vllm is down).skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
-    fleet.provisioning.unknown["192.0.2.7"] = UnknownFetch("192.0.2.7", time.time() - 100, time.time() - 5, 3)
+    fleet.provisioning.note("192.0.2.7", now=time.time() - 100)
+    fleet.provisioning.fetches["192.0.2.7"] = ConfigFetch("192.0.2.7", time.time() - 100, time.time() - 5, 3)
 
     items = pages.attention_items(fleet)
     kinds = [i.kind for i in items]
@@ -350,7 +352,8 @@ def test_admin_drill_down_renders_deployments_without_label_controls():
 def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
     pages = _app()
     fleet = _fleet(_server("gemma"))
-    fleet.provisioning.unknown["192.0.2.7"] = UnknownFetch("192.0.2.7", time.time() - 100, time.time() - 5, 3)
+    fleet.provisioning.note("192.0.2.7", now=time.time() - 100)
+    fleet.provisioning.fetches["192.0.2.7"] = ConfigFetch("192.0.2.7", time.time() - 100, time.time() - 5, 3)
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, attention=pages.attention_items(fleet), admin=True)
     assert "Fleet key presented from 192.0.2.7" in out
@@ -468,7 +471,7 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
         "pod-1": Discovered(pod, "nothing listening", time.time()),
     }
     # The pod also asked for its config: the same machine, seen by the box protocol too.
-    fleet.provisioning.unknown["pod-1"] = UnknownFetch("pod-1", time.time() - 100, time.time() - 5, 3)
+    fleet.provisioning.fetches["pod-1"] = ConfigFetch("pod-1", time.time() - 100, time.time() - 5, 3)
     items = pages.attention_items(fleet)
     assert [i.what for i in items] == [
         "pod-1 · rented, nobody intends it",

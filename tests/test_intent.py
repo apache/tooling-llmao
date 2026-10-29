@@ -70,6 +70,18 @@ def test_the_salt_is_checked_at_startup_not_at_mint():
     assert derive_vllm_api_key("CHANGE_ME_VLLM_API_SALT", "203.0.113.10", 8001).startswith("sk-vllm-")
 
 
+def test_the_fleet_key_is_checked_at_startup():
+    """validate_fleet refuses a missing or placeholder fleet key; the config route then trusts it."""
+    from llmao.fleet import validate_fleet
+
+    models = load_models(EXAMPLE)
+    for bad in (None, "", "  ", "CHANGE_ME_FLEET_KEY"):
+        cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8001]]})
+        cfg.fleet.key = bad
+        with pytest.raises(ValueError, match=r"fleet\.key is missing or CHANGE_ME"):
+            validate_fleet(cfg, models=models)
+
+
 def test_the_mint_still_refuses_a_bad_host_or_port():
     with pytest.raises(ValueError, match="host is empty"):
         derive_vllm_api_key("test-vllm-salt", "", 8001)

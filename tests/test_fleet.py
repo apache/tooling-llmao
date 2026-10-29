@@ -26,17 +26,15 @@ import yaml
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import (
-    HOST_HEADER,
     Fleet,
-    client_ip,
     normalize_peer_ip,
     snapshot_for_status,
     validate_fleet,
 )
-from llmao.intent import Approval, UnknownHostError, derive_vllm_api_key, vllm_api_key
+from llmao.intent import UnknownHostError, derive_vllm_api_key, vllm_api_key
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import VllmRecipe, load_models
-from llmao.provisioning import config_for_host
+from llmao.provisioning import HOST_HEADER, config_for_host, rental_name
 from llmao.rental import ProviderRentals, Rental
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
@@ -55,7 +53,7 @@ FLEET_KNOBS = {
 def _cfg(hosts, models_path=EXAMPLE):
     return edict(
         {
-            "fleet": {"hosts": hosts, "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS},
+            "fleet": {"hosts": hosts, "key": "test-fleet-key", "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS},
             "models_path": str(models_path),
         }
     )
@@ -63,6 +61,7 @@ def _cfg(hosts, models_path=EXAMPLE):
 
 def test_example_primary_host():
     cfg = edict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
+    cfg.fleet.key = "test-fleet-key"
     cfg.fleet.vllm_api_salt = "test-vllm-salt"
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
@@ -158,10 +157,11 @@ def test_an_approval_leaves_the_strip_and_joins_the_deployments_at_once():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
-    fleet.note_unknown_config_fetch("198.51.100.8", now=40.0)
-    assert "198.51.100.8" in fleet.provisioning.unknown
+    fleet.provisioning.note("198.51.100.8", now=40.0)
+    assert [u.name for u in fleet.unintended()] == ["198.51.100.8"]
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"], now=45.0)
-    assert "198.51.100.8" not in fleet.provisioning.unknown
+    # The fetch stays on record; the name is intended now, so it is no stranger.
+    assert fleet.unintended() == []
     assert [(s.name, s.listen_port, s.state) for s in fleet.servers] == [
         ("qwen3-8b", 8001, AWAITING),
         ("gemma4-26b", 8002, AWAITING),
@@ -177,20 +177,23 @@ def test_an_approval_leaves_the_strip_and_joins_the_deployments_at_once():
 
 
 def test_config_fetch_starts_loading_on_the_approved_host():
+    """The pass reads the fetch record: the last fetch by a server's name is its loading start."""
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
-    fleet.note_config_fetch("198.51.100.8", now=50.0)
-    fleet.note_config_fetch("198.51.100.8", now=60.0)
+    fleet.provisioning.note("198.51.100.8", now=50.0)
+    fleet.provisioning.note("198.51.100.8", now=60.0)
+    assert all(s.config_served_at is None for s in fleet.servers)
+    fleet.read_config_fetches()
     assert [s.listen_port for s in fleet.servers] == [8001, 8002]
     assert all(s.config_served_at == 60.0 for s in fleet.servers)
     view = deployment_status(snapshot_for_status(fleet.deployments[0], cfg, 60.0), cfg.fleet, 60.0)
     assert view.lifecycle == LOADING
-    # A host config.yaml already names is not built from an approval.
-    fleet.approvals["127.0.0.1"] = Approval("127.0.0.1", ("qwen3-8b",), 65.0)
-    fleet.note_config_fetch("127.0.0.1", now=70.0)
-    assert [s.host for s in fleet.servers] == ["198.51.100.8", "198.51.100.8"]
+    # Copied, not referenced: the record dropping the fetch leaves the start standing.
+    fleet.provisioning.fetches.clear()
+    fleet.read_config_fetches()
+    assert all(s.config_served_at == 60.0 for s in fleet.servers)
 
 
 def test_probe_moves_the_materialized_server_to_healthy():
@@ -198,7 +201,6 @@ def test_probe_moves_the_materialized_server_to_healthy():
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b"])
-    fleet.note_config_fetch("198.51.100.8", now=50.0)
     srv = fleet.servers[0]
     srv.public_port = 18001
     srv.record_probe(True, now=55.0, grace_s=1800, fail_threshold=3, reached=True)
@@ -288,8 +290,8 @@ def test_a_machine_seen_by_both_sources_is_one_unintended_record():
         raise httpx.ConnectError("connection refused")
 
     _discover(fleet, dead, vast=[_rental(id="1"), _rental(host="198.51.100.9", id="2")])
-    fleet.note_unknown_config_fetch("2", now=50.0)
-    fleet.note_unknown_config_fetch("stranger", now=40.0)
+    fleet.provisioning.note("2", now=50.0)
+    fleet.provisioning.note("stranger", now=40.0)
     records = fleet.unintended()
     assert [(r.name, r.rental and r.rental.id, r.finding, r.fetch and r.fetch.count) for r in records] == [
         ("2", "2", "nothing listening", 1),
@@ -427,21 +429,10 @@ def test_approved_host_gains_the_sibling_port():
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
-    fleet.note_config_fetch("198.51.100.8", now=50.0)
     fleet.servers = [s for s in fleet.servers if s.listen_port == 8001]
     fleet.deployments = [d for d in fleet.deployments if d.vllm.listen_port == 8001]
     fleet._materialize_approved("198.51.100.8")
     assert sorted(s.listen_port for s in fleet.servers) == [8001, 8002]
-
-
-def test_approval_drops_when_the_host_joins_config():
-    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    models = load_models(EXAMPLE)
-    fleet = _approvable(cfg, models)
-    fleet.approve_models("198.51.100.8", ["qwen3-8b"])
-    cfg.fleet.hosts["198.51.100.8"] = [["qwen3-8b", 8001]]
-    fleet.note_unknown_config_fetch("203.0.113.9", now=40)
-    assert "198.51.100.8" not in fleet.approvals
 
 
 def test_optional_name_two_copies():
@@ -606,33 +597,19 @@ def test_normalize_peer_ip():
     assert normalize_peer_ip("203.0.113.10") == "203.0.113.10"
 
 
-def test_client_ip_xff_leftmost():
-    assert client_ip(remote_addr="10.0.0.1", forwarded_for="203.0.113.10, 10.0.0.1") == "203.0.113.10"
+def test_rental_name_xff_leftmost():
+    assert rental_name(claimed=None, remote_addr="10.0.0.1", forwarded_for="203.0.113.10, 10.0.0.1") == "203.0.113.10"
 
 
-def test_client_ip_no_xff():
-    assert client_ip(remote_addr="203.0.113.10", forwarded_for=None) == "203.0.113.10"
-    assert client_ip(remote_addr="::ffff:203.0.113.10", forwarded_for="") == "203.0.113.10"
+def test_rental_name_no_xff():
+    assert rental_name(claimed=None, remote_addr="203.0.113.10", forwarded_for=None) == "203.0.113.10"
+    assert rental_name(claimed="", remote_addr="::ffff:203.0.113.10", forwarded_for="") == "203.0.113.10"
 
 
-def test_client_ip_claimed_host_not_peer():
-    """Vast transparent proxy: TCP peer is not the instance. Header is the key."""
-    assert (
-        client_ip(
-            remote_addr="10.0.0.9",
-            forwarded_for=None,
-            claimed_host="203.0.113.10",
-        )
-        == "203.0.113.10"
-    )
-    assert (
-        client_ip(
-            remote_addr="10.0.0.9",
-            forwarded_for="198.51.100.1",
-            claimed_host="203.0.113.10",
-        )
-        == "203.0.113.10"
-    )
+def test_rental_name_claimed_not_peer():
+    """Vast transparent proxy: the TCP peer is not the instance. The header is the name, as given."""
+    assert rental_name(claimed="58020031", forwarded_for=None, remote_addr="10.0.0.9") == "58020031"
+    assert rental_name(claimed=" pod-1 ", forwarded_for="198.51.100.1", remote_addr="10.0.0.9") == "pod-1"
     assert HOST_HEADER == "X-LLMAO-Host"
 
 

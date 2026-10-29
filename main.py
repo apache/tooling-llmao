@@ -74,6 +74,7 @@ def create_app():
 
     # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
     from llmao.models import load_models
+    from llmao.provisioning import ProvisioningRecord
     from llmao.proxy.client import LiteLLMBackend
     from llmao.pruner import Pruner
     from llmao.sampler import MetricsSampler, sample_interval
@@ -89,7 +90,10 @@ def create_app():
     interval = sample_interval(app.cfg)
     keep_days = retention_days(app.cfg)
     action_days = actions.retention_days(app.cfg)
-    fleet = Fleet.from_cfg(app.cfg, models=definitions)
+    # Every config fetch, by the name the rental sent (llmao/provisioning.py).
+    # One record: the config route writes it, the fleet reads it each pass.
+    app.provisioning = ProvisioningRecord()
+    fleet = Fleet.from_cfg(app.cfg, models=definitions, provisioning=app.provisioning)
 
     backend = LiteLLMBackend(app.cfg, fleet)
     fleet.after_probe = backend.deployments.sync_selfhost

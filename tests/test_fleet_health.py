@@ -46,7 +46,7 @@ from llmao.model_status import (
     UNAVAILABLE,
     UNHEALTHY,
 )
-from llmao.provisioning import UNKNOWN_FETCH_CAP, ConfigFetch, ProvisioningRecord, UnknownFetch
+from llmao.provisioning import FETCH_CAP, ConfigFetch, ProvisioningRecord
 from llmao.proxy.deployments import DeploymentManager
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
@@ -128,41 +128,38 @@ def test_model_rollup_aggregate():
     assert fleet.model_rollup("nope").rollup == UNAVAILABLE
 
 
-def test_note_config_fetch():
-    fleet = Fleet(cfg=None, servers=[])
-    fleet.note_config_fetch("primary", now=42.0)
-    assert fleet.provisioning.fetches["primary"] == ConfigFetch("primary", 42.0)
-    assert fleet.provisioning.fetched_at("primary") == 42.0
-    assert fleet.provisioning.fetched_at("never") is None
+def test_the_record_keeps_every_fetch_by_name():
+    record = ProvisioningRecord()
+    assert record.note("primary", now=42.0) == ConfigFetch("primary", 42.0, 42.0, 1)
+    assert record.note("primary", now=50.0) == ConfigFetch("primary", 42.0, 50.0, 2)
+    assert record.fetched_at("primary") == 50.0
+    assert record.fetched_at("never") is None
+    fleet = Fleet(cfg=None, servers=[], provisioning=record)
     assert fleet.config_fetch_display("never") == "—"
+    assert fleet.config_fetch_display("primary") != "—"
 
 
-def test_unknown_config_fetch_drops_once_in_hosts():
+def test_a_stranger_is_a_fetch_whose_name_nothing_intends():
+    """The record does not know membership; the fleet's join makes the split."""
     cfg = edict({"fleet": {"hosts": {"203.0.113.10": []}}})
     fleet = Fleet(cfg=cfg, servers=[])
-    fleet.note_unknown_config_fetch("198.51.100.8", now=10)
-    fleet.note_unknown_config_fetch("198.51.100.8", now=20)
-    assert fleet.provisioning.unknown["198.51.100.8"] == UnknownFetch("198.51.100.8", 10, 20, 2)
-    fleet.note_unknown_config_fetch("203.0.113.10", now=30)
-    assert "203.0.113.10" not in fleet.provisioning.unknown
-    cfg.fleet.hosts["198.51.100.8"] = []
-    fleet.note_unknown_config_fetch("203.0.113.9", now=40)
-    assert "198.51.100.8" not in fleet.provisioning.unknown
-    assert "203.0.113.9" in fleet.provisioning.unknown
-    # A known host's fetch forgets it as a stranger.
-    fleet.note_config_fetch("203.0.113.9", now=50)
-    assert "203.0.113.9" not in fleet.provisioning.unknown
+    fleet.provisioning.note("198.51.100.8", now=10)
+    fleet.provisioning.note("198.51.100.8", now=20)
+    fleet.provisioning.note("203.0.113.10", now=30)
+    assert set(fleet.provisioning.fetches) == {"198.51.100.8", "203.0.113.10"}
+    assert [(u.name, u.fetch) for u in fleet.unintended()] == [("198.51.100.8", ConfigFetch("198.51.100.8", 10, 20, 2))]
 
 
-def test_the_unknown_record_is_capped_at_the_oldest_last_seen():
+def test_the_record_is_capped_at_the_oldest_last_seen():
     record = ProvisioningRecord()
-    for i in range(UNKNOWN_FETCH_CAP):
-        record.note_unknown(f"10.0.{i // 256}.{i % 256}", now=100 + i)
-    # The first host seen again is the newest; the second-seen is now the oldest.
-    record.note_unknown("10.0.0.0", now=1000)
-    assert record.note_unknown("10.9.9.9", now=2000) == ["10.0.0.1"]
-    assert len(record.unknown) == UNKNOWN_FETCH_CAP
-    assert record.unknown["10.0.0.0"].count == 2
+    for i in range(FETCH_CAP):
+        record.note(f"10.0.{i // 256}.{i % 256}", now=100 + i)
+    # The first name seen again is the newest; the second-seen is now the oldest.
+    record.note("10.0.0.0", now=1000)
+    record.note("10.9.9.9", now=2000)
+    assert "10.0.0.1" not in record.fetches
+    assert len(record.fetches) == FETCH_CAP
+    assert record.fetches["10.0.0.0"].count == 2
 
 
 def test_add_refusal_until_serving():
@@ -299,6 +296,7 @@ def test_local_from_cfg_public_equals_listen():
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "key": "test-fleet-key",
                 "vllm_api_salt": "test-vllm-salt",
                 "health_interval_s": 45,
                 "health_timeout_s": 3,
@@ -315,7 +313,8 @@ def test_local_from_cfg_public_equals_listen():
     assert fleet.servers[0].public_port == 8001
     # A fresh server awaits contact; serving its config starts the load.
     assert fleet.servers[0].state == AWAITING
-    fleet.note_config_fetch("127.0.0.1", now=1.0)
+    fleet.provisioning.note("127.0.0.1", now=1.0)
+    fleet.read_config_fetches()
     assert fleet.servers[0].config_served_at == 1.0
     fleet.servers[0].record_probe(False, now=2.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
     assert fleet.servers[0].state == LOADING

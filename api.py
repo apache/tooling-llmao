@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import functools
-import hmac
 import logging
 
 import asfquart
@@ -29,9 +28,8 @@ from asfquart.auth import Requirements
 from quart import jsonify, request
 
 from llmao.auth import current_identity
-from llmao.fleet import HOST_HEADER, client_ip
 from llmao.intent import UnknownHostError
-from llmao.provisioning import config_for_host
+from llmao.provisioning import HOST_HEADER, config_for_host, fetch_refusal, rental_name
 from llmao.seam import AuthzError
 
 APP = asfquart.APP
@@ -105,41 +103,26 @@ async def healthz():
     return {"status": "ok"}
 
 
-def _fleet_key() -> str:
-    fleet = getattr(APP.cfg, "fleet", None)
-    key = ""
-    if fleet is not None:
-        key = str(getattr(fleet, "key", "") or "")
-    return key.strip()
-
-
 @APP.get("/vllm/config")
 @api
 async def vllm_config():
-    """JSON for the calling box. Bearer fleet key; host from X-LLMAO-Host, else peer / XFF."""
-    expected = _fleet_key()
-    if not expected or expected.startswith("CHANGE_ME"):
-        raise HttpError(503, "fleet.key is not configured")
-    auth = request.headers.get("Authorization") or ""
-    prefix = "Bearer "
-    if not auth.startswith(prefix):
-        raise HttpError(403, "missing fleet key")
-    presented = auth[len(prefix) :].strip()
-    if not hmac.compare_digest(presented, expected):
-        raise HttpError(403, "invalid fleet key")
-    host = client_ip(
-        remote_addr=request.remote_addr,
+    """JSON for the calling rental (docs/box-protocol.md); the pieces are llmao/provisioning.py's."""
+    refusal = fetch_refusal(APP.cfg, request.headers.get("Authorization"))
+    if refusal:
+        raise HttpError(*refusal)
+    name = rental_name(
+        claimed=request.headers.get(HOST_HEADER),
         forwarded_for=request.headers.get("X-Forwarded-For"),
-        claimed_host=request.headers.get(HOST_HEADER),
+        remote_addr=request.remote_addr,
     )
-    approval = APP.fleet.approvals.get(host)
+    # Every fetch is recorded by name; whether the name is intended is the
+    # fleet's call, and a name nothing intends shows on the /models strip.
+    APP.provisioning.note(name)
+    approval = APP.fleet.approvals.get(name)
     try:
-        payload = config_for_host(host, models=APP.models, cfg=APP.cfg, approved=approval and list(approval.models))
+        return config_for_host(name, models=APP.models, cfg=APP.cfg, approved=approval and list(approval.models))
     except UnknownHostError:
-        APP.fleet.note_unknown_config_fetch(host)
-        raise HttpError(404, f"unknown fleet host: {host}") from None
-    APP.fleet.note_config_fetch(host)
-    return payload
+        raise HttpError(404, f"unknown fleet host: {name}") from None
 
 
 @APP.get("/v1/projects/<project>/usage")

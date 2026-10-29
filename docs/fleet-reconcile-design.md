@@ -16,7 +16,7 @@ today they are folded into flags on shared objects.
 | Source | Named | What | Keyed by | Cadence |
 |---|---|---|---|---|
 | **Intended** | `IntendedDeployment` | one row of `fleet.hosts`, one in-memory approval, or one `config.yaml` provider line; `models.yaml` supplies the recipe | the key | process start, approve, config load |
-| **Box protocol** | `ConfigFetch` | the last `GET /vllm/config` a host fetched, and when | host | on each fetch |
+| **Box protocol** | `ConfigFetch` | the `GET /vllm/config` fetches by one name: first, last, how many | name | on each fetch |
 | **GPU inventory** | `Rental`, in a `ProviderRentals` set | what one provider reports about one machine: id, status, address, listen-port to public-port map, price | provider id; matched to a host by address, then by the id it had last time | each provider's listing interval |
 | **vLLM health** | `VllmProbe` | what the probe found at an address: reached, `/health` ok, the key verdict and served window from `/v1/models`, the cache size (the last three only when asked for; see Needs) | the key | `health_interval_s` |
 | **LiteLLM deployments** | `LiteLLMDeployment` | what `GET /model/info` has for the key, found by the `llmao_key` stamp | the key | `skew_interval_s` |
@@ -51,8 +51,9 @@ source said, with the time it was read, and nothing of ours on it.
   **ProviderRentals** is one provider's set of Rentals as of one fetch
   (replaces `vast_boxes`, `runpod_boxes`). A Rental no deployment matches
   is just inventory; a deployment no Rental matches is **unlisted**.
-- **ConfigFetch**: the last `GET /vllm/config` a host made, and when. The
-  loading start. Today a timestamp on each server.
+- **ConfigFetch**: one name's `GET /vllm/config` fetches, first and last
+  and how many, intended or not. The last by an intended name is the
+  loading start, copied onto its servers each pass (`config_served_at`).
 - **VllmProbe**: what one probe of one address found. It carries the
   engine's name because it is not engine-neutral: `/health` and its 200
   versus 503 are vLLM's, the served window is vLLM's `max_model_len`
@@ -119,9 +120,9 @@ per machine; the name only groups what the sources said. This rule is
 what the ad hoc records of 2026-10-27 to 29 stood in for, and each is
 retired as its source lands: `UnknownFetch` and the known/unknown split
 inside the provisioning record (the fetch handler deciding membership
-is the join running inside a source; provisioning records every fetch
-by name, and whether the name is intended is reconcile's call) go with
-the rest of provisioning; `ExtraLiteLLM` goes with LiteLLMDeployment;
+was the join running inside a source) went with the rest of provisioning
+(step 4: the record keeps every fetch by name, and `Fleet.unintended`
+makes the split); `ExtraLiteLLM` goes with LiteLLMDeployment;
 `Discovered`'s finding string becomes a VllmProbe rendered; the
 `Unintended` join becomes the grouping reconcile does. The fleet-key
 host claim narrows by the same join: a fetch whose name no Rental has
@@ -912,7 +913,22 @@ fact has two homes. Then `deployment.py` against six known shapes.
    renders from `provisioning.py`; the approvals stay on `Fleet`).
 4. The rest of provisioning: the naming rule, the key check and the
    payload over IntendedDeployment; the route in `api.py` thins to a
-   few lines; `ProvisioningRecord` is built in `main.py`.
+   few lines; `ProvisioningRecord` is built in `main.py`. **Done**
+   2026-10-29: `rental_name` (the claimed name as given, never
+   normalized; else the forwarded or peer address), `fetch_refusal`
+   (`fleet.key` is now checked at startup by `validate_fleet`, so the
+   503 is gone) and `HOST_HEADER` live in `provisioning.py`; the record
+   keeps one `ConfigFetch` (first, last, count) per name, intended or
+   not, under one cap, and `UnknownFetch` is gone; `main.py` builds the
+   record as `app.provisioning` and hands it to the route and the
+   `Fleet`; the route notes every fetch and decides nothing;
+   `Fleet.read_config_fetches` copies the loading start onto the
+   servers at the top of each probe pass, and `Fleet.unintended` makes
+   the stranger split against `intended_names`. The approval
+   bookkeeping the old handler did (dropping an approval when its host
+   "joins config", or when a stranger was evicted) is gone: config does
+   not change at runtime, and an approval makes a name intended whatever
+   the record holds.
 5. LiteLLMHealth.
 6. LiteLLMDeployment.
 7. VllmProbe (with `vllm_client.py`).

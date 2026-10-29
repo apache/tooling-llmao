@@ -47,6 +47,7 @@ def _with_providers(providers):
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
+                "key": "test-fleet-key",
                 "vllm_api_salt": "test-vllm-salt",
                 **FLEET_KNOBS,
             },

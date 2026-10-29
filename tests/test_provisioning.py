@@ -23,10 +23,10 @@ import pathlib
 import asfquart
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import HOST_HEADER, Fleet
+from llmao.fleet import Fleet
 from llmao.intent import HOSTS, vllm_intent
 from llmao.models import load_models
-from llmao.provisioning import config_for_host, server_json
+from llmao.provisioning import HOST_HEADER, config_for_host, server_json
 from tests.test_fleet import EXAMPLE, _cfg
 from tests.test_intent import _by_name
 
@@ -52,6 +52,7 @@ def test_the_config_route_serves_members_and_approved_hosts_and_404s_a_stranger(
     monkeypatch.setattr(app, "cfg", cfg)
     monkeypatch.setattr(app, "models", models, raising=False)
     monkeypatch.setattr(app, "fleet", fleet, raising=False)
+    monkeypatch.setattr(app, "provisioning", fleet.provisioning, raising=False)
     client = app.test_client()
 
     async def fetch(host, key="test-fleet-key"):
@@ -61,7 +62,7 @@ def test_the_config_route_serves_members_and_approved_hosts_and_404s_a_stranger(
     status, body = asyncio.run(fetch("10.0.0.1"))
     assert status == 200
     assert [(s["name"], s["port"]) for s in body["servers"]] == [("gemma4-26b", 8001)]
-    assert fleet.provisioning.fetches["10.0.0.1"].at > 0
+    assert fleet.provisioning.fetches["10.0.0.1"].count == 1
 
     status, body = asyncio.run(fetch("198.51.100.8"))
     assert status == 200
@@ -69,7 +70,7 @@ def test_the_config_route_serves_members_and_approved_hosts_and_404s_a_stranger(
 
     status, body = asyncio.run(fetch("192.0.2.9"))
     assert status == 404
-    assert "192.0.2.9" in fleet.provisioning.unknown
+    assert [u.name for u in fleet.unintended()] == ["192.0.2.9"]
 
     status, _ = asyncio.run(fetch("10.0.0.1", key="wrong"))
     assert status == 403
@@ -97,9 +98,9 @@ def test_server_json_is_the_listen_port_and_only_the_declared_requirements():
     assert "max_model_len" not in body and "vram_gb" not in body
 
 
-def test_config_for_host_renders_every_row_and_normalizes_the_host():
+def test_config_for_host_renders_every_row():
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003, "box-q"], ["gemma4-26b", 8001]]})
-    payload = config_for_host("::ffff:10.0.0.1", models=list(_by_name().values()), cfg=cfg)
+    payload = config_for_host("10.0.0.1", models=list(_by_name().values()), cfg=cfg)
     assert payload.host == "10.0.0.1"
     assert [(s.name, s.port) for s in payload.servers] == [("box-q", 8003), ("gemma4-26b", 8001)]
     assert payload.servers[0].model == "Qwen/Qwen3-8B-FP8"

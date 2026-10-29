@@ -49,6 +49,7 @@ from llmao.fleet import (
     ORPHAN_PASSES,
     add_refusal,
     extra_refusal,
+    fetch_detail,
     normalize_peer_ip,
     remove_refusal,
     snapshot_for_status,
@@ -812,7 +813,7 @@ def _unintended_detail(fleet, machine) -> str:
     if rental is not None:
         parts.append(f"{rental.provider} · {rental.label} ({rental.id}) — {machine.finding}")
     if machine.fetch is not None:
-        asked = fleet.unknown_fetch_detail(machine.name)
+        asked = fetch_detail(machine.fetch)
         parts.append(f"fleet key presented, {asked}" if rental is not None else asked)
     return "; ".join(parts)
 
