@@ -181,7 +181,8 @@ the retired models-dashboard design, whose two passes shipped as
     bound.
   - Never an Awaiting, Loading or Stalled deployment. A box's pre-states
     must not make a working model look broken.
-- **What admins see** in addition: the attention strip (unknown boxes,
+- **What admins see** in addition: the attention strip (machines nobody
+  intends, whether they asked for a config or a provider reports them;
   Stalled, Unhealthy, Rejected, Foreign, unlisted, skew), a replica summary
   per model, and the deployments drill-down with one primary action and a
   menu. An approved host's rows say so; the approval is never counted.

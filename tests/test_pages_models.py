@@ -204,12 +204,12 @@ def test_attention_items_lists_only_actionable_items():
     items = pages.attention_items(fleet)
     kinds = [i.kind for i in items]
     # One item per deployment. Skew text is on that item, not a second row.
-    assert "unknown" in kinds
+    assert "unintended" in kinds
     assert "unhealthy" in kinds
     assert "healthy" not in kinds
     unhealthy = next(i for i in items if i.kind == "unhealthy")
     assert "vLLM up, LiteLLM down" in unhealthy.detail
-    unknown = next(i for i in items if i.kind == "unknown")
+    unknown = next(i for i in items if i.kind == "unintended")
     assert "192.0.2.7" in unknown.what
     # The strip renders in the template.
     out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)[0]], attention=items)
@@ -437,7 +437,8 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Stop tracking"]
 
 
-def test_the_strip_shows_a_rental_nobody_intends_with_approve_by_name():
+def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
+    """A rental and a stranger's fetch under one name are one machine: one item, one Approve."""
     from llmao.fleet import Discovered
 
     pages = _app()
@@ -466,13 +467,15 @@ def test_the_strip_shows_a_rental_nobody_intends_with_approve_by_name():
         "1": Discovered(vast, "8001: serving gemma with our key", time.time()),
         "pod-1": Discovered(pod, "nothing listening", time.time()),
     }
+    # The pod also asked for its config: the same machine, seen by the box protocol too.
+    fleet.provisioning.unknown["pod-1"] = UnknownFetch("pod-1", time.time() - 100, time.time() - 5, 3)
     items = pages.attention_items(fleet)
     assert [i.what for i in items] == [
-        "1 · rented, nobody intends it",
         "pod-1 · rented, nobody intends it",
+        "1 · rented, nobody intends it",
     ]
-    assert items[0].detail == "Vast · 1x RTX 4090 (1) — 8001: serving gemma with our key"
-    assert items[1].detail == "RunPod · llmao-q (pod-1) — nothing listening"
+    assert items[0].detail == "RunPod · llmao-q (pod-1) — nothing listening; fleet key presented, seen 5s · 3 requests"
+    assert items[1].detail == "Vast · 1x RTX 4090 (1) — 8001: serving gemma with our key"
     # Approve is by the name the box sends: the provider's id for the machine.
     assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)

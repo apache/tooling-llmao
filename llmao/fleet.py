@@ -64,7 +64,7 @@ from llmao.model_status import (
     self_hosted_lifecycle,
 )
 from llmao.models import VllmRecipe, validate_models, warn_deprecated
-from llmao.provisioning import ProvisioningRecord
+from llmao.provisioning import ProvisioningRecord, UnknownFetch
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
@@ -732,6 +732,23 @@ class Discovered:
         return self.rental.name
 
 
+@dataclass(frozen=True)
+class Unintended:
+    """A machine nobody intends, by the name its box sends, joined from two sources.
+
+    ``rental`` is what its provider reports about it (None when no provider
+    reports a machine of that name), with ``finding`` what a probe found on
+    it; ``fetch`` is its ask for a config with the fleet key (None when it
+    has not asked). A machine seen from both sides is one record, with one
+    Approve. Fleet.unintended builds these; nothing stores them.
+    """
+
+    name: str
+    rental: Rental | None
+    finding: str
+    fetch: UnknownFetch | None
+
+
 class Fleet:
     """Live fleet: vLLM servers, intended deployments, lifecycle probes."""
 
@@ -907,6 +924,19 @@ class Fleet:
         self.provisioning.unknown.pop(host, None)
         self._materialize_approved(host)
         return approval
+
+    def unintended(self) -> list[Unintended]:
+        """Every machine nobody intends, one record per name: discovered rentals and stranger fetches, joined.
+
+        A name both sources know is one record. The ones that asked for
+        their config come first, latest ask first; then the rest by name.
+        """
+        out = []
+        for name in set(self.discovered) | set(self.provisioning.unknown):
+            found = self.discovered.get(name)
+            fetch = self.provisioning.unknown.get(name)
+            out.append(Unintended(name, found and found.rental, (found and found.finding) or "", fetch))
+        return sorted(out, key=lambda u: (u.fetch is None, -((u.fetch and u.fetch.last_seen) or 0.0), u.name))
 
     def note_unknown_config_fetch(self, host: str, *, now: float | None = None) -> None:
         """Remember a fleet-key config fetch for an IP that is not in fleet.hosts.

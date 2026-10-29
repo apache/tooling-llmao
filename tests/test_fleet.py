@@ -261,6 +261,29 @@ def test_a_rental_nobody_intends_is_discovered_not_added():
     assert _discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["1"].finding == "no vLLM port published"
 
 
+def test_a_machine_seen_by_both_sources_is_one_unintended_record():
+    """Discovery and the box protocol each know a name; the join is one record with both, asks first."""
+    cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
+    fleet = _approvable(cfg, load_models(EXAMPLE))
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    _discover(fleet, dead, vast=[_rental(id="1"), _rental(host="198.51.100.9", id="2")])
+    fleet.note_unknown_config_fetch("2", now=50.0)
+    fleet.note_unknown_config_fetch("stranger", now=40.0)
+    records = fleet.unintended()
+    assert [(r.name, r.rental and r.rental.id, r.finding, r.fetch and r.fetch.count) for r in records] == [
+        ("2", "2", "nothing listening", 1),
+        ("stranger", None, "", 1),
+        ("1", "1", "nothing listening", None),
+    ]
+    # Approving the name settles both sides at once.
+    fleet.approve_models("2", ["qwen3-8b"])
+    _discover(fleet, dead, vast=[_rental(id="1"), _rental(host="198.51.100.9", id="2")])
+    assert [r.name for r in fleet.unintended()] == ["stranger", "1"]
+
+
 def test_intended_hosts_are_not_discovered():
     """A fleet.hosts member, an approved host, or any host with a server is intended already."""
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})

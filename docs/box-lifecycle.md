@@ -174,10 +174,11 @@ they are there. An approval never changes a computed state.
 Approvals are process memory, lost on restart, and so is the record of
 the unknown box that asked. A box asks for its config once: on a 404 the
 installer exits and the box sits idle, so after a restart there is
-nothing in the strip to re-approve, and the box is invisible until the
-Vast or RunPod inventory shows it as a rental nobody intends (the
-reconcile work's job; `fleet-reconcile-design.md`). Until then the way
-back is by hand: reboot the box so it asks again. Membership in
+nothing in the strip to re-approve, and the box is invisible until its
+provider's rentals name it, when the strip shows it as a rental nobody
+intends. A box its provider reports that has also asked is one strip
+item, not two. Until a provider names it the way back is by hand:
+reboot the box so it asks again. Membership in
 `fleet.hosts` is the durable gate, so a recycled address gains nothing
 from a stale approval. There are no other admin marks on a host: a box
 that failed to provision is rebooted by hand and shows itself the moment

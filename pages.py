@@ -726,37 +726,19 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> 
 
 def attention_items(fleet) -> list:
     """The admin strip: only actionable items, in the order they were listed
-    in the design (unknown boxes, Stalled, Unhealthy, true skew)."""
+    in the design (machines nobody intends, Stalled, Unhealthy, true skew)."""
     items: list[edict] = []
-    for host, _seen in sorted(
-        fleet.provisioning.unknown.items(),
-        key=lambda item: item[1].last_seen,
-        reverse=True,
-    ):
+    for machine in fleet.unintended():
         items.append(
             edict(
-                kind="unknown",
-                what=f"Fleet key presented from {host} (not in fleet.hosts)",
+                kind="unintended",
+                what=_unintended_what(machine),
                 ident="",
                 anchor="",
                 rest="",
-                detail=fleet.unknown_fetch_detail(host),
+                detail=_unintended_detail(fleet, machine),
                 flag="",
-                actions=admin_actions(fleet, host=host, approve=True),
-            )
-        )
-    for name, found in sorted(fleet.discovered.items()):
-        rental = found.rental
-        items.append(
-            edict(
-                kind="discovered",
-                what=f"{name} · rented, nobody intends it",
-                ident="",
-                anchor="",
-                rest="",
-                detail=f"{rental.provider} · {rental.label} ({rental.id}) — {found.finding}",
-                flag="",
-                actions=admin_actions(fleet, host=name, approve=True),
+                actions=admin_actions(fleet, host=machine.name, approve=True),
             )
         )
     cfg = fleet.cfg.fleet
@@ -814,6 +796,25 @@ def attention_items(fleet) -> list:
             )
         )
     return items
+
+
+def _unintended_what(machine) -> str:
+    """One machine nobody intends: a rental when a provider reports it, else the stranger that asked."""
+    if machine.rental is not None:
+        return f"{machine.name} · rented, nobody intends it"
+    return f"Fleet key presented from {machine.name} (not in fleet.hosts)"
+
+
+def _unintended_detail(fleet, machine) -> str:
+    """What each source says: the provider's row and the probe's finding; the asks, when it asked."""
+    parts = []
+    rental = machine.rental
+    if rental is not None:
+        parts.append(f"{rental.provider} · {rental.label} ({rental.id}) — {machine.finding}")
+    if machine.fetch is not None:
+        asked = fleet.unknown_fetch_detail(machine.name)
+        parts.append(f"fleet key presented, {asked}" if rental is not None else asked)
+    return "; ".join(parts)
 
 
 def _orphan_detail(extra) -> str:

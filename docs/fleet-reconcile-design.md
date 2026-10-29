@@ -700,7 +700,14 @@ Also:
   approved, still not a LiteLLM row. The fetch is the box's one ask: on
   a 404 the installer exits and the box idles, so the unknown record and
   any approval die with a restart and the box is invisible until a
-  listing names it. **A rental nobody intends** (an inventory host with
+  provider's rentals name it. A machine both sources know, a Rental
+  nobody intends whose box also asked, is one strip item with one
+  Approve: `Fleet.unintended` joins the discovered record and the
+  stranger record by name (Early work item 14). The records nothing
+  intends are one family, each from its source: the stranger's fetch
+  (box protocol), the discovered Rental (the provider's rentals and the
+  probe), the orphan (the LiteLLM deployments); and the join of the
+  first two is the unintended machine. **A rental nobody intends** (an inventory host with
   no `fleet.hosts` row, no approval, and nothing serving) is therefore
   its own attention item under reconcile, with Approve on it, so an
   idle box we pay for is seen without a second fetch. The same item
@@ -1144,3 +1151,11 @@ real gap on its own. In order:
     its address-keyed row (its bearer was minted from that) until it is
     rebuilt, when its row is re-keyed to the instance id; nothing in
     llmao needs that to happen.
+14. **One strip item per machine nobody intends.** Done 2026-10-29.
+    A box that asked for its config and is also reported by its
+    provider showed twice, under the same name, each with an Approve.
+    `Unintended` (name, the Rental or None, the finding, the stranger
+    fetch or None) is the join, built by `Fleet.unintended` on demand
+    and never stored; the strip shows it once, the asks first. The two
+    sources stay apart: the stranger record in the provisioning record,
+    the discovered record on the fleet.
