@@ -72,7 +72,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from llmao.models import VllmRecipe, load_models
+from llmao.models import VllmRecipe
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 
 _LOGGER = logging.getLogger(__name__)
@@ -352,15 +352,14 @@ def provider_intents(cfg: Any) -> list[IntendedDeployment]:
 
 def intended_deployments(
     cfg: Any,
-    models: list | None = None,
+    models: list,
     approved_models: dict[str, list[str]] | None = None,
 ) -> list[IntendedDeployment]:
     """Every IntendedDeployment: fleet.hosts rows, then approvals, then provider lines.
 
-    The one function over all three origins. Requires validate_fleet()
-    already ran on cfg.
+    The one function over all three origins. ``models`` is the list loaded
+    at startup. Requires validate_fleet() already ran on cfg.
     """
-    models = models or load_models(cfg=cfg)
     by_name = {str(model.model_name): model for model in models}
     out = []
     members = set()

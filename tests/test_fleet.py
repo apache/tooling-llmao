@@ -35,7 +35,7 @@ from llmao.fleet import (
 )
 from llmao.intent import Approval, UnknownHostError, derive_vllm_api_key, vllm_api_key
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
-from llmao.models import load_models, vllm_recipe
+from llmao.models import VllmRecipe, load_models
 from llmao.provisioning import config_for_host
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
@@ -607,7 +607,7 @@ def test_a_box_serves_the_name_litellm_asks_for():
     """
     models = load_models(EXAMPLE)
     hosts = {}
-    for i, model in enumerate(m for m in models if vllm_recipe(m) is not None):
+    for i, model in enumerate(m for m in models if VllmRecipe.from_model(m) is not None):
         hosts[f"10.0.0.{i + 1}"] = [[model.model_name, 8001]]
     cfg = _cfg(hosts)
     validate_fleet(cfg, models=models)

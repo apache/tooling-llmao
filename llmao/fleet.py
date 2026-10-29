@@ -64,7 +64,7 @@ from llmao.model_status import (
     model_status,
     self_hosted_lifecycle,
 )
-from llmao.models import load_models, validate_models, vllm_recipe, warn_deprecated
+from llmao.models import VllmRecipe, validate_models, warn_deprecated
 from llmao.provisioning import ProvisioningRecord
 from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
@@ -188,8 +188,8 @@ def _require_listen_port(host: str, port: int) -> None:
     raise ValueError(f"{host}: listen port {port} is not one of {allowed}")
 
 
-def validate_fleet(cfg: Any, models: list | None = None) -> None:
-    """Fail-fast if fleet.hosts or models.yaml cannot be joined. Call at startup."""
+def validate_fleet(cfg: Any, *, models: list) -> None:
+    """Fail-fast if fleet.hosts or models.yaml cannot be joined. Call at startup, with the loaded models."""
     if "fleet" not in cfg:
         raise ValueError("config.yaml: missing fleet")
     if "hosts" not in cfg.fleet:
@@ -213,7 +213,6 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
     salt = cfg.fleet.get("vllm_api_salt")
     if not isinstance(salt, str) or not salt.strip() or salt.strip().startswith("CHANGE_ME"):
         raise ValueError("config.yaml: fleet.vllm_api_salt is missing or CHANGE_ME")
-    models = models or load_models(cfg=cfg)
     validate_models(models)
     warn_deprecated(models)
     validate_providers(cfg, models)
@@ -235,7 +234,7 @@ def validate_fleet(cfg: Any, models: list | None = None) -> None:
             _require_listen_port(host, port)
             if model_name not in known:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: unknown model {model_name!r}")
-            if vllm_recipe(by_name[model_name]) is None:
+            if VllmRecipe.from_model(by_name[model_name]) is None:
                 raise ValueError(f"fleet.hosts.{host}[{i}]: {model_name} has no vLLM recipe")
             if label in seen_names:
                 raise ValueError(f"fleet.hosts.{host}: duplicate name {label!r}")
@@ -735,10 +734,10 @@ class Fleet:
         self.runpod_rentals: ProviderRentals | None = None
 
     @classmethod
-    def from_cfg(cls, cfg: Any, models: list | None = None) -> Fleet:
+    def from_cfg(cls, cfg: Any, models: list) -> Fleet:
         """The fleet config intends: one server and one deployment per intended vLLM process,
-        one deployment per provider line. Requires validate_fleet() already ran on cfg."""
-        models = models or load_models(cfg=cfg)
+        one deployment per provider line. ``models`` is the list loaded at startup; the fleet
+        keeps it, and nothing reads models.yaml again. Requires validate_fleet() already ran on cfg."""
         by_name = {model.model_name: model for model in models}
         local = not gpu_host_api_key(cfg, "vast")
         servers: list[VllmServer] = []
@@ -784,11 +783,6 @@ class Fleet:
                 srv.config_served_at = fetch.at
         self.provisioning.unknown.pop(normalize_peer_ip(host), None)
 
-    def _models_by_name(self) -> dict[str, Any]:
-        if self.models:
-            return self.models
-        return {m.model_name: m for m in load_models(cfg=self.cfg)}
-
     def _materialize_approved(self, host: str) -> None:
         """Servers and deployments for an approved IP that config.yaml does not list.
 
@@ -803,7 +797,7 @@ class Fleet:
         if host in members:
             return
         have = {s.listen_port for s in self.servers if s.host == host}
-        for intended in host_intents(self.cfg, self._models_by_name(), host, approved=list(approval.models)):
+        for intended in host_intents(self.cfg, self.models, host, approved=list(approval.models)):
             if intended.listen_port not in have:
                 self._add_server(intended)
 
@@ -861,12 +855,11 @@ class Fleet:
             raise ValueError("Select at least one model")
         if len(chosen) > len(VLLM_LISTEN_PORTS):
             raise ValueError(f"{host}: at most {len(VLLM_LISTEN_PORTS)} servers")
-        by_name = self.models or {m.model_name: m for m in load_models(cfg=self.cfg)}
         for name in chosen:
-            model = by_name.get(name)
+            model = self.models.get(name)
             if model is None:
                 raise ValueError(f"Unknown model: {name}")
-            if vllm_recipe(model) is None:
+            if VllmRecipe.from_model(model) is None:
                 raise ValueError(f"{name} has no vLLM recipe, so a box cannot load it")
         approval = self.approvals[host] = Approval(host, tuple(chosen), now or time.time())
         self.provisioning.unknown.pop(host, None)
@@ -1195,7 +1188,7 @@ class Fleet:
                 break
         if not hf_id:
             return None
-        for model in self._models_by_name().values():
+        for model in self.models.values():
             vllm = getattr(model.model_info, "vllm", None)
             if vllm is not None and str(getattr(vllm, "model", "")) == hf_id:
                 return model

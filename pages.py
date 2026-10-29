@@ -72,7 +72,7 @@ from llmao.model_status import (
     UNKNOWN,
     deployment_status,
 )
-from llmao.models import load_models, model_available_for, model_in_service, ux_models, vllm_recipe
+from llmao.models import VllmRecipe, model_available_for, model_in_service, ux_models
 from llmao.proxy.client import (
     PRETEND_PROJECTS,
     TIER_FREE,
@@ -902,19 +902,19 @@ async def models_page(result):
     """Gateway model inventory (public fields; supply path for site admins)."""
     admin = bool(result.is_site_admin)
     result.reveal_supply = admin
-    catalog = ux_models(cfg=APP.cfg, reveal_supply=admin)
+    catalog = ux_models(list(APP.fleet.models.values()), reveal_supply=admin)
     result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
     result.attention = attention_items(APP.fleet) if admin else []
-    result.approve_choices = _approve_choices(APP.cfg) if admin else []
+    result.approve_choices = _approve_choices(APP.fleet) if admin else []
     return result
 
 
-def _approve_choices(cfg) -> list:
-    """Self-hosted models an unknown box can be told to load."""
+def _approve_choices(fleet) -> list:
+    """Self-hosted models an unknown box can be told to load, from the models loaded at startup."""
     choices = []
-    for model in load_models(cfg=cfg):
+    for model in fleet.models.values():
         info = model.model_info
-        if vllm_recipe(model) is None:
+        if VllmRecipe.from_model(model) is None:
             continue
         choices.append(
             edict(model_name=str(model.model_name), display_name=str(info.get("display_name") or model.model_name))

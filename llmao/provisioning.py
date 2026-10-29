@@ -45,7 +45,6 @@ from typing import Any
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.intent import IntendedDeployment, host_intents
-from llmao.models import load_models
 from llmao.reconcile import normalize_peer_ip
 
 # How many unknown hosts are remembered. A scan of the fleet key's port
@@ -82,16 +81,16 @@ def server_json(intended: IntendedDeployment) -> edict:
 def config_for_host(
     host: str,
     *,
-    models: list | None = None,
-    cfg: Any = None,
+    models: list,
+    cfg: Any,
     approved: list[str] | None = None,
 ) -> edict:
     """The payload for one host: its IntendedDeployments as servers JSON.
 
-    Raises intent.UnknownHostError when the host has neither rows nor an
-    approval. Requires validate_fleet() already ran on cfg.
+    ``models`` is the list loaded at startup. Raises intent.UnknownHostError
+    when the host has neither rows nor an approval. Requires
+    validate_fleet() already ran on cfg.
     """
-    models = models or load_models(cfg=cfg)
     by_name = {str(model.model_name): model for model in models}
     servers = [server_json(i) for i in host_intents(cfg, by_name, host, approved=approved)]
     return edict(host=normalize_peer_ip(host), servers=servers)

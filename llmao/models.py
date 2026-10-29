@@ -62,12 +62,6 @@ def load_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[di
     return data.models
 
 
-def vllm_recipe(model: Any) -> Any:
-    """How to run this model on one of our own boxes, or None if it says nothing."""
-    info = model.get("model_info") if hasattr(model, "get") else None
-    return (info.get("vllm") if hasattr(info, "get") else None) or None
-
-
 @dataclass(frozen=True)
 class VllmRecipe:
     """How to run a model on one of our boxes: the parsed ``model_info.vllm`` block.
@@ -94,9 +88,13 @@ class VllmRecipe:
 
     @classmethod
     def from_model(cls, model: Any) -> VllmRecipe | None:
-        """The recipe of one models.yaml row, or None when it has none."""
-        vllm = vllm_recipe(model)
-        if vllm is None:
+        """The recipe of one models.yaml row, or None when it has none.
+
+        Parses the ``model_info.vllm`` block of a row ``validate_models``
+        has passed; the one reader of that block after validation.
+        """
+        vllm = model.model_info.get("vllm")
+        if not vllm:
             return None
         args = vllm.get("args") or []
         if isinstance(args, str):
@@ -166,20 +164,21 @@ def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -
         seen.add(name)
         if "model_info" not in model:
             raise ValueError(f"{name}: model_info is required")
-        recipe = vllm_recipe(model)
-        if recipe is None:
+        # The raw block: VllmRecipe.from_model parses it only once this has passed.
+        recipe = model.model_info.get("vllm")
+        if not recipe:
             continue
-        if "model" not in recipe or not recipe.model:
+        if not hasattr(recipe, "get") or not recipe.get("model"):
             raise ValueError(f"{name}: model_info.vllm.model is required")
         # The template for registering one of our boxes: hosted_vllm/<name>.
         if not (model.get("litellm_params") or {}).get("model"):
             raise ValueError(f"{name}: litellm_params.model is required to serve it from our boxes")
 
 
-def public_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[dict[str, Any]]:
+def public_models(models: list) -> list[dict[str, Any]]:
     """Models for UX: model_name + model_info (no litellm_params / secrets)."""
     out = []
-    for entry in load_models(path, cfg=cfg):
+    for entry in models:
         name = entry.get("model_name")
         info = dict(entry.get("model_info") or {})
         # Never surface api credentials or api_base on the Models page.
@@ -222,22 +221,19 @@ def model_in_service(health: str) -> bool:
     return health in ("available", "degraded")
 
 
-def ux_models(
-    path: pathlib.Path | None = None,
-    *,
-    cfg: Any = None,
-    reveal_supply: bool = False,
-) -> list[edict]:
+def ux_models(models: list, *, reveal_supply: bool = False) -> list[edict]:
     """Shape rows for the Models page (table + detail modal).
 
-    When ``reveal_supply`` is False (normal committers), omit fields that
-    describe procurement, weight paths, or commercial partnerships.
+    ``models`` is the list loaded at startup (``load_models``); the page
+    does not read models.yaml again. When ``reveal_supply`` is False
+    (normal committers), omit fields that describe procurement, weight
+    paths, or commercial partnerships.
 
     Free-text is collapsed to one line for HTML data-* attributes (EZT
     HTML-escapes quotes; embedded newlines still break attributes).
     """
     rows = []
-    for m in public_models(path, cfg=cfg):
+    for m in public_models(models):
         if not reveal_supply:
             m = {k: v for k, v in m.items() if k not in _SUPPLY_PATH_KEYS}
         name = _oneline(m.get("model_name"))

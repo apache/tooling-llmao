@@ -28,6 +28,7 @@ from easydict import EasyDict as edict  # noqa: N813
 from litellm.types.router import Deployment
 
 from llmao.models import (
+    VllmRecipe,
     load_models,
     model_available_for,
     model_in_service,
@@ -35,7 +36,6 @@ from llmao.models import (
     public_models,
     ux_models,
     validate_models,
-    vllm_recipe,
     warn_deprecated,
 )
 
@@ -50,7 +50,7 @@ def test_models_yaml_loads_for_ux():
     assert models[0].model_info.vllm.model
     assert "gemma4-26b" in names
     assert "qwen3-8b" in names
-    pub = public_models(EXAMPLE)
+    pub = public_models(models)
     for p in pub:
         assert "model_name" in p
         assert "api_key" not in p
@@ -74,8 +74,9 @@ def test_models_path_from_cfg():
 
 
 def test_ux_models_redacts_supply_path_for_non_admins():
-    redacted = ux_models(EXAMPLE, reveal_supply=False)
-    full = ux_models(EXAMPLE, reveal_supply=True)
+    models = load_models(EXAMPLE)
+    redacted = ux_models(models, reveal_supply=False)
+    full = ux_models(models, reveal_supply=True)
     assert len(redacted) >= 2
     assert len(full) == len(redacted)
     for r in redacted:
@@ -95,11 +96,11 @@ def test_a_model_need_not_say_where_it_is_served():
     """Who serves a model is each deployment's, so a model may carry no recipe."""
     row = edict({"model_name": "grok-4", "model_info": {"license": "proprietary"}})
     validate_models([row])
-    assert vllm_recipe(row) is None
+    assert VllmRecipe.from_model(row) is None
 
     ours = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
     validate_models([ours])
-    assert vllm_recipe(ours).model
+    assert VllmRecipe.from_model(ours).hf_model
 
 
 def test_a_recipe_needs_the_template_for_our_boxes():
