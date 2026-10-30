@@ -72,7 +72,7 @@ from llmao.reconcile import DeploymentKey, deployment_key, norm_base, normalize_
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
 from llmao.vast_client import fetch_instances, rentals_from_body
-from llmao.vllm_client import fetch_health, fetch_served_models
+from llmao.vllm_client import VllmProbe, fetch_health, fetch_served_models, probe
 
 if TYPE_CHECKING:
     from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments, LiteLLMHealth, LiteLLMHealthReport
@@ -317,6 +317,13 @@ class VllmServer:
         # Consecutive listings that have omitted this host. Reset by any
         # sighting, so a host that flaps never reaches the threshold.
         self.unlisted_passes = 0
+        # The last probe of this server (llmao/vllm_client.py), None until
+        # the first. What it found is read off it (last_probe_ok, reached,
+        # last_error, vllm_probed_at); the roll-up re-runs the lifecycle at
+        # the current time from it and the history below.
+        self.probe: VllmProbe | None = None
+        # History, kept across probes by record_probe. The served window
+        # from the last /v1/models answer that carried one, and when.
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
         # Named by model_status. Awaiting contact until the box fetches its
@@ -324,22 +331,16 @@ class VllmServer:
         self.state = AWAITING
         self.config_served_at: float | None = None
         self.last_ok = None
-        self.last_error = None
         self.fails = 0
-        # The last probe's observation, kept so the roll-up can re-run the
-        # lifecycle at the current time without reconstructing counters from
-        # the state name. None until the first probe.
-        self.last_probe_ok: bool | None = None
-        self.vllm_probed_at: float | None = None
-        self.reached: bool | None = None
         # The first probe attempt in this process: the grace clock for a server
         # with no loading start that never answers (see self_hosted_lifecycle).
         self.first_probed_at: float | None = None
         # The first probe in this process that vLLM answered (a 503 counts):
         # the other loading start, beside config_served_at.
         self.first_reached_at: float | None = None
-        # The last /v1/models answer with the working key (True: 401) and how
-        # many passes running it has been refused. Rejected and Foreign.
+        # The last /v1/models verdict on the working key (True: 401), standing
+        # until a probe asks again, and how many passes running it has been
+        # refused. Rejected and Foreign.
         self.key_rejected: bool | None = None
         self.rejected_passes = 0
 
@@ -364,6 +365,25 @@ class VllmServer:
             served_name=recipe.served_name,
             kv_bytes_per_token=recipe.kv_bytes_per_token,
         )
+
+    @property
+    def last_probe_ok(self) -> bool | None:
+        """Whether the last probe's /health gave a 200; None until the first probe."""
+        return self.probe and self.probe.ok
+
+    @property
+    def reached(self) -> bool | None:
+        """Whether the last probe got any answer from vLLM's HTTP server (a 503 counts); None until the first probe."""
+        return self.probe and self.probe.reached
+
+    @property
+    def last_error(self) -> str | None:
+        """Why the last probe was not ok; None when it was, or before the first probe."""
+        return self.probe and self.probe.error
+
+    @property
+    def vllm_probed_at(self) -> float | None:
+        return self.probe and self.probe.at
 
     @property
     def last_ok_display(self) -> str:
@@ -431,59 +451,47 @@ class VllmServer:
             return False
         return served > self.kv_cache_tokens
 
-    def record_probe(
-        self,
-        ok: bool,
-        *,
-        now: float,
-        grace_s: float,
-        fail_threshold: int,
-        err: str | None = None,
-        reached: bool | None = None,
-        in_litellm: bool = False,
-        key_rejected: bool | None = None,
-    ) -> None:
-        """One probe pass.
+    def record_probe(self, found: VllmProbe, *, grace_s: float, fail_threshold: int, in_litellm: bool = False) -> None:
+        """One probe pass: keep the probe, step the history, name the state.
 
-        ``ok`` is a 200 from /health: vLLM says it is up. Not "all is well":
-        /health takes no key, so a box that refuses ours is ``ok`` and
-        Rejected. ``key_rejected`` is /v1/models' verdict on the working key
-        this pass, when it was asked; None leaves the last verdict standing.
+        ``found.ok`` is a 200 from /health: vLLM says it is up. Not "all is
+        well": /health takes no key, so a box that refuses ours is ok and
+        Rejected. The /v1/models verdict and window are history: a probe
+        that did not ask leaves the last ones standing.
         """
         was = self.state
-        if ok:
+        now = found.at
+        self.probe = found
+        if found.ok:
             self.last_ok = now
-            self.last_error = None
             self.fails = 0
         else:
             self.fails += 1
-            self.last_error = err or "unhealthy"
-        self.last_probe_ok = ok
-        self.vllm_probed_at = now
         if self.first_probed_at is None:
             self.first_probed_at = now
-        if reached is not None:
-            self.reached = reached
-        if reached and self.first_reached_at is None:
+        if found.reached and self.first_reached_at is None:
             self.first_reached_at = now
-        if key_rejected is not None:
-            self.key_rejected = key_rejected
-        if ok and self.key_rejected:
+        if found.key_rejected is not None:
+            self.key_rejected = found.key_rejected
+        if found.max_model_len is not None:
+            self.observed_max_model_len = found.max_model_len
+            self.observed_at = now
+        if found.ok and self.key_rejected:
             self.rejected_passes += 1
         else:
             self.rejected_passes = 0
-        # The counters above are the observation. The name comes from one place.
+        # The probe and the history above are the observation. The name comes from one place.
         cfg = edict(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
         snap = DeploymentSnapshot(
             model_name=self.model_name,
             self_hosted=True,
-            probe_ok=ok,
+            probe_ok=found.ok,
             fails=self.fails,
             last_ok=self.last_ok,
             vllm_probed_at=now,
             in_litellm=in_litellm,
             config_served_at=self.config_served_at,
-            reached=self.reached,
+            reached=found.reached,
             first_probed_at=self.first_probed_at,
             first_reached_at=self.first_reached_at,
             key_rejected=self.key_rejected,
@@ -986,24 +994,16 @@ class Fleet:
         try:
             in_litellm_by_srv = {dep.vllm: dep.in_litellm for dep in self.deployments if dep.vllm is not None}
             for srv in self.servers:
-                url = srv.health_url
-                if url is None:
+                in_litellm = bool(in_litellm_by_srv.get(srv, False))
+                root = srv.root_url
+                if root is None:
                     # No public port: nothing to probe. Leave the state alone.
                     # An unlisted host has no port because it has no instance,
-                    # which place_servers has already said once. Nothing to
-                    # dial is the strongest form of not reached, so it still
-                    # counts as an attempt: the grace clock runs, and the host
-                    # reads Stalled once it is out, as a dead rental should.
+                    # which place_servers has already said once; its probe is
+                    # the attempt that reached nothing (VllmProbe.no_address).
                     if srv.unlisted:
-                        srv.record_probe(
-                            False,
-                            now=stamp,
-                            grace_s=grace,
-                            fail_threshold=threshold,
-                            err="no address to dial",
-                            reached=False,
-                            in_litellm=bool(in_litellm_by_srv.get(srv, False)),
-                        )
+                        nothing = VllmProbe.no_address(stamp)
+                        srv.record_probe(nothing, grace_s=grace, fail_threshold=threshold, in_litellm=in_litellm)
                         continue
                     _LOGGER.warning(
                         "fleet: no health url for %s@%s listen %s",
@@ -1012,36 +1012,16 @@ class Fleet:
                         srv.listen_port,
                     )
                     continue
-                was = srv.state
-                ok, reached, err = await fetch_health(client, url)
-                # /v1/models with the working key, when /health passed: the
+                # /v1/models with the working key, when /health passes: the
                 # served window on the edge into Healthy, and again if an
                 # earlier read came back empty (it is fixed at engine init,
                 # so every probe would be waste); and on every pass while the
                 # key was refused, so Rejected ends the pass the key is
                 # fixed, or while no listing names the host, so a reassigned
                 # address is caught. The KV cache size comes from the sampler.
-                key_rejected = None
-                ask = was != HEALTHY or srv.observed_max_model_len is None or srv.key_rejected or srv.unlisted
-                if ok and ask:
-                    served = await fetch_served_models(client, srv.root_url, srv.api_key)
-                    if served.status == 401:
-                        key_rejected = True
-                    elif served.status == 200:
-                        key_rejected = False
-                        if served.max_model_len is not None:
-                            srv.observed_max_model_len = served.max_model_len
-                            srv.observed_at = stamp
-                srv.record_probe(
-                    ok,
-                    now=stamp,
-                    grace_s=grace,
-                    fail_threshold=threshold,
-                    err=err,
-                    reached=reached,
-                    in_litellm=bool(in_litellm_by_srv.get(srv, False)),
-                    key_rejected=key_rejected,
-                )
+                ask = srv.state != HEALTHY or srv.observed_max_model_len is None or srv.key_rejected or srv.unlisted
+                found = await probe(client, root, srv.api_key, ask_models=bool(ask), now=stamp)
+                srv.record_probe(found, grace_s=grace, fail_threshold=threshold, in_litellm=in_litellm)
         finally:
             if own:
                 await client.aclose()
@@ -1270,9 +1250,9 @@ class Fleet:
 def snapshot_for_status(dep) -> DeploymentSnapshot:
     """The last stored observations for this deployment, as the one record model_status reads.
 
-    record_probe keeps the counters (last_probe_ok, fails, last_ok,
-    vllm_probed_at) and config_served_at on the server, and the two LiteLLM
-    reads sit on the deployment, so deployment_status can re-run the same
+    record_probe keeps the last probe and the history (fails, last_ok, the
+    loading starts) on the server, and the two LiteLLM reads sit on the
+    deployment, so deployment_status can re-run the same
     lifecycle function the probe loop uses -- at the current time, so a
     Loading deployment that has since outlasted the grace window reads
     Stalled without waiting for the next probe.

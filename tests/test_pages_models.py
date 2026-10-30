@@ -51,7 +51,7 @@ from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments
 from llmao.reconcile import deployment_key
 from llmao.rental import ProviderRentals, Rental
 from tests.test_fleet import EXAMPLE
-from tests.test_fleet_health import _health, _registered
+from tests.test_fleet_health import _health, _record, _registered
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -84,11 +84,11 @@ def _server(name: str, *, host: str = "10.0.0.1", port: int = 8001, ok: bool = T
     # One success is Healthy. Three failures after that success is Unhealthy;
     # in_litellm must be set first or a failure with no config history is Awaiting.
     if ok:
-        srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
+        _record(srv, True, now=time.time(), grace_s=1800, fail_threshold=3)
     else:
-        srv.record_probe(True, now=time.time() - 1, grace_s=1800, fail_threshold=3, in_litellm=True)
+        _record(srv, True, now=time.time() - 1, grace_s=1800, fail_threshold=3, in_litellm=True)
         for _ in range(3):
-            srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused", in_litellm=True)
+            _record(srv, False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused", in_litellm=True)
     return srv
 
 
@@ -284,12 +284,10 @@ def test_awaiting_row_shows_the_last_probe():
         )
 
     refused = fresh("10.0.0.4", 8001)
-    refused.record_probe(
-        False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="no connection", reached=False
-    )
+    _record(refused, False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     # A 503 reaches vLLM, so that probe is the loading start: the row is Loading, not Awaiting.
     loading = fresh("10.0.0.5", 8001)
-    loading.record_probe(False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="HTTP 503", reached=True)
+    _record(loading, False, now=time.time() - 14, grace_s=1800, fail_threshold=3, err="HTTP 503", reached=True)
     quiet = fresh("10.0.0.6", 8001)
     fleet = _fleet(refused, loading, quiet)
     rows = {r.listen: r for r in pages.deployment_rows(fleet, admin=True)}
@@ -847,16 +845,18 @@ def test_an_unlisted_host_still_serving_gets_no_remove_sentence():
 def test_an_unlisted_host_never_reached_gets_the_sentence_once_the_grace_is_out():
     pages = _app()
     srv = _server("gemma", host="10.0.0.9")
+    # Never reached: no loading start of either kind, and no probe yet.
     srv.config_served_at = None
+    srv.first_reached_at = None
     srv.last_ok = None
-    srv.last_probe_ok = None
+    srv.probe = None
     srv.unlisted = True
     fleet = _fleet(srv)
     dep = fleet.deployments[0]
     dep.litellm = ()  # the deployment is already gone
     reason = "No Vast or RunPod instance has this address; the rental may have ended."
 
-    srv.record_probe(False, now=time.time() - 60, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    _record(srv, False, now=time.time() - 60, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
     assert "awaiting" in item.rest
     assert item.detail == reason
@@ -872,7 +872,7 @@ def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
 
     pages = _app()
     srv = _server("gemma", host="10.0.0.9", ok=True)
-    srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3, key_rejected=True)
+    _record(srv, True, now=time.time(), grace_s=1800, fail_threshold=3, key_rejected=True)
     assert srv.state == REJECTED
     fleet = _fleet(srv)
     dep = fleet.deployments[0]
@@ -889,7 +889,7 @@ def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
     # Unlisted as well, for long enough: Foreign, and the sentence.
     srv.unlisted = True
     for n in (1, 2, 3):
-        srv.record_probe(True, now=time.time() + n, grace_s=1800, fail_threshold=3, key_rejected=True)
+        _record(srv, True, now=time.time() + n, grace_s=1800, fail_threshold=3, key_rejected=True)
     assert srv.state == FOREIGN
     (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
     assert item.kind == "unlisted"

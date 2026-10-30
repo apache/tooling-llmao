@@ -47,7 +47,7 @@ from llmao.model_status import (
 from llmao.provisioning import FETCH_CAP, ConfigFetch, ProvisioningRecord
 from llmao.proxy.deployments import DeploymentManager, LiteLLMDeployment, LiteLLMHealth
 from llmao.reconcile import norm_base
-from llmao.vllm_client import fetch_served_models, parse_max_model_len
+from llmao.vllm_client import VllmProbe, fetch_served_models, parse_max_model_len
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
 
@@ -78,6 +78,33 @@ def _server(**kwargs):
     return VllmServer(**defaults)
 
 
+def _record(
+    srv,
+    ok: bool,
+    *,
+    now: float,
+    grace_s: float = 1800,
+    fail_threshold: int = 3,
+    err: str | None = None,
+    reached: bool | None = None,
+    key_rejected: bool | None = None,
+    in_litellm: bool = False,
+) -> None:
+    """Record one probe on the server, built from what a test says it found.
+
+    ``reached`` follows the error when not given: a 503 is an answer, a
+    timeout or no connection is not. ``key_rejected`` stands in for what
+    /v1/models answered: a 401, a 200, or not asked.
+    """
+    if reached is None:
+        reached = ok or bool(err and err.startswith("HTTP"))
+    status = {True: 401, False: 200, None: None}[key_rejected]
+    found = VllmProbe(f"http://{srv.address}:{srv.public_port}", now, reached, ok, None if ok else err or "unhealthy")
+    if status is not None:
+        found = VllmProbe(found.url, now, reached, ok, found.error, served_status=status)
+    srv.record_probe(found, grace_s=grace_s, fail_threshold=fail_threshold, in_litellm=in_litellm)
+
+
 def _registered(dep, *, id: str = "id-1", api_base: str | None = None) -> None:
     """What a read of the LiteLLM deployments had for this one: a row stamped with its key at its dialable base."""
     base = norm_base(api_base or dep.api_base)
@@ -91,7 +118,7 @@ def _health(dep, healthy: bool, *, at: float | None = None) -> None:
 
 def test_probe_serving():
     s = _server()
-    s.record_probe(True, now=100.0, grace_s=1800, fail_threshold=3)
+    _record(s, True, now=100.0, grace_s=1800, fail_threshold=3)
     assert s.state == HEALTHY
     assert s.last_ok == 100.0
 
@@ -99,25 +126,25 @@ def test_probe_serving():
 def test_starting_inside_grace():
     s = _server()
     s.config_served_at = 0.0
-    s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
+    _record(s, False, now=10.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
     assert s.state == LOADING
 
 
 def test_down_after_grace():
     s = _server()
     s.config_served_at = 0.0
-    s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="timeout")
+    _record(s, False, now=2000.0, grace_s=1800, fail_threshold=3, err="timeout")
     assert s.state == STALLED
 
 
 def test_serving_needs_consecutive_fails():
     s = _server()
     s.config_served_at = 0.0  # box has already fetched its config
-    s.record_probe(True, now=1.0, grace_s=1800, fail_threshold=3)
-    s.record_probe(False, now=2.0, grace_s=1800, fail_threshold=3)
-    s.record_probe(False, now=3.0, grace_s=1800, fail_threshold=3)
+    _record(s, True, now=1.0, grace_s=1800, fail_threshold=3)
+    _record(s, False, now=2.0, grace_s=1800, fail_threshold=3)
+    _record(s, False, now=3.0, grace_s=1800, fail_threshold=3)
     assert s.state == HEALTHY
-    s.record_probe(False, now=4.0, grace_s=1800, fail_threshold=3)
+    _record(s, False, now=4.0, grace_s=1800, fail_threshold=3)
     assert s.state == UNHEALTHY
 
 
@@ -128,9 +155,9 @@ def test_model_rollup_aggregate():
     # state is set the way record_probe would.
     # Probed "now" so the roll-up's staleness check (3 x 45s) keeps the
     # signals fresh.
-    a.record_probe(True, now=10_000.0, grace_s=1800, fail_threshold=3)
+    _record(a, True, now=10_000.0, grace_s=1800, fail_threshold=3)
     b.config_served_at = 9_990.0
-    b.record_probe(False, now=10_000.0, grace_s=1800, fail_threshold=3, err="refused")
+    _record(b, False, now=10_000.0, grace_s=1800, fail_threshold=3, err="refused")
     cfg = edict({"fleet": dict(FLEET_KNOBS)})
     fleet = Fleet(cfg=cfg, servers=[a, b])
     assert fleet.model_rollup("gemma4-26b", now=10_000.0).rollup == AVAILABLE
@@ -212,7 +239,7 @@ def test_skew_sentences_replace_old_phrases():
     # The skew runners compute signals at real time.time(), so the probe
     # observation must be fresh for it to count.
     srv.config_served_at = time.time() - 1.0
-    srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
+    _record(srv, False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
     assert srv.state == LOADING
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
@@ -222,7 +249,7 @@ def test_skew_sentences_replace_old_phrases():
     # Loading is not a missing-route badge. The old sentence is dropped.
     assert dep.skew == []
     assert "missing from LiteLLM" not in dep.skew
-    srv.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
+    _record(srv, True, now=time.time(), grace_s=1800, fail_threshold=3)
     assert srv.state == HEALTHY
     asyncio.run(backend.check_config_skew())
     assert dep.skew == [SKEW_INTENDED_NOT_IN_LITELLM]
@@ -231,7 +258,7 @@ def test_skew_sentences_replace_old_phrases():
     asyncio.run(backend.check_health_skew())
     assert SKEW_VLLM_UP_LITELLM_DOWN in dep.skew
     for _ in range(3):
-        srv.record_probe(False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
+        _record(srv, False, now=time.time(), grace_s=1800, fail_threshold=3, err="refused")
     assert srv.state == UNHEALTHY
     litellm.health = {"healthy_endpoints": [{"api_base": base}], "unhealthy_endpoints": []}
     asyncio.run(backend.check_health_skew())
@@ -330,7 +357,7 @@ def test_local_from_cfg_public_equals_listen():
     fleet.provisioning.note("127.0.0.1", now=1.0)
     fleet.update_config_fetches()
     assert fleet.servers[0].config_served_at == 1.0
-    fleet.servers[0].record_probe(False, now=2.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
+    _record(fleet.servers[0], False, now=2.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
     assert fleet.servers[0].state == LOADING
 
 
@@ -367,7 +394,7 @@ def test_an_orphan_serving_the_name_makes_the_model_mixed_once_the_strip_shows_i
     from llmao.proxy.deployments import LiteLLMDeployments
 
     s = _server()
-    s.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
+    _record(s, True, now=time.time(), grace_s=1800, fail_threshold=3)
     fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[s])
     _registered(fleet.deployments[0])
     assert fleet.model_rollup("gemma4-26b").privacy == PRIVATE
@@ -401,10 +428,10 @@ def test_grace_boundary_is_exclusive():
     """
     s = _server()
     s.config_served_at = 0.0
-    s.record_probe(False, now=1799.0, grace_s=1800, fail_threshold=3, err="refused")
+    _record(s, False, now=1799.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == LOADING
 
-    s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
+    _record(s, False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
 
 
@@ -419,11 +446,11 @@ def test_recovers_from_down_on_a_single_probe():
     s = _server()
     s.config_served_at = 0.0
     for _ in range(3):
-        s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
+        _record(s, False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
     assert s.fails == 3
 
-    s.record_probe(True, now=2100.0, grace_s=1800, fail_threshold=3)
+    _record(s, True, now=2100.0, grace_s=1800, fail_threshold=3)
     assert s.state == HEALTHY
     assert s.fails == 0
     assert s.last_error is None
@@ -444,9 +471,9 @@ def test_flapping_settles_rather_than_oscillating_per_probe():
     s.config_served_at = 0.0
     now = 100.0
     for _ in range(10):
-        s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")
+        _record(s, False, now=now, grace_s=1800, fail_threshold=3, err="refused")
         now += 45.0
-        s.record_probe(True, now=now, grace_s=1800, fail_threshold=3)
+        _record(s, True, now=now, grace_s=1800, fail_threshold=3)
         now += 45.0
 
     assert s.state == HEALTHY
@@ -463,10 +490,10 @@ def test_down_stays_down_while_failing():
     s = _server()
     s.config_served_at = 0.0
     for _ in range(3):
-        s.record_probe(False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
+        _record(s, False, now=2000.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
 
-    s.record_probe(False, now=9999.0, grace_s=1800, fail_threshold=3, err="refused")
+    _record(s, False, now=9999.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
     assert s.fails == 4
 
@@ -482,11 +509,11 @@ def test_never_healthy_box_goes_starting_then_down():
     s.config_served_at = 0.0
     now = 45.0
     while now < 1800.0:
-        s.record_probe(False, now=now, grace_s=1800, fail_threshold=3, err="refused")
+        _record(s, False, now=now, grace_s=1800, fail_threshold=3, err="refused")
         assert s.state == LOADING, f"flipped early at {now}s"
         now += 45.0
 
-    s.record_probe(False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
+    _record(s, False, now=1800.0, grace_s=1800, fail_threshold=3, err="refused")
     assert s.state == STALLED
 
 
@@ -636,37 +663,35 @@ def test_litellm_is_not_compared_with_the_fleet_before_its_first_pass():
 def test_the_first_probe_starts_the_not_reached_clock():
     s = _server()
     assert s.first_probed_at is None
-    s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    _record(s, False, now=10.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     assert (s.state, s.first_probed_at) == (AWAITING, 10.0)
-    s.record_probe(False, now=1000.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    _record(s, False, now=1000.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     assert (s.state, s.first_probed_at) == (AWAITING, 10.0)
-    s.record_probe(False, now=1810.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    _record(s, False, now=1810.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     assert s.state == STALLED
 
 
 def test_the_first_reached_probe_is_a_loading_start():
     """A 503 with no config fetch: Loading from that answer, Stalled past the grace of it."""
     s = _server()
-    s.record_probe(False, now=10.0, grace_s=1800, fail_threshold=3, err="503", reached=True)
+    _record(s, False, now=10.0, grace_s=1800, fail_threshold=3, err="503", reached=True)
     assert (s.state, s.first_reached_at, s.config_served_at) == (LOADING, 10.0, None)
     # The start does not move with later answers, nor with a lost connection.
-    s.record_probe(False, now=1000.0, grace_s=1800, fail_threshold=3, err="503", reached=True)
+    _record(s, False, now=1000.0, grace_s=1800, fail_threshold=3, err="503", reached=True)
     assert (s.state, s.first_reached_at) == (LOADING, 10.0)
-    s.record_probe(False, now=1810.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    _record(s, False, now=1810.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     assert (s.state, s.first_reached_at) == (STALLED, 10.0)
 
 
 def test_a_box_healthy_once_in_this_process_has_the_hold_over():
     """After a restart the first Healthy probe is a loading start, so a blip is held over the threshold."""
     s = _server()
-    s.record_probe(True, now=10.0, grace_s=1800, fail_threshold=3, reached=True, in_litellm=True)
+    _record(s, True, now=10.0, grace_s=1800, fail_threshold=3, reached=True, in_litellm=True)
     assert s.state == HEALTHY
-    s.record_probe(False, now=55.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False, in_litellm=True)
+    _record(s, False, now=55.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False, in_litellm=True)
     assert s.state == HEALTHY
     for now in (100.0, 145.0):
-        s.record_probe(
-            False, now=now, grace_s=1800, fail_threshold=3, err="no connection", reached=False, in_litellm=True
-        )
+        _record(s, False, now=now, grace_s=1800, fail_threshold=3, err="no connection", reached=False, in_litellm=True)
     assert s.state == UNHEALTHY
 
 
@@ -752,10 +777,10 @@ def test_rejected_at_an_unlisted_host_becomes_foreign_after_the_passes():
 def test_a_failed_probe_interrupts_the_rejected_run():
     s = _server()
     s.unlisted = True
-    s.record_probe(True, now=1.0, grace_s=1800, fail_threshold=3, key_rejected=True)
-    s.record_probe(True, now=2.0, grace_s=1800, fail_threshold=3, key_rejected=True)
+    _record(s, True, now=1.0, grace_s=1800, fail_threshold=3, key_rejected=True)
+    _record(s, True, now=2.0, grace_s=1800, fail_threshold=3, key_rejected=True)
     assert (s.state, s.rejected_passes) == (REJECTED, 2)
-    s.record_probe(False, now=3.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
+    _record(s, False, now=3.0, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
     assert s.rejected_passes == 0
     assert s.state != FOREIGN
 

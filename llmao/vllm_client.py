@@ -68,6 +68,17 @@ class VllmProbe:
     max_model_len: int | None = None
     hf_id: str = ""
 
+    @classmethod
+    def no_address(cls, at: float) -> VllmProbe:
+        """The probe of a server with no address to dial: an attempt that reached nothing.
+
+        Nothing to dial is the strongest form of not reached, and it still
+        counts as an attempt, so the grace clock runs on a host no listing
+        names and it reads Stalled once the grace is out, as a dead rental
+        should.
+        """
+        return cls("", at, reached=False, ok=False, error="no address to dial")
+
     @property
     def key_rejected(self) -> bool | None:
         """``/v1/models``' verdict on the key: True on a 401, False on a 200, None when it said neither."""

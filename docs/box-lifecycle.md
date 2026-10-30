@@ -21,8 +21,8 @@ Everything the lifecycle reads, and where it comes from.
 | Observation | Set by | Meaning |
 |---|---|---|
 | `config_served_at` | `Fleet.update_config_fetches`, each probe pass, from the box's last `GET /vllm/config` | A **loading start**. The box has been told what to run, so a loading window has started. `None` until then. |
-| `probe_ok` | each `/health` probe | `True` on a 200: vLLM says it is serving. Not "all is well": `/health` takes no key. |
-| `reached` | each probe | Any HTTP answer at all, a 503 included. `False` is no connection or a timeout. |
+| `probe_ok` | the last `VllmProbe` (`srv.probe`, from `vllm_client.probe`) | `True` on a 200 from `/health`: vLLM says it is serving. Not "all is well": `/health` takes no key. |
+| `reached` | the last `VllmProbe` | Any HTTP answer at all, a 503 included. `False` is no connection, a timeout, or no address to dial (`VllmProbe.no_address`). |
 | `first_reached_at` | the first probe in this process that vLLM answered | The other **loading start**: vLLM is listening, so the model is loading, whether or not this process served the config (an approved host that fetched before a restart never fetches again). The loading start is the earlier of the two. |
 | `first_probed_at` | the first probe attempt in this process | The clock for a server that has no loading start and never answers. "No address to dial" counts as an attempt when the host is unlisted. |
 | `last_ok`, `fails` | each probe | When `/health` last passed, and the consecutive failures since. |

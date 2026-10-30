@@ -197,13 +197,15 @@ def test_config_fetch_starts_loading_on_the_approved_host():
 
 
 def test_probe_moves_the_materialized_server_to_healthy():
+    from tests.test_fleet_health import _record  # local: that module imports this one's knobs
+
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b"])
     srv = fleet.servers[0]
     srv.public_port = 18001
-    srv.record_probe(True, now=55.0, grace_s=1800, fail_threshold=3, reached=True)
+    _record(srv, True, now=55.0, grace_s=1800, fail_threshold=3, reached=True)
     assert srv.state == "healthy"
     assert fleet.deployments[0].api_base == "http://198.51.100.8:18001/v1"
 

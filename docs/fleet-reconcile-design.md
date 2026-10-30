@@ -968,9 +968,17 @@ fact has two homes. Then `deployment.py` against six known shapes.
    2026-10-29: `url`, `at`, `reached`, `ok`, `error`, and from
    `/v1/models` when asked `served_status`, `max_model_len`, `hf_id`;
    `key_rejected` is read off the status; the caller says whether to
-   ask); (c) `probe_all`
-   hands the probe to `record_probe` and the observation fields on
-   `VllmServer` become reads of it; (d) `Discovered` carries a probe,
+   ask); (c) `probe_all` hands the probe to `record_probe` and the
+   observation fields on `VllmServer` become reads of it (**Done**
+   2026-10-29: `srv.probe` is the last `VllmProbe`; `last_probe_ok`,
+   `reached`, `last_error`, `vllm_probed_at` read off it; the window and
+   the key verdict stay as history, standing until a probe asks again.
+   Noted by the user: `record_probe` still takes `in_litellm`, LiteLLM's
+   fact, because the lifecycle needs it to tell Unhealthy from Awaiting
+   after a restart; a crossed concern that resolves in `deployment.py`,
+   where the one record holds both observations and the probe pass
+   carries nothing of LiteLLM's);
+   (d) `Discovered` carries a probe,
    rendered where it is shown; (e) the sampler's `/metrics` read returns
    `Sample` through the client.
 
