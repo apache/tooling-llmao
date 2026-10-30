@@ -979,7 +979,11 @@ fact has two homes. Then `deployment.py` against six known shapes.
    where the one record holds both observations and the probe pass
    carries nothing of LiteLLM's);
    (d) `Discovered` carries a probe,
-   rendered where it is shown; (e) the sampler's `/metrics` read returns
+   rendered where it is shown (**Done** 2026-10-29: `Discovered.probes`,
+   one `VllmProbe` per vLLM listen port the rental publishes;
+   `discovery_finding` renders the line and `Fleet.finding` supplies the
+   models.yaml names; `fleet.py` reads nothing from vLLM itself any more);
+   (e) the sampler's `/metrics` read returns
    `Sample` through the client.
 
 Pages, capacity, the sampler, and the action log read the view. They stop

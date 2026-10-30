@@ -255,32 +255,32 @@ def test_a_rental_nobody_intends_is_discovered_not_added():
     found = _discover(fleet, serving, vast=[_rental()])
     # Keyed by the name the box sends, the instance id; the address is only dialed.
     assert list(found) == ["1"]
-    assert found["1"].finding == "8001: serving qwen3-8b with our key"
+    assert fleet.finding(found["1"]) == "8001: serving qwen3-8b with our key"
     assert found["1"].rental.host == "198.51.100.8"
     assert fleet.servers == []
 
     def refusing(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401 if request.url.path == "/v1/models" else 200)
 
-    assert _discover(fleet, refusing, vast=[_rental()])["1"].finding == "8001: refuses our key"
+    assert fleet.finding(_discover(fleet, refusing, vast=[_rental()])["1"]) == "8001: refuses our key"
 
     def loading(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 
-    finding = _discover(fleet, loading, vast=[_rental()])["1"].finding
+    finding = fleet.finding(_discover(fleet, loading, vast=[_rental()])["1"])
     assert finding == "8001: vLLM answering, not serving (HTTP 503)"
 
     def dead(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    assert _discover(fleet, dead, vast=[_rental()])["1"].finding == "nothing listening"
+    assert fleet.finding(_discover(fleet, dead, vast=[_rental()])["1"]) == "nothing listening"
     # Not running: the provider's word, no probe. A machine is named by its
     # id before it has an address, on either provider.
-    assert _discover(fleet, dead, vast=[_rental(status="exited")])["1"].finding == "exited"
-    assert _discover(fleet, dead, vast=[_rental(host="", status="loading")])["1"].finding == "loading"
+    assert fleet.finding(_discover(fleet, dead, vast=[_rental(status="exited")])["1"]) == "exited"
+    assert fleet.finding(_discover(fleet, dead, vast=[_rental(host="", status="loading")])["1"]) == "loading"
     starting = _rental("", provider="RunPod", id="pod-2", ports={})
-    assert _discover(fleet, dead, runpod=[starting])["pod-2"].finding == "no address yet"
-    assert _discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["1"].finding == "no vLLM port published"
+    assert fleet.finding(_discover(fleet, dead, runpod=[starting])["pod-2"]) == "no address yet"
+    assert fleet.finding(_discover(fleet, dead, vast=[_rental(ports={"22": 19022})])["1"]) == "no vLLM port published"
 
 
 def test_a_machine_seen_by_both_sources_is_one_unintended_record():
@@ -339,7 +339,7 @@ def test_a_runpod_rental_is_discovered_with_the_bearer_minted_from_its_pod_id():
     pod = _rental(host="203.0.113.7", provider="RunPod", id="pod-1")
     found = _discover(fleet, handler, runpod=[pod])
     assert list(found) == ["pod-1"]
-    assert found["pod-1"].finding == "8001: serving org/unlisted-weights with our key"
+    assert fleet.finding(found["pod-1"]) == "8001: serving org/unlisted-weights with our key"
     assert bearers == [f"Bearer {vllm_api_key(cfg, 'pod-1', 8001)}"]
 
 

@@ -50,6 +50,7 @@ from llmao.provisioning import ConfigFetch
 from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments
 from llmao.reconcile import deployment_key
 from llmao.rental import ProviderRentals, Rental
+from llmao.vllm_client import VllmProbe
 from tests.test_fleet import EXAMPLE
 from tests.test_fleet_health import _health, _record, _registered
 
@@ -460,9 +461,14 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
         name="pod-1",
         status="running",
     )
+    now = time.time()
+    serving = VllmProbe(
+        "http://198.51.100.8:18001", now, reached=True, ok=True, error=None, served_status=200, hf_id="gemma"
+    )
+    dead = VllmProbe("http://203.0.113.7:18001", now, reached=False, ok=False, error="no connection")
     fleet.discovered = {
-        "1": Discovered(vast, "8001: serving gemma with our key", time.time()),
-        "pod-1": Discovered(pod, "nothing listening", time.time()),
+        "1": Discovered(vast, {8001: serving}, now),
+        "pod-1": Discovered(pod, {8001: dead}, now),
     }
     # The pod also asked for its config: the same machine, seen by the box protocol too.
     fleet.provisioning.fetches["pod-1"] = ConfigFetch("pod-1", time.time() - 100, time.time() - 5, 3)

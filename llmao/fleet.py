@@ -72,7 +72,7 @@ from llmao.reconcile import DeploymentKey, deployment_key, norm_base, normalize_
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
 from llmao.vast_client import fetch_instances, rentals_from_body
-from llmao.vllm_client import VllmProbe, fetch_health, fetch_served_models, probe
+from llmao.vllm_client import VllmProbe, probe
 
 if TYPE_CHECKING:
     from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments, LiteLLMHealth, LiteLLMHealthReport
@@ -674,9 +674,10 @@ class Discovered:
     """
 
     rental: Rental
-    # One line: the provider's status when it is not running, else what the
-    # vLLM listen ports answered ("8001: serving qwen3-8b with our key").
-    finding: str
+    # What each vLLM listen port the rental publishes answered, by listen
+    # port; empty when it is not running, has no address, or publishes
+    # none. Fleet.finding renders it as one line.
+    probes: dict[int, VllmProbe]
     at: float
 
     @property
@@ -690,16 +691,46 @@ class Unintended:
     """A machine nobody intends, by the name its box sends, joined from two sources.
 
     ``rental`` is what its provider reports about it (None when no provider
-    reports a machine of that name), with ``finding`` what a probe found on
-    it; ``fetch`` is its config fetches with the fleet key (None when it has
-    not asked). A machine seen from both sides is one record, with one
-    Approve. Fleet.unintended builds these; nothing stores them.
+    reports a machine of that name), with ``finding`` the line its probes
+    render to; ``fetch`` is its config fetches with the fleet key (None when
+    it has not asked). A machine seen from both sides is one record, with
+    one Approve. Fleet.unintended builds these; nothing stores them.
     """
 
     name: str
     rental: Rental | None
     finding: str
     fetch: ConfigFetch | None
+
+
+def discovery_finding(rental: Rental, probes: dict[int, VllmProbe], name_of) -> str:
+    """One line on a rental nobody intends: the provider's status when not running, else what its vLLM ports answered.
+
+    ``name_of`` turns the weights a port serves into a models.yaml name,
+    or "" when none runs them.
+    """
+    if rental.status and not rental.running:
+        return rental.status
+    if not rental.host:
+        return "no address yet"
+    if not probes:
+        return "no vLLM port published"
+    if not any(found.reached for found in probes.values()):
+        return "nothing listening"
+    parts = []
+    for listen, found in sorted(probes.items()):
+        if not found.reached:
+            what = found.error
+        elif not found.ok:
+            what = f"vLLM answering, not serving ({found.error})"
+        elif found.key_rejected:
+            what = "refuses our key"
+        elif found.served_status != 200:
+            what = f"up, /v1/models answered {found.served_status or 'nothing usable'}"
+        else:
+            what = f"serving {name_of(found.hf_id) or found.hf_id or 'an unnamed model'} with our key"
+        parts.append(f"{listen}: {what}")
+    return "; ".join(parts)
 
 
 def fetch_detail(fetch: ConfigFetch) -> str:
@@ -946,7 +977,9 @@ class Fleet:
         out = []
         for name in set(self.discovered) | set(strangers):
             found = self.discovered.get(name)
-            out.append(Unintended(name, found and found.rental, (found and found.finding) or "", strangers.get(name)))
+            out.append(
+                Unintended(name, found and found.rental, (found and self.finding(found)) or "", strangers.get(name))
+            )
         return sorted(out, key=lambda u: (u.fetch is None, -((u.fetch and u.fetch.last_at) or 0.0), u.name))
 
     def model_rollup(self, model_name: str, *, now: float | None = None):
@@ -1172,49 +1205,29 @@ class Fleet:
                 address = normalize_peer_ip(rental.host)
                 if not name or name in names or (address and address in names) or (rental.provider, rental.id) in on:
                     continue
-                found[name] = Discovered(rental, await self._discovery_finding(client, rental, address), stamp)
+                found[name] = Discovered(rental, await self._discovery_probes(client, rental, address, stamp), stamp)
         if set(found) != set(self.discovered):
             _LOGGER.info("fleet: rentals nobody intends: %s", sorted(found) or "none")
         self.discovered = found
 
-    async def _discovery_finding(self, client: httpx.AsyncClient, rental: Rental, host: str) -> str:
-        """One line on a rental nobody intends: its status when not running, else what its vLLM ports answered."""
-        if rental.status and not rental.running:
-            return rental.status
-        if not host:
-            return "no address yet"
-        ports = sorted(
-            (int(listen), int(public)) for listen, public in rental.ports.items() if int(listen) in VLLM_LISTEN_PORTS
-        )
-        if not ports:
-            return "no vLLM port published"
-        parts = []
-        reached_any = False
-        for listen, public in ports:
-            ok, reached, err = await fetch_health(client, f"http://{host}:{public}/health")
-            reached_any = reached_any or reached
-            if not reached:
-                parts.append(f"{listen}: {err}")
-            elif not ok:
-                parts.append(f"{listen}: vLLM answering, not serving ({err})")
-            else:
-                parts.append(f"{listen}: {await self._served_with_our_key(client, rental, host, listen, public)}")
-        if not reached_any:
-            return "nothing listening"
-        return "; ".join(parts)
+    async def _discovery_probes(
+        self, client: httpx.AsyncClient, rental: Rental, host: str, now: float
+    ) -> dict[int, VllmProbe]:
+        """Probe each vLLM listen port a running rental publishes, by listen port; empty when nothing can be dialed."""
+        if not host or (rental.status and not rental.running):
+            return {}
+        out = {}
+        for listen, public in rental.ports.items():
+            if int(listen) not in VLLM_LISTEN_PORTS:
+                continue
+            # The bearer is minted from the name the box sends, not from where it is dialed.
+            key = vllm_api_key(self.cfg, rental.name, int(listen))
+            out[int(listen)] = await probe(client, f"http://{host}:{int(public)}", key, ask_models=True, now=now)
+        return out
 
-    async def _served_with_our_key(
-        self, client: httpx.AsyncClient, rental: Rental, host: str, listen: int, public: int
-    ) -> str:
-        # The bearer is minted from the name the box sends, not from where it is dialed.
-        served = await fetch_served_models(
-            client, f"http://{host}:{public}", vllm_api_key(self.cfg, rental.name, listen)
-        )
-        if served.status == 401:
-            return "refuses our key"
-        if served.status != 200:
-            return f"up, /v1/models answered {served.status or 'nothing usable'}"
-        return f"serving {self._model_name_for(served.hf_id) or served.hf_id or 'an unnamed model'} with our key"
+    def finding(self, found: Discovered) -> str:
+        """The strip's line for a rental nobody intends, its probes rendered with the models this fleet knows."""
+        return discovery_finding(found.rental, found.probes, self._model_name_for)
 
     def _model_name_for(self, hf_id: str) -> str:
         """The models.yaml name whose recipe runs these weights, or ""."""
