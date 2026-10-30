@@ -964,7 +964,11 @@ fact has two homes. Then `deployment.py` against six known shapes.
    2026-10-29: `fetch_health`, `fetch_served_models`,
    `parse_max_model_len` from `fleet.py`; `parse_kv_cache_tokens`,
    `parse_metrics` from `sampler.py`); (b) `VllmProbe` and the `probe()`
-   that produces it, with tests, used by nothing yet; (c) `probe_all`
+   that produces it, with tests, used by nothing yet (**Done**
+   2026-10-29: `url`, `at`, `reached`, `ok`, `error`, and from
+   `/v1/models` when asked `served_status`, `max_model_len`, `hf_id`;
+   `key_rejected` is read off the status; the caller says whether to
+   ask); (c) `probe_all`
    hands the probe to `record_probe` and the observation fields on
    `VllmServer` become reads of it; (d) `Discovered` carries a probe,
    rendered where it is shown; (e) the sampler's `/metrics` read returns

@@ -24,12 +24,16 @@ the gauges and counters capacity planning rolls up. It dials whatever URL
 it is handed and knows no port plan; the fleet decides what to ask and
 when (docs/fleet-reconcile-design.md). Another engine gets its own client
 module, not an ``if`` in this one.
+
+``probe`` produces ``VllmProbe``, the snapshot of one probe of one address:
+what ``/health`` said, and what ``/v1/models`` said when it was asked.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -38,6 +42,72 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.capacity import Sample
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VllmProbe:
+    """What one probe of one address found, as of ``at``. Nothing of ours on it.
+
+    Three levels of contact. ``reached``: vLLM's HTTP server answered at all
+    (a 503 while the model loads counts). ``ok``: ``/health`` gave a 200,
+    which is vLLM's own word that it is serving and not "all is well", since
+    ``/health`` takes no key. ``served_status``: what ``/v1/models`` answered
+    with the key we believe the box runs with, when it was asked: a 401 is
+    the box refusing that key, a 200 carries the served context window and
+    the weights it loaded. None when it was not asked, or nothing usable
+    came back.
+    """
+
+    url: str
+    at: float
+    reached: bool
+    ok: bool
+    # Why not ok: "timeout", "no connection", or "HTTP <status>". None when ok.
+    error: str | None
+    served_status: int | None = None
+    max_model_len: int | None = None
+    hf_id: str = ""
+
+    @property
+    def key_rejected(self) -> bool | None:
+        """``/v1/models``' verdict on the key: True on a 401, False on a 200, None when it said neither."""
+        if self.served_status == 401:
+            return True
+        if self.served_status == 200:
+            return False
+        return None
+
+
+async def probe(
+    client: httpx.AsyncClient,
+    root: str,
+    api_key: str,
+    *,
+    ask_models: bool,
+    now: float | None = None,
+) -> VllmProbe:
+    """One probe of one address: ``/health``, then ``/v1/models`` with the key if it passed and the caller asked.
+
+    ``root`` is the server root, ``http://host:port``, never a /v1-suffixed
+    base. Whether to ask ``/v1/models`` is the caller's: it is fixed at
+    engine start, so asking on every pass is waste, and the fleet knows
+    which servers still need it. Never raises.
+    """
+    at = now or time.time()
+    ok, reached, error = await fetch_health(client, f"{root}/health")
+    if not (ok and ask_models):
+        return VllmProbe(root, at, reached, ok, error)
+    served = await fetch_served_models(client, root, api_key)
+    return VllmProbe(
+        root,
+        at,
+        reached,
+        ok,
+        error,
+        served_status=served.status,
+        max_model_len=served.max_model_len,
+        hf_id=served.hf_id,
+    )
 
 
 async def fetch_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:
