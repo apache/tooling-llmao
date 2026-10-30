@@ -141,13 +141,16 @@ reset by any 200.
 | **Loading** | Healthy | Rejected | Loading inside `grace` of the loading start; Stalled past it | same as listening |
 | **Healthy** | Healthy | Rejected | Healthy while `fails < threshold`; Unhealthy at it | same as listening |
 | **Unhealthy** | Healthy | Rejected | Unhealthy | Unhealthy |
-| **Stalled** | Healthy | Rejected | Stalled | Stalled |
+| **Stalled** | Healthy | Rejected | Loading when this probe is the first to reach and no loading start exists yet; otherwise Stalled | Stalled |
 | **Rejected** | Healthy | Foreign if the host is unlisted and the refusal has run `REJECTED_PASSES` passes; else Rejected | Rejected while `fails < threshold`; Unhealthy at it | same as listening |
 | **Foreign** | Healthy | Foreign | Foreign while `fails < threshold`; Unhealthy at it | same as listening |
 
 One thing moves a deployment that is not a probe: a config fetch seen for
-its name sets the loading start, and from Awaiting that is Loading, the
-same as the listening column.
+its name sets the loading start. From Awaiting that is Loading, the same
+as the listening column. From Stalled it is Loading only when no loading
+start existed yet, the never-reached kind, and the grace runs from the
+fetch. A later fetch does not move the start: the start is the earlier
+of the two.
 
 **The two left columns are the same from everywhere.** A box that
 answers 200 and takes our key is Healthy, whatever it was a pass ago: a
@@ -192,8 +195,11 @@ not serving means different things depending on what it was doing:
   answering and the listings have nothing to do with it.
 - *Unhealthy* and *Stalled* are the two kinds of down and differ only in
   how they were reached: Unhealthy was serving once, Stalled never was.
-  Both leave only on a 200. A 503 after Stalled does not restart the
-  grace; the box had its window.
+  Unhealthy leaves only on a 200. Stalled leaves on a 200, and also the
+  first time the box is heard from when no loading start existed yet: a
+  reached probe, or a config fetch. The grace runs from that moment, so
+  the row reads Loading. A 503 after the window already ran does not
+  restart it. The box had its grace.
 - *Rejected* and *Foreign* under silence behave as Healthy does, with the
   hold-over and then Unhealthy. This is a change from today: a Rejected
   box that misses one probe currently reads Healthy, because the
