@@ -404,25 +404,6 @@ class VllmServer:
             return None
         return f"{self.root_url}/v1"
 
-    def same_deployment(self, host: str, port: int | None, model_name: str) -> bool:
-        """True when this LiteLLM deployment is this server, reachable: on its public port."""
-        if port is None or port != self.public_port or model_name != self.model_name:
-            return False
-        return self.address is not None and normalize_peer_ip(host) == self.address
-
-    def on_listen_port(self, host: str, port: int | None, model_name: str) -> bool:
-        """True when this LiteLLM deployment is this server, but at its listen port.
-
-        The same process, so not a stranger. But off-box the listen port is
-        unreachable -- the provider publishes it on another -- so LiteLLM
-        cannot use it, and it does not stand in for the deployment the server
-        needs. Where the two ports are one (local), the deployment is simply
-        the right one.
-        """
-        if port is None or port != self.listen_port or port == self.public_port:
-            return False
-        return model_name == self.model_name and self.address is not None and normalize_peer_ip(host) == self.address
-
     @property
     def rental_usd_per_hour(self) -> float | None:
         """What this server's whole machine rents for, dollars per hour; None if unknown."""
@@ -556,14 +537,10 @@ class FleetDeployment:
         # the provider's model, as LiteLLM names it. None on our boxes.
         self.provider = provider
         self.litellm_model = litellm_model
-        # What the last read of the LiteLLM deployments had for this one,
-        # written by Fleet.update_litellm_deployments from match_litellm:
-        # the rows stamped with its key or at its dialable
-        # address, under its name or another; and, apart, the rows at a
-        # box's listen port where that differs from the public one, which
-        # LiteLLM cannot reach off-box, so they are noted and not counted.
+        # What the last read of the LiteLLM deployments had under this one's
+        # key, written by Fleet.update_litellm_deployments. One row is the
+        # deployment; more than one is duplicates (model_status.SKEW_DUPLICATED).
         self.litellm: tuple[LiteLLMDeployment, ...] = ()
-        self.litellm_listen: tuple[LiteLLMDeployment, ...] = ()
         # LiteLLM's own /health verdict on it, from the last read that said
         # anything (Fleet.update_litellm_health). None until one does.
         self.litellm_health: LiteLLMHealth | None = None
@@ -629,53 +606,10 @@ class FleetDeployment:
         """
         return {ACCESS_GROUP_SELF_HOSTED} if self.self_hosted else set()
 
-    def match_litellm(
-        self, rows: tuple[LiteLLMDeployment, ...]
-    ) -> tuple[tuple[LiteLLMDeployment, ...], tuple[LiteLLMDeployment, ...]]:
-        """The rows of one read of the LiteLLM deployments that are this deployment, and those at its listen port.
-
-        Writes nothing: Fleet.update_litellm_deployments stores the answer
-        on the deployment, and the executor asks it of the read it just
-        made, so no decision rests on the store having been updated first.
-
-        The stamp decides first: a row stamped with this key is this
-        deployment at whatever address it was registered. Then the address:
-        an unstamped row at the dialable base is it on our box under any
-        name (one box serves one model, so a row at its base is its
-        deployment, misnamed when the name differs: config_mismatch), and
-        on a provider's base under this model name only, since the account
-        serves every model from one base. A row at a box's listen port is
-        kept apart (at_listen_port). A box with no address yet is found by
-        its stamp alone.
-        """
-        base = self.api_base and norm_base(self.api_base)
-        srv = self.vllm
-        mine, listen = [], []
-        for row in rows:
-            if row.key == self.key:
-                mine.append(row)
-            elif row.key is not None:
-                continue
-            elif srv is not None and srv.on_listen_port(row.host, row.port, row.model_name):
-                listen.append(row)
-            elif base and row.api_base == base and (self.provider is None or row.model_name == self.model_name):
-                mine.append(row)
-        return tuple(mine), tuple(listen)
-
     @property
     def in_litellm(self) -> bool:
         """Whether LiteLLM has this deployment, as of the last read."""
         return bool(self.litellm)
-
-    @property
-    def config_mismatch(self) -> bool:
-        """LiteLLM has this box's api_base under another model name."""
-        return any(row.model_name != self.model_name for row in self.litellm)
-
-    @property
-    def at_listen_port(self) -> bool:
-        """LiteLLM has this server at its listen port, which is unreachable off-box."""
-        return bool(self.litellm_listen)
 
     @property
     def litellm_healthy(self) -> bool | None:
@@ -860,22 +794,21 @@ class Fleet:
         """One read of the LiteLLM deployments, joined to the intended ones; the rest are orphans.
 
         The one place the LiteLLM deployments are written onto the fleet.
-        Each intended deployment gets the rows that are it (FleetDeployment
-        .match_litellm). A row nothing matched is an orphan, counted across
-        reads: one absent from a read drops out, so a flapping one never
-        reaches ORPHAN_PASSES, and one that reaches it is logged once, with
-        who added it.
+        Each intended deployment gets the rows under its key. A row whose
+        key no intent has, the unstamped included, is an orphan, counted
+        across reads: one absent from a read drops out, so a flapping one
+        never reaches ORPHAN_PASSES, and one that reaches it is logged once,
+        with who added it.
         """
         self.litellm = snapshot
-        claimed: set[LiteLLMDeployment] = set()
+        intended = set()
         for dep in self.deployments:
-            dep.litellm, dep.litellm_listen = dep.match_litellm(snapshot.rows)
-            claimed.update(dep.litellm)
-            claimed.update(dep.litellm_listen)
+            dep.litellm = snapshot.under(dep.key)
+            intended.add(dep.key)
         before = {(o.deployment.api_base, o.deployment.model_name): o.passes for o in self.orphans}
         orphans = []
         for row in snapshot.rows:
-            if row in claimed:
+            if row.key in intended:
                 continue
             seen = before.get((row.api_base, row.model_name), 0) + 1
             orphans.append(Orphan(row, seen))
@@ -1344,7 +1277,7 @@ def snapshot_for_status(dep) -> DeploymentSnapshot:
             in_litellm=dep.in_litellm,
             litellm_healthy=dep.litellm_healthy,
             litellm_health_at=dep.litellm_health_at,
-            config_mismatch=dep.config_mismatch,
+            litellm_copies=len(dep.litellm),
         )
     return DeploymentSnapshot(
         model_name=dep.model_name,
@@ -1358,8 +1291,7 @@ def snapshot_for_status(dep) -> DeploymentSnapshot:
         litellm_health_at=dep.litellm_health_at,
         context_window=srv.observed_max_model_len or srv.max_model_len,
         kv_cache_tokens=srv.kv_cache_tokens,
-        config_mismatch=dep.config_mismatch,
-        at_listen_port=dep.at_listen_port,
+        litellm_copies=len(dep.litellm),
         config_served_at=srv.config_served_at,
         reached=srv.reached,
         first_probed_at=srv.first_probed_at,

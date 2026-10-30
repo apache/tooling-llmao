@@ -29,7 +29,7 @@ from llmao.model_status import (
     LOADING,
     MIXED,
     PRIVATE,
-    SKEW_CONFIG_MISMATCH,
+    SKEW_DUPLICATED,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_INTENDED_NOT_IN_LITELLM,
     SKEW_VLLM_DOWN_LITELLM_UP,
@@ -282,13 +282,13 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
 
 def test_extra_route_and_mismatch_are_badges_only():
     extra = deployment_status(
-        DeploymentSnapshot(model_name=MODEL, self_hosted=True, litellm_only=True, config_mismatch=True),
+        DeploymentSnapshot(model_name=MODEL, self_hosted=True, litellm_only=True, litellm_copies=2),
         CFG,
         NOW,
     )
     assert extra.lifecycle == UNKNOWN
     assert extra.counted is False
-    assert extra.skew == (SKEW_IN_LITELLM_NOT_IN_CONFIG, SKEW_CONFIG_MISMATCH)
+    assert extra.skew == (SKEW_IN_LITELLM_NOT_IN_CONFIG, SKEW_DUPLICATED)
     summary = model_status(MODEL, [extra])
     assert summary.rollup == UNAVAILABLE
     assert summary.privacy == MIXED

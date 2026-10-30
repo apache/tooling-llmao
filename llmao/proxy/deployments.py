@@ -89,10 +89,42 @@ class LiteLLMDeployment:
 
 @dataclass(frozen=True)
 class LiteLLMDeployments:
-    """One read of the LiteLLM deployments: every one it has, and when it was read."""
+    """One read of the LiteLLM deployments: every one it has, by key, and when it was read.
+
+    The stamp is the only way a row is matched to a deployment of ours.
+    Every row llmao adds is stamped, and the rows from before stamping were
+    stamped in place on 2026-10-22; a row with no stamp is nobody's, an
+    orphan, whatever address it sits at. One key can hold several rows:
+    LiteLLM keeps a second copy when asked twice.
+    """
 
     rows: tuple[LiteLLMDeployment, ...]
     read_at: float
+    # The rows grouped by their stamp, built once from ``rows`` so that every
+    # lookup by key is a dict hit and the two can never disagree. Build a
+    # snapshot through from_rows, never by hand, so the index is always there.
+    by_key: dict[DeploymentKey, tuple[LiteLLMDeployment, ...]]
+
+    @classmethod
+    def from_rows(cls, rows: tuple[LiteLLMDeployment, ...], *, now: float) -> LiteLLMDeployments:
+        """The snapshot of one read, with its by-key index built from the rows.
+
+        The parser calls this with what /model/info answered; a test calls
+        it with rows it made up. The unstamped rows stay in ``rows`` and
+        appear under no key.
+        """
+        by_key: dict[DeploymentKey, tuple[LiteLLMDeployment, ...]] = {}
+        for row in rows:
+            if row.key is not None:
+                by_key[row.key] = (*by_key.get(row.key, ()), row)
+        return cls(rows, now, by_key)
+
+    def under(self, key: DeploymentKey) -> tuple[LiteLLMDeployment, ...]:
+        """The rows stamped with this key, in the order LiteLLM listed them."""
+        return self.by_key.get(key, ())
+
+    def has(self, key: DeploymentKey) -> bool:
+        return key in self.by_key
 
 
 def deployments_from_model_info(body: Any, *, now: float) -> LiteLLMDeployments:
@@ -118,7 +150,7 @@ def deployments_from_model_info(body: Any, *, now: float) -> LiteLLMDeployments:
                 key=key,
             )
         )
-    return LiteLLMDeployments(tuple(out), now)
+    return LiteLLMDeployments.from_rows(tuple(out), now=now)
 
 
 def _rows_of(body: Any) -> list:
@@ -256,16 +288,15 @@ class DeploymentManager:
 
         Callers decide the gate. sync_selfhost waits until vLLM is SERVING.
         POST /do-add-deployment uses add_refusal for the same gate, then calls
-        this. A fresh fetch first, matched here, so a deployment already
-        present is not posted again (a 400 or 409 means the same thing); the
+        this. A fresh fetch first, so a deployment already present under this
+        key is not posted again (a 400 or 409 means the same thing); the
         fetch is folded for everything that reads the fleet, but the decision
         is made on the fetch itself. A fetch after, so presence is observed.
         """
         dep = self.fleet.deployment(key)
         snapshot = await self.fetch_deployments()
         self.fleet.update_litellm_deployments(snapshot)
-        mine, _listen = dep.match_litellm(snapshot.rows)
-        if mine:
+        if snapshot.has(key):
             _LOGGER.info("model/new already present %s@%s", dep.name, key.display)
             return False
         body = self.deployment_body(dep)
@@ -279,26 +310,25 @@ class DeploymentManager:
         return True
 
     async def delete_deployment(self, key: DeploymentKey) -> bool:
-        """POST /model/delete for the LiteLLM id under this key. True when a write was sent.
+        """POST /model/delete for every LiteLLM id under this key. True when a write was sent.
 
-        The id comes from a fresh fetch, by the stamp: the row stamped with
+        The ids come from a fresh fetch, by the stamp: a row stamped with
         this key is this deployment at whatever address it was registered,
-        including a public port that has since been remapped. A row with no
-        stamp is not one of ours (every row llmao adds is stamped, and the
-        rows from before stamping were stamped in place on 2026-10-22). The
-        fetch is folded either way, so a deployment LiteLLM no longer has
-        stops reading as present.
+        including a public port that has since been remapped, and every copy
+        goes, since each would take traffic. The fetch is folded either way,
+        so a deployment LiteLLM no longer has stops reading as present.
         """
         dep = self.fleet.deployment(key)
         snapshot = await self.fetch_deployments()
         self.fleet.update_litellm_deployments(snapshot)
-        found = next((row.id for row in snapshot.rows if row.key == key and row.id), None)
-        if not found:
+        ids = [row.id for row in snapshot.under(key) if row.id]
+        if not ids:
             _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, key.display)
             return False
-        resp = await self._transport.request("POST", "model/delete", json={"id": found})
-        self._transport.raise_http(resp)
-        _LOGGER.info("model/delete %s@%s id=%s", dep.name, key.display, found)
+        for found in ids:
+            resp = await self._transport.request("POST", "model/delete", json={"id": found})
+            self._transport.raise_http(resp)
+            _LOGGER.info("model/delete %s@%s id=%s", dep.name, key.display, found)
         await self._confirm()
         return True
 

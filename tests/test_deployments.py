@@ -23,7 +23,7 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import ORPHAN_PASSES, Fleet, FleetDeployment
 from llmao.intent import provider_intent
-from llmao.model_status import AWAITING, HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
+from llmao.model_status import AWAITING, HEALTHY, SKEW_DUPLICATED, UNHEALTHY
 from llmao.proxy.deployments import ORDER_SELF_HOSTED, ORDER_SPEND, DeploymentManager, deployments_from_model_info
 from llmao.reconcile import DeploymentKey
 from tests.fake_transport import FakeTransport
@@ -357,24 +357,49 @@ def test_a_stamp_for_another_key_is_not_this_deployment():
         "litellm_params": {"api_base": "http://10.0.0.7:12711/v1"},
         "model_info": {"id": "theirs", "llmao_key": "http://10.0.0.8:8001"},
     }
-    (theirs,) = deployments_from_model_info({"data": [row]}, now=0.0).rows
+    snapshot = deployments_from_model_info({"data": [row]}, now=0.0)
+    (theirs,) = snapshot.rows
     assert theirs.key == DeploymentKey("http://10.0.0.8:8001", "gemma4-26b") != dep.key
-    assert dep.match_litellm((theirs,)) == ((), ())
-    # Unstamped at its address: present, as a row from before stamping would be,
-    # but not deletable by it: the id lookup goes by the stamp alone (the backfill stamped every row).
+    assert not snapshot.has(dep.key)
+    assert snapshot.under(dep.key) == ()
+    # Unstamped at its address: nobody's, whatever the address says (the backfill
+    # stamped every row), so not this deployment and nothing to delete by.
     del row["model_info"]["llmao_key"]
     be = _manager(fleet, _litellm([row]))
     assert asyncio.run(be.delete_deployment(dep.key)) is False
-    assert dep.in_litellm is True
+    assert dep.in_litellm is False
+    assert [o.deployment.display for o in fleet.orphans] == ["10.0.0.7:12711"]
     assert "model/delete" not in _paths(be)
 
 
 def test_sync_selfhost_does_not_repost_the_same_deployment():
     fleet = _listen_and_public()
-    be = _manager(fleet, _info("10.0.0.7", 12711))
+    be = _manager(fleet, _info("10.0.0.7", 12711, model_id="mine", stamp="http://10.0.0.7:10100"))
     asyncio.run(be.sync_selfhost())
     assert "model/new" not in _paths(be)
     assert fleet.deployments[0].in_litellm is True
+
+
+def test_duplicates_under_one_key_are_skew_and_all_go_together():
+    """LiteLLM keeps a second copy when asked twice; every copy takes traffic, so each is deleted."""
+    fleet = _listen_and_public()
+    (dep,) = fleet.deployments
+    copy = {
+        "model_name": "gemma4-26b",
+        "litellm_params": {"api_base": "http://10.0.0.7:12711/v1"},
+        "model_info": {"llmao_key": "http://10.0.0.7:10100"},
+    }
+    rows = [{**copy, "model_info": {**copy["model_info"], "id": n}} for n in ("one", "two")]
+    be = _manager(fleet, _litellm(rows))
+    asyncio.run(be.check_config_skew())
+    assert dep.in_litellm is True
+    assert len(dep.litellm) == 2
+    assert SKEW_DUPLICATED in dep.skew
+    assert fleet.orphans == []
+    dep.vllm.state = UNHEALTHY
+    asyncio.run(be.sync_selfhost())
+    assert [c.json["id"] for c in be._transport.calls if c.path == "model/delete"] == ["one", "two"]
+    assert dep.in_litellm is False
 
 
 def test_a_deployment_at_the_listen_port_does_not_stand_in_for_the_reachable_one():
@@ -386,7 +411,8 @@ def test_a_deployment_at_the_listen_port_does_not_stand_in_for_the_reachable_one
     assert posted == ["http://10.0.0.7:12711/v1"]
 
 
-def test_a_deployment_at_the_listen_port_is_reported_on_its_server():
+def test_unstamped_rows_at_our_own_address_are_orphans():
+    """The address decides nothing: a row nothing stamped is nobody's, at the public port or the listen port."""
     fleet = _listen_and_public()
     (dep,) = fleet.deployments
     info = {
@@ -397,22 +423,19 @@ def test_a_deployment_at_the_listen_port_is_reported_on_its_server():
     }
     be = _manager(fleet, info)
     asyncio.run(be.check_config_skew())
-    assert dep.in_litellm is True
-    assert dep.at_listen_port is True
-    assert SKEW_AT_LISTEN_PORT in dep.skew
-    # Once, on its server; not again as an orphan.
-    assert fleet.orphans == []
+    assert dep.in_litellm is False
+    assert [o.deployment.display for o in fleet.orphans] == ["10.0.0.7:12711", "10.0.0.7:10100"]
 
 
-def test_where_the_ports_are_one_the_deployment_is_simply_right():
-    """Local: no provider in between, the listen port is the public one."""
+def test_where_the_ports_are_one_the_stamp_is_the_listen_url_all_the_same():
+    """Local: no provider in between, the listen port is the public one, and the stamp is still what matches."""
     s = _server(host="127.0.0.1", listen_port=8001, public_port=8001)
     s.state = HEALTHY
     fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
-    be = _manager(fleet, _info("127.0.0.1", 8001))
+    be = _manager(fleet, _info("127.0.0.1", 8001, model_id="mine", stamp="http://127.0.0.1:8001"))
     asyncio.run(be.check_config_skew())
     assert fleet.deployments[0].in_litellm is True
-    assert fleet.deployments[0].at_listen_port is False
+    assert fleet.orphans == []
 
 
 def test_other_port_is_not_this_deployment():
@@ -491,7 +514,15 @@ def test_a_failed_registration_is_kept_for_the_page_until_one_succeeds():
 def test_a_restart_finds_the_registration_already_there():
     """LiteLLM keeps a second copy if asked, so presence is checked first."""
     fleet, (dep,) = _bought(XAI)
-    rows = {"data": [{"model_name": "grok-4", "litellm_params": {"api_base": "https://api.x.ai/v1"}}]}
+    rows = {
+        "data": [
+            {
+                "model_name": "grok-4",
+                "litellm_params": {"api_base": "https://api.x.ai/v1"},
+                "model_info": {"id": "x", "llmao_key": "https://api.x.ai"},
+            }
+        ]
+    }
     be = _manager(fleet, rows, cfg=ACCOUNTS)
     asyncio.run(be.ensure_providers())
     assert "model/new" not in _paths(be)
@@ -499,19 +530,19 @@ def test_a_restart_finds_the_registration_already_there():
 
 
 def test_two_models_on_one_account_are_not_skew():
-    """OpenRouter serves both under one api_base; neither is the other's mismatch."""
+    """OpenRouter serves both under one api_base; the stamp plus the model name keeps them two keys."""
     fleet, (grok, gemma) = _bought(OR_GROK, OR_GEMMA)
     base = "https://openrouter.ai/api/v1"
     info = {
         "data": [
-            {"model_name": "grok-4", "litellm_params": {"api_base": base}},
-            {"model_name": "gemma", "litellm_params": {"api_base": base}},
+            {"model_name": "grok-4", "litellm_params": {"api_base": base}, "model_info": {"llmao_key": base}},
+            {"model_name": "gemma", "litellm_params": {"api_base": base}, "model_info": {"llmao_key": base}},
         ]
     }
     be = _manager(fleet, info, cfg=ACCOUNTS)
     asyncio.run(be.check_config_skew())
     assert grok.in_litellm and gemma.in_litellm
-    assert not grok.config_mismatch and not gemma.config_mismatch
+    assert [row.model_name for row in grok.litellm] == ["grok-4"]
     assert fleet.orphans == []
 
 
@@ -558,15 +589,15 @@ def test_an_unknown_address_is_found_by_its_stamp():
     assert [o.deployment.display for o in fleet.orphans] == ["10.0.0.99:8001"]
 
 
-def test_an_unknown_address_is_not_found_on_its_listen_port():
-    """Off-box the listen port is unreachable; finding it there proves nothing."""
+def test_an_unknown_address_is_not_found_by_an_unstamped_row_on_its_listen_port():
+    """Off-box the listen port is unreachable, and an unstamped row there is nobody's anyway."""
     fleet, dep = _unplaced()
     dep.litellm = ()
     info = {"data": [{"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.5:8001/v1"}}]}
     be = _manager(fleet, info)
     asyncio.run(be.check_config_skew())
     assert dep.in_litellm is False
-    assert dep.at_listen_port is True
+    assert [o.deployment.display for o in fleet.orphans] == ["10.0.0.5:8001"]
 
 
 def test_an_unknown_address_keeps_its_last_litellm_health():

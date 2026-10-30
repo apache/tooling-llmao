@@ -584,8 +584,10 @@ Two cases become plain:
   `unplaced` guard, made general.
 - **A port remap.** The key is the same, but the dialable URL no longer
   matches the `api_base` LiteLLM holds, so the plan says "update this
-  deployment's api_base". Today that case is spread across
-  `at_listen_port`, `same_deployment` and `on_listen_port`.
+  deployment's api_base". (It was once spread across `at_listen_port`,
+  `same_deployment` and `on_listen_port`; those went with the address
+  fallback on 2026-10-29, and until the plan exists a remapped row is
+  simply the deployment, found by its stamp, at an address LiteLLM holds.)
   `POST /model/update` merges `litellm_params`, which is where `api_base`
   lives, so the action is that call, and it does not touch `model_info`,
   so the stamp is safe across it (verified in the backfill; see the
@@ -938,18 +940,25 @@ fact has two homes. Then `deployment.py` against six known shapes.
    longer imports `fleet.py` (`ORDER_SELF_HOSTED` and `ORDER_SPEND` moved
    with it). The executor's every read goes through
    `Fleet.update_litellm_deployments`, which joins the rows to the intended
-   deployments (`FleetDeployment.match_litellm`: by the stamp first, then by
-   the dialable address) and rebuilds `Fleet.orphans` with their pass
-   counts; `Fleet.update_litellm_health` does the same for the verdicts. The
-   five fields written onto a deployment (`in_litellm`,
-   `config_mismatch`, `at_listen_port`, `litellm_healthy`,
+   deployments and rebuilds `Fleet.orphans` with their pass counts;
+   `Fleet.update_litellm_health` does the same for the verdicts. The
+   fields written onto a deployment (`in_litellm`, `litellm_healthy`,
    `litellm_health_at`) are reads of the two snapshots now, so a write to
-   LiteLLM sets nothing: every add and delete is followed by a read, and
-   a confirm read that fails leaves the write unobserved until the next
-   read. `ExtraLiteLLM`, the route tuples, `_index_deployments`,
-   `_mark_presence`, `_stamps_from_model_info` and the executor's own
-   orphan counter are gone. The LiteLLM health age is the read's time now,
-   not "now", so the 12-hour staleness box-lifecycle.md describes is real.
+   LiteLLM sets nothing: every add and delete is followed by a fetch that
+   is folded, and a confirm fetch that fails leaves the write unobserved
+   until the next one. `ExtraLiteLLM`, the route tuples,
+   `_index_deployments`, `_mark_presence`, `_stamps_from_model_info` and
+   the executor's own orphan counter are gone. The LiteLLM health age is
+   the read's time now, not "now", so the 12-hour staleness
+   box-lifecycle.md describes is real. Then, the same day: a fetch only
+   fetches (`DeploymentManager.fetch_deployments`), every fold is a
+   visible `update_*` call, the executor acts on keys, and **the stamp is
+   the only match**: `LiteLLMDeployments` indexes its rows by key, the add
+   asks `has(key)` of the fetch it just made, the delete removes every id
+   `under(key)`, and a row with no stamp is an orphan whatever address it
+   sits at. The address fallback, `config_mismatch`, `at_listen_port`,
+   `same_deployment` and `on_listen_port` went with it; more than one row
+   under a key is the new `SKEW_DUPLICATED` badge.
 7. VllmProbe (with `vllm_client.py`).
 
 Pages, capacity, the sampler, and the action log read the view. They stop
@@ -1070,7 +1079,7 @@ badges, unlisted (host-level), and the plan actions.
 | Healthy, absent | probe ok, dialable, no LiteLLM deployment | Healthy; skew intended_not_in_litellm | add_litellm |
 | Probe failed, under threshold | `last_ok` set, `fails` < `health_fail_threshold` | stays Healthy | none |
 | Healthy, present, api_base matches | probe ok, the deployment's api_base == dialable | Healthy | none |
-| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; skew at_listen_port or mismatch | update_api_base via `POST /model/update` (it merges `litellm_params` and leaves `model_info`, the stamp included, alone). `asf_api_base` lags until that write |
+| Port remap | same key, dialable ≠ LiteLLM api_base (including a listen-port row) | Healthy; no badge today, the row is found by its stamp | update_api_base via `POST /model/update` (it merges `litellm_params` and leaves `model_info`, the stamp included, alone). `asf_api_base` lags until that write |
 | LiteLLM health skew | vLLM up and LiteLLM `/health` down, or the reverse | badge only (`vllm_up_litellm_down` / `vllm_down_litellm_up`) | none |
 | Unhealthy / Stalled, in LiteLLM | self-hosted; probe failed past threshold, or stalled | Unhealthy / Stalled | delete_litellm |
 | 65e22c8 serving through a listing gap | both listings fresh, neither names the host; probe ok on last-known dialable | Healthy. The count may reach `UNLISTED_PASSES`. The route stays | none. No sentence while Healthy. Keep probing the last-known URL |
@@ -1082,7 +1091,8 @@ badges, unlisted (host-level), and the plan actions.
 | Listed, not running | either listing has the host with a non-running status, or with no public address | listed, not running: not a miss; no address from that listing; dialable is last-known | keep probing last-known; the unlisted count does not move |
 | #29 orphan, early | not intended, a LiteLLM deployment exists, orphan_passes < `ORPHAN_PASSES` | litellm_only skew | none (count) |
 | #29 orphan, persisted | orphan_passes ≥ `ORPHAN_PASSES` | litellm_only skew item | none; `needs_human`. The item says who meant it: stamped (`llmao_key`) is llmao's own add, intent lost in a restart; unstamped is a hand add in LiteLLM's UI. Stop tracking deletes; Approve, when a listing names the host, intends it again |
-| Orphan that is our listen port | a LiteLLM deployment matches a key's listen URL | at_listen_port | update_api_base, not prune |
+| Our stamp at our listen port | a LiteLLM deployment stamped with a key sits at that key's listen URL | the deployment, at an unreachable address | update_api_base, not prune |
+| Duplicates | more than one LiteLLM deployment under one key | duplicated in LiteLLM | delete the extra copies (today: every copy goes when the deployment is dropped) |
 | Hand edit in LiteLLM's UI | intended row; its deployment is gone, or its api_base differs | skew | add when the add gate is open; update_api_base when api_base differs. Body fields are not reverted in v1. Action log records the revert |
 | Two LiteLLM ids, one key | two rows for one key | keep the stamped id, else the api_base that matches the dialable URL; two stamped: the lower id | the other id is an orphan: skew, a human decides |
 | Confirm fetch failed | a write just happened; the follow-up GET of the LiteLLM deployments failed | that source is unread, not "still absent" | no add, no delete, no prune |

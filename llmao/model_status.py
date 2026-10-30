@@ -92,8 +92,9 @@ SKEW_INTENDED_NOT_IN_LITELLM = "intended_not_in_litellm"
 SKEW_VLLM_UP_LITELLM_DOWN = "vllm_up_litellm_down"
 SKEW_VLLM_DOWN_LITELLM_UP = "vllm_down_litellm_up"
 SKEW_IN_LITELLM_NOT_IN_CONFIG = "in_litellm_not_in_config"
-SKEW_CONFIG_MISMATCH = "config_mismatch"
-SKEW_AT_LISTEN_PORT = "in_litellm_at_listen_port"
+# LiteLLM holds more than one deployment under this key: it keeps a second
+# copy when asked twice, and every copy takes traffic.
+SKEW_DUPLICATED = "litellm_duplicates"
 
 # Display and log text for a badge. The stored value is the badge id.
 SKEW_PHRASE = {
@@ -101,8 +102,7 @@ SKEW_PHRASE = {
     SKEW_VLLM_UP_LITELLM_DOWN: "vLLM up, LiteLLM down",
     SKEW_VLLM_DOWN_LITELLM_UP: "vLLM down, LiteLLM up",
     SKEW_IN_LITELLM_NOT_IN_CONFIG: "in LiteLLM, not in config",
-    SKEW_CONFIG_MISMATCH: "config and LiteLLM disagree",
-    SKEW_AT_LISTEN_PORT: "in LiteLLM at the listen port",
+    SKEW_DUPLICATED: "duplicated in LiteLLM",
 }
 
 
@@ -134,10 +134,9 @@ class DeploymentSnapshot:
     kv_cache_tokens: int | None = None
     # LiteLLM has this api_base and config.yaml does not. Not an intended row.
     litellm_only: bool = False
-    # Caller-supplied. The skew runner does not detect a model or port mismatch.
-    config_mismatch: bool = False
-    # LiteLLM has this server at its listen port, which is unreachable off-box.
-    at_listen_port: bool = False
+    # How many deployments LiteLLM holds under this key. More than one is
+    # duplicates: LiteLLM keeps a second copy when asked twice.
+    litellm_copies: int = 0
     # When we last handed this box its config. None until a GET /vllm/config
     # succeeded for it since we started. One of the two loading starts.
     config_served_at: float | None = None
@@ -308,10 +307,8 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
         skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
     if vllm_signal == SIGNAL_DOWN and litellm_signal == SIGNAL_UP:
         skew.append(SKEW_VLLM_DOWN_LITELLM_UP)
-    if snap.config_mismatch:
-        skew.append(SKEW_CONFIG_MISMATCH)
-    if snap.at_listen_port:
-        skew.append(SKEW_AT_LISTEN_PORT)
+    if snap.litellm_copies > 1:
+        skew.append(SKEW_DUPLICATED)
 
     return DeploymentStatus(
         model_name=snap.model_name,

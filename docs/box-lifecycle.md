@@ -27,7 +27,7 @@ Everything the lifecycle reads, and where it comes from.
 | `first_probed_at` | the first probe attempt in this process | The clock for a server that has no loading start and never answers. "No address to dial" counts as an attempt when the host is unlisted. |
 | `last_ok`, `fails` | each probe | When `/health` last passed, and the consecutive failures since. |
 | `key_rejected`, `rejected_passes` | `/v1/models` with the working key, asked only when `/health` passed | `True` on a 401. The passes count runs while refused; a 200 or a failed probe resets it. |
-| `litellm`, `litellm_health` | the LiteLLM deployments read (`Fleet.update_litellm_deployments`) and LiteLLM's own `/health` read (`Fleet.update_litellm_health`) | The deployments LiteLLM has for this one, found by the stamp first and then by address (`in_litellm`, `config_mismatch`, `at_listen_port` are read off them), and LiteLLM's last verdict on it with its time. |
+| `litellm`, `litellm_health` | the LiteLLM deployments read (`Fleet.update_litellm_deployments`) and LiteLLM's own `/health` read (`Fleet.update_litellm_health`) | The deployments LiteLLM has under this one's key, its stamp (`in_litellm` is read off them; more than one is duplicates), and LiteLLM's last verdict on it with its time. |
 | `unlisted` | `Fleet.place_servers`, from the Vast and RunPod listings | Host-level: every configured provider has answered and none names this host, for `UNLISTED_PASSES` passes running. |
 
 The clocks: `health_interval_s` (45 s between passes), `health_grace_s`
@@ -197,9 +197,8 @@ lifecycle emits these six badges and nothing else (`SKEW_PHRASE` in
 | Intended, not in LiteLLM | A deployment config intends, and LiteLLM lacks. Emitted only for Healthy, or for a commercial deployment that is Configured. | `sync_selfhost` adds it, or Add does. |
 | vLLM up, LiteLLM down | The probe passes but LiteLLM's own `/health` reports the endpoint down. The two signals carry their own ages, so a difference reads as two snapshots, not a contradiction. | LiteLLM's next health pass agrees. |
 | vLLM down, LiteLLM up | The reverse. | likewise |
-| In LiteLLM, not in config | An orphan: a LiteLLM deployment no intended one claims, by its stamp or its address (`Fleet.orphans`, rebuilt on every read). On the strip after `ORPHAN_PASSES` reads, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Stop tracking; an approval of the host, or a config row, that claims it |
-| Config and LiteLLM disagree | The server's `api_base` is in LiteLLM under a different model name. Kept across the health pass. | a matching name |
-| In LiteLLM at the listen port | LiteLLM has the server at its listen port where that differs from its public port. Unreachable off-box, so it does not count as "in LiteLLM"; the server is registered at its public port as well and the listen-port entry is left for an admin. | the entry is removed |
+| In LiteLLM, not in config | An orphan: a LiteLLM deployment whose stamp no intended one has, or with no stamp at all, whatever address it sits at (`Fleet.orphans`, rebuilt on every read). On the strip after `ORPHAN_PASSES` reads, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Stop tracking; an approval of the host, or a config row, that claims it |
+| Duplicated in LiteLLM | LiteLLM holds more than one deployment under this key: it keeps a second copy when asked twice, and every copy takes traffic. | the extra copies are deleted (every copy goes when the deployment is dropped; removing extras from a serving one is the plan's) |
 
 A signal is stale after `health_fail_threshold` missed intervals (about
 2.5 minutes for the probe, about 12 hours for LiteLLM's health). Stale

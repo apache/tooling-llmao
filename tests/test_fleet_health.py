@@ -37,7 +37,7 @@ from llmao.model_status import (
     HEALTHY,
     LOADING,
     REJECTED,
-    SKEW_CONFIG_MISMATCH,
+    SKEW_DUPLICATED,
     SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_INTENDED_NOT_IN_LITELLM,
     SKEW_VLLM_DOWN_LITELLM_UP,
@@ -256,20 +256,23 @@ def test_extra_routes_are_per_port_and_model():
     assert SKEW_IN_LITELLM_NOT_IN_CONFIG not in dep.skew
 
 
-def test_model_name_mismatch_survives_health_check():
+def test_duplicates_survive_the_health_check_and_clear_with_the_extra_copy():
     srv = _server()
     srv.state = HEALTHY
     dep = FleetDeployment.from_vllm(srv)
     fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
-    backend, litellm = _skew_manager(fleet, [{"model_name": "not-gemma", "litellm_params": {"api_base": srv.api_base}}])
+    copy = {"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}
+    stamped = [{**copy, "model_info": {"id": n, "llmao_key": dep.key.url}} for n in ("one", "two")]
+    backend, litellm = _skew_manager(fleet, stamped)
     asyncio.run(backend.check_config_skew())
-    assert SKEW_CONFIG_MISMATCH in dep.skew
+    assert SKEW_DUPLICATED in dep.skew
     litellm.health = {"healthy_endpoints": [{"api_base": srv.api_base}], "unhealthy_endpoints": []}
     asyncio.run(backend.check_health_skew())
-    assert SKEW_CONFIG_MISMATCH in dep.skew
-    litellm.info = [{"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}]
+    assert SKEW_DUPLICATED in dep.skew
+    litellm.info = stamped[:1]
     asyncio.run(backend.check_config_skew())
-    assert SKEW_CONFIG_MISMATCH not in dep.skew
+    assert SKEW_DUPLICATED not in dep.skew
+    assert dep.in_litellm is True
     assert fleet.orphans == []
 
 
