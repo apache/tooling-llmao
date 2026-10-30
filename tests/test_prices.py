@@ -22,6 +22,7 @@ import asyncio
 import time
 
 import httpx
+import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.capacity import HOUR_S, HourlyRollup
@@ -293,6 +294,22 @@ def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
 def test_without_a_runpod_key_the_runner_ends_at_once():
     fleet = Fleet(edict(), [_server("203.0.113.20")])
     asyncio.run(asyncio.wait_for(fleet.run_runpod_rentals(), timeout=1))
+
+
+def test_the_runner_reads_the_rentals_on_its_first_pass():
+    """The runner calls the reader by its name: a rename once left it calling a method that did not exist,
+    and every pass failed with a warning while the pods went unread."""
+    fleet = _fleet_with_runpod([_server("203.0.113.20")])
+    calls = []
+
+    async def read(client):
+        calls.append(client)
+        raise asyncio.CancelledError
+
+    fleet.read_runpod_rentals = read
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(fleet.run_runpod_rentals())
+    assert len(calls) == 1
 
 
 def _fleet_renting_from_both(servers):

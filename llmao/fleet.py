@@ -1071,12 +1071,12 @@ class Fleet:
         while True:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                    await self.read_runpod_listing(client)
+                    await self.read_runpod_rentals(client)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                # The last list stands; an outage only makes it older.
-                _LOGGER.warning("runpod listing failed: %s", e)
+                # The last report stands; an outage only makes it older.
+                _LOGGER.warning("the RunPod rentals could not be read: %s", e)
             await asyncio.sleep(RUNPOD_LISTING_INTERVAL_S)
 
     def place_servers(self) -> None:
