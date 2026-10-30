@@ -326,7 +326,7 @@ def test_local_from_cfg_public_equals_listen():
     # A fresh server awaits contact; serving its config starts the load.
     assert fleet.servers[0].state == AWAITING
     fleet.provisioning.note("127.0.0.1", now=1.0)
-    fleet.read_config_fetches()
+    fleet.update_config_fetches()
     assert fleet.servers[0].config_served_at == 1.0
     fleet.servers[0].record_probe(False, now=2.0, grace_s=1800, fail_threshold=3, err="HTTP 503")
     assert fleet.servers[0].state == LOADING

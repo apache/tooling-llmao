@@ -20,14 +20,14 @@ Everything the lifecycle reads, and where it comes from.
 
 | Observation | Set by | Meaning |
 |---|---|---|
-| `config_served_at` | `Fleet.read_config_fetches`, each probe pass, from the box's last `GET /vllm/config` | A **loading start**. The box has been told what to run, so a loading window has started. `None` until then. |
+| `config_served_at` | `Fleet.update_config_fetches`, each probe pass, from the box's last `GET /vllm/config` | A **loading start**. The box has been told what to run, so a loading window has started. `None` until then. |
 | `probe_ok` | each `/health` probe | `True` on a 200: vLLM says it is serving. Not "all is well": `/health` takes no key. |
 | `reached` | each probe | Any HTTP answer at all, a 503 included. `False` is no connection or a timeout. |
 | `first_reached_at` | the first probe in this process that vLLM answered | The other **loading start**: vLLM is listening, so the model is loading, whether or not this process served the config (an approved host that fetched before a restart never fetches again). The loading start is the earlier of the two. |
 | `first_probed_at` | the first probe attempt in this process | The clock for a server that has no loading start and never answers. "No address to dial" counts as an attempt when the host is unlisted. |
 | `last_ok`, `fails` | each probe | When `/health` last passed, and the consecutive failures since. |
 | `key_rejected`, `rejected_passes` | `/v1/models` with the working key, asked only when `/health` passed | `True` on a 401. The passes count runs while refused; a 200 or a failed probe resets it. |
-| `litellm`, `litellm_health` | the LiteLLM deployments read (`Fleet.read_litellm_deployments`) and LiteLLM's own `/health` read (`Fleet.read_litellm_health`) | The deployments LiteLLM has for this one, found by the stamp first and then by address (`in_litellm`, `config_mismatch`, `at_listen_port` are read off them), and LiteLLM's last verdict on it with its time. |
+| `litellm`, `litellm_health` | the LiteLLM deployments read (`Fleet.update_litellm_deployments`) and LiteLLM's own `/health` read (`Fleet.update_litellm_health`) | The deployments LiteLLM has for this one, found by the stamp first and then by address (`in_litellm`, `config_mismatch`, `at_listen_port` are read off them), and LiteLLM's last verdict on it with its time. |
 | `unlisted` | `Fleet.place_servers`, from the Vast and RunPod listings | Host-level: every configured provider has answered and none names this host, for `UNLISTED_PASSES` passes running. |
 
 The clocks: `health_interval_s` (45 s between passes), `health_grace_s`
@@ -273,7 +273,7 @@ reconcile migration.
 - `llmao/fleet.py`: `VllmServer.record_probe` (the counters and the
   transition log lines), `Fleet.probe_all` (when `/v1/models` is asked),
   `Fleet.place_servers` and `apply_rentals` (listed, unlisted, the public
-  port), `read_config_fetches` (the loading start), `discover_rentals` (a
+  port), `update_config_fetches` (the loading start), `discover_rentals` (a
   rental nobody intends, never added on sight), `add_refusal` and
   `remove_refusal` (the button gates).
 - `llmao/proxy/deployments.py`: `sync_selfhost` (the automatic add and

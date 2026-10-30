@@ -1130,7 +1130,7 @@ async def do_add_deployment():
         await flash_danger(reason)
         return _see_other("/models")
     try:
-        await APP.backend.deployments.add_deployment(matches[0])
+        await APP.backend.deployments.add_deployment(matches[0].key)
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
@@ -1165,7 +1165,7 @@ async def do_remove_deployment():
         await flash_danger(reason)
         return _see_other("/models")
     try:
-        await APP.backend.deployments.delete_deployment(matches[0])
+        await APP.backend.deployments.delete_deployment(matches[0].key)
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")

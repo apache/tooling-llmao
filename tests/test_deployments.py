@@ -359,13 +359,12 @@ def test_a_stamp_for_another_key_is_not_this_deployment():
     }
     (theirs,) = deployments_from_model_info({"data": [row]}, now=0.0).rows
     assert theirs.key == DeploymentKey("http://10.0.0.8:8001", "gemma4-26b") != dep.key
-    dep.read_litellm((theirs,))
-    assert dep.litellm == ()
+    assert dep.match_litellm((theirs,)) == ((), ())
     # Unstamped at its address: present, as a row from before stamping would be,
     # but not deletable by it: the id lookup goes by the stamp alone (the backfill stamped every row).
     del row["model_info"]["llmao_key"]
     be = _manager(fleet, _litellm([row]))
-    assert asyncio.run(be.delete_deployment(dep)) is False
+    assert asyncio.run(be.delete_deployment(dep.key)) is False
     assert dep.in_litellm is True
     assert "model/delete" not in _paths(be)
 

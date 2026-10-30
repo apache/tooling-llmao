@@ -923,7 +923,7 @@ fact has two homes. Then `deployment.py` against six known shapes.
    not, under one cap, and `UnknownFetch` is gone; `main.py` builds the
    record as `app.provisioning` and hands it to the route and the
    `Fleet`; the route notes every fetch and decides nothing;
-   `Fleet.read_config_fetches` copies the loading start onto the
+   `Fleet.update_config_fetches` copies the loading start onto the
    servers at the top of each probe pass, and `Fleet.unintended` makes
    the stranger split against `intended_names`. The approval
    bookkeeping the old handler did (dropping an approval when its host
@@ -937,10 +937,10 @@ fact has two homes. Then `deployment.py` against six known shapes.
    for one read, `LiteLLMHealth` and `LiteLLMHealthReport`), which no
    longer imports `fleet.py` (`ORDER_SELF_HOSTED` and `ORDER_SPEND` moved
    with it). The executor's every read goes through
-   `Fleet.read_litellm_deployments`, which joins the rows to the intended
-   deployments (`FleetDeployment.read_litellm`: by the stamp first, then by
+   `Fleet.update_litellm_deployments`, which joins the rows to the intended
+   deployments (`FleetDeployment.match_litellm`: by the stamp first, then by
    the dialable address) and rebuilds `Fleet.orphans` with their pass
-   counts; `Fleet.read_litellm_health` does the same for the verdicts. The
+   counts; `Fleet.update_litellm_health` does the same for the verdicts. The
    five fields written onto a deployment (`in_litellm`,
    `config_mismatch`, `at_listen_port`, `litellm_healthy`,
    `litellm_health_at`) are reads of the two snapshots now, so a write to

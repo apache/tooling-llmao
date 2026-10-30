@@ -379,7 +379,7 @@ def _orphan(fleet, passes: int, *, stamp: str = "", id: str = "orphan-1") -> Non
     rows = (row, *(r for dep in fleet.deployments for r in dep.litellm))
     fleet.orphans = []
     for _ in range(passes):
-        fleet.read_litellm_deployments(LiteLLMDeployments(rows, time.time()))
+        fleet.update_litellm_deployments(LiteLLMDeployments(rows, time.time()))
 
 
 def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_tracking():

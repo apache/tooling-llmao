@@ -556,15 +556,16 @@ class FleetDeployment:
         # the provider's model, as LiteLLM names it. None on our boxes.
         self.provider = provider
         self.litellm_model = litellm_model
-        # What the last read of the LiteLLM deployments had for this one
-        # (read_litellm): the rows stamped with its key or at its dialable
+        # What the last read of the LiteLLM deployments had for this one,
+        # written by Fleet.update_litellm_deployments from match_litellm:
+        # the rows stamped with its key or at its dialable
         # address, under its name or another; and, apart, the rows at a
         # box's listen port where that differs from the public one, which
         # LiteLLM cannot reach off-box, so they are noted and not counted.
         self.litellm: tuple[LiteLLMDeployment, ...] = ()
         self.litellm_listen: tuple[LiteLLMDeployment, ...] = ()
         # LiteLLM's own /health verdict on it, from the last read that said
-        # anything (Fleet.read_litellm_health). None until one does.
+        # anything (Fleet.update_litellm_health). None until one does.
         self.litellm_health: LiteLLMHealth | None = None
         self.skew: list[str] = []
         # The last registration (or removal) call to LiteLLM that failed, and
@@ -628,8 +629,14 @@ class FleetDeployment:
         """
         return {ACCESS_GROUP_SELF_HOSTED} if self.self_hosted else set()
 
-    def read_litellm(self, rows: tuple[LiteLLMDeployment, ...]) -> None:
-        """Take from one read of the LiteLLM deployments the ones that concern this deployment.
+    def match_litellm(
+        self, rows: tuple[LiteLLMDeployment, ...]
+    ) -> tuple[tuple[LiteLLMDeployment, ...], tuple[LiteLLMDeployment, ...]]:
+        """The rows of one read of the LiteLLM deployments that are this deployment, and those at its listen port.
+
+        Writes nothing: Fleet.update_litellm_deployments stores the answer
+        on the deployment, and the executor asks it of the read it just
+        made, so no decision rests on the store having been updated first.
 
         The stamp decides first: a row stamped with this key is this
         deployment at whatever address it was registered. Then the address:
@@ -653,8 +660,7 @@ class FleetDeployment:
                 listen.append(row)
             elif base and row.api_base == base and (self.provider is None or row.model_name == self.model_name):
                 mine.append(row)
-        self.litellm = tuple(mine)
-        self.litellm_listen = tuple(listen)
+        return tuple(mine), tuple(listen)
 
     @property
     def in_litellm(self) -> bool:
@@ -705,7 +711,7 @@ class Orphan:
     unstamped, a hand add in LiteLLM's UI. Stop tracking on /models deletes
     it. ``passes`` is how many reads running it has been one; the strip
     shows it from ORPHAN_PASSES on, so a transient read is not an item.
-    Fleet.read_litellm_deployments builds these.
+    Fleet.update_litellm_deployments builds these.
     """
 
     deployment: LiteLLMDeployment
@@ -784,7 +790,7 @@ class Fleet:
         self.ready = asyncio.Event()
         # Every name that fetched its config (llmao/provisioning.py). The
         # config route writes it; main.py builds the one record and hands it
-        # to both. Each probe pass reads it (read_config_fetches), and
+        # to both. Each probe pass reads it (update_config_fetches), and
         # unintended() shows the names nothing intends.
         self.provisioning = provisioning or ProvisioningRecord()
         # What an admin told an unknown box to load (intent.Approval), keyed by
@@ -792,7 +798,7 @@ class Fleet:
         self.approvals: dict[str, Approval] = {}
         # The last read of the LiteLLM deployments (llmao/proxy/deployments.py),
         # None until one; and the deployments in it no intent claims, with
-        # their pass counts. Both set by read_litellm_deployments.
+        # their pass counts. Both set by update_litellm_deployments.
         self.litellm: LiteLLMDeployments | None = None
         self.orphans: list[Orphan] = []
         # What each provider we rent from last reported (llmao/rental.py).
@@ -836,7 +842,7 @@ class Fleet:
             deployments.append(FleetDeployment.from_vllm(srv))
         return cls(cfg, servers, deployments, models=by_name, provisioning=provisioning)
 
-    def read_config_fetches(self) -> None:
+    def update_config_fetches(self) -> None:
         """Each pass reads the ConfigFetch source: the last fetch by a server's name is its loading start.
 
         ``config_served_at`` on the server is the lifecycle fact the fetch
@@ -850,11 +856,12 @@ class Fleet:
             if at is not None:
                 srv.config_served_at = at
 
-    def read_litellm_deployments(self, snapshot: LiteLLMDeployments) -> None:
+    def update_litellm_deployments(self, snapshot: LiteLLMDeployments) -> None:
         """One read of the LiteLLM deployments, joined to the intended ones; the rest are orphans.
 
-        Each intended deployment takes the rows that are it (FleetDeployment
-        .read_litellm). A row nothing took is an orphan, counted across
+        The one place the LiteLLM deployments are written onto the fleet.
+        Each intended deployment gets the rows that are it (FleetDeployment
+        .match_litellm). A row nothing matched is an orphan, counted across
         reads: one absent from a read drops out, so a flapping one never
         reaches ORPHAN_PASSES, and one that reaches it is logged once, with
         who added it.
@@ -862,7 +869,7 @@ class Fleet:
         self.litellm = snapshot
         claimed: set[LiteLLMDeployment] = set()
         for dep in self.deployments:
-            dep.read_litellm(snapshot.rows)
+            dep.litellm, dep.litellm_listen = dep.match_litellm(snapshot.rows)
             claimed.update(dep.litellm)
             claimed.update(dep.litellm_listen)
         before = {(o.deployment.api_base, o.deployment.model_name): o.passes for o in self.orphans}
@@ -881,7 +888,14 @@ class Fleet:
                 )
         self.orphans = orphans
 
-    def read_litellm_health(self, report: LiteLLMHealthReport) -> None:
+    def deployment(self, key: DeploymentKey) -> FleetDeployment:
+        """The intended deployment under this key: what the executor is handed to act on."""
+        dep = next((d for d in self.deployments if d.key == key), None)
+        if dep is None:
+            raise KeyError(key)
+        return dep
+
+    def update_litellm_health(self, report: LiteLLMHealthReport) -> None:
         """One read of LiteLLM's own /health, onto each deployment it spoke of.
 
         A deployment with no address this pass has nothing to match the
@@ -1027,7 +1041,7 @@ class Fleet:
         own = client is None
         if own:
             client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
-        self.read_config_fetches()
+        self.update_config_fetches()
         try:
             in_litellm_by_srv = {dep.vllm: dep.in_litellm for dep in self.deployments if dep.vllm is not None}
             for srv in self.servers:

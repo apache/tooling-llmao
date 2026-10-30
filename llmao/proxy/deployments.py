@@ -20,13 +20,16 @@ Two sources (docs/fleet-reconcile-design.md): ``LiteLLMDeployment``, one per
 ``GET /model/info`` entry, and ``LiteLLMHealth``, LiteLLM's own ``GET
 /health`` verdict on a deployment. Each is a frozen snapshot of what LiteLLM
 said, with nothing of ours on it; the fleet joins them to the intended
-deployments (``Fleet.read_litellm_deployments``, ``Fleet.read_litellm_health``).
+deployments (``Fleet.update_litellm_deployments``, ``Fleet.update_litellm_health``).
 
 ``DeploymentManager`` is the executor: it fetches the two sources, hands
 them to the fleet, and sends ``/model/new`` and ``/model/delete`` for the
-deployments the fleet says to add or drop. Every write is followed by a
-read, so presence is observed, not assumed. This module never imports
-``llmao.fleet``: the fleet is handed in.
+keys it is told to add or drop. A fetch only fetches; every place that
+folds a fetch into the fleet says so on its own line, and the executor's
+own decisions read the fetch, never the fleet's copy of it. Every write
+is followed by a fetch that is folded, so presence is observed, not
+assumed. This module never imports ``llmao.fleet``: the fleet is handed
+in.
 """
 
 from __future__ import annotations
@@ -242,59 +245,65 @@ class DeploymentManager:
             "model_info": info,
         }
 
-    async def read_deployments(self) -> LiteLLMDeployments:
-        """GET /model/info, read into the fleet. Raises when LiteLLM does not answer."""
+    async def fetch_deployments(self) -> LiteLLMDeployments:
+        """GET /model/info as a snapshot. Fetches only; the fleet is not touched. Raises when LiteLLM is down."""
         resp = await self._transport.request("GET", "model/info")
         self._transport.raise_http(resp)
-        snapshot = deployments_from_model_info(resp.json(), now=time.time())
-        self.fleet.read_litellm_deployments(snapshot)
-        return snapshot
+        return deployments_from_model_info(resp.json(), now=time.time())
 
-    async def add_deployment(self, dep) -> bool:
-        """POST /model/new for this deployment. No serving check. True when a write was sent.
+    async def add_deployment(self, key: DeploymentKey) -> bool:
+        """POST /model/new for the deployment under this key. No serving check. True when a write was sent.
 
         Callers decide the gate. sync_selfhost waits until vLLM is SERVING.
         POST /do-add-deployment uses add_refusal for the same gate, then calls
-        this. A fresh read first, so a deployment already present is not
-        posted again (a 400 or 409 means the same thing), and a read after,
-        so presence is observed.
+        this. A fresh fetch first, matched here, so a deployment already
+        present is not posted again (a 400 or 409 means the same thing); the
+        fetch is folded for everything that reads the fleet, but the decision
+        is made on the fetch itself. A fetch after, so presence is observed.
         """
-        await self.read_deployments()
-        if dep.in_litellm:
-            _LOGGER.info("model/new already present %s@%s", dep.name, dep.key.display)
+        dep = self.fleet.deployment(key)
+        snapshot = await self.fetch_deployments()
+        self.fleet.update_litellm_deployments(snapshot)
+        mine, _listen = dep.match_litellm(snapshot.rows)
+        if mine:
+            _LOGGER.info("model/new already present %s@%s", dep.name, key.display)
             return False
         body = self.deployment_body(dep)
         resp = await self._transport.request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
-            _LOGGER.info("model/new already present %s@%s", dep.name, dep.key.display)
+            _LOGGER.info("model/new already present %s@%s", dep.name, key.display)
         else:
             self._transport.raise_http(resp)
-            _LOGGER.info("model/new %s@%s", dep.name, dep.key.display)
+            _LOGGER.info("model/new %s@%s", dep.name, key.display)
         await self._confirm()
         return True
 
-    async def delete_deployment(self, dep) -> bool:
-        """POST /model/delete for this deployment's LiteLLM id. True when a write was sent.
+    async def delete_deployment(self, key: DeploymentKey) -> bool:
+        """POST /model/delete for the LiteLLM id under this key. True when a write was sent.
 
-        The id comes from a fresh read, by the stamp: the row stamped with
+        The id comes from a fresh fetch, by the stamp: the row stamped with
         this key is this deployment at whatever address it was registered,
         including a public port that has since been remapped. A row with no
         stamp is not one of ours (every row llmao adds is stamped, and the
-        rows from before stamping were stamped in place on 2026-10-22).
+        rows from before stamping were stamped in place on 2026-10-22). The
+        fetch is folded either way, so a deployment LiteLLM no longer has
+        stops reading as present.
         """
-        snapshot = await self.read_deployments()
-        found = next((row.id for row in snapshot.rows if row.key == dep.key and row.id), None)
+        dep = self.fleet.deployment(key)
+        snapshot = await self.fetch_deployments()
+        self.fleet.update_litellm_deployments(snapshot)
+        found = next((row.id for row in snapshot.rows if row.key == key and row.id), None)
         if not found:
-            _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, dep.key.display)
+            _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, key.display)
             return False
         resp = await self._transport.request("POST", "model/delete", json={"id": found})
         self._transport.raise_http(resp)
-        _LOGGER.info("model/delete %s@%s id=%s", dep.name, dep.key.display, found)
+        _LOGGER.info("model/delete %s@%s id=%s", dep.name, key.display, found)
         await self._confirm()
         return True
 
     async def _each(self, action, dep) -> bool:
-        """Run `action` on one deployment; a failure is logged and goes no further.
+        """Run `action` on one deployment's key; a failure is logged on the deployment and goes no further.
 
         The callers walk every deployment. Unguarded, the first one to raise
         ended the walk, and every deployment after it was never registered:
@@ -302,7 +311,7 @@ class DeploymentManager:
         Returns whether the action sent a write to LiteLLM.
         """
         try:
-            wrote = await action(dep)
+            wrote = await action(dep.key)
         except Exception as e:
             _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.key.display)
             # Kept for /models, which otherwise shows only that it is missing.
@@ -314,19 +323,21 @@ class DeploymentManager:
         return bool(wrote)
 
     async def _confirm(self) -> None:
-        """Re-read the LiteLLM deployments straight after a write, so presence is observed, not assumed.
+        """Fetch the LiteLLM deployments straight after a write and fold them, so presence is observed, not assumed.
 
         LiteLLM updates its router inside the /model/new and /model/delete
         handlers before answering (1.105.0: add_new_model awaits
         proxy_config.add_deployment; delete_model calls
-        llm_router.delete_deployment), so the read that follows sees the
-        write. If the read fails, the last read stands and the next pass
-        reads again; a failure here never raises out of the probe tick.
+        llm_router.delete_deployment), so the fetch that follows sees the
+        write. If the fetch fails, the last fold stands and the next pass
+        fetches again; a failure here never raises out of the probe tick.
         """
         try:
-            await self.read_deployments()
+            snapshot = await self.fetch_deployments()
         except Exception as e:
             _LOGGER.warning("the LiteLLM deployments could not be re-read after a write: %s", e)
+            return
+        self.fleet.update_litellm_deployments(snapshot)
 
     async def ensure_providers(self) -> None:
         """At startup: POST /model/new for each config.yaml providers deployment."""
@@ -364,8 +375,8 @@ class DeploymentManager:
                 await self._each(self.delete_deployment, dep)
 
     async def check_config_skew(self) -> None:
-        """Read the LiteLLM deployments into the fleet and refresh every deployment's badges."""
-        await self.read_deployments()
+        """Fetch the LiteLLM deployments, fold them into the fleet, and refresh every deployment's badges."""
+        self.fleet.update_litellm_deployments(await self.fetch_deployments())
         self.fleet.refresh_skew()
 
     async def delete_orphan(self, orphan) -> None:
@@ -377,9 +388,9 @@ class DeploymentManager:
         await self._confirm()
 
     async def check_health_skew(self) -> None:
-        """Read LiteLLM's own GET /health (real completions; tokens) into the fleet and refresh the badges."""
+        """Fetch LiteLLM's own GET /health (real completions; tokens), fold it into the fleet, refresh the badges."""
         resp = await self._transport.request("GET", "health")
         self._transport.raise_http(resp)
         body = resp.json() if resp.content else {}
-        self.fleet.read_litellm_health(health_from_body(body, now=time.time()))
+        self.fleet.update_litellm_health(health_from_body(body, now=time.time()))
         self.fleet.refresh_skew()
