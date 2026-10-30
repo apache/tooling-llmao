@@ -959,7 +959,16 @@ fact has two homes. Then `deployment.py` against six known shapes.
    sits at. The address fallback, `config_mismatch`, `at_listen_port`,
    `same_deployment` and `on_listen_port` went with it; more than one row
    under a key is the new `SKEW_DUPLICATED` badge.
-7. VllmProbe (with `vllm_client.py`).
+7. VllmProbe (with `vllm_client.py`), in five small commits: (a) the
+   readers and parsers move into `vllm_client.py` unchanged (**Done**
+   2026-10-29: `fetch_health`, `fetch_served_models`,
+   `parse_max_model_len` from `fleet.py`; `parse_kv_cache_tokens`,
+   `parse_metrics` from `sampler.py`); (b) `VllmProbe` and the `probe()`
+   that produces it, with tests, used by nothing yet; (c) `probe_all`
+   hands the probe to `record_probe` and the observation fields on
+   `VllmServer` become reads of it; (d) `Discovered` carries a probe,
+   rendered where it is shown; (e) the sampler's `/metrics` read returns
+   `Sample` through the client.
 
 Pages, capacity, the sampler, and the action log read the view. They stop
 calling `add_refusal` / `remove_refusal` once the plan is the gate.

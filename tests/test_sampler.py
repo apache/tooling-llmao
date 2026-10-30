@@ -28,7 +28,8 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.capacity import HOUR_S, HourlyRollup
 from llmao.fleet import Fleet, FleetDeployment, VllmServer
-from llmao.sampler import MetricsSampler, parse_kv_cache_tokens, parse_metrics, sample_interval
+from llmao.sampler import MetricsSampler, sample_interval
+from llmao.vllm_client import parse_kv_cache_tokens, parse_metrics
 
 # As vLLM 0.27 writes it, trimmed.
 METRICS = "\n".join(

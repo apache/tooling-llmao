@@ -27,8 +27,6 @@ from llmao.fleet import (
     FleetDeployment,
     VllmServer,
     add_refusal,
-    fetch_served_models,
-    parse_max_model_len,
 )
 from llmao.model_status import (
     AVAILABLE,
@@ -49,6 +47,7 @@ from llmao.model_status import (
 from llmao.provisioning import FETCH_CAP, ConfigFetch, ProvisioningRecord
 from llmao.proxy.deployments import DeploymentManager, LiteLLMDeployment, LiteLLMHealth
 from llmao.reconcile import norm_base
+from llmao.vllm_client import fetch_served_models, parse_max_model_len
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
 

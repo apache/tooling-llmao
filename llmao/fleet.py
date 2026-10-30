@@ -72,6 +72,7 @@ from llmao.reconcile import DeploymentKey, deployment_key, norm_base, normalize_
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
 from llmao.vast_client import fetch_instances, rentals_from_body
+from llmao.vllm_client import fetch_health, fetch_served_models
 
 if TYPE_CHECKING:
     from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments, LiteLLMHealth, LiteLLMHealthReport
@@ -1012,7 +1013,7 @@ class Fleet:
                     )
                     continue
                 was = srv.state
-                ok, reached, err = await _get_health(client, url)
+                ok, reached, err = await fetch_health(client, url)
                 # /v1/models with the working key, when /health passed: the
                 # served window on the edge into Healthy, and again if an
                 # earlier read came back empty (it is fixed at engine init,
@@ -1210,7 +1211,7 @@ class Fleet:
         parts = []
         reached_any = False
         for listen, public in ports:
-            ok, reached, err = await _get_health(client, f"http://{host}:{public}/health")
+            ok, reached, err = await fetch_health(client, f"http://{host}:{public}/health")
             reached_any = reached_any or reached
             if not reached:
                 parts.append(f"{listen}: {err}")
@@ -1352,68 +1353,3 @@ def remove_refusal(dep) -> str | None:
 def orphan_refusal(orphan: Orphan) -> str | None:
     """Why Stop tracking must not delete an orphan: only when LiteLLM reported it without an id."""
     return (not orphan.deployment.id and "LiteLLM reported it without an id") or None
-
-
-def parse_max_model_len(models_json: Any) -> int | None:
-    """Served context window from /v1/models, or None."""
-    try:
-        rows = models_json["data"]
-    except (TypeError, KeyError):
-        return None
-    for row in rows or []:
-        value = row.get("max_model_len") if isinstance(row, dict) else None
-        if value is not None:
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
-async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
-    """GET /v1/models with the key we believe this vLLM has: (status, max_model_len, hf_id).
-
-    ``status`` is the HTTP status, or None when nothing usable came back. A
-    401 is the box refusing the key (Rejected); a 200 carries the served
-    context window, ``max_model_len``, which is None when the body has none,
-    and ``hf_id``, the first served model's id ("" when the body names none).
-
-    base is the server root, not api_base: a /v1-suffixed base would ask for
-    /v1/v1/models and 404. The KV cache size, the other half of the oversized
-    check, is read by the sampler (llmao/sampler.py), the one reader of
-    /metrics.
-
-    Never raises: an unreachable or differently-shaped endpoint leaves both
-    unknown and the UX shows them as such.
-    """
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    served = edict(status=None, max_model_len=None, hf_id="")
-    try:
-        resp = await client.get(f"{base}/v1/models", headers=headers)
-        served.status = resp.status_code
-        if resp.status_code == 200:
-            body = resp.json()
-            served.max_model_len = parse_max_model_len(body)
-            rows = body.get("data") if isinstance(body, dict) else None
-            served.hf_id = next((str(r["id"]) for r in rows or () if isinstance(r, dict) and r.get("id")), "")
-    except (httpx.HTTPError, ValueError):
-        pass
-    return served
-
-
-async def _get_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:
-    """(ok, reached, err). ``reached`` is True when vLLM's HTTP server answered
-    at all (e.g. a 503 while the model is still loading); False for no
-    connection. ``ok`` is only a 200.
-    """
-    try:
-        resp = await client.get(url)
-    except httpx.TimeoutException as e:
-        _LOGGER.warning("health %s: %s", url, e)
-        return False, False, "timeout"
-    except httpx.HTTPError as e:
-        _LOGGER.warning("health %s: %s", url, e)
-        return False, False, "no connection"
-    if resp.status_code == 200:
-        return True, True, None
-    return False, True, f"HTTP {resp.status_code}"
