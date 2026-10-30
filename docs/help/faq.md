@@ -60,3 +60,5 @@ The [[]Models page](/models) states that for each model. Private means every dep
 ## Why are there two Qwen3 8B models?
 
 `qwen3-8b` and `qwen3-8b-bf16` are the same model. They run on different hardware, and one of the machines cannot load the compressed weights the other uses. Answers should be equivalent. Use whichever the [[]Models page](/models) shows as available.
+
+The same goes for `qwen3.8-27b` and `qwen3.8-27b-int4`: one model, with the second compressed further so it runs on smaller cards. Red Hat, who did the compression, measures it within a point or two of the original.

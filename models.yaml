@@ -196,6 +196,76 @@ models:
         Its reasoning phase makes it a poor fit for interactive agents that
         expect a prompt first token.
 
+  # The same model as qwen3.8-27b at four bits, for cards the FP8 build does
+  # not fit on. Qwen publishes no INT4 build of its own; this is Red Hat's,
+  # chosen over the community AWQ builds because it documents what it did:
+  # AWQ smoothing then GPTQ (W4A16, compressed-tensors), linear layers only,
+  # with the vision tower, embeddings, lm_head and the linear-attention
+  # in_proj kept at BF16, calibrated on 512 open-perfectblend samples, and a
+  # published recovery table at 98.5-101% of BF16 across six benchmarks.
+  # W4A16 runs through the Marlin kernels, so Ampere and later, not just
+  # Hopper and Blackwell as the FP8 build's DeepGEMM path is.
+  #
+  # A separate model_name, so callers ask for it by this name and it does not
+  # pool with the FP8 boxes.
+  - model_name: qwen3.8-27b-int4
+    litellm_params:
+      model: hosted_vllm/qwen3.8-27b-int4
+      # As for qwen3.8-27b: shields callers that send "high".
+      reasoning_effort: medium
+    model_info:
+      vllm:
+        model: RedHatAI/Qwen3.8-27B-INT4
+        source:
+          kind: hf
+        # 18.1 GiB of safetensors in the HF repo (the unquantized embeddings
+        # and lm_head are 4 GiB of that, at a 248k vocabulary). Rounded up
+        # so the fit check fails closed. Weights only: KV cache comes out of
+        # what is left, so a 24GB card is tight and a 32GB card is the
+        # sensible floor.
+        vram_gb: 20
+        # 19.5G of weights; room for the torch compile cache.
+        disk_gb: 25
+        # As qwen3.8-27b, and for the same reason.
+        max_model_len: 131072
+        args:
+          # The repo ships static FP8 KV scales, so this costs no accuracy.
+          - --kv-cache-dtype
+          - fp8
+          - --enable-prefix-caching
+          - --enable-chunked-prefill
+          # 4096, as on the 24GB qwen3-8b box, not the 16384 the 96GB box
+          # runs. This build exists for smaller cards; see the note at the
+          # top of this file before raising it.
+          - --max-num-batched-tokens
+          - "4096"
+          - --reasoning-parser
+          - qwen3
+          - --enable-auto-tool-choice
+          # qwen3_coder, as verified on qwen3.8-27b: same chat template.
+          # Red Hat's own card says qwen3_xml, which the 8B showed can
+          # silently swallow calls; re-verify against real output before
+          # changing.
+          - --tool-call-parser
+          - qwen3_coder
+      display_name: "Qwen3.8 27B INT4"
+      good_for: "The same as Qwen3.8 27B, on smaller cards: harder reasoning, code, and images. Slow to start answering."
+      context_window: 131072
+      license: Apache-2.0
+      openness: open-weight
+      weights_distribution: "RedHatAI/Qwen3.8-27B-INT4 (HF, W4A16 from Qwen/Qwen3.8-27B) · vLLM"
+      training_data_provenance: "undisclosed (Alibaba); INT4 calibration on mlabonne/open-perfectblend (Red Hat)"
+      provenance_record: absent
+      modality: text+vision
+      supports_thinking: true
+      thinks_by_default: true
+      reasoning_effort_levels: [xhigh, medium, low]
+      notes: >-
+        Qwen3.8 27B quantized to four-bit weights by Red Hat, for hardware
+        the FP8 build does not fit on. Same model and same behaviour as
+        qwen3.8-27b; Red Hat measures 98.5-101% of BF16 on its benchmarks.
+        Not yet measured here.
+
   - model_name: qwen3-8b
     litellm_params:
       model: hosted_vllm/qwen3-8b
