@@ -141,7 +141,7 @@ reset by any 200.
 | **Loading** | Healthy | Rejected | Loading inside `grace` of the loading start; Stalled past it | same as listening |
 | **Healthy** | Healthy | Rejected | Healthy while `fails < threshold`; Unhealthy at it | same as listening |
 | **Unhealthy** | Healthy | Rejected | Unhealthy | Unhealthy |
-| **Stalled** | Healthy | Rejected | Loading when this probe is the first to reach and no loading start exists yet; otherwise Stalled | Stalled |
+| **Stalled** | Healthy | Rejected | Loading when no loading start existed before this probe; otherwise Stalled | Stalled |
 | **Rejected** | Healthy | Foreign if the host is unlisted and the refusal has run `REJECTED_PASSES` passes; else Rejected | Rejected while `fails < threshold`; Unhealthy at it | same as listening |
 | **Foreign** | Healthy | Foreign | Foreign while `fails < threshold`; Unhealthy at it | same as listening |
 
