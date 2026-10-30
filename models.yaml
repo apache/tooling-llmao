@@ -239,6 +239,14 @@ models:
           # top of this file before raising it.
           - --max-num-batched-tokens
           - "4096"
+          # Every in-flight sequence holds one Mamba state block on this
+          # hybrid architecture, and vLLM's default admits 256. With the
+          # weights loaded, a small card had room for 164, and vLLM 0.32
+          # refuses to start rather than capture CUDA graphs it cannot run
+          # ("max_num_seqs (256) exceeds available Mamba cache blocks").
+          # 128 is far above the concurrency a card this size can serve.
+          - --max-num-seqs
+          - "128"
           - --reasoning-parser
           - qwen3
           - --enable-auto-tool-choice
