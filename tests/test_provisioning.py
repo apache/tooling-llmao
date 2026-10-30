@@ -105,3 +105,13 @@ def test_config_for_host_renders_every_row():
     assert [(s.name, s.port) for s in payload.servers] == [("box-q", 8003), ("gemma4-26b", 8001)]
     assert payload.servers[0].model == "Qwen/Qwen3-8B-FP8"
     assert EXAMPLE.is_file()
+    # The example config sets no token, so the payload carries none.
+    assert "hf_token" not in payload
+
+
+def test_config_for_host_hands_out_the_hf_token_once_for_the_box():
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003], ["gemma4-26b", 8001]]})
+    cfg.fleet.hf_token = " hf_read "
+    payload = config_for_host("10.0.0.1", models=list(_by_name().values()), cfg=cfg)
+    assert payload.hf_token == "hf_read"
+    assert all("hf_token" not in s for s in payload.servers)

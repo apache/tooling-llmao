@@ -387,7 +387,15 @@ def _ini_escape(value: str) -> str:
     return value.replace("%", "%%")
 
 
-def program_ini(spec: dict[str, Any], *, hf_home: str, vllm_cache: str, log_dir: str, data_dir: str) -> str:
+def program_ini(
+    spec: dict[str, Any],
+    *,
+    hf_home: str,
+    vllm_cache: str,
+    log_dir: str,
+    data_dir: str,
+    hf_token: str | None = None,
+) -> str:
     name = program_name(spec["name"])
     command = shlex.join(build_argv(spec))
     log = str(Path(log_dir) / f"{spec['name']}.log")
@@ -397,15 +405,19 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, vllm_cache: str, log_dir:
     # a server may fail its first boot; supervisord's restart then reads the
     # plan. It lives in VLLM_CACHE_ROOT, on the volume so it survives restarts.
     # expandable_segments is what PyTorch's own out-of-memory error advises.
-    env = ",".join(
-        [
-            f'HF_HOME="{_ini_escape(hf_home)}"',
-            f'VLLM_CACHE_ROOT="{_ini_escape(vllm_cache)}"',
-            'VLLM_ENABLE_STARTUP_PLAN="1"',
-            'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
-            f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"',
-        ]
-    )
+    pairs = [
+        f'HF_HOME="{_ini_escape(hf_home)}"',
+        f'VLLM_CACHE_ROOT="{_ini_escape(vllm_cache)}"',
+        'VLLM_ENABLE_STARTUP_PLAN="1"',
+        'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
+        f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"',
+    ]
+    # Hugging Face's rate limit for unauthenticated downloads, and gated
+    # repositories. Not a speed-up by itself. Optional: a control plane
+    # without one hands out no token, and the pull proceeds as before.
+    if hf_token:
+        pairs.append(f'HF_TOKEN="{_ini_escape(hf_token)}"')
+    env = ",".join(pairs)
     return (
         f"[program:{name}]\n"
         f"command={_ini_escape(command)}\n"
@@ -419,7 +431,7 @@ def program_ini(spec: dict[str, Any], *, hf_home: str, vllm_cache: str, log_dir:
     )
 
 
-def write_units(specs: list[dict[str, Any]], conf_dir: Path) -> list[Path]:
+def write_units(specs: list[dict[str, Any]], conf_dir: Path, *, hf_token: str | None = None) -> list[Path]:
     data_dir = Path(require_env("DATA_DIRECTORY"))
     hf_home = data_dir / "hf-cache"
     # Where the Vast vLLM template already keeps it.
@@ -439,6 +451,7 @@ def write_units(specs: list[dict[str, Any]], conf_dir: Path) -> list[Path]:
                 vllm_cache=str(vllm_cache),
                 log_dir=str(log_dir),
                 data_dir=str(data_dir),
+                hf_token=hf_token,
             )
         )
         path.chmod(0o600)
@@ -521,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
         if total and gmu is not None:
             card = f"each of {cards} cards" if cards > 1 else "the card"
             print(f"install_set: {spec['name']} gets {gmu} of {card} ({gmu * total:.1f}GB)", file=sys.stderr)
-    write_units(specs, CONF_DIR)
+    write_units(specs, CONF_DIR, hf_token=data.get("hf_token"))
     if args.no_reload:
         return 0
     supervisorctl_update()

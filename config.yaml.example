@@ -174,6 +174,11 @@ fleet:
   # Shared bearer for LEGACY_SERVERS only. validate_fleet requires a real
   # value when one of those hosts is configured. Drop it with the last pair.
   selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
+  # Optional. A Hugging Face read-only token, handed to every box in
+  # GET /vllm/config and put in each vLLM's environment as HF_TOKEN. Lifts
+  # the rate limit on unauthenticated downloads and opens gated weights; it
+  # does not make the pull itself faster. This file and Puppet eyaml only.
+  # hf_token: hf_...
   # Seconds between vLLM GET /health probes, on the public port (/health takes
   # no key; /v1/models with the box's key is asked when it passes).
   health_interval_s: 45

@@ -109,6 +109,11 @@ rows and the `models.yaml` recipe each names.
   memory between its servers from `vram_gb`. `vram_gb` and `disk_gb` are
   what the box checks before pulling weights.
 
+Beside `servers`, the payload may carry `hf_token`: the Hugging Face token
+from `fleet.hf_token`, one for the box rather than per server. The installer
+sets it as `HF_TOKEN` in every program's environment. Absent when llmao has
+none, and an installer that predates the field ignores it.
+
 ## Hosts and ports
 
 A `fleet.hosts` entry is the box's name (above) mapped to rows of
@@ -205,8 +210,10 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
 
 ## Security
 
-- The fleet key is the only long-lived secret a box holds. The vLLM bearer
-  is derived from a salt the box never sees.
+- The fleet key is the only long-lived secret a box holds before it fetches
+  its config; the Hugging Face token, when configured, arrives with it, in
+  files only root reads. The vLLM bearer is derived from a salt the box
+  never sees.
 - Membership is the durable gate. A box's standing to fetch its config
   comes from `fleet.hosts` (in `config.yaml`, survives a restart) or from
   an admin's in-memory approval of a host that presented the fleet key.

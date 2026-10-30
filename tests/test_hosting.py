@@ -117,6 +117,19 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     assert (tmp_path / ".vllm_cache").is_dir()
     assert f"directory={tmp_path}" in text
     assert written[0].stat().st_mode & 0o777 == 0o600
+    # No token from the control plane: none in the unit, so the pull runs as before.
+    assert "HF_TOKEN" not in text
+
+
+def test_the_hf_token_reaches_every_program(tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
+    monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
+    specs = inst.servers_from_config({**SAMPLE, "hf_token": "hf_read"})
+    written = inst.write_units(specs, tmp_path / "conf.d", hf_token="hf_read")  # noqa: S106 -- a test value
+    for path in written:
+        text = path.read_text()
+        assert 'HF_TOKEN="hf_read"' in text.split("environment=", 1)[1]
+        assert "hf_read" not in text.split("environment=", 1)[0]
 
 
 def test_fetch_json():
@@ -399,9 +412,9 @@ def test_apportion_budgets_from_free_memory_as_a_fraction_of_total():
     assert other["gpu_memory_utilization"] == pytest.approx((90 - 32) / 128, abs=0.001)
 
 
-def _config_server(seen: dict):
+def _config_server(seen: dict, payload: dict | None = None):
     """A /vllm/config that records the host the box claimed to be."""
-    body = json.dumps(SAMPLE).encode()
+    body = json.dumps(payload or SAMPLE).encode()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -442,6 +455,18 @@ def test_main_claims_llmao_host_and_reloads_supervisord(monkeypatch, tmp_path):
     assert seen["host"] == "198.51.100.8"
     assert sorted(p.name for p in (tmp_path / "conf.d").iterdir()) == ["vllm-model-a.conf", "vllm-model-b.conf"]
     assert reloads == [True]
+    assert "HF_TOKEN" not in (tmp_path / "conf.d" / "vllm-model-a.conf").read_text()
+
+
+def test_main_carries_the_payloads_hf_token_into_the_units(monkeypatch, tmp_path):
+    httpd = _config_server({}, payload={**SAMPLE, "hf_token": "hf_read"})
+    _box_env(monkeypatch, tmp_path, httpd)
+    try:
+        assert inst.main([]) == 0
+    finally:
+        httpd.shutdown()
+    for path in (tmp_path / "conf.d").iterdir():
+        assert 'HF_TOKEN="hf_read"' in path.read_text()
 
 
 def test_main_no_reload_writes_units_and_leaves_supervisord_alone(monkeypatch, tmp_path):
