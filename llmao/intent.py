@@ -58,8 +58,8 @@ prices::
 Where a model is served is a fact about the deployment, never the model, so
 none of this is in models.yaml. The same model can be listed under several
 providers and run on our own boxes as well; which one serves a request is
-LiteLLM's routing, steered by ``order`` (fleet.ORDER_SELF_HOSTED and
-fleet.ORDER_SPEND). The keys live in config.yaml, which is not committed.
+LiteLLM's routing, steered by ``order`` (proxy.deployments.ORDER_SELF_HOSTED and
+proxy.deployments.ORDER_SPEND). The keys live in config.yaml, which is not committed.
 """
 
 from __future__ import annotations

@@ -122,7 +122,8 @@ retired as its source lands: `UnknownFetch` and the known/unknown split
 inside the provisioning record (the fetch handler deciding membership
 was the join running inside a source) went with the rest of provisioning
 (step 4: the record keeps every fetch by name, and `Fleet.unintended`
-makes the split); `ExtraLiteLLM` goes with LiteLLMDeployment;
+makes the split); `ExtraLiteLLM` went with LiteLLMDeployment (steps 5
+and 6: an orphan is a `LiteLLMDeployment` in `Fleet.orphans`);
 `Discovered`'s finding string becomes a VllmProbe rendered; the
 `Unintended` join becomes the grouping reconcile does. The fleet-key
 host claim narrows by the same join: a fetch whose name no Rental has
@@ -930,7 +931,25 @@ fact has two homes. Then `deployment.py` against six known shapes.
    not change at runtime, and an approval makes a name intended whatever
    the record holds.
 5. LiteLLMHealth.
-6. LiteLLMDeployment.
+6. LiteLLMDeployment. **Done**, 5 and 6 together, 2026-10-29: both
+   snapshot types and their parsers live in `proxy/deployments.py`
+   (`LiteLLMDeployment` with its stamp read as a key, `LiteLLMDeployments`
+   for one read, `LiteLLMHealth` and `LiteLLMHealthReport`), which no
+   longer imports `fleet.py` (`ORDER_SELF_HOSTED` and `ORDER_SPEND` moved
+   with it). The executor's every read goes through
+   `Fleet.read_litellm_deployments`, which joins the rows to the intended
+   deployments (`FleetDeployment.read_litellm`: by the stamp first, then by
+   the dialable address) and rebuilds `Fleet.orphans` with their pass
+   counts; `Fleet.read_litellm_health` does the same for the verdicts. The
+   five fields written onto a deployment (`in_litellm`,
+   `config_mismatch`, `at_listen_port`, `litellm_healthy`,
+   `litellm_health_at`) are reads of the two snapshots now, so a write to
+   LiteLLM sets nothing: every add and delete is followed by a read, and
+   a confirm read that fails leaves the write unobserved until the next
+   read. `ExtraLiteLLM`, the route tuples, `_index_deployments`,
+   `_mark_presence`, `_stamps_from_model_info` and the executor's own
+   orphan counter are gone. The LiteLLM health age is the read's time now,
+   not "now", so the 12-hour staleness box-lifecycle.md describes is real.
 7. VllmProbe (with `vllm_client.py`).
 
 Pages, capacity, the sampler, and the action log read the view. They stop

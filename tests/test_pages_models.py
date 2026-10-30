@@ -31,7 +31,7 @@ import asfquart
 import ezt
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import ORPHAN_PASSES, ExtraLiteLLM, Fleet, FleetDeployment, VllmServer, remove_refusal
+from llmao.fleet import ORPHAN_PASSES, Fleet, FleetDeployment, VllmServer, remove_refusal
 from llmao.intent import Approval, provider_intent
 from llmao.model_status import (
     AVAILABLE,
@@ -40,7 +40,6 @@ from llmao.model_status import (
     DEGRADED,
     HEALTHY,
     LOADING,
-    SKEW_IN_LITELLM_NOT_IN_CONFIG,
     SKEW_VLLM_UP_LITELLM_DOWN,
     STALLED,
     UNAVAILABLE,
@@ -49,8 +48,11 @@ from llmao.model_status import (
 )
 from llmao.models import load_models
 from llmao.provisioning import ConfigFetch
+from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments
+from llmao.reconcile import deployment_key
 from llmao.rental import ProviderRentals, Rental
 from tests.test_fleet import EXAMPLE
+from tests.test_fleet_health import _health, _registered
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -106,9 +108,8 @@ def _fleet(*servers) -> Fleet:
     deployments = []
     for srv in servers:
         dep = FleetDeployment.from_vllm(srv)
-        dep.in_litellm = True
-        dep.litellm_healthy = True
-        dep.litellm_health_at = time.time()
+        _registered(dep)
+        _health(dep, True)
         deployments.append(dep)
     return Fleet(cfg=cfg, servers=list(servers), deployments=deployments)
 
@@ -170,9 +171,8 @@ def test_unavailable_self_hosted_has_no_concurrency():
 def test_commercial_is_external_and_has_no_concurrency():
     pages = _app()
     dep = FleetDeployment.from_intended(provider_intent("example", "claude", "anthropic/claude", "https://api.example"))
-    dep.in_litellm = True
-    dep.litellm_healthy = True
-    dep.litellm_health_at = time.time()
+    _registered(dep)
+    _health(dep, True)
     cfg = edict(
         {
             "fleet": {
@@ -372,17 +372,14 @@ def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
     assert ">Gemma<" in out
 
 
-def _orphan(passes: int, *, stamp: str = "", route_id: str = "orphan-1") -> ExtraLiteLLM:
-    return ExtraLiteLLM(
-        host="198.51.100.9",
-        port=18490,
-        model_name="gemma",
-        skew=(SKEW_IN_LITELLM_NOT_IN_CONFIG,),
-        route_id=route_id,
-        api_base="http://198.51.100.9:18490",
-        passes=passes,
-        llmao_key=stamp,
-    )
+def _orphan(fleet, passes: int, *, stamp: str = "", id: str = "orphan-1") -> None:
+    """Read the LiteLLM deployments ``passes`` times running with one at an address nothing intends."""
+    key = stamp and deployment_key("gemma", api_base=stamp)
+    row = LiteLLMDeployment(id=id, model_name="gemma", api_base="http://198.51.100.9:18490", key=key or None)
+    rows = (row, *(r for dep in fleet.deployments for r in dep.litellm))
+    fleet.orphans = []
+    for _ in range(passes):
+        fleet.read_litellm_deployments(LiteLLMDeployments(rows, time.time()))
 
 
 def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
@@ -390,9 +387,9 @@ def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_trackin
     fleet = _fleet(_server("gemma"))
     fleet.cfg.fleet.hosts = {}
     # A debounce: one read is not an item.
-    fleet.extra_litellm = [_orphan(ORPHAN_PASSES - 1)]
+    _orphan(fleet, ORPHAN_PASSES - 1)
     assert pages.attention_items(fleet) == []
-    fleet.extra_litellm = [_orphan(ORPHAN_PASSES)]
+    _orphan(fleet, ORPHAN_PASSES)
     (item,) = pages.attention_items(fleet)
     assert item.what == "198.51.100.9:18490 · gemma — in LiteLLM, not in config"
     assert item.detail == "not added by llmao; someone added it in LiteLLM"
@@ -404,10 +401,10 @@ def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_trackin
     assert 'name="port" value="18490"' in out
     assert 'data-confirm="Stop tracking 198.51.100.9:18490?' in out
     # The post finds the orphan the way the form named it.
-    assert pages._match_extra(fleet, "gemma", "198.51.100.9", "18490") is fleet.extra_litellm[0]
-    assert pages._match_extra(fleet, "gemma", "198.51.100.9", "8001") is None
+    assert pages._match_orphan(fleet, "gemma", "198.51.100.9", "18490") is fleet.orphans[0]
+    assert pages._match_orphan(fleet, "gemma", "198.51.100.9", "8001") is None
     # No id to delete by: the button is there, disabled, with the reason as text.
-    fleet.extra_litellm = [_orphan(ORPHAN_PASSES, route_id="")]
+    _orphan(fleet, ORPHAN_PASSES, id="")
     out = _render([], attention=pages.attention_items(fleet), admin=True)
     assert "LiteLLM reported it without an id" in out
     assert "disabled" in out
@@ -417,7 +414,7 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.cfg.fleet.hosts = {}
-    fleet.extra_litellm = [_orphan(ORPHAN_PASSES, stamp="http://198.51.100.9:8001")]
+    _orphan(fleet, ORPHAN_PASSES, stamp="http://198.51.100.9:8001")
     (item,) = pages.attention_items(fleet)
     assert item.detail.startswith("llmao added it")
     # No listing names the host: nothing to approve, the box is invisible.
@@ -498,7 +495,7 @@ def test_remove_refusal_gate():
 
     # self-hosted but not in LiteLLM: there is nothing to drop.
     absent = _fleet(_server("gemma"))
-    absent.deployments[0].in_litellm = False
+    absent.deployments[0].litellm = ()
     assert remove_refusal(absent.deployments[0]) == "not in LiteLLM"
 
     # a commercial row is never manually removed.
@@ -516,7 +513,7 @@ def test_drill_down_renders_add_and_remove_actions():
     fleet = _fleet(a, b, c, d)
     for dep in fleet.deployments:  # _fleet defaults every box into LiteLLM
         if dep.vllm.host in ("10.0.0.2", "10.0.0.4"):
-            dep.in_litellm = False
+            dep.litellm = ()
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
 
@@ -551,7 +548,7 @@ def test_serving_but_not_in_litellm_says_why():
     unplaced.public_port = None
     fleet = _fleet(failed, unplaced)
     for dep in fleet.deployments:
-        dep.in_litellm = False
+        dep.litellm = ()
     fleet.deployments[0].litellm_error = "LiteLLM said no"
     fleet.deployments[0].litellm_error_at = time.time() - 120
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
@@ -612,8 +609,7 @@ def test_diagnostics_say_a_failed_litellm_check_plainly():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     dep = fleet.deployments[0]
-    dep.litellm_healthy = False
-    dep.litellm_health_at = time.time() - 300
+    _health(dep, False, at=time.time() - 300)
     row = pages.deployment_rows(fleet, admin=True)[0]
     facts = {d.label: d for d in row.diags}
     assert facts["LiteLLM"].value == "check failed 5m ago"
@@ -640,7 +636,7 @@ def test_awaiting_row_has_no_diagnostics_line():
         public_port=8001,
     )
     fleet = _fleet(quiet)
-    fleet.deployments[0].in_litellm = False
+    fleet.deployments[0].litellm = ()
     row = pages.deployment_rows(fleet, admin=True)[0]
     assert row.state == AWAITING
     assert row.diags == []
@@ -831,9 +827,9 @@ def test_a_gone_box_has_no_buttons():
     gone.unlisted = True
     fleet = _fleet(gone)
     dep = fleet.deployments[0]
-    for in_litellm in (True, False):
-        dep.in_litellm = in_litellm
-        assert pages.admin_actions(fleet, dep) == []
+    assert pages.admin_actions(fleet, dep) == []
+    dep.litellm = ()
+    assert pages.admin_actions(fleet, dep) == []
 
 
 def test_an_unlisted_host_still_serving_gets_no_remove_sentence():
@@ -858,7 +854,7 @@ def test_an_unlisted_host_never_reached_gets_the_sentence_once_the_grace_is_out(
     srv.unlisted = True
     fleet = _fleet(srv)
     dep = fleet.deployments[0]
-    dep.in_litellm = False  # the deployment is already gone
+    dep.litellm = ()  # the deployment is already gone
     reason = "No Vast or RunPod instance has this address; the rental may have ended."
 
     srv.record_probe(False, now=time.time() - 60, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
@@ -881,7 +877,7 @@ def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
     assert srv.state == REJECTED
     fleet = _fleet(srv)
     dep = fleet.deployments[0]
-    dep.in_litellm = False  # the first 401 dropped it
+    dep.litellm = ()  # the first 401 dropped it
     (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
     assert item.kind == "rejected"
     assert "rejected" in item.rest

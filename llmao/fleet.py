@@ -34,7 +34,7 @@ import ipaddress
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
@@ -56,6 +56,7 @@ from llmao.model_status import (
     FOREIGN,
     HEALTHY,
     REJECTED,
+    SKEW_PHRASE,
     STALLED,
     UNHEALTHY,
     DeploymentSnapshot,
@@ -65,10 +66,13 @@ from llmao.model_status import (
 )
 from llmao.models import VllmRecipe, validate_models, warn_deprecated
 from llmao.provisioning import ConfigFetch, ProvisioningRecord
-from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
+from llmao.reconcile import DeploymentKey, deployment_key, norm_base, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
 from llmao.runpod_client import fetch_pods, rentals_from_pods
 from llmao.vast_client import fetch_instances, rentals_from_body
+
+if TYPE_CHECKING:
+    from llmao.proxy.deployments import LiteLLMDeployment, LiteLLMDeployments, LiteLLMHealth, LiteLLMHealthReport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,11 +126,11 @@ RUNPOD_LISTING_INTERVAL_S = 600
 # to one listing interval of about a minute, so three passes is a few minutes.
 UNLISTED_PASSES = 3
 
-# Consecutive skew passes (skew_interval_s, 180s) a LiteLLM deployment that no
-# fleet deployment claims must persist before the attention strip shows it
-# (the skew clock). Absence has innocent causes -- a provider lookup that
-# failed this pass, a box mid-recreate, a deployment llmao is about to claim
-# -- so the item waits this many passes. It is never deleted unattended:
+# Consecutive reads of the LiteLLM deployments (skew_interval_s, 180s) on
+# which a deployment no intent claims must persist before the attention strip
+# shows it (the skew clock). Absence has innocent causes -- a provider lookup
+# that failed this pass, a box mid-recreate, a deployment llmao is about to
+# claim -- so the item waits this many passes. It is never deleted unattended:
 # something instructed LiteLLM to serve it, and a human decides.
 ORPHAN_PASSES = 3
 
@@ -522,22 +526,14 @@ COST_BASIS_CAPACITY = "derived_capacity"
 # group contains, and nothing that names the group has to be told.
 ACCESS_GROUP_SELF_HOSTED = "llmao:self-hosted"
 
-# LiteLLM's routing order: among a model name's healthy deployments it uses
-# only those with the lowest order. Our boxes come first; a provider we pay
-# serves only once none of them can -- llmao has removed them, or LiteLLM has
-# put them in cooldown. A busy box still takes the request: busy is not down.
-# Every deployment carries one, because LiteLLM drops a deployment with no
-# order as soon as any other deployment of the name has one.
-ORDER_SELF_HOSTED = 1
-ORDER_SPEND = 2
-
 
 class FleetDeployment:
     """One intended LiteLLM deployment (definitions + api_base).
 
     Self-hosted: wraps a VllmServer (public port may be unset). Provider: one
     line of config.yaml providers, with the provider's own model string.
-    Skew/health live here, not on VllmServer.
+    What LiteLLM has and thinks of it (the two LiteLLM sources) is read onto
+    it here, not onto VllmServer; the facts are derived from those reads.
     """
 
     def __init__(
@@ -560,14 +556,17 @@ class FleetDeployment:
         # the provider's model, as LiteLLM names it. None on our boxes.
         self.provider = provider
         self.litellm_model = litellm_model
-        self.in_litellm = False
-        self.litellm_healthy: bool | None = None
-        self.litellm_health_at: float | None = None
+        # What the last read of the LiteLLM deployments had for this one
+        # (read_litellm): the rows stamped with its key or at its dialable
+        # address, under its name or another; and, apart, the rows at a
+        # box's listen port where that differs from the public one, which
+        # LiteLLM cannot reach off-box, so they are noted and not counted.
+        self.litellm: tuple[LiteLLMDeployment, ...] = ()
+        self.litellm_listen: tuple[LiteLLMDeployment, ...] = ()
+        # LiteLLM's own /health verdict on it, from the last read that said
+        # anything (Fleet.read_litellm_health). None until one does.
+        self.litellm_health: LiteLLMHealth | None = None
         self.skew: list[str] = []
-        # Set by the config skew pass when LiteLLM has this api_base under another model_name.
-        self.config_mismatch = False
-        # Set by the config skew pass when LiteLLM has this server at its listen port.
-        self.at_listen_port = False
         # The last registration (or removal) call to LiteLLM that failed, and
         # when; cleared by the next one that succeeds.
         self.litellm_error = ""
@@ -629,12 +628,64 @@ class FleetDeployment:
         """
         return {ACCESS_GROUP_SELF_HOSTED} if self.self_hosted else set()
 
+    def read_litellm(self, rows: tuple[LiteLLMDeployment, ...]) -> None:
+        """Take from one read of the LiteLLM deployments the ones that concern this deployment.
+
+        The stamp decides first: a row stamped with this key is this
+        deployment at whatever address it was registered. Then the address:
+        an unstamped row at the dialable base is it on our box under any
+        name (one box serves one model, so a row at its base is its
+        deployment, misnamed when the name differs: config_mismatch), and
+        on a provider's base under this model name only, since the account
+        serves every model from one base. A row at a box's listen port is
+        kept apart (at_listen_port). A box with no address yet is found by
+        its stamp alone.
+        """
+        base = self.api_base and norm_base(self.api_base)
+        srv = self.vllm
+        mine, listen = [], []
+        for row in rows:
+            if row.key == self.key:
+                mine.append(row)
+            elif row.key is not None:
+                continue
+            elif srv is not None and srv.on_listen_port(row.host, row.port, row.model_name):
+                listen.append(row)
+            elif base and row.api_base == base and (self.provider is None or row.model_name == self.model_name):
+                mine.append(row)
+        self.litellm = tuple(mine)
+        self.litellm_listen = tuple(listen)
+
+    @property
+    def in_litellm(self) -> bool:
+        """Whether LiteLLM has this deployment, as of the last read."""
+        return bool(self.litellm)
+
+    @property
+    def config_mismatch(self) -> bool:
+        """LiteLLM has this box's api_base under another model name."""
+        return any(row.model_name != self.model_name for row in self.litellm)
+
+    @property
+    def at_listen_port(self) -> bool:
+        """LiteLLM has this server at its listen port, which is unreachable off-box."""
+        return bool(self.litellm_listen)
+
+    @property
+    def litellm_healthy(self) -> bool | None:
+        """LiteLLM's last /health verdict on it; None when it has said nothing."""
+        return self.litellm_health and self.litellm_health.healthy
+
+    @property
+    def litellm_health_at(self) -> float | None:
+        return self.litellm_health and self.litellm_health.at
+
     @property
     def litellm_health_display(self) -> str:
         """Human-readable 'litellm_health_at'; a dash when unknown."""
-        if self.litellm_health_at is None:
+        if self.litellm_health is None:
             return "—"
-        return _ago(self.litellm_health_at)
+        return _ago(self.litellm_health.at)
 
     @property
     def litellm_error_display(self) -> str:
@@ -645,30 +696,20 @@ class FleetDeployment:
 
 
 @dataclass(frozen=True)
-class ExtraLiteLLM:
-    """One LiteLLM route that nothing in config.yaml or an approval intends: an orphan.
+class Orphan:
+    """A LiteLLM deployment whose key no intent has: skew under the key it carries.
 
     Something instructed LiteLLM to serve it, so it is shown, never deleted
-    unattended. ``llmao_key`` says who: the stamp llmao writes on its own
-    adds (``model_info.llmao_key``, the listen URL), so a stamped orphan is
-    llmao's own add whose intent has gone since (an approval lost in a
-    restart, a ``fleet.hosts`` row removed), and an unstamped one was added
-    by hand in LiteLLM's UI. Stop tracking on /models deletes it.
+    unattended. Its stamp says who: llmao's own add whose intent has gone
+    since (an approval lost in a restart, a ``fleet.hosts`` row removed), or,
+    unstamped, a hand add in LiteLLM's UI. Stop tracking on /models deletes
+    it. ``passes`` is how many reads running it has been one; the strip
+    shows it from ORPHAN_PASSES on, so a transient read is not an item.
+    Fleet.read_litellm_deployments builds these.
     """
 
-    host: str
-    port: int | None
-    model_name: str
-    skew: tuple[str, ...]
-    # What /model/delete takes, and the normalised api_base it was found at.
-    # Empty id means LiteLLM reported the route without one, so it can be
-    # shown but not removed.
-    route_id: str = ""
-    api_base: str = ""
-    # Consecutive skew passes this route has been an orphan. The strip
-    # shows it from ORPHAN_PASSES on, so a transient read is not an item.
-    passes: int = 0
-    llmao_key: str = ""
+    deployment: LiteLLMDeployment
+    passes: int
 
 
 @dataclass(frozen=True)
@@ -749,10 +790,11 @@ class Fleet:
         # What an admin told an unknown box to load (intent.Approval), keyed by
         # normalized host. Process memory only; config.yaml is not written.
         self.approvals: dict[str, Approval] = {}
-        # LiteLLM routes that match no deployment. Rebuilt each config skew pass.
-        # Identity is host, port, and model name. api_base is not a primary key:
-        # one host serves several ports, and one host:port can report more than one model.
-        self.extra_litellm: list[ExtraLiteLLM] = []
+        # The last read of the LiteLLM deployments (llmao/proxy/deployments.py),
+        # None until one; and the deployments in it no intent claims, with
+        # their pass counts. Both set by read_litellm_deployments.
+        self.litellm: LiteLLMDeployments | None = None
+        self.orphans: list[Orphan] = []
         # What each provider we rent from last reported (llmao/rental.py).
         # None until read: Vast's comes with every lifecycle pass, RunPod's
         # from its own runner (run_runpod_listing).
@@ -807,6 +849,61 @@ class Fleet:
             at = self.provisioning.fetched_at(srv.host)
             if at is not None:
                 srv.config_served_at = at
+
+    def read_litellm_deployments(self, snapshot: LiteLLMDeployments) -> None:
+        """One read of the LiteLLM deployments, joined to the intended ones; the rest are orphans.
+
+        Each intended deployment takes the rows that are it (FleetDeployment
+        .read_litellm). A row nothing took is an orphan, counted across
+        reads: one absent from a read drops out, so a flapping one never
+        reaches ORPHAN_PASSES, and one that reaches it is logged once, with
+        who added it.
+        """
+        self.litellm = snapshot
+        claimed: set[LiteLLMDeployment] = set()
+        for dep in self.deployments:
+            dep.read_litellm(snapshot.rows)
+            claimed.update(dep.litellm)
+            claimed.update(dep.litellm_listen)
+        before = {(o.deployment.api_base, o.deployment.model_name): o.passes for o in self.orphans}
+        orphans = []
+        for row in snapshot.rows:
+            if row in claimed:
+                continue
+            seen = before.get((row.api_base, row.model_name), 0) + 1
+            orphans.append(Orphan(row, seen))
+            if seen == ORPHAN_PASSES:
+                _LOGGER.warning(
+                    "skew: in LiteLLM, not in config %s %s (%s)",
+                    row.display,
+                    row.model_name,
+                    "llmao added it" if row.key else "not added by llmao",
+                )
+        self.orphans = orphans
+
+    def read_litellm_health(self, report: LiteLLMHealthReport) -> None:
+        """One read of LiteLLM's own /health, onto each deployment it spoke of.
+
+        A deployment with no address this pass has nothing to match the
+        answer to, and keeps its last verdict rather than being wiped for the
+        four hours until the next check.
+        """
+        for dep in self.deployments:
+            if not dep.api_base:
+                continue
+            base = norm_base(dep.api_base)
+            dep.litellm_health = report.verdict(base, dep.provider and dep.litellm_model)
+
+    def refresh_skew(self, now: float | None = None) -> None:
+        """Replace each deployment's stored badges with the ones model_status computes now; a new one is logged."""
+        stamp = now or time.time()
+        cfg = self.cfg.fleet
+        for dep in self.deployments:
+            view = deployment_status(snapshot_for_status(dep), cfg, stamp)
+            fresh = [badge for badge in view.skew if badge not in dep.skew]
+            dep.skew = list(view.skew)
+            for badge in fresh:
+                _LOGGER.warning("skew: %s@%s %s", dep.name, dep.key.display, SKEW_PHRASE[badge])
 
     def _materialize_approved(self, host: str) -> None:
         """Servers and deployments for an approved IP that config.yaml does not list.
@@ -898,7 +995,7 @@ class Fleet:
         """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
         stamp = now or time.time()
         cfg = self.cfg.fleet
-        views = [deployment_status(snapshot_for_status(dep, cfg, stamp), cfg, stamp) for dep in self.deployments]
+        views = [deployment_status(snapshot_for_status(dep), cfg, stamp) for dep in self.deployments]
         return model_status(model_name, views)
 
     def cost_basis(self, model_name: str) -> str | None:
@@ -1215,19 +1312,16 @@ class Fleet:
             await asyncio.sleep(interval)
 
 
-def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> DeploymentSnapshot:
-    """The last stored probe observation for this deployment.
+def snapshot_for_status(dep) -> DeploymentSnapshot:
+    """The last stored observations for this deployment, as the one record model_status reads.
 
     record_probe keeps the counters (last_probe_ok, fails, last_ok,
-    vllm_probed_at) and config_served_at on the server, so deployment_status
-    can re-run the same lifecycle function the probe loop uses -- at the
-    current time, so a Loading deployment that has since outlasted the grace
-    window reads Stalled without waiting for the next probe. cfg.fleet is the
-    validated interval block.
+    vllm_probed_at) and config_served_at on the server, and the two LiteLLM
+    reads sit on the deployment, so deployment_status can re-run the same
+    lifecycle function the probe loop uses -- at the current time, so a
+    Loading deployment that has since outlasted the grace window reads
+    Stalled without waiting for the next probe.
     """
-    now = now or time.time()
-    litellm_at = now if dep.litellm_healthy is not None else None
-    mismatch = bool(dep.config_mismatch)
     srv = dep.vllm
     if srv is None:
         return DeploymentSnapshot(
@@ -1235,8 +1329,8 @@ def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> Deployment
             self_hosted=False,
             in_litellm=dep.in_litellm,
             litellm_healthy=dep.litellm_healthy,
-            litellm_health_at=litellm_at,
-            config_mismatch=mismatch,
+            litellm_health_at=dep.litellm_health_at,
+            config_mismatch=dep.config_mismatch,
         )
     return DeploymentSnapshot(
         model_name=dep.model_name,
@@ -1247,10 +1341,10 @@ def snapshot_for_status(dep, cfg: edict, now: float | None = None) -> Deployment
         vllm_probed_at=srv.vllm_probed_at,
         in_litellm=dep.in_litellm,
         litellm_healthy=dep.litellm_healthy,
-        litellm_health_at=litellm_at,
+        litellm_health_at=dep.litellm_health_at,
         context_window=srv.observed_max_model_len or srv.max_model_len,
         kv_cache_tokens=srv.kv_cache_tokens,
-        config_mismatch=mismatch,
+        config_mismatch=dep.config_mismatch,
         at_listen_port=dep.at_listen_port,
         config_served_at=srv.config_served_at,
         reached=srv.reached,
@@ -1302,9 +1396,9 @@ def remove_refusal(dep) -> str | None:
     return None
 
 
-def extra_refusal(row: ExtraLiteLLM) -> str | None:
+def orphan_refusal(orphan: Orphan) -> str | None:
     """Why Stop tracking must not delete an orphan: only when LiteLLM reported it without an id."""
-    return (not row.route_id and "LiteLLM reported it without an id") or None
+    return (not orphan.deployment.id and "LiteLLM reported it without an id") or None
 
 
 def parse_max_model_len(models_json: Any) -> int | None:

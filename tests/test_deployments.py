@@ -21,13 +21,16 @@ import asyncio
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.fleet import ORDER_SELF_HOSTED, ORDER_SPEND, ORPHAN_PASSES, Fleet, FleetDeployment
+from llmao.fleet import ORPHAN_PASSES, Fleet, FleetDeployment
 from llmao.intent import provider_intent
 from llmao.model_status import AWAITING, HEALTHY, SKEW_AT_LISTEN_PORT, UNHEALTHY
-from llmao.proxy.deployments import DeploymentManager
+from llmao.proxy.deployments import ORDER_SELF_HOSTED, ORDER_SPEND, DeploymentManager, deployments_from_model_info
+from llmao.reconcile import DeploymentKey
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
-from tests.test_fleet_health import _server
+from tests.test_fleet_health import _health, _registered, _server
+
+CFG = edict(fleet=edict(FLEET_KNOBS))
 
 
 def _manager(fleet, answer=None, *, cfg=None):
@@ -35,7 +38,7 @@ def _manager(fleet, answer=None, *, cfg=None):
 
     `answer` is a body for every call, or a function of the call.
     """
-    cfg = cfg or edict(fleet=edict())
+    cfg = cfg or CFG
     respond = answer if callable(answer) else (lambda call: answer)
     return DeploymentManager(cfg, fleet, FakeTransport(respond))
 
@@ -74,7 +77,7 @@ def test_deployment_body_from_models():
     models = {
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], models=models)
+    fleet = Fleet(CFG, [s], models=models)
     body = _manager(fleet).deployment_body(fleet.deployments[0])
     assert body["model_name"] == "gemma4-26b"
     assert body["litellm_params"]["model"] == "hosted_vllm/gemma4-26b"
@@ -98,7 +101,7 @@ def test_a_self_hosted_deployment_carries_no_price():
         litellm_params=edict(model="hosted_vllm/gemma4-26b"),
         pricing=edict(input_cost_per_token=1e-07, output_cost_per_token=1e-06),
     )
-    fleet = Fleet(None, [s], models={"gemma4-26b": model})
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": model})
     body = _manager(fleet).deployment_body(fleet.deployments[0])
     sent = {**body["litellm_params"], **body["model_info"]}
     assert not {"input_cost_per_token", "output_cost_per_token", "cost_basis"} & set(sent)
@@ -110,7 +113,7 @@ def test_sync_selfhost_posts_new_when_serving():
     models = {
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], models=models)
+    fleet = Fleet(CFG, [s], models=models)
     be = _manager(fleet, _litellm())
     asyncio.run(be.sync_selfhost())
     # Is it there?, the write, and the read that confirms the write.
@@ -127,18 +130,18 @@ def test_presence_after_a_write_is_observed_not_assumed():
     """
     s = _server()
     s.state = HEALTHY
-    fleet = Fleet(None, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
     be = _manager(fleet, {"data": []})
     asyncio.run(be.sync_selfhost())
     assert "model/new" in _paths(be)
     assert fleet.deployments[0].in_litellm is False
 
 
-def test_a_failed_confirm_keeps_the_last_answer(caplog):
-    """The re-read after a write failed: the write is assumed, as before, and the tick does not raise."""
+def test_a_failed_confirm_leaves_the_write_unobserved(caplog):
+    """The re-read after a write failed: nothing is assumed, the next read decides, and the tick does not raise."""
     s = _server()
     s.state = HEALTHY
-    fleet = Fleet(None, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
     reads = []
 
     def answer(call):
@@ -151,7 +154,7 @@ def test_a_failed_confirm_keeps_the_last_answer(caplog):
     with caplog.at_level("WARNING", logger="llmao.proxy.deployments"):
         asyncio.run(be.sync_selfhost())
     assert _paths(be) == ["model/info", "model/new", "model/info"]
-    assert fleet.deployments[0].in_litellm is True
+    assert fleet.deployments[0].in_litellm is False
     assert "could not be re-read after a write" in caplog.text
 
 
@@ -163,7 +166,7 @@ def test_one_failing_deployment_does_not_stop_the_rest(caplog):
         s.state = HEALTHY
     # "gone" is not in models.yaml, so its body cannot be built.
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
-    fleet = Fleet(None, [broken, *fine], models=models)
+    fleet = Fleet(CFG, [broken, *fine], models=models)
     be = _manager(fleet, _litellm())
     with caplog.at_level("ERROR", logger="llmao.proxy.deployments"):
         asyncio.run(be.sync_selfhost())
@@ -180,8 +183,8 @@ def test_sync_selfhost_deletes_when_down():
     models = {
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], models=models)
-    fleet.deployments[0].in_litellm = True
+    fleet = Fleet(CFG, [s], models=models)
+    _registered(fleet.deployments[0])
     be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))
     asyncio.run(be.sync_selfhost())
     # The id lookup, the delete, and the read that confirms it.
@@ -197,8 +200,8 @@ def test_sync_selfhost_deletes_a_box_no_provider_lists():
     models = {
         "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
     }
-    fleet = Fleet(None, [s], models=models)
-    fleet.deployments[0].in_litellm = True
+    fleet = Fleet(CFG, [s], models=models)
+    _registered(fleet.deployments[0])
     be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False
@@ -216,8 +219,8 @@ def test_a_serving_box_no_provider_lists_keeps_its_route():
     s.state = HEALTHY
     s.unlisted = True
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
-    fleet = Fleet(None, [s], models=models)
-    fleet.deployments[0].in_litellm = True
+    fleet = Fleet(CFG, [s], models=models)
+    _registered(fleet.deployments[0])
     be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is True
@@ -226,7 +229,7 @@ def test_a_serving_box_no_provider_lists_keeps_its_route():
 
 def _orphan(model_id="orphan-1"):
     """A LiteLLM route at an address no deployment of ours claims."""
-    fleet = Fleet(None, [], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
     return fleet, _info("198.51.100.9", 18490, model_id=model_id)
 
 
@@ -240,55 +243,55 @@ def test_an_orphan_is_counted_and_never_deleted():
     serve it, so it is counted, shown, and a human decides.
     """
     fleet, info = _orphan()
-    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, info)
     for expected in range(1, ORPHAN_PASSES + 2):
         asyncio.run(be.check_config_skew())
-        assert [row.passes for row in fleet.extra_litellm] == [expected]
+        assert [o.passes for o in fleet.orphans] == [expected]
     assert "model/delete" not in _paths(be)
     # No stamp: not llmao's own add.
-    assert fleet.extra_litellm[0].llmao_key == ""
+    assert fleet.orphans[0].deployment.key is None
 
 
 def test_an_orphan_says_whether_llmao_added_it():
     """The stamp is llmao's own add, whose intent has gone since; no stamp is a hand add in LiteLLM."""
     fleet, info = _orphan()
     info["data"][0]["model_info"]["llmao_key"] = "http://198.51.100.9:8001"
-    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, info)
     asyncio.run(be.check_config_skew())
-    assert fleet.extra_litellm[0].llmao_key == "http://198.51.100.9:8001"
+    assert fleet.orphans[0].deployment.key == DeploymentKey("http://198.51.100.9:8001", "gemma4-26b")
 
 
 def test_stop_tracking_an_orphan_deletes_it_by_id():
     fleet, info = _orphan()
-    be = _manager(fleet, _litellm(info["data"]), cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, _litellm(info["data"]))
     asyncio.run(be.check_config_skew())
-    (row,) = fleet.extra_litellm
-    asyncio.run(be.delete_extra(row))
+    (orphan,) = fleet.orphans
+    asyncio.run(be.delete_orphan(orphan))
     assert [c.json["id"] for c in be._transport.calls if c.path == "model/delete"] == ["orphan-1"]
-    # A write, then the read that confirms it; the row is gone before the next pass.
+    # A write, then the read that confirms it; the orphan is gone before the next pass.
     assert _paths(be)[-2:] == ["model/delete", "model/info"]
-    assert fleet.extra_litellm == []
+    assert fleet.orphans == []
     asyncio.run(be.check_config_skew())
-    assert fleet.extra_litellm == []
+    assert fleet.orphans == []
 
 
 def test_an_orphan_that_is_claimed_again_starts_its_count_over():
-    """A provider lookup that failed one pass must not make an item of a live route."""
+    """A provider lookup that failed one pass must not make an item of a live deployment."""
     fleet, info = _orphan()
     # A callable answer, so what LiteLLM reports can change between passes.
     reply = {"body": info}
-    be = _manager(fleet, lambda call: reply["body"], cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, lambda call: reply["body"])
     asyncio.run(be.check_config_skew())
-    assert [row.passes for row in fleet.extra_litellm] == [1]
-    # The route is gone from LiteLLM's answer: nothing is an extra this pass.
+    assert [o.passes for o in fleet.orphans] == [1]
+    # The deployment is gone from LiteLLM's answer: nothing is an orphan this pass.
     reply["body"] = {"data": []}
     asyncio.run(be.check_config_skew())
-    assert fleet.extra_litellm == []
+    assert fleet.orphans == []
     # Back again: the count starts over rather than resuming.
     reply["body"] = info
     for expected in range(1, ORPHAN_PASSES):
         asyncio.run(be.check_config_skew())
-        assert [row.passes for row in fleet.extra_litellm] == [expected]
+        assert [o.passes for o in fleet.orphans] == [expected]
     assert "model/delete" not in _paths(be)
 
 
@@ -310,7 +313,7 @@ def _listen_and_public():
     s = _server(host="10.0.0.7", listen_port=10100, public_port=12711)
     s.state = HEALTHY
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
-    return Fleet(None, [s], models=models)
+    return Fleet(CFG, [s], models=models)
 
 
 def test_the_stamp_is_the_listen_url_not_the_public_one():
@@ -331,7 +334,7 @@ def test_a_stamped_deployment_is_found_after_a_remap():
     fleet = _listen_and_public()
     (dep,) = fleet.deployments
     dep.vllm.state = UNHEALTHY
-    dep.in_litellm = True
+    _registered(dep)
     stale = {
         "model_name": "gemma4-26b",
         "litellm_params": {"api_base": "http://10.0.0.7:11111/v1"},
@@ -348,16 +351,23 @@ def test_a_stamp_for_another_key_is_not_this_deployment():
     """Same model name and, by coincidence, the same address: the stamp says it is another box's."""
     fleet = _listen_and_public()
     (dep,) = fleet.deployments
-    be = _manager(fleet)
+    dep.vllm.state = UNHEALTHY
     row = {
         "model_name": "gemma4-26b",
         "litellm_params": {"api_base": "http://10.0.0.7:12711/v1"},
         "model_info": {"id": "theirs", "llmao_key": "http://10.0.0.8:8001"},
     }
-    assert be._litellm_id(row, dep) is None
-    # Unstamped: not one of ours, whatever its address says (the backfill stamped every row).
+    (theirs,) = deployments_from_model_info({"data": [row]}, now=0.0).rows
+    assert theirs.key == DeploymentKey("http://10.0.0.8:8001", "gemma4-26b") != dep.key
+    dep.read_litellm((theirs,))
+    assert dep.litellm == ()
+    # Unstamped at its address: present, as a row from before stamping would be,
+    # but not deletable by it: the id lookup goes by the stamp alone (the backfill stamped every row).
     del row["model_info"]["llmao_key"]
-    assert be._litellm_id(row, dep) is None
+    be = _manager(fleet, _litellm([row]))
+    assert asyncio.run(be.delete_deployment(dep)) is False
+    assert dep.in_litellm is True
+    assert "model/delete" not in _paths(be)
 
 
 def test_sync_selfhost_does_not_repost_the_same_deployment():
@@ -386,21 +396,21 @@ def test_a_deployment_at_the_listen_port_is_reported_on_its_server():
             {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.7:10100/v1"}},
         ]
     }
-    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, info)
     asyncio.run(be.check_config_skew())
     assert dep.in_litellm is True
     assert dep.at_listen_port is True
     assert SKEW_AT_LISTEN_PORT in dep.skew
-    # Once, on its server; not again as a stranger.
-    assert fleet.extra_litellm == []
+    # Once, on its server; not again as an orphan.
+    assert fleet.orphans == []
 
 
 def test_where_the_ports_are_one_the_deployment_is_simply_right():
     """Local: no provider in between, the listen port is the public one."""
     s = _server(host="127.0.0.1", listen_port=8001, public_port=8001)
     s.state = HEALTHY
-    fleet = Fleet(None, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
-    be = _manager(fleet, _info("127.0.0.1", 8001), cfg=edict(fleet=edict(FLEET_KNOBS)))
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    be = _manager(fleet, _info("127.0.0.1", 8001))
     asyncio.run(be.check_config_skew())
     assert fleet.deployments[0].in_litellm is True
     assert fleet.deployments[0].at_listen_port is False
@@ -410,7 +420,7 @@ def test_other_port_is_not_this_deployment():
     s = _server(host="10.1.2.3", listen_port=8001, public_port=18001)
     s.state = HEALTHY
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
-    fleet = Fleet(None, [s], models=models)
+    fleet = Fleet(CFG, [s], models=models)
     be = _manager(fleet, _info("10.1.2.3", 19999))
     asyncio.run(be.sync_selfhost())
     assert "model/new" in _paths(be)
@@ -431,7 +441,7 @@ ACCOUNTS = edict(
 def _bought(*pds):
     deps = [FleetDeployment.from_intended(pd) for pd in pds]
     models = {pd.model_name: edict(model_name=pd.model_name, model_info=edict()) for pd in pds}
-    return Fleet(None, [], deployments=deps, models=models), deps
+    return Fleet(ACCOUNTS, [], deployments=deps, models=models), deps
 
 
 def test_a_provider_deployment_is_built_from_config():
@@ -454,7 +464,7 @@ def test_a_provider_deployment_is_built_from_config():
 
 def test_ensure_providers_registers_each_one_once():
     fleet, deps = _bought(XAI, OR_GROK)
-    be = _manager(fleet, {"data": []}, cfg=ACCOUNTS)
+    be = _manager(fleet, _litellm(), cfg=ACCOUNTS)
     asyncio.run(be.ensure_providers())
     posts = [c.json for c in be._transport.calls if c.path == "model/new"]
     assert [p["litellm_params"]["api_key"] for p in posts] == ["xai-test", "sk-or-test"]
@@ -503,7 +513,7 @@ def test_two_models_on_one_account_are_not_skew():
     asyncio.run(be.check_config_skew())
     assert grok.in_litellm and gemma.in_litellm
     assert not grok.config_mismatch and not gemma.config_mismatch
-    assert fleet.extra_litellm == []
+    assert fleet.orphans == []
 
 
 def test_health_on_a_shared_api_base_is_per_model():
@@ -522,44 +532,48 @@ def _unplaced():
     """A box whose public port is not known this pass, after an earlier pass knew it."""
     box = _server(host="10.0.0.5", listen_port=8001, public_port=None)
     box.state = HEALTHY
-    fleet = Fleet(None, [box], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [box], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
     (dep,) = fleet.deployments
-    dep.in_litellm = True
-    dep.litellm_healthy = True
-    dep.litellm_health_at = 1000.0
+    _registered(dep, api_base="http://10.0.0.5:41234")
+    _health(dep, True, at=1000.0)
     return fleet, dep
 
 
-def test_an_unknown_address_is_not_missing_from_litellm():
+def test_an_unknown_address_is_found_by_its_stamp():
+    """Its own deployment is at a public port nobody knows this pass; the stamp finds it there."""
     fleet, dep = _unplaced()
     info = {
         "data": [
-            # Its own deployment, on the public port nobody knows this pass.
-            {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.5:41234/v1"}},
+            {
+                "model_name": "gemma4-26b",
+                "litellm_params": {"api_base": "http://10.0.0.5:41234/v1"},
+                "model_info": {"id": "mine", "llmao_key": "http://10.0.0.5:8001"},
+            },
             # Somebody else's: a host the fleet does not have.
             {"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.99:8001/v1"}},
         ]
     }
-    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, info)
     asyncio.run(be.check_config_skew())
     assert dep.in_litellm is True
-    assert [(x.host, x.port) for x in fleet.extra_litellm] == [("10.0.0.99", 8001)]
+    assert [o.deployment.display for o in fleet.orphans] == ["10.0.0.99:8001"]
 
 
 def test_an_unknown_address_is_not_found_on_its_listen_port():
     """Off-box the listen port is unreachable; finding it there proves nothing."""
     fleet, dep = _unplaced()
-    dep.in_litellm = False
+    dep.litellm = ()
     info = {"data": [{"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.5:8001/v1"}}]}
-    be = _manager(fleet, info, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, info)
     asyncio.run(be.check_config_skew())
     assert dep.in_litellm is False
+    assert dep.at_listen_port is True
 
 
 def test_an_unknown_address_keeps_its_last_litellm_health():
     """Wiping it would leave the deployment unjudged for four hours."""
     fleet, dep = _unplaced()
-    be = _manager(fleet, {"healthy_endpoints": [], "unhealthy_endpoints": []}, cfg=edict(fleet=edict(FLEET_KNOBS)))
+    be = _manager(fleet, {"healthy_endpoints": [], "unhealthy_endpoints": []})
     asyncio.run(be.check_health_skew())
     assert dep.litellm_healthy is True
     assert dep.litellm_health_at == 1000.0
@@ -572,8 +586,8 @@ def test_sync_selfhost_drops_a_box_that_rejects_our_key():
     s = _server()
     s.state = REJECTED
     models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
-    fleet = Fleet(None, [s], models=models)
-    fleet.deployments[0].in_litellm = True
+    fleet = Fleet(CFG, [s], models=models)
+    _registered(fleet.deployments[0])
     be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))
     asyncio.run(be.sync_selfhost())
     assert fleet.deployments[0].in_litellm is False

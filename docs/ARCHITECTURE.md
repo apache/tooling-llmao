@@ -248,12 +248,14 @@ classDiagram
     +servers
     +deployments
     +models
-    +unknown_config_fetches
-    +extra_litellm
+    +provisioning
+    +litellm
+    +orphans
   }
   class FleetDeployment {
     +vllm
-    +in_litellm
+    +litellm
+    +litellm_health
     +api_base
     +self_hosted
     +model_name

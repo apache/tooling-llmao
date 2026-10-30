@@ -188,7 +188,7 @@ def test_config_fetch_starts_loading_on_the_approved_host():
     fleet.read_config_fetches()
     assert [s.listen_port for s in fleet.servers] == [8001, 8002]
     assert all(s.config_served_at == 60.0 for s in fleet.servers)
-    view = deployment_status(snapshot_for_status(fleet.deployments[0], cfg, 60.0), cfg.fleet, 60.0)
+    view = deployment_status(snapshot_for_status(fleet.deployments[0]), cfg.fleet, 60.0)
     assert view.lifecycle == LOADING
     # Copied, not referenced: the record dropping the fetch leaves the start standing.
     fleet.provisioning.fetches.clear()

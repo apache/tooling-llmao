@@ -47,7 +47,8 @@ from llmao.model_status import (
     UNHEALTHY,
 )
 from llmao.provisioning import FETCH_CAP, ConfigFetch, ProvisioningRecord
-from llmao.proxy.deployments import DeploymentManager
+from llmao.proxy.deployments import DeploymentManager, LiteLLMDeployment, LiteLLMHealth
+from llmao.reconcile import norm_base
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
 
@@ -76,6 +77,17 @@ def _server(**kwargs):
     )
     defaults.update(kwargs)
     return VllmServer(**defaults)
+
+
+def _registered(dep, *, id: str = "id-1", api_base: str | None = None) -> None:
+    """What a read of the LiteLLM deployments had for this one: a row stamped with its key at its dialable base."""
+    base = norm_base(api_base or dep.api_base)
+    dep.litellm = (LiteLLMDeployment(id=id, model_name=dep.model_name, api_base=base, key=dep.key),)
+
+
+def _health(dep, healthy: bool, *, at: float | None = None) -> None:
+    """LiteLLM's /health verdict on this deployment, as read."""
+    dep.litellm_health = LiteLLMHealth(healthy, at or time.time())
 
 
 def test_probe_serving():
@@ -167,7 +179,7 @@ def test_add_refusal_until_serving():
     assert add_refusal(dep) == "vLLM is not serving yet"
     dep.vllm.state = HEALTHY
     assert add_refusal(dep) is None
-    dep.in_litellm = True
+    _registered(dep)
     assert add_refusal(dep) == "already in LiteLLM"
 
 
@@ -238,9 +250,9 @@ def test_extra_routes_are_per_port_and_model():
         {"model_name": "other-c", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
     ]
     asyncio.run(_skew_manager(fleet, info)[0].check_config_skew())
-    found = {(row.host, row.port, row.model_name) for row in fleet.extra_litellm}
+    found = {(o.deployment.host, o.deployment.port, o.deployment.model_name) for o in fleet.orphans}
     assert found == {("10.0.0.1", 9001, "other-a"), ("10.0.0.1", 9002, "other-b"), ("10.0.0.1", 9002, "other-c")}
-    assert all(SKEW_IN_LITELLM_NOT_IN_CONFIG in row.skew for row in fleet.extra_litellm)
+    assert all(o.passes == 1 for o in fleet.orphans)
     assert SKEW_IN_LITELLM_NOT_IN_CONFIG not in dep.skew
 
 
@@ -258,7 +270,7 @@ def test_model_name_mismatch_survives_health_check():
     litellm.info = [{"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}]
     asyncio.run(backend.check_config_skew())
     assert SKEW_CONFIG_MISMATCH not in dep.skew
-    assert fleet.extra_litellm == []
+    assert fleet.orphans == []
 
 
 def test_add_calls_deployment_only_when_serving():
@@ -351,7 +363,7 @@ def test_model_in_litellm():
     s = _server()
     fleet = Fleet(cfg=None, servers=[s])
     assert fleet.model_in_litellm("gemma4-26b") is False
-    fleet.deployments[0].in_litellm = True
+    _registered(fleet.deployments[0])
     assert fleet.model_in_litellm("gemma4-26b") is True
     assert fleet.model_in_litellm("other") is False
 
@@ -733,7 +745,7 @@ def test_rejected_and_foreign_may_be_removed_but_not_added():
     dep = FleetDeployment.from_vllm(s)
     for state in (REJECTED, FOREIGN):
         s.state = state
-        dep.in_litellm = False
+        dep.litellm = ()
         assert add_refusal(dep) == "vLLM rejects our key"
-        dep.in_litellm = True
+        _registered(dep)
         assert remove_refusal(dep) is None
