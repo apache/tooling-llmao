@@ -403,3 +403,65 @@ models:
         Qwen3 8B from the unquantized weights, for hardware the FP8 build
         does not load on. Same model and same behaviour as qwen3-8b; send
         enable_thinking:false to keep it cheap. Not yet measured.
+
+  - model_name: qwen3.5-9b
+    litellm_params:
+      model: hosted_vllm/qwen3.5-9b
+    model_info:
+      vllm:
+        model: Qwen/Qwen3.5-9B
+        source:
+          kind: hf
+        # 18.0 GiB of BF16 safetensors in the HF repo: 9B of weights plus a
+        # 0.4B vision encoder, and 4 GiB of it is the untied embeddings and
+        # lm_head at a 248k vocabulary. Rounded up so the fit check fails
+        # closed. Too large for a 24GB card once the KV cache is counted;
+        # a 32GB card is the floor. Qwen publishes no FP8 build of this
+        # one; RedHatAI/Qwen3.5-9B-FP8-dynamic (13 GiB) is the candidate
+        # if a smaller card is wanted.
+        vram_gb: 19
+        # 19.3G of weights; room for the torch compile cache.
+        disk_gb: 23
+        # 131072, matching the others so callers need not track which model
+        # has which window. Native maximum is 262144.
+        max_model_len: 131072
+        # KV cache per token: only the 8 full-attention layers of 32 hold
+        # one (the other 24 are Gated DeltaNet, whose state is per sequence,
+        # not per token). Keys and values, 4 KV heads of 256, one byte each
+        # at --kv-cache-dtype fp8 (2 x 8 x 4 x 256 x 1).
+        kv_bytes_per_token: 16384
+        args:
+          - --kv-cache-dtype
+          - fp8
+          - --enable-prefix-caching
+          - --enable-chunked-prefill
+          # Carried over from qwen3-8b, not tuned for this model or a box.
+          - --max-num-batched-tokens
+          - "4096"
+          # Qwen's own card for this model: qwen3 and qwen3_coder, the same
+          # pair qwen3.8-27b runs. Not yet verified against real output.
+          - --reasoning-parser
+          - qwen3
+          - --enable-auto-tool-choice
+          - --tool-call-parser
+          - qwen3_coder
+      display_name: "Qwen3.5 9B"
+      good_for: "Routine calls with images, at a step up from Qwen3 8B in reasoning and code."
+      context_window: 131072
+      license: Apache-2.0
+      openness: open-weight
+      weights_distribution: "Qwen/Qwen3.5-9B (HF, BF16) · vLLM"
+      training_data_provenance: "undisclosed (Alibaba)"
+      provenance_record: absent
+      modality: text+vision
+      supports_thinking: true
+      # Qwen's card: thinking mode by default, off with enable_thinking:false.
+      # The /think and /nothink soft switches of Qwen3 are not supported.
+      # Whether the default should be off, as on qwen3-8b, is a measurement
+      # not yet taken.
+      thinks_by_default: true
+      notes: >-
+        Dense 9B, hybrid Gated DeltaNet + periodic full attention, with a
+        vision encoder. Qwen's figures put it ahead of Qwen3-30B-A3B on
+        GPQA, MMLU-Pro and competition math. Reasoning on by default; send
+        enable_thinking:false to keep it cheap. Not yet measured.
