@@ -362,6 +362,26 @@ def test_probe_skips_without_public_port():
     assert s.state == AWAITING
 
 
+def test_an_orphan_serving_the_name_makes_the_model_mixed_once_the_strip_shows_it():
+    from llmao.fleet import ORPHAN_PASSES
+    from llmao.model_status import MIXED, PRIVATE
+    from llmao.proxy.deployments import LiteLLMDeployments
+
+    s = _server()
+    s.record_probe(True, now=time.time(), grace_s=1800, fail_threshold=3)
+    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[s])
+    _registered(fleet.deployments[0])
+    assert fleet.model_rollup("gemma4-26b").privacy == PRIVATE
+    stranger = LiteLLMDeployment(id="x", model_name="gemma4-26b", api_base="http://198.51.100.9:18490", key=None)
+    rows = (stranger, *fleet.deployments[0].litellm)
+    for n in range(1, ORPHAN_PASSES + 1):
+        fleet.update_litellm_deployments(LiteLLMDeployments.from_rows(rows, now=time.time()))
+        expected = MIXED if n >= ORPHAN_PASSES else PRIVATE
+        assert fleet.model_rollup("gemma4-26b").privacy == expected
+    # Another name's orphan says nothing about this one.
+    assert fleet.model_rollup("other").privacy == PRIVATE
+
+
 def test_model_in_litellm():
     s = _server()
     fleet = Fleet(cfg=None, servers=[s])

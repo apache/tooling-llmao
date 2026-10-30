@@ -21,8 +21,8 @@ flowchart LR
 llmao is the source of truth for which models exist, how each is served
 (`models.yaml`), which box serves what on which port (`fleet.hosts`), and
 the bearer LiteLLM presents to each vLLM. The box learns all of it from one
-JSON response. There is no on-disk `servers.yaml` and no long-lived process
-manager on the box: the installer writes Supervisor units and exits.
+JSON response. There is no long-lived process manager on the box: the
+installer writes Supervisor units and exits.
 
 ## The request
 

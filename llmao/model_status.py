@@ -45,8 +45,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-# Lifecycle. One per deployment, or Unknown for a fleet-key fetch from an IP
-# that is not in config.yaml.
+# Lifecycle. One per deployment.
 AWAITING = "awaiting"
 LOADING = "loading"
 HEALTHY = "healthy"
@@ -62,7 +61,6 @@ REJECTED = "rejected"
 # from fleet.hosts" sentence shows. A host a listing still names is ours
 # whatever it answers, so it is never Foreign.
 FOREIGN = "foreign"
-UNKNOWN = "unknown"
 CONFIGURED = "configured"
 
 # Consecutive probe passes a 401 must persist, with the host unlisted, before
@@ -108,7 +106,7 @@ SKEW_PHRASE = {
 
 @dataclass(frozen=True)
 class DeploymentSnapshot:
-    """One intended deployment, or one LiteLLM route that config does not list.
+    """One intended deployment, as model_status reads it.
 
     Self-hosted probe fields are the counters ``record_probe`` already keeps.
     ``probe_ok`` is None until the first probe. ``fails`` is the count after
@@ -132,8 +130,6 @@ class DeploymentSnapshot:
     litellm_health_at: float | None = None
     context_window: int | None = None
     kv_cache_tokens: int | None = None
-    # LiteLLM has this api_base and config.yaml does not. Not an intended row.
-    litellm_only: bool = False
     # How many deployments LiteLLM holds under this key. More than one is
     # duplicates: LiteLLM keeps a second copy when asked twice.
     litellm_copies: int = 0
@@ -180,9 +176,6 @@ class DeploymentStatus:
     # vLLM answered the last probe (e.g. a 503 while loading) as opposed to no
     # connection. Display-only loading detail; None until the first probe.
     reached: bool | None = None
-    # LiteLLM has this route and config.yaml does not. It may be one of our
-    # boxes. Any such row forces model privacy to MIXED.
-    litellm_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -279,9 +272,7 @@ def commercial_lifecycle(snap: DeploymentSnapshot) -> str:
 
 def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None = None) -> DeploymentStatus:
     now = now or time.time()
-    if snap.litellm_only:
-        lifecycle = UNKNOWN
-    elif snap.self_hosted:
+    if snap.self_hosted:
         lifecycle = self_hosted_lifecycle(snap, cfg, now)
     else:
         lifecycle = commercial_lifecycle(snap)
@@ -296,12 +287,10 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
     # and LiteLLM for a commercial endpoint. A stale one drops out of the
     # roll-up instead of reading as down.
     driving_unknown = vllm_signal == SIGNAL_UNKNOWN if snap.self_hosted else litellm_signal == SIGNAL_UNKNOWN
-    counted = lifecycle in (HEALTHY, UNHEALTHY, REJECTED) and not driving_unknown and not snap.litellm_only
+    counted = lifecycle in (HEALTHY, UNHEALTHY, REJECTED) and not driving_unknown
 
     skew: list[str] = []
-    if snap.litellm_only:
-        skew.append(SKEW_IN_LITELLM_NOT_IN_CONFIG)
-    elif not snap.in_litellm and lifecycle in (HEALTHY, CONFIGURED):
+    if not snap.in_litellm and lifecycle in (HEALTHY, CONFIGURED):
         skew.append(SKEW_INTENDED_NOT_IN_LITELLM)
     if vllm_signal == SIGNAL_UP and litellm_signal == SIGNAL_DOWN:
         skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
@@ -321,18 +310,18 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
         kv_cache_tokens=snap.kv_cache_tokens,
         counted=counted,
         reached=snap.reached,
-        litellm_only=snap.litellm_only,
     )
 
 
-def _privacy(rows: list[DeploymentStatus]) -> str:
+def _privacy(rows: list[DeploymentStatus], *, orphaned: bool) -> str:
     """Where requests for this model can be handled.
 
     Every configured row counts, including one that is down and therefore not
-    in the roll-up. A LiteLLM-only route might be one of our boxes or a third
-    party; until we can tell, the model is MIXED.
+    in the roll-up. An orphan serving the name poisons it: LiteLLM sends
+    requests somewhere nothing intends, so the model is MIXED until an admin
+    stops tracking the orphan or approves its host, whichever it is.
     """
-    if any(v.litellm_only for v in rows):
+    if orphaned:
         return MIXED
     if not rows:
         # A provider's model always has its deployment. One with none is
@@ -350,8 +339,14 @@ def _privacy(rows: list[DeploymentStatus]) -> str:
 def model_status(
     model_name: str,
     views: list[DeploymentStatus],
+    *,
+    orphaned: bool = False,
 ) -> ModelStatus:
-    """Roll up one model. ``views`` may include other models; they are ignored."""
+    """Roll up one model. ``views`` may include other models; they are ignored.
+
+    ``orphaned``: LiteLLM has a deployment of this name that nothing intends
+    (Fleet.orphans), which poisons the privacy.
+    """
     rows = [v for v in views if v.model_name == model_name]
     counted = [v for v in rows if v.counted]
     healthy = [v for v in counted if v.lifecycle == HEALTHY]
@@ -362,7 +357,7 @@ def model_status(
     else:
         rollup = AVAILABLE
 
-    privacy = _privacy(rows)
+    privacy = _privacy(rows, orphaned=orphaned)
 
     contexts = [v.context_window for v in healthy if v.context_window is not None]
     context = min(contexts) if contexts else None

@@ -15,10 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""vLLM host JSON: validate at process start, join models.yaml at request time.
+"""The live fleet: the intended servers and deployments, the runners that observe them, and the joins.
 
-GPU boxes fetch GET /vllm/config (no servers.yaml). Placement is fleet.hosts
-keyed by client IP.
+GPU boxes fetch GET /vllm/config (llmao/provisioning.py). A server is named
+by the id its provider gives the machine, which is what the box sends as its
+host (legacy and local boxes by their IP), and placed on its Rental by
+address (docs/box-lifecycle.md).
 
 Terminology: **models.yaml** is admin definitions. A **model** is one row
 (`model_name`). A **VllmServer** is one vLLM process. A **FleetDeployment**
@@ -939,11 +941,16 @@ class Fleet:
         return sorted(out, key=lambda u: (u.fetch is None, -((u.fetch and u.fetch.last_at) or 0.0), u.name))
 
     def model_rollup(self, model_name: str, *, now: float | None = None):
-        """Available / Degraded / Unavailable. validate_fleet already required the intervals."""
+        """Available / Degraded / Unavailable, and privacy. validate_fleet already required the intervals.
+
+        An orphan serving the name, once the strip shows it (ORPHAN_PASSES),
+        poisons its privacy to MIXED: requests go somewhere nothing intends.
+        """
         stamp = now or time.time()
         cfg = self.cfg.fleet
         views = [deployment_status(snapshot_for_status(dep), cfg, stamp) for dep in self.deployments]
-        return model_status(model_name, views)
+        orphaned = any(o.deployment.model_name == model_name and o.passes >= ORPHAN_PASSES for o in self.orphans)
+        return model_status(model_name, views, orphaned=orphaned)
 
     def cost_basis(self, model_name: str) -> str | None:
         """How to read a cost recorded against this model name.

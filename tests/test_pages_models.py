@@ -44,7 +44,6 @@ from llmao.model_status import (
     STALLED,
     UNAVAILABLE,
     UNHEALTHY,
-    UNKNOWN,
 )
 from llmao.models import load_models
 from llmao.provisioning import ConfigFetch
@@ -648,7 +647,7 @@ def test_awaiting_row_has_no_diagnostics_line():
 
 def test_every_state_has_a_badge_class():
     pages = _app()
-    for state in (AWAITING, LOADING, HEALTHY, UNHEALTHY, STALLED, UNKNOWN, CONFIGURED, "pending", "no deployment"):
+    for state in (AWAITING, LOADING, HEALTHY, UNHEALTHY, STALLED, CONFIGURED, "pending", "no deployment"):
         assert pages._badge_class(state).startswith("text-bg-")
     # Serving but not routed is a warning, not a success.
     assert pages._badge_class(HEALTHY, routed=False) == "text-bg-warning"

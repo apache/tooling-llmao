@@ -71,7 +71,6 @@ from llmao.model_status import (
     STALLED,
     UNAVAILABLE,
     UNHEALTHY,
-    UNKNOWN,
     deployment_status,
 )
 from llmao.models import VllmRecipe, model_available_for, model_in_service, ux_models
@@ -517,7 +516,6 @@ _BADGE_CLASS = {
     STALLED: "text-bg-danger",
     REJECTED: "text-bg-danger",
     FOREIGN: "text-bg-danger",
-    UNKNOWN: "text-bg-dark",
     CONFIGURED: "text-bg-light border",
     "pending": "text-bg-light border",
     "no deployment": "text-bg-warning",
@@ -881,7 +879,7 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
         row = edict(m)
         status = fleet.model_rollup(row.model_name)
         rollup = status.rollup
-        own = [d for d in fleet.deployments if d.model_name == row.model_name and not getattr(d, "litellm_only", False)]
+        own = [d for d in fleet.deployments if d.model_name == row.model_name]
         row.self_count = sum(1 for d in own if d.self_hosted)
         row.external_count = sum(1 for d in own if not d.self_hosted)
         row.hosting_label = _hosting_label(row.self_count, row.external_count)
