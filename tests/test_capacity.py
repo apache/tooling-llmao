@@ -30,7 +30,6 @@ from llmao.capacity import (
     CapacityStore,
     CapacityWriter,
     HourlyRollup,
-    Sample,
     days_to_read,
     hour_label,
     retention_days,
@@ -38,6 +37,7 @@ from llmao.capacity import (
     summarise_spend,
 )
 from llmao.proxy.client import MemoryStore
+from llmao.vllm_client import Sample
 from tests.fake_transport import fake_memory
 
 # 2026-10-18T09:00:00Z, a clock hour's start.

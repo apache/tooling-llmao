@@ -27,19 +27,19 @@ module, not an ``if`` in this one.
 
 ``probe`` produces ``VllmProbe``, the snapshot of one probe of one address:
 what ``/health`` said, and what ``/v1/models`` said when it was asked.
+``fetch_metrics`` produces ``Sample``, one reading of ``/metrics``, which the
+sampler hands to the capacity rollup.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
-
-from llmao.capacity import Sample
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -269,6 +269,41 @@ def parse_kv_cache_tokens(metrics_text: str) -> int | None:
         if blocks > 0 and size > 0:
             return blocks * size
     return None
+
+
+@dataclass
+class Sample:
+    """One reading of one server's /metrics, as parsed here.
+
+    Gauges are the value at the moment of reading. Counters and the
+    queue-time histogram are vLLM's totals since the server started; the
+    capacity rollup (llmao/capacity.py) differences them.
+    """
+
+    ts: float
+    running: float = 0.0
+    waiting: float = 0.0
+    # KV cache in use, as a fraction.
+    kv: float = 0.0
+    # prompt_tokens, generation_tokens, requests, preemptions, queue_s, queued
+    counters: dict[str, float] = field(default_factory=dict)
+    # Queue-time histogram: upper bound in seconds => cumulative count.
+    buckets: dict[float, float] = field(default_factory=dict)
+    # The KV cache size in tokens, fixed at engine start. Not rolled up: the
+    # sampler hands it to the fleet for the oversized check.
+    kv_cache_tokens: int | None = None
+
+
+async def fetch_metrics(client: httpx.AsyncClient, root: str, *, now: float | None = None) -> Sample:
+    """GET /metrics as a Sample.
+
+    Raises httpx.HTTPError when the box does not answer: the sampler says
+    what an outage means (logged once per outage, not per reading), and
+    bounds the wait at its call (asyncio.timeout), not here.
+    """
+    resp = await client.get(f"{root}/metrics")
+    resp.raise_for_status()
+    return parse_metrics(resp.text, now=now)
 
 
 def parse_metrics(text: str, *, now: float | None = None) -> Sample:

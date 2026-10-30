@@ -984,7 +984,10 @@ fact has two homes. Then `deployment.py` against six known shapes.
    `discovery_finding` renders the line and `Fleet.finding` supplies the
    models.yaml names; `fleet.py` reads nothing from vLLM itself any more);
    (e) the sampler's `/metrics` read returns
-   `Sample` through the client.
+   `Sample` through the client (**Done** 2026-10-29: `fetch_metrics`,
+   and `Sample` lives beside its producer in `vllm_client.py`; the
+   capacity rollup imports it, not the other way round). Step 7 is
+   complete: `vllm_client.py` is the one reader of a vLLM process.
 
 Pages, capacity, the sampler, and the action log read the view. They stop
 calling `add_refusal` / `remove_refusal` once the plan is the gate.

@@ -55,7 +55,10 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from llmao.vllm_client import Sample
 
 from asfpy.stopwatch import Stopwatch
 from easydict import EasyDict as edict  # noqa: N813
@@ -65,29 +68,6 @@ _LOGGER = logging.getLogger(__name__)
 KEY_PREFIX = "llmao:capacity:"
 HOUR_S = 3600
 DAY_S = 86400
-
-
-@dataclass
-class Sample:
-    """One reading of one server's /metrics, as the sampler parsed it.
-
-    Gauges are the value at the moment of reading. Counters and the
-    queue-time histogram are vLLM's totals since the server started; the
-    rollup differences them.
-    """
-
-    ts: float
-    running: float = 0.0
-    waiting: float = 0.0
-    # KV cache in use, as a fraction.
-    kv: float = 0.0
-    # prompt_tokens, generation_tokens, requests, preemptions, queue_s, queued
-    counters: dict[str, float] = field(default_factory=dict)
-    # Queue-time histogram: upper bound in seconds => cumulative count.
-    buckets: dict[float, float] = field(default_factory=dict)
-    # The KV cache size in tokens, fixed at engine start. Not rolled up: the
-    # sampler hands it to the fleet for the oversized check.
-    kv_cache_tokens: int | None = None
 
 
 def retention_days(cfg: Any) -> int:

@@ -114,7 +114,7 @@ def test_each_server_is_named_by_host_and_listen_port():
     fleet.deployments.append(FleetDeployment(model_name="grok-4", name="grok-4", self_hosted=False))
     sampler = MetricsSampler(fleet, HourlyRollup(15), interval_s=15)
     # Read at the public port; named by the listen port. No address, no reading.
-    assert sampler.targets() == [(reachable, "203.0.113.10:8001", "qwen3-8b", "http://203.0.113.10:22018/metrics")]
+    assert sampler.targets() == [(reachable, "203.0.113.10:8001", "qwen3-8b", "http://203.0.113.10:22018")]
 
 
 def test_a_pass_feeds_the_rollup_and_notes_a_box_that_did_not_answer():

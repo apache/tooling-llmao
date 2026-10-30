@@ -37,10 +37,11 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from llmao.vllm_client import parse_metrics
+from llmao.vllm_client import fetch_metrics
 
 if TYPE_CHECKING:
-    from llmao.capacity import HourlyRollup, Sample
+    from llmao.capacity import HourlyRollup
+    from llmao.vllm_client import Sample
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,9 +85,9 @@ class MetricsSampler:
         self._down: set[str] = set()
 
     def targets(self) -> list[tuple[Any, str, str, str]]:
-        """(VllmServer, server, model_name, metrics URL) for each self-hosted server with an address.
+        """(VllmServer, server, model_name, root URL) for each self-hosted server with an address.
 
-        A server is host:listen port, as everywhere else in llmao. The URL
+        A server is host:listen port, as everywhere else in llmao. The root
         is its public address, the one LiteLLM uses.
         """
         out = []
@@ -95,14 +96,16 @@ class MetricsSampler:
             if not dep.self_hosted or srv is None or not dep.api_base:
                 continue
             root = dep.api_base.rstrip("/").removesuffix("/v1")
-            out.append((srv, f"{srv.host}:{srv.listen_port}", dep.model_name, f"{root}/metrics"))
+            out.append((srv, f"{srv.host}:{srv.listen_port}", dep.model_name, root))
         return out
 
-    async def _read(self, client: httpx.AsyncClient, server: str, url: str) -> Sample | None:
+    async def _read(self, client: httpx.AsyncClient, server: str, root: str) -> Sample | None:
+        # The wait is bounded here, where the reading is asked for: a box
+        # that takes longer than the sampler allows is one that did not answer.
         try:
-            resp = await client.get(url, timeout=self._timeout)
-            resp.raise_for_status()
-        except httpx.HTTPError as e:
+            async with asyncio.timeout(self._timeout):
+                sample = await fetch_metrics(client, root)
+        except (httpx.HTTPError, TimeoutError) as e:
             if server not in self._down:
                 self._down.add(server)
                 _LOGGER.warning("sampler: %s unreachable (%s)", server, type(e).__name__)
@@ -110,7 +113,7 @@ class MetricsSampler:
         if server in self._down:
             self._down.discard(server)
             _LOGGER.info("sampler: %s answering again", server)
-        return parse_metrics(resp.text)
+        return sample
 
     async def sample_once(self, client: httpx.AsyncClient) -> None:
         """One reading of every box, all at once: twenty boxes in turn could
@@ -120,8 +123,8 @@ class MetricsSampler:
         # hour carries its share and adding rows up gives the real bill.
         # Every server on the box counts, reachable or not.
         per_box = Counter(srv.host for srv in self._fleet.servers)
-        readings = await asyncio.gather(*(self._read(client, server, url) for _srv, server, _model, url in targets))
-        for (srv, server, model_name, _url), sample in zip(targets, readings, strict=True):
+        readings = await asyncio.gather(*(self._read(client, server, root) for _srv, server, _model, root in targets))
+        for (srv, server, model_name, _root), sample in zip(targets, readings, strict=True):
             if sample is None:
                 self._rollup.missed(server)
                 continue
