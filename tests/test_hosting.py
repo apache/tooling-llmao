@@ -298,14 +298,23 @@ def test_check_fit_credits_the_weights_already_cached(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(inst, "free_vram_gb", lambda: None)
     monkeypatch.setattr(inst, "free_disk_gb", lambda p: 20.0)
-    blobs = tmp_path / "hf-cache" / "hub" / "models--org--model-a" / "blobs"
-    blobs.mkdir(parents=True)
-    with open(blobs / "weights", "wb") as f:
-        f.truncate(40 * 1024**3)
-    # A snapshot is a symlink into blobs and must not be counted twice.
-    snap = tmp_path / "hf-cache" / "hub" / "models--org--model-a" / "snapshots" / "abc"
-    snap.mkdir(parents=True)
-    (snap / "weights").symlink_to(blobs / "weights")
+    hub = tmp_path / "hf-cache" / "hub"
+    # The current layout: shards content-addressed under hub/blobs/<xx>/,
+    # shared by every model; the model's own blobs hold only small files.
+    shared = hub / "blobs" / "99"
+    shared.mkdir(parents=True)
+    with open(shared / "99abc", "wb") as f:
+        f.truncate(39 * 1024**3)
+    own = hub / "models--org--model-a" / "blobs"
+    own.mkdir(parents=True)
+    with open(own / "config", "wb") as f:
+        f.truncate(1 * 1024**3)
+    # Two snapshots naming the same bytes count them once.
+    for rev in ("abc", "def"):
+        snap = hub / "models--org--model-a" / "snapshots" / rev
+        snap.mkdir(parents=True)
+        (snap / "model.safetensors").symlink_to(shared / "99abc")
+        (snap / "config.json").symlink_to(own / "config")
     spec = _spec(disk=55)
     spec["model"] = "org/model-a"
     assert inst.check_fit([spec], data_dir=str(tmp_path)) == []

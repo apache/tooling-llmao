@@ -263,22 +263,34 @@ def hf_home(data_dir: str | Path) -> Path:
 def cached_weights_gb(model: str, data_dir: str | Path) -> float:
     """What this model already has on disk under HF_HOME, in GB; 0 when nothing.
 
-    The hub cache keeps a model's files as blobs under
-    hub/models--<org>--<name>/blobs, with snapshots as symlinks into it, so
-    the blobs alone are the bytes on disk. A re-provision of a box that
-    already holds its weights must not be refused for lacking the room to
-    pull them again: that box asked for 48GB free with 37GB of the same
-    weights already there, and kept its old units.
+    Counted through the snapshots, hub/models--<org>--<name>/snapshots/*,
+    whose entries are symlinks to the bytes: the older hub cache kept them
+    in the model's own blobs directory, the current one keeps the shards
+    content-addressed under hub/blobs/<xx>/ shared by every model, with
+    only the small files left per model. Walking blobs found 0.2GB of an
+    18GB model. Each target counts once, however many snapshots name it.
+
+    A re-provision of a box that already holds its weights must not be
+    refused for lacking the room to pull them again: that box asked for
+    48GB free with 37GB of the same weights already there, and kept its
+    old units.
     """
-    blobs = hf_home(data_dir) / "hub" / f"models--{model.replace('/', '--')}" / "blobs"
+    snapshots = hf_home(data_dir) / "hub" / f"models--{model.replace('/', '--')}" / "snapshots"
+    seen: set[tuple[int, int]] = set()
+    total = 0
     try:
-        entries = list(blobs.iterdir())
+        files = [p for p in snapshots.rglob("*") if p.is_file()]
     except OSError:
         return 0.0
-    total = 0
-    for entry in entries:
-        if entry.is_file() and not entry.is_symlink():
-            total += entry.stat().st_size
+    for path in files:
+        try:
+            st = path.stat()  # follows the symlink
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) in seen:
+            continue
+        seen.add((st.st_dev, st.st_ino))
+        total += st.st_size
     return total / (1024.0**3)
 
 
