@@ -107,6 +107,12 @@ rm /workspace/.llmao/provisioned
 then restart the pod. The next boot clears the old units and provisions
 afresh. Stopping the servers first is not needed: a restart stops them.
 
+When the new set names a different model, also remove the old model's
+weights from the volume first, `/workspace/hf-cache/hub/models--<org>--<old-model>`.
+The installer credits the weights a model already has when it checks the
+disk, but nothing removes a model the pod no longer serves, and the
+leftovers can cost the new model the room it needs.
+
 ## Ports (open)
 
 `fleet.hosts` accepts `[model, listen, name|null, public]`. The fourth slot

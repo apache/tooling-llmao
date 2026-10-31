@@ -77,6 +77,20 @@ then reboot the instance from the Vast console. On boot it finds no marker
 and provisions again: it fetches the installer and this box's config, and
 writes new Supervisor units.
 
+**When the set changes to a different model**, also remove the old model's
+weights before the reboot, under `$DATA_DIRECTORY/hf-cache/hub/`
+(one `models--<org>--<name>` directory per model):
+
+```bash
+rm -r "$DATA_DIRECTORY"/hf-cache/hub/models--<org>--<old-model>
+```
+
+The installer credits the weights a model already has when it checks the
+disk, but it does not remove the weights of a model the box no longer
+serves, and on an 80GB disk two models' worth of leftovers is a refused
+install. A refused install restarts the old units and says why in the
+provisioning log: `install_set: will not fit -- disk: ...`.
+
 **Do not `supervisorctl stop all`.** Vast's image runs its own services under
 the same supervisord, including the Jupyter terminal you are typing in; it
 stops that too, and leaves you no shell to finish with.

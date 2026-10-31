@@ -111,9 +111,14 @@ The model must divide evenly across the cards (its attention heads by the GPU
 count); vLLM says so at startup if it does not. Cards talk over PCIe unless
 the box has NVLink, which costs some speed.
 
-The disk check compares the full requirement with free space even when the
-weights are already on the volume, so a re-run on a nearly full box can
-refuse where a first install would not.
+The disk check credits what each model already has under the HF cache
+(`hub/models--<org>--<name>/blobs`), so a re-provision of a box that holds
+its weights is not refused for the room to pull them again. It knows
+nothing about weights a box no longer needs: **when a box's set changes to
+a different model, delete the old model's directory under
+`$DATA_DIRECTORY/hf-cache/hub/` before re-provisioning**, or its weights
+keep the disk the new model needs and the fit check refuses. Nothing
+removes them otherwise.
 
 ## Sizing servers that share a card
 
