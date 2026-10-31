@@ -290,6 +290,34 @@ def test_check_fit_reports_disk_shortfall(monkeypatch):
     assert "disk" in problems[0]
 
 
+def test_check_fit_credits_the_weights_already_cached(monkeypatch, tmp_path):
+    """A re-provision of a full box is not refused for the room to pull what it holds.
+
+    The box that found this needed 48GB by the recipes with 37GB of those
+    very weights on disk and 44GB free, and kept its old units.
+    """
+    monkeypatch.setattr(inst, "free_vram_gb", lambda: None)
+    monkeypatch.setattr(inst, "free_disk_gb", lambda p: 20.0)
+    blobs = tmp_path / "hf-cache" / "hub" / "models--org--model-a" / "blobs"
+    blobs.mkdir(parents=True)
+    with open(blobs / "weights", "wb") as f:
+        f.truncate(40 * 1024**3)
+    # A snapshot is a symlink into blobs and must not be counted twice.
+    snap = tmp_path / "hf-cache" / "hub" / "models--org--model-a" / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    (snap / "weights").symlink_to(blobs / "weights")
+    spec = _spec(disk=55)
+    spec["model"] = "org/model-a"
+    assert inst.check_fit([spec], data_dir=str(tmp_path)) == []
+
+    # A model with nothing cached still needs the whole figure.
+    other = _spec(name="c", disk=30)
+    other["model"] = "org/model-c"
+    problems = inst.check_fit([spec, other], data_dir=str(tmp_path))
+    assert len(problems) == 1
+    assert "need 45.0GB" in problems[0] and "40.0GB already cached" in problems[0]
+
+
 def _sized(name, vram=None, mml=None, gmu=None):
     raw = {"name": name, "model": f"org/{name}", "port": 8000, "api_key": "sk-x"}
     if vram is not None:

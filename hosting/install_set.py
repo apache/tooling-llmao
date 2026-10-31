@@ -255,6 +255,33 @@ def free_disk_gb(path: str) -> float | None:
     return (st.f_bavail * st.f_frsize) / (1024.0**3)
 
 
+def hf_home(data_dir: str | Path) -> Path:
+    """Where the servers on this box keep their weights: HF_HOME in every unit."""
+    return Path(data_dir) / "hf-cache"
+
+
+def cached_weights_gb(model: str, data_dir: str | Path) -> float:
+    """What this model already has on disk under HF_HOME, in GB; 0 when nothing.
+
+    The hub cache keeps a model's files as blobs under
+    hub/models--<org>--<name>/blobs, with snapshots as symlinks into it, so
+    the blobs alone are the bytes on disk. A re-provision of a box that
+    already holds its weights must not be refused for lacking the room to
+    pull them again: that box asked for 48GB free with 37GB of the same
+    weights already there, and kept its old units.
+    """
+    blobs = hf_home(data_dir) / "hub" / f"models--{model.replace('/', '--')}" / "blobs"
+    try:
+        entries = list(blobs.iterdir())
+    except OSError:
+        return 0.0
+    total = 0
+    for entry in entries:
+        if entry.is_file() and not entry.is_symlink():
+            total += entry.stat().st_size
+    return total / (1024.0**3)
+
+
 def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
     """Reasons these servers will not fit, or an empty list.
 
@@ -289,15 +316,17 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
         )
 
     # Once per model, not per server: two servers of the same model share
-    # one copy of the weights under HF_HOME.
+    # one copy of the weights under HF_HOME. Less what is already there.
     per_model: dict[str, float] = {}
     for s in specs:
         if s.get("disk_gb"):
             per_model[s["model"]] = max(per_model.get(s["model"], 0.0), s["disk_gb"])
-    want_disk = sum(per_model.values())
+    cached = sum(cached_weights_gb(model, data_dir) for model in per_model)
+    want_disk = max(sum(per_model.values()) - cached, 0.0)
     have_disk = free_disk_gb(data_dir)
     if want_disk and have_disk is not None and want_disk > have_disk:
-        problems.append(f"disk: need {want_disk:.1f}GB under {data_dir}, {have_disk:.1f}GB free")
+        already = f" after {cached:.1f}GB already cached" if cached else ""
+        problems.append(f"disk: need {want_disk:.1f}GB under {data_dir}{already}, {have_disk:.1f}GB free")
 
     return problems
 
@@ -433,11 +462,11 @@ def program_ini(
 
 def write_units(specs: list[dict[str, Any]], conf_dir: Path, *, hf_token: str | None = None) -> list[Path]:
     data_dir = Path(require_env("DATA_DIRECTORY"))
-    hf_home = data_dir / "hf-cache"
+    weights = hf_home(data_dir)
     # Where the Vast vLLM template already keeps it.
     vllm_cache = data_dir / ".vllm_cache"
     log_dir = data_dir / "logs"
-    hf_home.mkdir(parents=True, exist_ok=True)
+    weights.mkdir(parents=True, exist_ok=True)
     vllm_cache.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     conf_dir.mkdir(parents=True, exist_ok=True)
@@ -447,7 +476,7 @@ def write_units(specs: list[dict[str, Any]], conf_dir: Path, *, hf_token: str | 
         path.write_text(
             program_ini(
                 spec,
-                hf_home=str(hf_home),
+                hf_home=str(weights),
                 vllm_cache=str(vllm_cache),
                 log_dir=str(log_dir),
                 data_dir=str(data_dir),
