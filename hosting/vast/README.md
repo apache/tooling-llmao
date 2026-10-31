@@ -77,18 +77,20 @@ then reboot the instance from the Vast console. On boot it finds no marker
 and provisions again: it fetches the installer and this box's config, and
 writes new Supervisor units.
 
-**When the set changes to a different model**, also remove the old model's
-weights before the reboot, under `$DATA_DIRECTORY/hf-cache/hub/`
-(one `models--<org>--<name>` directory per model):
+**When the set changes to a different model**, also remove the weights
+cache before the reboot:
 
 ```bash
-rm -r "$DATA_DIRECTORY"/hf-cache/hub/models--<org>--<old-model>
+rm -r "$DATA_DIRECTORY"/hf-cache
 ```
 
-The installer credits the weights a model already has when it checks the
-disk, but it does not remove the weights of a model the box no longer
-serves, and on an 80GB disk two models' worth of leftovers is a refused
-install. A refused install restarts the old units and says why in the
+The whole cache, not the old model's directory: the hub cache keeps the
+shards content-addressed under `hub/blobs/`, shared by every model, and
+the per-model directory holds only symlinks to them, so removing it frees
+nothing. A model that stays is pulled again. The installer credits the
+weights a model already has when it checks the disk, but it does not
+remove the weights of a model the box no longer serves, and on an 80GB
+disk two models' worth of leftovers is a refused install. A refused install restarts the old units and says why in the
 provisioning log: `install_set: will not fit -- disk: ...`.
 
 **Do not `supervisorctl stop all`.** Vast's image runs its own services under

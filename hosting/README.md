@@ -111,14 +111,17 @@ The model must divide evenly across the cards (its attention heads by the GPU
 count); vLLM says so at startup if it does not. Cards talk over PCIe unless
 the box has NVLink, which costs some speed.
 
-The disk check credits what each model already has under the HF cache
-(`hub/models--<org>--<name>/blobs`), so a re-provision of a box that holds
-its weights is not refused for the room to pull them again. It knows
+The disk check credits what each model already has under the HF cache,
+counted through the model's snapshots, so a re-provision of a box that
+holds its weights is not refused for the room to pull them again. It knows
 nothing about weights a box no longer needs: **when a box's set changes to
-a different model, delete the old model's directory under
-`$DATA_DIRECTORY/hf-cache/hub/` before re-provisioning**, or its weights
-keep the disk the new model needs and the fit check refuses. Nothing
-removes them otherwise.
+a different model, delete `$DATA_DIRECTORY/hf-cache` before
+re-provisioning**, or the old weights keep the disk the new model needs
+and the fit check refuses. The whole cache, not the old model's directory:
+the current hub cache keeps the shards content-addressed under
+`hub/blobs/`, shared by every model, and the per-model directory holds
+only symlinks to them, so removing it frees nothing. A model that stays is
+pulled again. Nothing removes weights otherwise.
 
 ## Sizing servers that share a card
 
