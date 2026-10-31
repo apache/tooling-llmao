@@ -510,9 +510,14 @@ def supervisorctl(*args: str) -> None:
     """One supervisorctl call, its failure reported and not raised.
 
     Stopping a program that is not running, or starting one already up, is
-    an error to supervisorctl and not to us.
+    an error to supervisorctl and not to us. Nor is a missing supervisorctl.
     """
-    if subprocess.run(["supervisorctl", *args], check=False).returncode != 0:
+    try:
+        failed = subprocess.run(["supervisorctl", *args], check=False).returncode != 0
+    except OSError as exc:
+        failed = True
+        print(f"install_set: supervisorctl could not run: {exc}", file=sys.stderr)
+    if failed:
         print(f"install_set: supervisorctl {' '.join(args)} reported an error", file=sys.stderr)
 
 
@@ -579,6 +584,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_reload:
         return 0
     supervisorctl_update()
+    # `update` restarts only the programs whose unit changed. A server whose
+    # recipe did not change was stopped above all the same, and stayed
+    # stopped: a box re-provisioned for one model's new flag came back with
+    # the other model down. Start each one; one already up is an error to
+    # supervisorctl and not to us.
+    for spec in specs:
+        supervisorctl("start", program_name(spec["name"]))
     return 0
 
 

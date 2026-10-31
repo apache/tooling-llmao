@@ -555,8 +555,15 @@ def test_reprovision_stops_our_servers_before_measuring_the_card(monkeypatch, tm
         assert inst.main([]) == 0
     finally:
         httpd.shutdown()
-    # Ours only, by name, and before the fit check reads free memory.
-    assert events == [("stop", "vllm-dropped", "vllm-model-a"), ("check_fit",)]
+    # Ours only, by name, and before the fit check reads free memory. Then,
+    # after the reload, every server of the set is started: `update` alone
+    # restarts only those whose unit changed, and model-a's may not have.
+    assert events == [
+        ("stop", "vllm-dropped", "vllm-model-a"),
+        ("check_fit",),
+        ("start", "vllm-model-a"),
+        ("start", "vllm-model-b"),
+    ]
     assert sorted(p.name for p in conf.iterdir()) == ["jupyter.conf", "vllm-model-a.conf", "vllm-model-b.conf"]
     assert reloads == [True]
 
