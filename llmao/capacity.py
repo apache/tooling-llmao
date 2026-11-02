@@ -55,6 +55,7 @@ import datetime as dt
 import json
 import logging
 import math
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -296,9 +297,18 @@ class CapacityStore:
         return done
 
     async def mark_demand_day(self, day: str, *, sources: list[str], rows: int) -> None:
-        """Record that `day` has been rolled up, from which sources, into how many rows."""
-        marker = json.dumps(dict(sources=sources, rows=rows), sort_keys=True)
+        """Record that `day` has been rolled up, by which fold, from which sources, into how many rows."""
+        marker = json.dumps(dict(version=FOLD_VERSION, sources=sources, rows=rows), sort_keys=True)
         await self._memory.put(f"{DEMAND_DAY_PREFIX}{day}", marker)
+
+    async def clear_demand_day(self, day: dt.date) -> int:
+        """Delete a day's demand rows, before it is rolled up again. The count."""
+        gone = 0
+        for item in await self._day(DEMAND_PREFIX, day):
+            if item.get("key"):
+                await self._memory.delete(item.key)
+                gone += 1
+        return gone
 
     async def prune(self, keep_days: int, *, today: dt.date | None = None, sweep_days: int = 7) -> int:
         """Delete the rows of the `sweep_days` days just past retention.
@@ -392,6 +402,18 @@ class CapacityPruner:
 # LiteLLM's own health checks run as this team.
 _HEALTH_CHECK_TEAM = "litellm-internal-health-check"
 
+# A request can name a deployment by its LiteLLM id instead of a model, and
+# the spend row then carries the id as the model group. Nobody's tool does
+# that; the fleet tools and health probes do (one eight-token completion
+# per deployment), so such a row is a probe of one box, not demand. Seen on
+# 2026-11-02: sixty ids over 281 rows, eight tokens each, no project.
+_DEPLOYMENT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+# Bumped whenever fold_demand changes what a row holds or what counts. A
+# day whose marker carries an older version is rolled up again, so a
+# correction here reaches every stored day on the next run.
+FOLD_VERSION = 2
+
 # Prompt length in tokens, bucketed: is anyone using the context we pay KV
 # cache for. The last bucket has no upper bound.
 PROMPT_BUCKETS = ((1_000, "<1k"), (8_000, "1k-8k"), (32_000, "8k-32k"), (128_000, "32k-128k"), (None, ">128k"))
@@ -459,6 +481,7 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
         start = str(r.startTime or "")
         if (
             not r.model_group
+            or _DEPLOYMENT_ID.match(r.model_group)
             or meta.get("user_api_key_team_alias") == _HEALTH_CHECK_TEAM
             or start[:10] != day.isoformat()
         ):
@@ -534,20 +557,24 @@ class DemandRollup:
         self._at_hour = at_hour
         self._grace_s = grace_s
 
-    def missing_days(self, done: set[str], now: dt.datetime) -> list[dt.date]:
-        """Closed days inside retention with no marker, oldest first."""
+    def missing_days(self, done: dict[str, edict], now: dt.datetime) -> list[dt.date]:
+        """Closed days inside retention with no marker, or one from an older fold; oldest first."""
         last_closed = (now - dt.timedelta(seconds=self._grace_s)).date() - dt.timedelta(days=1)
         day = now.date() - dt.timedelta(days=self._keep_days - 1)
         out = []
         while day <= last_closed:
-            if day.isoformat() not in done:
+            marker = done.get(day.isoformat())
+            if marker is None or marker.get("version") != FOLD_VERSION:
                 out.append(day)
             day += dt.timedelta(days=1)
         return out
 
     async def roll_up(self, day: dt.date) -> int:
-        """One day: read it from LiteLLM, fold it, store it, mark it. The row count."""
+        """One day: read it from LiteLLM, fold it, replace what the store had, mark it. The row count."""
         rows = fold_demand(day, await self._metering.spend_log(day))
+        # Cleared first: a row the new fold no longer produces (a model that
+        # no longer counts) would otherwise outlive it under its old key.
+        await self._store.clear_demand_day(day)
         for row in rows:
             await self._store.write_demand(row)
         await self._store.mark_demand_day(day.isoformat(), sources=["litellm"], rows=len(rows))
@@ -557,7 +584,7 @@ class DemandRollup:
         """Every missing closed day, oldest first; stops at the first that fails. The days done."""
         done = await self._store.demand_days_done()
         rolled = []
-        for day in self.missing_days(set(done), now):
+        for day in self.missing_days(done, now):
             try:
                 n = await self.roll_up(day)
             except Exception as e:

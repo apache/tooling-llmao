@@ -28,6 +28,7 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.capacity import (
     DEMAND_DAY_PREFIX,
     DEMAND_PREFIX,
+    FOLD_VERSION,
     HOUR_S,
     NO_PROJECT,
     CapacityStore,
@@ -422,7 +423,9 @@ def test_demand_rows_are_kept_by_hour_then_model_and_pruned_with_the_rest():
     asyncio.run(store.mark_demand_day("2026-11-01", sources=["litellm"], rows=1))
     assert sorted(rows) == [f"{DEMAND_DAY_PREFIX}2026-11-01", f"{DEMAND_PREFIX}2026-11-01T09:gemma4-26b"]
     assert [r.model for r in asyncio.run(store.read_demand(1, today=DAY))] == ["gemma4-26b"]
-    assert asyncio.run(store.demand_days_done()) == {"2026-11-01": edict(sources=["litellm"], rows=1)}
+    assert asyncio.run(store.demand_days_done()) == {
+        "2026-11-01": edict(version=FOLD_VERSION, sources=["litellm"], rows=1)
+    }
     # 90 days later the day, its rows and its marker go together.
     rows[f"llmao:capacity:2026-11-01T09:{SERVER}"] = json.dumps({"hour": "2026-11-01T09"})
     gone = asyncio.run(store.prune(90, today=DAY + dt.timedelta(days=91)))
@@ -465,8 +468,29 @@ def test_the_rollup_does_every_closed_day_the_store_lacks_oldest_first():
 
 def test_a_day_is_not_closed_until_an_hour_after_midnight():
     rollup = DemandRollup(_Metering({}), _store()[0], keep_days=90)
-    assert rollup.missing_days(set(), dt.datetime(2026, 11, 2, 0, 30, tzinfo=dt.UTC))[-1] == dt.date(2026, 10, 31)
-    assert rollup.missing_days(set(), dt.datetime(2026, 11, 2, 1, 0, tzinfo=dt.UTC))[-1] == dt.date(2026, 11, 1)
+    assert rollup.missing_days({}, dt.datetime(2026, 11, 2, 0, 30, tzinfo=dt.UTC))[-1] == dt.date(2026, 10, 31)
+    assert rollup.missing_days({}, dt.datetime(2026, 11, 2, 1, 0, tzinfo=dt.UTC))[-1] == dt.date(2026, 11, 1)
+
+
+def test_a_request_to_a_deployment_id_is_a_probe_not_demand():
+    """The fleet tools and health probes name a deployment by its LiteLLM id."""
+    rows = fold_demand(DAY, [_spend(9), _spend(9, model="dae4931b-4b1d-4342-b680-9ba79e4cd375", prompt=8)])
+    assert [(r.model, r.requests) for r in rows] == [("gemma4-26b", 1)]
+
+
+def test_a_day_rolled_up_by_an_older_fold_is_done_again_without_its_old_rows():
+    store, rows = _store()
+    # What an earlier fold left: a marker without the current version, and a
+    # row for a model the current fold no longer counts.
+    rows[f"{DEMAND_DAY_PREFIX}2026-11-01"] = json.dumps(dict(version=1, sources=["litellm"], rows=1))
+    rows[f"{DEMAND_PREFIX}2026-11-01T09:dae4931b-4b1d-4342-b680-9ba79e4cd375"] = json.dumps(dict(hour="2026-11-01T09"))
+    rollup = DemandRollup(_Metering({"2026-11-01": [_spend(9)]}), store, keep_days=2)
+    done = asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 1, 30, tzinfo=dt.UTC)))
+    assert done == [dt.date(2026, 11, 1)]
+    assert sorted(rows) == [f"{DEMAND_DAY_PREFIX}2026-11-01", f"{DEMAND_PREFIX}2026-11-01T09:gemma4-26b"]
+    assert asyncio.run(store.demand_days_done())["2026-11-01"].version == FOLD_VERSION
+    # And a day marked by the current fold is left alone.
+    assert asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 2, 0, tzinfo=dt.UTC))) == []
 
 
 def test_a_quiet_day_is_marked_so_it_is_not_asked_for_again():

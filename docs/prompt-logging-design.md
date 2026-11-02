@@ -433,10 +433,18 @@ What counts: a call to a model. A spend row with no model group (a bad
 key refused at the door, a `/v1/models` listing) is not use of a model,
 and LiteLLM's own health checks, which run as the team
 `litellm-internal-health-check`, are not anyone's demand. Both are left
-out; on 2026-11-01 they were 817 of the day's 1,764 spend rows. A
-refused call to a model does count, in `requests` and in `refused`, with
-no tokens. The log-only fields are absent from a row until track N
-writes them.
+out; on 2026-11-01 they were 817 of the day's 1,764 spend rows. Nor is
+a request that names a deployment by its LiteLLM id instead of a model:
+the fleet tools and health probes do that, one eight-token completion
+per deployment, and the id then appears as the model group (sixty of
+them over 281 rows in early October 2026). A refused call to a model
+does count, in `requests` and in `refused`, with no tokens. The
+log-only fields are absent from a row until track N writes them.
+
+The day marker carries `FOLD_VERSION`. When the fold changes what a row
+holds or what counts, the constant is bumped and the next run rolls
+every stored day up again, clearing the day's old rows first, so a
+correction reaches history without anyone touching the store.
 
 No prompt content and no per-user split: the capacity page is for
 planning, and per project and per tool is what planning needs. Per user
