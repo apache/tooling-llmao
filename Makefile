@@ -37,6 +37,7 @@ check: install
 # models.yaml is admin definitions (not included by the proxy).
 proxy: install
 	@test -f litellm.yaml || (echo "Missing litellm.yaml — copy litellm.yaml.example" >&2; exit 1)
+	@mkdir -p prompt-log
 	uv run litellm --config litellm.yaml
 
 clean:

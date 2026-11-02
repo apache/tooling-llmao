@@ -26,8 +26,10 @@ the false-positive cases matter more than the one it exists to catch.
 import asyncio
 import types
 
+import litellm
 import pytest
 
+import litellm_hooks
 from litellm_hooks import empty_completion_guard, explain
 
 
@@ -131,3 +133,145 @@ def test_message_without_a_requested_budget():
     message = explain("qwen3.8-27b", None, 0)
     assert "its entire output budget" in message
     assert "characters of reasoning" not in message
+
+
+# ================================================================ prompt log
+#
+# The apparatus only: settings, build-once, fail-at-start. What the hook
+# writes is step N3 of docs/prompt-logging-design.md and is not tested yet.
+
+
+@pytest.fixture
+def unbuilt(monkeypatch):
+    """A fresh module: no instance built, no settings on litellm."""
+    monkeypatch.setattr(litellm_hooks, "_prompt_log", None)
+    monkeypatch.setattr(litellm, "callback_settings", {}, raising=False)
+
+
+def _settings(monkeypatch, **section):
+    monkeypatch.setattr(litellm, "callback_settings", {"prompt_log": section}, raising=False)
+
+
+def test_import_builds_nothing(unbuilt):
+    """Importing the file, as every test here does, must not need litellm.yaml."""
+    assert litellm_hooks._prompt_log is None
+    assert isinstance(litellm_hooks.empty_completion_guard, litellm_hooks.EmptyCompletionGuard)
+
+
+def test_missing_section_stops_the_proxy(unbuilt):
+    with pytest.raises(RuntimeError, match=r"callback_settings\.prompt_log is missing"):
+        _ = litellm_hooks.prompt_log
+
+
+def test_missing_dir_setting_stops_the_proxy(unbuilt, monkeypatch):
+    _settings(monkeypatch)
+    with pytest.raises(RuntimeError, match=r"callback_settings.prompt_log.dir is missing"):
+        _ = litellm_hooks.prompt_log
+
+
+def test_absent_directory_is_not_created(unbuilt, monkeypatch, tmp_path):
+    """A missing directory in production means /x1 is not mounted."""
+    missing = tmp_path / "prompt-log"
+    _settings(monkeypatch, dir=str(missing))
+    with pytest.raises(RuntimeError, match="not a writable directory"):
+        _ = litellm_hooks.prompt_log
+    assert not missing.exists()
+
+
+def test_built_once(unbuilt, monkeypatch, tmp_path):
+    _settings(monkeypatch, dir=str(tmp_path))
+    first = litellm_hooks.prompt_log
+    assert isinstance(first, litellm_hooks.PromptLog)
+    assert first.dir == tmp_path
+    assert litellm_hooks.prompt_log is first
+
+
+def test_other_missing_names_still_raise(unbuilt):
+    with pytest.raises(AttributeError):
+        _ = litellm_hooks.no_such_hook
+
+
+def _auth():
+    """What LiteLLM's UserAPIKeyAuth carries that the hook reads."""
+    return types.SimpleNamespace(user_id="someone", key_alias="someone-laptop", team_alias="tooling")
+
+
+def _pre_call(data):
+    return asyncio.run(litellm_hooks.prompt_log.async_pre_call_hook(_auth(), None, data, "completion"))
+
+
+def test_pre_call_hook_returns_the_same_dict(unbuilt, monkeypatch, tmp_path):
+    _settings(monkeypatch, dir=str(tmp_path))
+    data = {"model": "x", "messages": [], "user": "t"}
+    assert _pre_call(data) is data
+
+
+# ----------------------------------------------------------- no opt-out
+#
+# What a client can send to switch logging off, and that the strip removes
+# it. The surface itself is measured against a live proxy by
+# bin/check-no-log.py; these pin the strip and LiteLLM's own decision.
+
+
+def test_strip_removes_no_log():
+    data = {"model": "x", "no-log": True, "stream": True}
+    assert litellm_hooks._strip_opt_outs(data) == ["no-log"]
+    assert data == {"model": "x", "stream": True}
+
+
+def test_strip_reports_nothing_for_an_ordinary_request():
+    data = {"model": "x", "metadata": {"headers": {"user-agent": "curl"}}}
+    assert litellm_hooks._strip_opt_outs(data) == []
+
+
+def test_opt_out_attempt_is_warned_with_the_user(unbuilt, monkeypatch, tmp_path, caplog):
+    """Silently ignoring it is the design; silently is for the client, not for us."""
+    _settings(monkeypatch, dir=str(tmp_path))
+    data = {"model": "x", "no-log": True, "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}
+    with caplog.at_level("WARNING", logger="litellm_hooks.prompt_log"):
+        _pre_call(data)
+    (record,) = caplog.records
+    assert "someone" in record.getMessage()
+    assert "no-log" in record.getMessage()
+    assert "x-litellm-enable-message-redaction" in record.getMessage()
+
+
+def test_ordinary_request_is_not_warned(unbuilt, monkeypatch, tmp_path, caplog):
+    _settings(monkeypatch, dir=str(tmp_path))
+    with caplog.at_level("WARNING", logger="litellm_hooks.prompt_log"):
+        _pre_call({"model": "x", "messages": []})
+    assert not caplog.records
+
+
+def test_strip_removes_the_redaction_headers_everywhere_and_nothing_else():
+    headers = {
+        "litellm-enable-message-redaction": "true",
+        "x-litellm-enable-message-redaction": "true",
+        "user-agent": "curl",
+    }
+    data = {
+        "headers": dict(headers),
+        "metadata": {"headers": dict(headers), "user_api_key_alias": "k"},
+        "litellm_metadata": {"headers": dict(headers)},
+    }
+    litellm_hooks._strip_opt_outs(data)
+    for holder in (data, data["metadata"], data["litellm_metadata"]):
+        assert holder["headers"] == {"user-agent": "curl"}
+    assert data["metadata"]["user_api_key_alias"] == "k"
+
+
+def test_strip_tolerates_requests_without_metadata():
+    data = {"model": "x", "metadata": None}
+    litellm_hooks._strip_opt_outs(data)
+    assert data == {"model": "x", "metadata": None}
+
+
+def test_litellm_would_redact_before_the_strip_and_not_after():
+    """Pins the LiteLLM contract the strip relies on, against the pinned version."""
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    for header in litellm_hooks._REDACTION_HEADERS:
+        data = {"metadata": {"headers": {header: "true"}}}
+        assert should_redact_message_logging({"litellm_params": data})
+        litellm_hooks._strip_opt_outs(data)
+        assert not should_redact_message_logging({"litellm_params": data})

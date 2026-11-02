@@ -24,7 +24,23 @@ litellm_settings:
   # reasoning_effort. See litellm_hooks.py.
   #
   # Production sets this through the same file Puppet writes.
-  callbacks: ["litellm_hooks.empty_completion_guard"]
+  #
+  # prompt_log records every request (docs/prompt-logging-design.md). It
+  # needs the callback_settings section below, and refuses to start
+  # without it or without its directory.
+  callbacks: ["litellm_hooks.empty_completion_guard", "litellm_hooks.prompt_log"]
+  # A request carrying "no-log": true would otherwise skip every logging
+  # callback, prompt_log included. Measured; see bin/check-no-log.py. The
+  # hook also strips the field itself; this is LiteLLM's own switch.
+  global_disable_no_log_param: true
+
+# Per-callback settings, stored on litellm before any callback loads.
+callback_settings:
+  prompt_log:
+    # Must exist and be writable; the hook does not create it. Production:
+    # /x1/llmao/prompt-log, created by Puppet. Developer: `make proxy`
+    # creates ./prompt-log, which is gitignored.
+    dir: ./prompt-log
 
 general_settings:
   # Proxy admin key (must start with sk-). Same value as config.yaml → litellm.master_key.
