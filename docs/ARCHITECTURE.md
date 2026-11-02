@@ -58,9 +58,13 @@ Developers: system PostgreSQL + `make db`. Production: Puppet + on-disk
 `database_url`.
 
 **LLMAO's own records** live in LiteLLM's memory store (`/v1/memory`), since
-LLMAO has no database: one row per access request (`llmao:request:<id>`) and
-one for the tier limits an admin has changed (`llmao:tiers`). Per-project
-token caps are still team metadata.
+LLMAO has no database. By key prefix: `llmao:request:` (access requests),
+`llmao:tiers` (tier limits an admin changed), `llmao:skew:` (what the
+outside-edits runner found), `llmao:action:` (the admin action log),
+`llmao:log:` (notices), `llmao:capacity:` (one row per server per hour),
+`llmao:demand:` and `llmao:demand-day:` (one row per model per hour from
+the spend log, and the per-day marker). Per-project token caps are still
+team metadata.
 
 **PATs:** personal keys bind ASF uid + project team + purpose; automation
 keys are team-scoped exceptions (who may create them is an **open RAI
@@ -83,19 +87,36 @@ built at startup.
 - The JSON is `{host, servers[]}`. `servers[].port` is the **container
   listen** port, never the public port. Both providers' listings supply the
   public port; it is never sent to the box.
-- Three runners (`app.add_runner`):
-  - `fleet-lifecycle`: reads the Vast listing, places servers on their
-    boxes, probes `/health`, then calls `Fleet.after_probe`, which is
-    `DeploymentManager.sync_selfhost`: `/model/new` for a Healthy server,
-    `/model/delete` for a down one.
-  - `litellm-skew`: reads the LiteLLM deployments and LiteLLM's own
-    `/health`; reports orphans (deployments nothing intends) for the
-    /models strip. Nothing deletes an orphan unattended.
-  - `runpod-rentals`: reads what RunPod reports about our pods every 10 minutes.
-  - `demand-rollup` (with `metrics-sampler`, `capacity-writer` and
-    `capacity-prune`, in `llmao/capacity.py`): once a day at 01:00 UTC,
-    reads each closed day of LiteLLM's spend log and stores it as demand
-    rows, one per model per hour, for `/admin/capacity`.
+- The runners (`app.add_runner` in `main.py`; each is one `while True`
+  loop with its own interval):
+  - `fleet-lifecycle` (`Fleet.run_lifecycle`, every `health_interval_s`):
+    reads the Vast listing, places servers on their boxes, notes rentals
+    nobody intends, probes every server's `/health` (and `/v1/models`
+    when the key or window needs asking), then calls `Fleet.after_probe`,
+    which is `DeploymentManager.sync_selfhost`: `/model/new` for a
+    Healthy server, `/model/delete` for a down one.
+  - `runpod-rentals` (`Fleet.run_runpod_rentals`): reads what RunPod
+    reports about our pods every 10 minutes.
+  - `litellm-skew` (`LiteLLMBackend.run_skew`, every `skew_interval_s`,
+    after the fleet's first pass): reads the LiteLLM deployments and, on a
+    long interval, LiteLLM's own `/health`; reports orphans (deployments
+    nothing intends) for the /models strip. Nothing deletes an orphan
+    unattended.
+  - `litellm-outside-edits` (`LiteLLMBackend.watch_outside_edits`, same
+    interval): finds teams and keys changed in LiteLLM's own admin UI
+    rather than through llmao, and records them for "Work needed".
+  - `metrics-sampler`, `capacity-writer`, `capacity-prune`
+    (`llmao/sampler.py`, `llmao/capacity.py`): read each serving box's
+    `/metrics` every `sample_interval_s`, fold the readings into one row
+    per server per hour, store finished hours, prune past
+    `capacity_retention_days`. Design: `docs/capacity-design.md`.
+  - `demand-rollup` (`DemandRollup`, `llmao/capacity.py`): once a day at
+    01:00 UTC and at start, reads each closed day of LiteLLM's spend log
+    that the store lacks and stores it as demand rows, one per model per
+    hour, with a day marker carrying `FOLD_VERSION`. Design:
+    `docs/prompt-logging-design.md`, "Demand rows".
+  - `memory-prune` (`llmao/pruner.py`): daily, the other records in the
+    memory store (access requests, the action log).
 - `Fleet.models` is the YAML recipe. `FleetDeployment` is one intended
   LiteLLM deployment. `VllmServer` carries the lifecycle state: Awaiting,
   Loading, Healthy, Unhealthy, Stalled, Rejected or Foreign.
@@ -195,100 +216,297 @@ the retired models-dashboard design, whose two passes shipped as
   deployment config intends but LiteLLM lacks is a visible skew badge, not
   a mystery.
 
-## Components
+## The system
 
-Two request paths cross this process. The **HTML/UX** path (browser) goes through
-asfquart and talks to the LiteLLM **admin** surface. The **config** path is the
-fleet control plane: GPU boxes call `GET /vllm/config` to be told what to load.
-The **inference** path (client tools) does **not** touch this process at all.
+Everything llmao talks to, and who talks to whom. Two processes are ours
+on the one box: this one (the portal) and the LiteLLM proxy, which runs
+our two callbacks from `litellm_hooks.py` inside it. The boxes and the
+providers are outside.
+
+```mermaid
+flowchart TB
+  subgraph people [people and their tools]
+    BROWSER[browser]
+    TOOL[client tool<br/>with a PAT]
+  end
+  subgraph ourbox [our box, Puppet-managed]
+    direction TB
+    LLMAO[llmao, the portal<br/>asfquart + runners]
+    subgraph proxy [LiteLLM proxy]
+      ROUTER["router: PAT, team budget,<br/>rate limits, spend log"]
+      HOOKS["litellm_hooks.py:<br/>empty_completion_guard, prompt_log"]
+      MEMORY[("memory store<br/>llmao:* rows")]
+    end
+    PG[(Postgres)]
+  end
+  subgraph fleet [GPU boxes we rent]
+    VLLM[vLLM servers<br/>/health /v1/models /metrics]
+  end
+  subgraph outside [outside services]
+    OAUTH[oauth.apache.org + LDAP]
+    PAID[model providers<br/>xAI, OpenRouter]
+    RENT[rental providers' APIs<br/>Vast, RunPod]
+  end
+
+  BROWSER -->|HTTPS| LLMAO
+  LLMAO <-->|sign-in| OAUTH
+  TOOL -->|OpenAI API + PAT| ROUTER
+  ROUTER --> HOOKS
+  ROUTER <--> PG
+  ROUTER -->|hosted_vllm, per-box key| VLLM
+  ROUTER -->|provider key| PAID
+  LLMAO -->|admin API, master key:<br/>teams, keys, model/*, spend| ROUTER
+  LLMAO <-->|/v1/memory| MEMORY
+  VLLM -->|GET /vllm/config, fleet key| LLMAO
+  LLMAO -->|probe + sample| VLLM
+  LLMAO -->|listings, prices| RENT
+```
+
+The inference path, tool to model, never enters the portal. The portal
+sees it afterwards, in LiteLLM's spend log, and the hooks see it as it
+happens, inside the proxy.
+
+## Inside the portal
+
+What runs in this process and what each part reads or writes. The HTML
+and JSON handlers answer requests; the runners are the control plane and
+the meters; everything they learn sits on `Fleet` or in the memory
+store, where the pages read it.
 
 ```mermaid
 flowchart LR
-  subgraph browser [browser]
-    UI[Models / Keys / Projects]
+  subgraph handlers [request handlers]
+    AUTH[OAuth + session<br/>require + seam.authorize]
+    PAGES["pages.py: / projects keys<br/>models admin admin/capacity help"]
+    JSON["api.py: /vllm/config<br/>/v1/projects/…/usage, budget, /healthz"]
   end
-  subgraph proc [llmao / asfquart]
-    AUTH[OAuth + session<br/>@require + seam.authorize]
-    PAGES[HTML pages: pages.py]
-    JSON[JSON API: api.py]
-    FLEET[Fleet control plane<br/>GET /vllm/config]
-    RUNNERS[runners: fleet-lifecycle,<br/>litellm-skew, runpod-rentals]
+  subgraph state [in-process state]
+    FLEET["Fleet: servers, deployments,<br/>approvals, rentals, orphans"]
+    ROLLUP[HourlyRollup]
   end
-  subgraph litellm [LiteLLM proxy]
-    ADMIN[admin API<br/>teams / budgets / PATs / model/*]
-    ROUTER[Router: budget + capacity]
+  subgraph runners [runners]
+    LIFE[fleet-lifecycle]
+    RUNPOD[runpod-rentals]
+    SKEW[litellm-skew]
+    EDITS[litellm-outside-edits]
+    SAMPLER[metrics-sampler]
+    WRITER[capacity-writer]
+    DEMAND[demand-rollup]
+    PRUNE[capacity-prune<br/>memory-prune]
   end
-  BOX[GPU boxes / vLLM]
-  TOOL[client tool]
-  MODEL[model]
+  subgraph backend [LiteLLMBackend, one transport]
+    MGRS[teams keys metering tiers<br/>requests skew log deployments]
+    MEM[MemoryStore]
+  end
+  BOXES[vLLM servers]
+  LITELLM[LiteLLM admin API]
+  VAST[Vast API]
+  RP[RunPod API]
 
-  UI --> AUTH
   AUTH --> PAGES
   AUTH --> JSON
-  PAGES -->|admin ops| ADMIN
-  JSON -->|admin ops| ADMIN
-  BOX -->|fleet key| FLEET
-  FLEET -->|"host, servers"| BOX
-  RUNNERS -->|probe + skew| FLEET
-  RUNNERS -->|after_probe: model/new or model/delete| ADMIN
-  TOOL -->|PAT| ROUTER
-  ROUTER --> MODEL
+  PAGES --> MGRS
+  PAGES --> FLEET
+  JSON -->|config for a box| FLEET
+  LIFE -->|listing| VAST
+  LIFE -->|probe /health, /v1/models| BOXES
+  LIFE --> FLEET
+  LIFE -->|after_probe: sync_selfhost| MGRS
+  RUNPOD --> RP
+  RUNPOD --> FLEET
+  SKEW -->|/model/info, /health| MGRS
+  SKEW --> FLEET
+  EDITS --> MGRS
+  SAMPLER -->|/metrics| BOXES
+  SAMPLER --> ROLLUP
+  WRITER --> ROLLUP
+  WRITER --> MEM
+  DEMAND -->|/spend/logs/v2, one closed day| MGRS
+  DEMAND --> MEM
+  PRUNE --> MEM
+  MGRS --> LITELLM
+  MEM -->|/v1/memory| LITELLM
 ```
 
 ## Class relationships
 
-`Fleet` is built at startup and holds the fleet state the runners and pages read.
-`LiteLLMBackend` takes the same `Fleet`; it and its `DeploymentManager`
-(`llmao/proxy/deployments.py`, which adds, deletes and prunes deployments
-and confirms every write by re-reading `/model/info`) are the only things
-that write to LiteLLM. The lifecycle/skew logic in `model_status.py` is a set
-of **pure functions**: it takes a `DeploymentSnapshot` (frozen out of a
-deployment + its server) and returns a status object, with no shared mutable
-state.
+`Fleet` is built at startup from `config.yaml` (`intent.intended_deployments`
+turns `fleet.hosts` and `providers` into `IntendedDeployment` rows) and
+holds the fleet state the runners and pages read. `LiteLLMBackend` takes
+the same `Fleet`; it and its `DeploymentManager`
+(`llmao/proxy/deployments.py`, which adds and deletes deployments and
+confirms every write by re-reading `/model/info`) are the only things
+that write deployments to LiteLLM. The lifecycle/skew logic in
+`model_status.py` is a set of **pure functions**: it takes a
+`DeploymentSnapshot` (frozen out of a deployment + its server by
+`fleet.snapshot_for_status`) and returns a status object, with no shared
+mutable state.
 
 ```mermaid
 classDiagram
   class Fleet {
-    +servers
-    +deployments
-    +models
-    +provisioning
-    +litellm
-    +orphans
+    +servers: list~VllmServer~
+    +deployments: list~FleetDeployment~
+    +models: models.yaml rows
+    +provisioning: ProvisioningRecord
+    +approvals: dict~host, Approval~
+    +litellm: LiteLLMDeployments
+    +orphans: list~Orphan~
+    +vast_rentals, runpod_rentals: ProviderRentals
+    +discovered: dict~name, Discovered~
+    +ready: Event
+    +run_lifecycle()
+    +probe_all()
+    +place_servers()
+    +approve_models()
+    +model_rollup()
   }
   class FleetDeployment {
-    +vllm
-    +litellm
-    +litellm_health
-    +api_base
+    +model_name, name
     +self_hosted
-    +model_name
-    +skew
+    +vllm: VllmServer
+    +provider, litellm_model
+    +litellm: tuple~LiteLLMDeployment~
+    +litellm_health: LiteLLMHealth
+    +skew: list
+    +api_base
+    +in_litellm
   }
   class VllmServer {
-    +host
-    +listen_port
+    +model_name, name, served_name
+    +host, address, listen_port, public_port
+    +api_key
+    +rental: Rental
+    +unlisted, unlisted_passes
+    +probe: VllmProbe
     +state
+    +config_served_at, first_probed_at, first_reached_at
+    +last_ok, fails
+    +key_rejected, rejected_passes
+    +kv_cache_tokens, observed_max_model_len
+    +record_probe()
+  }
+  class IntendedDeployment {
+    +key: DeploymentKey
+    +model_name, name, origin
+    +host, listen_port, recipe, api_key
+    +provider, litellm_model, api_base
+  }
+  class Approval {
+    +host
+    +models
+    +at
+  }
+  class Rental {
+    +provider, id, name
+    +host, ports, status
+    +usd_per_hour
+  }
+  class VllmProbe {
+    +url, at
+    +reached, ok, error
+    +served_status, max_model_len
+    +key_rejected
   }
   class LiteLLMBackend {
-    +fleet
-    +deployments
+    +deployments: DeploymentManager
+    +memory: MemoryStore
+    +teams, keys, metering, tiers
+    +requests, skew, log
+    +warm()
+    +run_skew()
+    +watch_outside_edits()
   }
   class DeploymentManager {
+    +fleet
+    +fetch_deployments()
+    +add_deployment()
+    +delete_deployment()
+    +ensure_providers()
     +sync_selfhost()
     +check_config_skew()
     +check_health_skew()
+  }
+  class LiteLLMDeployments {
+    +rows
+    +read_at
+    +under(key)
   }
   class DeploymentSnapshot
   class DeploymentStatus
   class ModelStatus
 
+  Fleet "1" *-- "0..n" VllmServer : servers
   Fleet "1" *-- "0..n" FleetDeployment : deployments
+  Fleet "1" *-- "0..n" Approval : approvals
   FleetDeployment "1" o-- "0..1" VllmServer : vllm
+  VllmServer "1" o-- "0..1" Rental : placed on
+  VllmServer "1" o-- "0..1" VllmProbe : last probe
+  VllmServer ..> IntendedDeployment : from_intended()
+  FleetDeployment ..> IntendedDeployment : from_intended()
   Fleet "1" -- "1" LiteLLMBackend : held by
   LiteLLMBackend "1" *-- "1" DeploymentManager : deployments
-  DeploymentSnapshot ..> FleetDeployment : built from
-  DeploymentSnapshot ..> VllmServer : built from
+  DeploymentManager ..> LiteLLMDeployments : fetch_deployments()
+  Fleet ..> LiteLLMDeployments : update_litellm_deployments()
+  DeploymentSnapshot ..> FleetDeployment : snapshot_for_status()
+  DeploymentSnapshot ..> VllmServer : snapshot_for_status()
   DeploymentSnapshot ..> DeploymentStatus : deployment_status()
-  FleetDeployment ..> ModelStatus : model_rollup()
+  DeploymentStatus ..> ModelStatus : model_status()
+```
+
+The capacity side has its own small set, all in `llmao/capacity.py` and
+`llmao/sampler.py`, sharing nothing with the fleet classes but the
+`Fleet` the sampler reads its targets from:
+
+```mermaid
+classDiagram
+  class MetricsSampler {
+    +targets()
+    +sample_once()
+    +run()
+  }
+  class HourlyRollup {
+    +record()
+    +missed()
+    +take_finished()
+    +put_back()
+  }
+  class Hour {
+    +hour, server, model_name
+    +readings, busy, queueing
+    +kv_sum, kv_peak, counters, buckets
+    +usd_per_hour
+    +row()
+  }
+  class CapacityStore {
+    +write() / read()
+    +write_demand() / read_demand()
+    +demand_days_done()
+    +mark_demand_day() / clear_demand_day()
+    +prune()
+  }
+  class CapacityWriter {
+    +write_finished()
+    +run()
+  }
+  class CapacityPruner {
+    +run()
+  }
+  class DemandRollup {
+    +missing_days()
+    +roll_up(day)
+    +roll_up_missing()
+    +run()
+  }
+  class UsageManager {
+    +spend_log(day)
+  }
+  MetricsSampler --> HourlyRollup : record()
+  HourlyRollup "1" *-- "0..n" Hour
+  CapacityWriter --> HourlyRollup : take_finished()
+  CapacityWriter --> CapacityStore : write()
+  CapacityPruner --> CapacityStore : prune()
+  DemandRollup --> UsageManager : spend_log(day)
+  DemandRollup --> CapacityStore : write_demand(), mark_demand_day()
+  CapacityStore --> MemoryStore : /v1/memory
 ```
