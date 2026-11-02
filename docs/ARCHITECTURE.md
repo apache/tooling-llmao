@@ -92,6 +92,10 @@ built at startup.
     `/health`; reports orphans (deployments nothing intends) for the
     /models strip. Nothing deletes an orphan unattended.
   - `runpod-rentals`: reads what RunPod reports about our pods every 10 minutes.
+  - `demand-rollup` (with `metrics-sampler`, `capacity-writer` and
+    `capacity-prune`, in `llmao/capacity.py`): once a day at 01:00 UTC,
+    reads each closed day of LiteLLM's spend log and stores it as demand
+    rows, one per model per hour, for `/admin/capacity`.
 - `Fleet.models` is the YAML recipe. `FleetDeployment` is one intended
   LiteLLM deployment. `VllmServer` carries the lifecycle state: Awaiting,
   Loading, Healthy, Unhealthy, Stalled, Rejected or Foreign.

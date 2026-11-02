@@ -107,10 +107,10 @@ Nothing here waits for the review.
 
 | Step | What | State |
 |---|---|---|
-| L1 | The real daily prompt-token figure, from the capacity rows, replaces the Size paragraph's assumption | planned |
-| L2 | The single reader of `/spend/logs/v2` in `llmao/proxy/client.py`, beside the daily reader: one closed UTC day, page by page | planned |
-| L3 | The demand rows: key layout, write, read, prune in `CapacityStore` and `CapacityPruner`; the fold from a day of spend rows to 24 demand rows per model, carrying everything LiteLLM has that the rows might need; the `demand-rollup` runner, daily at 01:00 UTC and at start, which rolls up every closed day the store lacks | planned |
-| L4 | The demand tables on `/admin/capacity`, and the LiteLLM side of the reconciliation figure | planned |
+| L1 | The real daily prompt-token figure, from the spend log and the capacity rows, replaces the Size paragraph's assumption | done 2026-11-02 |
+| L2 | The single reader of `/spend/logs/v2` in `llmao/proxy/client.py`, beside the daily reader: one closed UTC day, page by page | done 2026-11-02 |
+| L3 | The demand rows: key layout, write, read, prune in `CapacityStore` and `CapacityPruner`; the fold from a day of spend rows to 24 demand rows per model, carrying everything LiteLLM has that the rows might need; the `demand-rollup` runner, daily at 01:00 UTC and at start, which rolls up every closed day the store lacks | done 2026-11-02 |
+| L4 | "What was asked" on `/admin/capacity`: requests per day, tokens, projects, tools, prompt length, refusals by reason, latency. The LiteLLM side of the reconciliation is the rows' request count; the figure itself appears with the log side (N4) | done 2026-11-02 |
 
 ### Track N: the new data, after review
 
@@ -256,19 +256,30 @@ track L; the rest is the new data the log exists for.
 | `params` | `model_parameters` | no | the request minus the prompt: `temperature`, `max_tokens`, `tools` (the definitions an agent put in front of the model), `tool_choice`, `response_format`, `reasoning_effort`, `chat_template_kwargs`, ... |
 | `messages` | `messages` | no | the prompt as LiteLLM received it: the messages list for chat, the string for completions, the input for embeddings. LiteLLM has the column, switched off |
 
-`requester_ip_address` is left out: the proxy sits behind the Apache vhost
-on loopback and does not read `X-Forwarded-For`, so it would say
-`127.0.0.1` on every row.
+`requester_ip_address` is left out. LiteLLM's spend log already holds it
+(populated with the client's address in production, measured 2026-11-02,
+so the vhost does pass it through), and nothing planned reads it from
+the record.
 
 ### Size
 
 A line is the size of the prompt. Agentic tools resend the whole
-conversation every turn, so one Claude Code turn at 100k tokens is about
-400 KB. **Assumption, not a measurement:** a thousand such requests a day
-is 400 MB a day uncompressed; gzip takes prose and code down five to eight
-times, so 50 to 80 MB a day, and 90 days is 5 to 7 GB. The capacity rows
-already hold prompt tokens per server per hour, so the real daily figure is
-one query away and should replace this paragraph.
+conversation every turn, so one coding-agent turn at 100k tokens is about
+400 KB.
+
+Measured on production over the week to 2026-11-01, from the spend log
+and the capacity rows: between 900 and 13,600 model calls a day, and
+between 36 million and 164 million prompt tokens a day. The median
+prompt was 580 tokens and the 95th percentile 92,000, which is the
+agents resending their context. At four bytes a token that is 150 MB to
+650 MB a day uncompressed; gzip takes prose and code down five to eight
+times, so 20 to 130 MB a day, and 90 days is 2 to 12 GB.
+
+The gateway host has no separate `/x1` mount yet; its root volume is 100
+GB with 88 GB free (2026-11-02). Whether `/x1` becomes a mount is
+Puppet's concern, not the application's. **To do, as users grow:** disk
+usage needs watching, through a DataDog monitor on the host and/or a
+free-space figure on `/admin` beside the LiteLLM version check.
 
 ## Files
 
@@ -411,10 +422,21 @@ was asked, and join to them on hour and model. Each holds:
 |---|---|---|
 | `requests`, `prompt_tokens`, `completion_tokens` | LiteLLM | totals for the hour |
 | `by_project`, `by_tool` | LiteLLM | the same three, split by team alias and by user-agent family |
-| `refused` | LiteLLM | requests that failed before reaching a box, by reason: rate limit, budget, parallel cap, upstream error. `waiting_frac` on the capacity rows sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
-| `prompt_len` | LiteLLM | counts in token-length buckets, for whether anyone uses the context we pay KV cache for |
-| `ttft_p50`, `ttft_p95`, `duration_p50`, `duration_p95` | LiteLLM | latency as the client felt it, to set against the box's queue times |
-| `streamed`, `with_tools`, `finish_length` | the log | counts; empty until track N |
+| `refused` | LiteLLM | requests that failed, by LiteLLM's `normalized_error` (`429_RATE_LIMIT_EXCEEDED`, `400_CONTEXT_WINDOW_EXCEEDED`, ...). `waiting_frac` on the capacity rows sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
+| `prompt_len` | LiteLLM | counts in token-length buckets (`<1k`, `1k-8k`, `8k-32k`, `32k-128k`, `>128k`), for whether anyone uses the context we pay KV cache for |
+| `duration_p50_s`, `duration_p95_s` | LiteLLM | latency as the client felt it, successful requests, to set against the box's queue times |
+| `ttft_p50_s`, `ttft_p95_s` | the log | time to first token: the spend log sets `completionStartTime` on every request, streamed or not, so it cannot tell |
+| `streamed`, `with_tools`, `finish_length` | the log | counts |
+| `sources` | | which of the two have written to the row |
+
+What counts: a call to a model. A spend row with no model group (a bad
+key refused at the door, a `/v1/models` listing) is not use of a model,
+and LiteLLM's own health checks, which run as the team
+`litellm-internal-health-check`, are not anyone's demand. Both are left
+out; on 2026-11-01 they were 817 of the day's 1,764 spend rows. A
+refused call to a model does count, in `requests` and in `refused`, with
+no tokens. The log-only fields are absent from a row until track N
+writes them.
 
 No prompt content and no per-user split: the capacity page is for
 planning, and per project and per tool is what planning needs. Per user

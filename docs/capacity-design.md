@@ -27,6 +27,13 @@ hand, and this page is not it.
 | 4 | Provider spend from LiteLLM's daily activity | done |
 | 5 | The page | planned |
 | 6 | "Add a box / remove a box" suggestions | after a few weeks of data |
+| 7 | Demand rows: what was asked per model per hour, from LiteLLM's spend log, rolled up once a day; "What was asked" on the page | done 2026-11-02 |
+
+Demand, the other side of the capacity rows (what was asked, against what
+each server did), is designed in `docs/prompt-logging-design.md` under
+"Demand rows", and lives in the same module and store: `fold_demand`,
+`DemandRollup` and `summarise_demand` in `llmao/capacity.py`, keys
+`llmao:demand:<hour>:<model>` beside the capacity keys, pruned together.
 
 **Future, on demand only:** a CSV download of the report. Not built until
 someone asks for it.
