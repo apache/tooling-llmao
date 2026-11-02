@@ -46,6 +46,7 @@ from llmao.capacity import (
     tool_family,
 )
 from llmao.proxy.client import MemoryStore
+from llmao.rental import Rental
 from llmao.vllm_client import Sample
 from tests.fake_transport import fake_memory
 
@@ -91,6 +92,30 @@ def test_an_hour_of_readings_becomes_one_row():
     assert row.prompt_tokens == 350
     assert row.generation_tokens == 60
     assert row.usd_per_hour is None
+    # No provider has placed the server: no rental on the row.
+    assert row.rental == "" and row.rental_label == ""
+
+
+def test_an_hour_is_stamped_with_the_rental_its_provider_names():
+    """The server is an address and port, which changes when the provider moves the
+    machine and means nothing once the rental ends. The stamp keeps its hours together."""
+    rental = Rental(
+        provider="Vast",
+        id="53865410",
+        label="RTX 3060 x2",
+        url="",
+        usd_per_hour=0.14,
+        host="203.0.113.10",
+        name="53865410",
+        status="running",
+    )
+    rollup = HourlyRollup(interval_s=15)
+    rollup.record(SERVER, "m", _sample(T0), usd_per_hour=0.07, rental=rental)
+    (hour,) = rollup.take_finished(T0 + HOUR_S)
+    row = hour.row(15)
+    assert row.rental == "Vast 53865410"
+    assert row.rental_label == "RTX 3060 x2"
+    assert row.usd_per_hour == 0.07
 
 
 def test_a_restarted_server_counts_from_zero():

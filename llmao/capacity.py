@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from llmao.rental import Rental
     from llmao.vllm_client import Sample
 
 from asfpy.stopwatch import Stopwatch
@@ -129,6 +130,13 @@ class Hour:
     # This server's share of its box's rental, dollars per hour. None when
     # no provider prices the box.
     usd_per_hour: float | None = None
+    # The machine, as its provider names it (Rental.ident, "Vast 53865410")
+    # and labels it ("RTX 3060 x2"). Empty when no provider has placed the
+    # server. The server is an address and port, which a provider changes
+    # when it moves the machine and which means nothing once the rental has
+    # ended; the stamp is what keeps a rental's hours together through both.
+    rental: str = ""
+    rental_label: str = ""
 
     def add(self, sample: Sample, before: Sample | None) -> None:
         self.readings += 1
@@ -183,6 +191,8 @@ class Hour:
             queue_avg_s=round(self.counters.get("queue_s", 0.0) / queued, 3) if queued else None,
             queue_p95_s=self.queue_p95_s(),
             usd_per_hour=self.usd_per_hour,
+            rental=self.rental,
+            rental_label=self.rental_label,
         )
 
 
@@ -195,9 +205,18 @@ class HourlyRollup:
         self._before: dict[str, Sample] = {}
         self._finished: list[Hour] = []
 
-    def record(self, server: str, model_name: str, sample: Sample, *, usd_per_hour: float | None = None) -> None:
+    def record(
+        self,
+        server: str,
+        model_name: str,
+        sample: Sample,
+        *,
+        usd_per_hour: float | None = None,
+        rental: Rental | None = None,
+    ) -> None:
         """Add one reading to its server's hour. `usd_per_hour` is the server's
-        share of its box's rental, when the box's provider prices it."""
+        share of its box's rental, when the box's provider prices it; `rental`
+        is the machine the provider places the server on, when one does."""
         hour = hour_of(sample.ts)
         current = self._hours.get(server)
         if current is None or current.hour != hour:
@@ -207,6 +226,9 @@ class HourlyRollup:
         current.add(sample, self._before.get(server))
         if usd_per_hour is not None:
             current.usd_per_hour = round(usd_per_hour, 4)
+        if rental is not None:
+            current.rental = rental.ident
+            current.rental_label = rental.label
         self._before[server] = sample
 
     def missed(self, server: str) -> None:

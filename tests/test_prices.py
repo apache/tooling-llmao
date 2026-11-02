@@ -413,5 +413,16 @@ def test_each_row_carries_its_servers_share_of_the_machine():
             await sampler.sample_once(client)
 
     asyncio.run(one_pass())
-    hours = {h.server: h.row(15).usd_per_hour for h in rollup.take_finished(time.time() + HOUR_S)}
-    assert hours == {"203.0.113.10:8001": 0.103, "203.0.113.10:8002": 0.103, "198.51.100.8:8001": None}
+    rows = {h.server: h.row(15) for h in rollup.take_finished(time.time() + HOUR_S)}
+    assert {s: r.usd_per_hour for s, r in rows.items()} == {
+        "203.0.113.10:8001": 0.103,
+        "203.0.113.10:8002": 0.103,
+        "198.51.100.8:8001": None,
+    }
+    # Each row names the machine too, so the hours of one rental stay
+    # together when its address changes and after it ends.
+    assert {s: (r.rental, r.rental_label) for s, r in rows.items()} == {
+        "203.0.113.10:8001": ("Vast 1", "GB10 x1"),
+        "203.0.113.10:8002": ("Vast 1", "GB10 x1"),
+        "198.51.100.8:8001": ("", ""),
+    }

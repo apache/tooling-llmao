@@ -86,6 +86,13 @@ One row per server per UTC clock hour, keyed by hour then server:
 | `prompt_tokens`, `generation_tokens`, `requests`, `preemptions` | growth of vLLM's counters over the hour |
 | `queue_avg_s`, `queue_p95_s` | time requests spent queued, from vLLM's histogram |
 | `usd_per_hour` | this server's share of its box's rental price; empty if no provider prices the box |
+| `rental`, `rental_label` | the machine as its provider names it (`Rental.ident`, "Vast 53865410") and labels it ("RTX 3060 x2"); empty until a provider places the server. Rows from before 2026-11-02 have neither |
+
+The server is an address and listen port. A provider changes the address
+when it moves or restarts the machine, and the address means nothing once
+the rental has ended, so the hours of one rental can sit under two servers
+and an ended rental's hours under an address nothing names. The rental
+stamp is what joins them.
 
 Counters are vLLM's totals since it started. A total that goes down means
 the server restarted, and the new total is counted from zero. A reading the
