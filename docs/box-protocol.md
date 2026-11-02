@@ -14,8 +14,9 @@ flowchart LR
     LITELLM["LiteLLM proxy"]
     BOX -- "GET /vllm/config<br/>Bearer fleet key<br/>X-LLMAO-Host" --> LLMAO
     LLMAO -- "{host, servers[]}" --> BOX
-    BOX -- "vllm serve :8001 :8002 :8003" --> LITELLM
-    LLMAO -- "/model/new when Healthy" --> LITELLM
+    LLMAO -- "probe /health, /v1/models<br/>sample /metrics" --> BOX
+    LLMAO -- "/model/new when Healthy<br/>/model/delete when down" --> LITELLM
+    LITELLM -- "completions, per-box bearer<br/>public port of :8001 :8002 :8003" --> BOX
 ```
 
 llmao is the source of truth for which models exist, how each is served
