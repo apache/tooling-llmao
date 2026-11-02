@@ -297,7 +297,17 @@ def test_an_unpriced_hour_is_counted_as_unpriced_not_as_free():
     (m,) = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7).models
     assert m.unpriced_hours == 1
     assert m.cost_usd == 0.5
-    # A cost per token would understate with an hour missing, so there is none.
+    # The cost per token is over the priced hour alone: its rental against
+    # its tokens, so the unpriced hour neither hides the figure nor dilutes it.
+    assert m.usd_per_mtok == 0.5 / (1100 / 1e6)
+
+
+def test_no_cost_per_token_when_nothing_priced_served_anything():
+    rows = [
+        _hour_row("2026-10-19T08", "203.0.113.10:8001", "m", usd=None),
+        _hour_row("2026-10-19T09", "203.0.113.10:8001", "m", usd=0.5, prompt=0, gen=0),
+    ]
+    (m,) = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7).models
     assert m.usd_per_mtok is None
 
 

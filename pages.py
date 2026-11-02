@@ -1896,7 +1896,10 @@ def _capacity_model_row(m) -> edict:
         model_name=m.model_name,
         cost_per_day=_money(m.cost_per_day),
         tokens_per_day=_tokens_h(int(m.tokens_per_day)),
-        usd_per_mtok=_money(m.usd_per_mtok) if m.usd_per_mtok is not None else "—",
+        # Empty, not a dash, when nothing priced served anything: the template
+        # leaves it out. The long form because $0.00 is a real figure (a free
+        # machine), distinct from unknown.
+        usd_per_mtok=_money(m.usd_per_mtok) if m.usd_per_mtok is not None else "",
         busy=_pct(m.busy),
         busy_hot=ezt.boolean(m.busy >= 0.8),
         waiting=_pct(m.waiting),

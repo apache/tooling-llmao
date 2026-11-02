@@ -715,6 +715,12 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
                 )
             )
         queue = [r.queue_p95_s for r in mine if r.queue_p95_s is not None]
+        # The cost of a million tokens: the rental paid in the hours that
+        # have a price, divided by the tokens served in those same hours.
+        # An hour without a price is left out of both sides. (The first
+        # hours after llmao starts have none: the provider's price has not
+        # been read yet.) None when no priced hour served a token.
+        priced_tokens = sum(r.prompt_tokens + r.generation_tokens for r in priced)
         models.append(
             edict(
                 model_name=name,
@@ -733,10 +739,7 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
                 kv_peak=max(r.kv_peak for r in mine),
                 preemptions=sum(r.preemptions for r in mine),
                 queue_p95_worst_s=max(queue) if queue else None,
-                # Rental set against what was served: what a million tokens
-                # cost at the use the boxes actually had. Only when every hour
-                # is priced, or it would understate.
-                usd_per_mtok=cost / (tokens / 1e6) if tokens and len(priced) == len(mine) else None,
+                usd_per_mtok=cost / (priced_tokens / 1e6) if priced_tokens else None,
                 daily_tokens=[edict(day=d, value=daily_tokens[d]) for d in sorted(daily_tokens)],
                 daily_cost=[edict(day=d, value=round(daily_cost[d], 2)) for d in sorted(daily_cost)],
             )
