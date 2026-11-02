@@ -110,7 +110,7 @@ Nothing here waits for the review.
 | L1 | The real daily prompt-token figure, from the spend log and the capacity rows, replaces the Size paragraph's assumption | done 2026-11-02 |
 | L2 | The single reader of `/spend/logs/v2` in `llmao/proxy/client.py`, beside the daily reader: one closed UTC day, page by page | done 2026-11-02 |
 | L3 | The demand rows: key layout, write, read, prune in `CapacityStore` and `CapacityPruner`; the fold from a day of spend rows to 24 demand rows per model, carrying everything LiteLLM has that the rows might need; the `demand-rollup` runner, daily at 01:00 UTC and at start, which rolls up every closed day the store lacks | done 2026-11-02 |
-| L4 | "What was asked" on `/admin/capacity`: requests per day, tokens, projects, tools, prompt length, refusals by reason, latency. The LiteLLM side of the reconciliation is the rows' request count; the figure itself appears with the log side (N4) | done 2026-11-02 |
+| L4 | "What was asked of it" on each model's card on `/admin/capacity`: requests per day, tokens, projects, tools, prompt length, refusals by reason, latency. The LiteLLM side of the reconciliation is the rows' request count; the figure itself appears with the log side (N4) | done 2026-11-02 |
 
 ### Track N: the new data, after review
 

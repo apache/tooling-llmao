@@ -121,7 +121,8 @@ built at startup.
   LiteLLM deployment. `VllmServer` carries the lifecycle state: Awaiting,
   Loading, Healthy, Unhealthy, Stalled, Rejected or Foreign.
 - The `/models` admin drill-down shows the green badge only when the server
-  is Healthy **and** LiteLLM has its deployment. host:port is site-admin.
+  is Healthy **and** LiteLLM has its deployment. The deployment label
+  (model on rental:port) is site-admin.
 - JSON handlers use `@api` in `api.py`. Do not wrap Quart `asgi_app` with
   Werkzeug ProxyFix.
 

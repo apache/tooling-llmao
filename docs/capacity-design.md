@@ -13,9 +13,52 @@ at `/admin/capacity`, linked from `/admin`. It answers, per model:
 
 And, for the model providers we pay (xAI, OpenRouter), what we spend: per
 day, month to date, a projection to month end, and which projects spend it.
+On a planning page that spend has one use: comparison. What a million
+tokens costs there against what our rental costs per million for the same
+model, and whether demand on a bought model has grown enough to justify a
+rental. The section and its tiles appear only when something was bought
+in the period; with every deployment on our own rentals, that is never.
+
+This is a planning page, not a usage report: it exists to answer "rent
+more machines, or return some" and, later, what shape the next rental for
+a model should have. Every figure on it serves that question or is left
+out.
 
 Some figures may later go into a Board report; that report is curated by
 hand, and this page is not it.
+
+## The page
+
+One card per model, the catalog's display name and id, in two halves
+joined by model name from the two stores: **What it served**, from the
+hourly capacity rows, and **What was asked of it**, from the demand rows.
+Either half may be missing (sampling started later than the spend log
+reaches back; a day's demand arrives the morning after) and the card
+shows whichever it has. Models with a deployment now come first, by
+rental cost; one with nothing serving it is marked. A model with nothing
+serving it and nothing seen for a week is a footnote line with its last
+day and what it cost, not a card.
+
+Under "What it served", the rentals table has one line per vLLM process,
+a rental and a listen port, named by the rental stamp on the rows ("Vast
+53865410:8001" with the rental's label beside it), with the first and
+last day seen and what became of the machine: "ended" when no provider
+lists it now, the provider's own word ("exited") when listed but not
+running, "gone" for a pre-stamp address no server has now.
+
+What never happened is left out rather than shown as zero: the waiting
+meter and the worst wait (vLLM's smallest bucket, under 0.3 s, is the
+same news as none), preemptions, the Refused column, the Waiting column.
+The cost per million tokens is over the priced hours alone, so the few
+unpriced hours after a start neither hide it nor dilute it.
+
+**Next (not built as of 2026-11-02):** the day-by-day charts (tokens,
+requests, spend) move from CSS bars over only the days that had rows to
+Apache ECharts, vendored by `bin/fetch-thirdparty.sh`, drawn from a JSON
+payload per chart that covers every day of the period, a day with no row
+as zero: the x-axis is the calendar, so a series that stopped reads as
+having stopped. Then the tiles and the page's wording (rental and
+deployment, not box and server).
 
 ## Status
 
