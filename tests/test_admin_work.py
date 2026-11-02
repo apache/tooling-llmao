@@ -211,10 +211,31 @@ def _model(**over):
 
 def test_the_worst_queue_time_reads_as_a_person_would_say_it():
     pages = _app()
-    assert pages._capacity_model_row(_model()).queue_p95 == "—"
-    # vLLM's smallest bucket: it cannot tell 0.01s from 0.29s.
-    assert pages._capacity_model_row(_model(queue_p95_worst_s=0.3)).queue_p95 == "<0.3s"
+    assert pages._capacity_model_row(_model()).queue_p95 == ""
+    # vLLM's smallest bucket: it cannot tell 0.01s from 0.29s, and "under
+    # 0.3s" is the same news as nothing, so it is left out.
+    assert pages._capacity_model_row(_model(queue_p95_worst_s=0.3)).queue_p95 == ""
     assert pages._capacity_model_row(_model(queue_p95_worst_s=2.5)).queue_p95 == "2.5s"
+
+
+def test_what_never_happened_is_not_shown():
+    """A zero meter, a zero count and an empty column say nothing: each is left out."""
+    pages = _app()
+    quiet = pages._capacity_model_row(
+        _model(servers=[edict(server="s", usd_per_hour=None, busy=0, waiting=0, kv_peak=0, tokens=0)])
+    )
+    assert not quiet.queued and quiet.preemptions is None and not quiet.servers_queued
+    busy = pages._capacity_model_row(
+        _model(
+            waiting=0.01,
+            waiting_peak=3,
+            preemptions=60,
+            servers=[edict(server="s", usd_per_hour=None, busy=0, waiting=0.01, kv_peak=0, tokens=0)],
+        )
+    )
+    assert busy.queued and busy.preemptions == 60 and busy.servers_queued
+    # A peak with no share: a request queued once, briefly. Still told.
+    assert pages._capacity_model_row(_model(waiting_peak=1)).queued
 
 
 def test_a_busy_model_is_marked_and_a_day_series_becomes_bar_heights():

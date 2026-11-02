@@ -24,6 +24,7 @@
       <div class="admin-tile-figure">[fleet_tokens_per_day]</div>
       <div class="admin-tile-label"><i class="bi bi-cpu" aria-hidden="true"></i> Tokens per day, our boxes</div>
     </div></div></div>
+    [if-any providers]
     <div class="col"><div class="card h-100 admin-tile"><div class="card-body">
       <div class="admin-tile-figure">[spend_month_to_date]</div>
       <div class="admin-tile-label"><i class="bi bi-cash-coin" aria-hidden="true"></i> Providers, month to date</div>
@@ -32,6 +33,7 @@
       <div class="admin-tile-figure">[spend_projected]</div>
       <div class="admin-tile-label"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Providers, month projected</div>
     </div></div></div>
+    [end]
   </div>
 
   <section class="mb-4">
@@ -59,19 +61,21 @@
             </div>
             <div class="small text-muted mt-1">share of the time a request was running</div>
           </div>
+          [if-any models.queued]
           <div class="col-md-4">
             <div class="cap-meter-label"><span>Waiting</span><span>[models.waiting]%</span></div>
             <div class="progress" style="height:8px" role="progressbar" aria-label="Waiting" aria-valuenow="[models.waiting]" aria-valuemin="0" aria-valuemax="100">
               <div class="progress-bar[if-any models.waiting_hot] bg-danger[end]" style="width:[models.waiting]%"></div>
             </div>
-            <div class="small text-muted mt-1">share of the time a request queued &middot; peak [models.waiting_peak] &middot; worst p95 [models.queue_p95]</div>
+            <div class="small text-muted mt-1">share of the time a request queued &middot; up to [models.waiting_peak] at once[if-any models.queue_p95] &middot; worst wait [models.queue_p95][end]</div>
           </div>
+          [end]
           <div class="col-md-4">
             <div class="cap-meter-label"><span>KV cache, peak</span><span>[models.kv_peak]%</span></div>
             <div class="progress" style="height:8px" role="progressbar" aria-label="KV cache peak" aria-valuenow="[models.kv_peak]" aria-valuemin="0" aria-valuemax="100">
               <div class="progress-bar[if-any models.kv_hot] bg-warning[end]" style="width:[models.kv_peak]%"></div>
             </div>
-            <div class="small text-muted mt-1">[models.preemptions] preempted</div>
+            [if-any models.preemptions]<div class="small text-warning-emphasis mt-1">[models.preemptions] requests preempted for lack of cache</div>[end]
           </div>
         </div>
 
@@ -85,14 +89,14 @@
         [end]
 
         <table class="table table-sm small mt-3 mb-0">
-          <thead><tr><th>Server</th><th>Rental share</th><th class="text-end">Busy</th><th class="text-end">Waiting</th><th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
+          <thead><tr><th>Server</th><th>Rental share</th><th class="text-end">Busy</th>[if-any models.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
           <tbody>
             [for models.servers]
             <tr>
               <td class="font-monospace">[models.servers.server]</td>
               <td>[models.servers.usd_per_hour]</td>
               <td class="text-end">[models.servers.busy]%</td>
-              <td class="text-end">[models.servers.waiting]%</td>
+              [if-any models.servers_queued]<td class="text-end">[models.servers.waiting]%</td>[end]
               <td class="text-end">[models.servers.kv_peak]%</td>
               <td class="text-end">[models.servers.tokens]</td>
             </tr>
@@ -150,10 +154,12 @@
             <div class="text-muted" title="Prompt length in tokens, successful requests">Prompt length</div>
             [for demand.prompt_len]<div class="d-flex justify-content-between"><span>[demand.prompt_len.name]</span><span>[demand.prompt_len.count]</span></div>[end]
           </div>
+          [if-any demand.refused_any]
           <div class="col-md-3">
             <div class="text-muted">Refused <span class="[if-any demand.refused_hot]text-danger[else]text-muted[end]">[demand.refused_pct]%</span></div>
             [for demand.refused]<div class="d-flex justify-content-between"><span>[demand.refused.name]</span><span>[demand.refused.count]</span></div>[end]
           </div>
+          [end]
         </div>
         <div class="small text-muted mt-2">[demand.requests] requests over [demand.days] days</div>
       </div>
@@ -164,12 +170,12 @@
     [end]
   </section>
 
+  [if-any spend_down]
+  <div class="alert alert-warning small">Provider spend could not be read from LiteLLM.</div>
+  [end]
+  [if-any providers]
   <section class="mb-4">
     <h2 class="h5 mb-2">Providers we pay</h2>
-    [if-any spend_down]
-    <div class="alert alert-warning small">Provider spend could not be read from LiteLLM.</div>
-    [end]
-    [if-any providers]
     <div class="row row-cols-1 row-cols-lg-2 g-3">
       [for providers]
       <div class="col">
@@ -179,10 +185,7 @@
               <h3 class="h6 mb-0">[providers.provider]</h3>
               <div class="small text-muted">[providers.period] this period &middot; [providers.today] today</div>
             </div>
-            <div class="cap-meter-label mt-3"><span>Month to date [providers.month_to_date]</span><span>projected [providers.projected]</span></div>
-            <div class="progress" style="height:8px" role="progressbar" aria-label="Month to date against projection" aria-valuenow="[providers.month_pct]" aria-valuemin="0" aria-valuemax="100">
-              <div class="progress-bar" style="width:[providers.month_pct]%"></div>
-            </div>
+            <div class="small mt-3">[providers.month_to_date] so far this month, [providers.projected] by its end at this rate</div>
             [if-any providers.spend_bars]
             <div class="small text-muted mt-3 mb-1">Spend per day</div>
             <div class="cap-bars cap-bars-short" role="img" aria-label="Spend per day with [providers.provider]">
@@ -204,10 +207,8 @@
       </div>
       [end]
     </div>
-    [else]
-    <p class="text-muted small">No spend with a model provider in this period.</p>
-    [end]
   </section>
+  [end]
 
   <p class="small text-muted mb-0">
     Rental is each box's hourly price from Vast or RunPod, a whole hour for every hour sampled; a box running two

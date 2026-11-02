@@ -1862,6 +1862,7 @@ def _demand_model_row(m) -> edict:
         prompt_tokens=_tokens_h(m.prompt_tokens),
         completion_tokens=_tokens_h(m.completion_tokens),
         refused_total=f"{m.refused_total:,}",
+        refused_any=ezt.boolean(m.refused_total > 0),
         refused_pct=_pct(m.refused_total / m.requests) if m.requests else 0,
         refused_hot=ezt.boolean(m.requests > 0 and m.refused_total / m.requests >= 0.05),
         refused=[edict(name=r.name, count=f"{r.count:,}") for r in m.refused[:6]],
@@ -1884,13 +1885,11 @@ def _capacity_model_row(m) -> edict:
     # so it cannot tell 0.01s from 0.29s. A value of 0.3 therefore means
     # "under 0.3s", which for a person reading the page is "no real wait".
     # None means no request queued at all in the period.
+    #
+    # Shown only when it says something: a figure of "<0.3s" is the same
+    # news as no figure, and the template leaves an empty one out.
     worst = m.queue_p95_worst_s
-    if worst is None:
-        queue_p95 = "—"
-    elif worst <= 0.3:
-        queue_p95 = "<0.3s"
-    else:
-        queue_p95 = f"{worst:g}s"
+    queue_p95 = f"{worst:g}s" if worst is not None and worst > 0.3 else ""
 
     return edict(
         model_name=m.model_name,
@@ -1902,13 +1901,18 @@ def _capacity_model_row(m) -> edict:
         usd_per_mtok=_money(m.usd_per_mtok) if m.usd_per_mtok is not None else "",
         busy=_pct(m.busy),
         busy_hot=ezt.boolean(m.busy >= 0.8),
+        # The waiting meter, the peak and the worst queue are one story,
+        # told only when a request queued at all in the period. A meter at
+        # 0% on every card said nothing.
+        queued=ezt.boolean(m.waiting > 0 or m.waiting_peak > 0),
         waiting=_pct(m.waiting),
         waiting_hot=ezt.boolean(m.waiting >= 0.05),
         kv_peak=_pct(m.kv_peak),
         kv_hot=ezt.boolean(m.kv_peak >= 0.9),
         waiting_peak=m.waiting_peak,
-        preemptions=m.preemptions,
+        preemptions=m.preemptions or None,
         queue_p95=queue_p95,
+        servers_queued=ezt.boolean(any(srv.waiting > 0 for srv in m.servers)),
         prompt_tokens=_tokens_h(m.prompt_tokens),
         generation_tokens=_tokens_h(m.generation_tokens),
         requests=f"{m.requests:,}",
@@ -1937,8 +1941,6 @@ def _spend_provider_row(p) -> edict:
         today=_money(p.today_usd),
         month_to_date=_money(p.month_to_date_usd),
         projected=_money(projected),
-        # How far into the projected month the spend so far is.
-        month_pct=_pct(p.month_to_date_usd / projected) if projected else 0,
         models=[edict(name=x.name, usd=_money(x.usd)) for x in p.models],
         projects=[edict(name=x.name, usd=_money(x.usd)) for x in p.projects],
         spend_bars=_bars([edict(day=d.day, value=d.usd) for d in p.daily], _money),

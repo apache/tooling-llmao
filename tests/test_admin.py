@@ -133,12 +133,16 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         spend_down=ezt.boolean(False),
         providers=[],
     )
-    buf = io.StringIO()
     template = ezt.Template(
         str(THIS_DIR / "templates" / "capacity.ezt"), compress_whitespace=0, base_format=ezt.FORMAT_HTML
     )
-    template.generate(buf, data)
-    out = buf.getvalue()
+
+    def render() -> str:
+        buf = io.StringIO()
+        template.generate(buf, data)
+        return buf.getvalue()
+
+    out = render()
     assert "What was asked" in out
     assert "<code>gemma4-26b</code>" in out
     assert "2 requests/day" in out
@@ -146,6 +150,29 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     assert "429_RATE_LIMIT_EXCEEDED" in out
     assert "text-danger" in out  # half the requests refused is a warning
     assert "0.6s typical" in out
+    # Nothing bought from a model provider in the period: no section and no tiles for it.
+    assert "Providers we pay" not in out
+    assert "month to date" not in out
+    data.providers = [
+        pages._spend_provider_row(
+            edict(
+                provider="xAI",
+                period_usd=1.0,
+                today_usd=0.0,
+                month_to_date_usd=1.0,
+                projected_month_usd=3.0,
+                models=[],
+                projects=[],
+                daily=[],
+            )
+        )
+    ]
+    out = render()
+    assert "Providers we pay" in out
+    assert "Providers, month to date" in out
+    # And a model that never refused a request has no Refused column.
+    data.demand[0].refused_any = ezt.boolean(False)
+    assert "Refused" not in render()
 
 
 def test_admin_drops_models_and_shows_a_version_match():
