@@ -101,6 +101,9 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         for status, err in (("success", None), ("failure", edict(normalized_error="429_RATE_LIMIT_EXCEEDED")))
     ]
     summary = summarise_demand(fold_demand(day, spend), today=day, period_days=7)
+    cards, dormant = pages.capacity_cards(
+        [], summary, catalog={"gemma4-26b": "Gemma 4 26B"}, live={"gemma4-26b"}, today=day
+    )
     data = edict(
         title="Capacity",
         is_site_admin=ezt.boolean(True),
@@ -127,9 +130,9 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         spend_projected="$0.00",
         unpriced_hours=None,
         capacity_down=ezt.boolean(False),
-        models=[],
         demand_down=ezt.boolean(False),
-        demand=[pages._demand_model_row(m) for m in summary],
+        cards=cards,
+        dormant=dormant,
         spend_down=ezt.boolean(False),
         providers=[],
     )
@@ -143,8 +146,10 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         return buf.getvalue()
 
     out = render()
-    assert "What was asked" in out
-    assert "<code>gemma4-26b</code>" in out
+    # Demand with no hourly rows yet: the card has only the asked half.
+    assert "What was asked of it" in out and "What it served" not in out
+    assert "Gemma 4 26B" in out and ">gemma4-26b</code>" in out
+    assert "nothing serving it now" not in out
     assert "2 requests/day" in out
     assert "spark" in out and "OpenAI" in out
     assert "429_RATE_LIMIT_EXCEEDED" in out
@@ -171,7 +176,7 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     assert "Providers we pay" in out
     assert "Providers, month to date" in out
     # And a model that never refused a request has no Refused column.
-    data.demand[0].refused_any = ezt.boolean(False)
+    data.cards[0].demand.refused_any = ezt.boolean(False)
     assert "Refused" not in render()
     # A model's rentals: named, with when each was seen and what became of it.
     line = edict(
@@ -190,6 +195,8 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     )
     model = edict(
         model_name="qwen3-8b-bf16",
+        cost_usd=3.6,
+        last_hour="2026-10-20T18",
         cost_per_day=2.4,
         tokens_per_day=250,
         usd_per_mtok=None,
@@ -207,8 +214,18 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         daily_tokens=[],
         servers=[line],
     )
-    data.models = [pages._capacity_model_row(model, listed={}, live_servers=set())]
+    # Nothing serves it now and nothing was seen for a week: a footnote, not a card.
+    data.cards, data.dormant = pages.capacity_cards([model], [], catalog={}, live=set(), today=day, listed={})
+    assert data.cards == [] and [c.model_name for c in data.dormant] == ["qwen3-8b-bf16"]
     out = render()
+    assert "last seen Oct 20 ($3.60 over 35 hours)" in out
+    assert "Vast 9:8001" not in out
+    # Still deployed: a card, with its rentals.
+    data.cards, data.dormant = pages.capacity_cards(
+        [model], [], catalog={}, live={"qwen3-8b-bf16"}, today=day, listed={}
+    )
+    out = render()
+    assert "What it served" in out and "What was asked of it" not in out
     assert "Vast 9:8001" in out and "RTX 3060 x2" in out
     assert "Oct 19 to Oct 20" in out and ">ended<" in out
     assert "hours sampled" not in out

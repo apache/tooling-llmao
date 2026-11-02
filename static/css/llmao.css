@@ -257,6 +257,15 @@ body {
   font-size: 0.875rem;
   margin-bottom: 0.25rem;
 }
+.capacity-page .model-id {
+  font-size: 0.85rem;
+}
+/* The two halves of a model's card: what it served, what was asked of it. */
+.capacity-page .cap-part {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
 .capacity-page .cap-bars {
   display: flex;
   align-items: flex-end;

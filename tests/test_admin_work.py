@@ -188,6 +188,8 @@ def test_one_source_down_thins_the_list_rather_than_failing_the_page(monkeypatch
 def _model(**over):
     m = edict(
         model_name="qwen3-8b",
+        cost_usd=10.0,
+        last_hour="2026-11-02T10",
         cost_per_day=1.0,
         tokens_per_day=1000,
         usd_per_mtok=None,
@@ -207,6 +209,55 @@ def _model(**over):
     )
     m.update(over)
     return m
+
+
+def _demand(**over):
+    d = edict(
+        model="qwen3-8b",
+        days=3,
+        last_hour="2026-11-01T23",
+        requests=30,
+        requests_per_day=10.0,
+        prompt_tokens=3000,
+        completion_tokens=300,
+        refused_total=0,
+        refused=[],
+        by_project=[],
+        by_tool=[],
+        prompt_len=[],
+        duration_p50_s=0.3,
+        duration_p95_worst_s=4.0,
+        daily_requests=[],
+    )
+    d.update(over)
+    return d
+
+
+def test_one_card_per_model_live_first_and_the_forgotten_as_a_footnote():
+    pages = _app()
+    today = dt.date(2026, 11, 2)
+    supply = [
+        _model(model_name="cheap", cost_usd=1.0),
+        _model(model_name="dear", cost_usd=50.0),
+        # Nothing serves it now, and its last hour is twelve days back.
+        _model(model_name="retired", cost_usd=99.0, last_hour="2026-10-21T18", hours=35),
+        # Nothing serves it now either, but it was seen yesterday: still a card.
+        _model(model_name="paused", cost_usd=2.0, last_hour="2026-11-01T18"),
+    ]
+    demand = [_demand(model="dear"), _demand(model="asked-only")]
+    cards, dormant = pages.capacity_cards(
+        supply, demand, catalog={"dear": "Dear Model"}, live={"cheap", "dear", "asked-only"}, today=today
+    )
+    # Live by cost, then the rest; a model from the demand rows alone is a card too.
+    assert [c.model_name for c in cards] == ["dear", "cheap", "asked-only", "paused"]
+    assert [bool(c.live) for c in cards] == [True, True, True, False]
+    assert [c.display_name for c in cards] == ["Dear Model", "cheap", "asked-only", "paused"]
+    dear, cheap, asked, _paused = cards
+    assert dear.supply is not None and dear.demand is not None
+    assert cheap.demand is None and asked.supply is None
+    assert asked.last_seen == "Nov 1" and asked.cost == ""
+    (gone,) = dormant
+    assert (gone.model_name, gone.last_seen, gone.cost, gone.hours) == ("retired", "Oct 21", "$99.00", 35)
 
 
 def test_the_worst_queue_time_reads_as_a_person_would_say_it():

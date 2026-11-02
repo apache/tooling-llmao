@@ -1791,12 +1791,6 @@ async def admin_capacity(result):
         rows = []
         result.capacity_down = ezt.boolean(True)
     fleet = summarise_capacity(rows, today=today, period_days=days)
-    # What the providers report now, to say which rentals have ended; None
-    # until a provider has been read, which says nothing either way.
-    reported = [r for r in (APP.fleet.vast_rentals, APP.fleet.runpod_rentals) if r is not None]
-    listed = {r.ident: r.status for rentals in reported for r in rentals} if reported else None
-    live_servers = {f"{s.host}:{s.listen_port}" for s in APP.fleet.servers}
-    result.models = [_capacity_model_row(m, listed=listed, live_servers=live_servers) for m in fleet.models]
     result.fleet_cost_per_day = _money(fleet.cost_per_day)
     result.fleet_tokens_per_day = _tokens_h(int(fleet.tokens_per_day))
     result.unpriced_hours = fleet.unpriced_hours or None
@@ -1809,7 +1803,23 @@ async def admin_capacity(result):
     except BackendUnavailableError:
         demand_rows = []
         result.demand_down = ezt.boolean(True)
-    result.demand = [_demand_model_row(m) for m in summarise_demand(demand_rows, today=today, period_days=days)]
+    demand = summarise_demand(demand_rows, today=today, period_days=days)
+
+    # What the providers report now, to say which rentals have ended; None
+    # until a provider has been read, which says nothing either way.
+    reported = [r for r in (APP.fleet.vast_rentals, APP.fleet.runpod_rentals) if r is not None]
+    listed = {r.ident: r.status for rentals in reported for r in rentals} if reported else None
+    live_servers = {f"{s.host}:{s.listen_port}" for s in APP.fleet.servers}
+    catalog = {str(m.model_name): str(m.model_info.get("display_name") or m.model_name) for m in APP.models}
+    result.cards, result.dormant = capacity_cards(
+        fleet.models,
+        demand,
+        catalog=catalog,
+        live={d.model_name for d in APP.fleet.deployments},
+        today=today,
+        listed=listed,
+        live_servers=live_servers,
+    )
 
     try:
         spent = await APP.backend.metering.provider_spend(days_to_read(days, today))
@@ -1822,6 +1832,56 @@ async def admin_capacity(result):
     result.spend_month_to_date = _money(sum(p.month_to_date_usd for p in providers))
     result.spend_projected = _money(sum(p.projected_month_usd for p in providers))
     return result
+
+
+# A model with nothing serving it now and nothing seen for this long is a footnote.
+DORMANT_DAYS = 7
+
+
+def capacity_cards(
+    supply: list,
+    demand: list,
+    *,
+    catalog: dict[str, str],
+    live: set[str],
+    today: dt.date,
+    listed: dict[str, str] | None = None,
+    live_servers: set[str] = frozenset(),
+) -> tuple[list, list]:
+    """One card per model: what it served and what was asked of it, joined by name.
+
+    The two come from different stores and either may be missing: sampling
+    started later than the spend log reaches back, and a day's demand is
+    rolled up the morning after. A card shows whichever it has. Models
+    with a deployment now come first, then by rental cost. A model with
+    nothing serving it and nothing seen for DORMANT_DAYS is returned in
+    the second list, for a footnote, so a retired model does not sit
+    among the live ones by the cost it once had.
+    """
+    pairs: dict[str, edict] = {}
+    for m in supply:
+        pairs.setdefault(m.model_name, edict(supply=None, demand=None)).supply = m
+    for d in demand:
+        pairs.setdefault(d.model, edict(supply=None, demand=None)).demand = d
+    recent = (today - dt.timedelta(days=DORMANT_DAYS)).isoformat()
+    cards, dormant, cost = [], [], {}
+    for name, pair in pairs.items():
+        last = max(h for h in ((pair.supply and pair.supply.last_hour), (pair.demand and pair.demand.last_hour)) if h)
+        card = edict(
+            model_name=name,
+            display_name=catalog.get(name, name),
+            live=ezt.boolean(name in live),
+            supply=pair.supply and _capacity_model_row(pair.supply, listed=listed, live_servers=live_servers),
+            demand=pair.demand and _demand_model_row(pair.demand),
+            last_seen=_day_h(last),
+            cost=_money(pair.supply.cost_usd) if pair.supply else "",
+            hours=pair.supply.hours if pair.supply else 0,
+        )
+        cost[name] = pair.supply.cost_usd if pair.supply else 0.0
+        (dormant if name not in live and last[:10] < recent else cards).append(card)
+    cards.sort(key=lambda c: (not c.live, -cost[c.model_name], c.model_name))
+    dormant.sort(key=lambda c: c.model_name)
+    return cards, dormant
 
 
 def _pct(fraction: float) -> int:

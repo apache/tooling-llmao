@@ -667,6 +667,7 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
             edict(
                 model=name,
                 days=days,
+                last_hour=max(r.hour for r in mine),
                 requests=requests,
                 requests_per_day=requests / days if days else 0.0,
                 prompt_tokens=sum(r.prompt_tokens for r in mine),
@@ -783,6 +784,7 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
                 model_name=name,
                 servers=servers,
                 hours=len(mine),
+                last_hour=max(r.hour for r in mine),
                 unpriced_hours=len(mine) - len(priced),
                 cost_usd=cost,
                 cost_per_day=cost / hours_seen * 24,

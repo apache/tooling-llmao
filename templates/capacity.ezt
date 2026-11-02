@@ -12,7 +12,8 @@
     </div>
   </div>
   <p class="text-muted small mb-3">
-    What our boxes did and cost, and what the providers we pay were paid, over the last [period_days] days.
+    What each model served and what was asked of it, over the last [period_days] days: for deciding whether to rent
+    more machines or return some.
   </p>
 
   <div class="row row-cols-2 row-cols-lg-4 g-3 mb-4">
@@ -22,7 +23,7 @@
     </div></div></div>
     <div class="col"><div class="card h-100 admin-tile"><div class="card-body">
       <div class="admin-tile-figure">[fleet_tokens_per_day]</div>
-      <div class="admin-tile-label"><i class="bi bi-cpu" aria-hidden="true"></i> Tokens per day, our boxes</div>
+      <div class="admin-tile-label"><i class="bi bi-cpu" aria-hidden="true"></i> Tokens per day, our rentals</div>
     </div></div></div>
     [if-any providers]
     <div class="col"><div class="card h-100 admin-tile"><div class="card-body">
@@ -37,107 +38,100 @@
   </div>
 
   <section class="mb-4">
-    <h2 class="h5 mb-2">Our boxes</h2>
     [if-any capacity_down]
     <div class="alert alert-warning small">The capacity records could not be read from LiteLLM.</div>
     [end]
-    [if-any models]
-    [for models]
+    [if-any demand_down]
+    <div class="alert alert-warning small">The demand records could not be read from LiteLLM.</div>
+    [end]
+    [if-any cards]
+    [for cards]
     <div class="card mb-3">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2">
-          <h3 class="h6 mb-0"><code>[models.model_name]</code></h3>
+          <h2 class="h6 mb-0">
+            [cards.display_name] <code class="model-id">[cards.model_name]</code>
+            [if-any cards.live][else]<span class="badge text-bg-secondary ms-1">nothing serving it now</span>[end]
+          </h2>
+          [if-any cards.supply]
           <div class="small text-muted">
-            [models.cost_per_day]/day &middot; [models.tokens_per_day] tokens/day[if-any models.usd_per_mtok] &middot;
-            <span title="Rental divided by tokens served in the same hours, at the use the rentals actually had">[models.usd_per_mtok] per million tokens</span>[end]
+            [cards.supply.cost_per_day]/day &middot; [cards.supply.tokens_per_day] tokens/day[if-any cards.supply.usd_per_mtok] &middot;
+            <span title="Rental divided by tokens served in the same hours, at the use the rentals actually had">[cards.supply.usd_per_mtok] per million tokens</span>[end]
           </div>
+          [end]
         </div>
 
-        <div class="row g-3 mt-1">
+        [if-any cards.supply]
+        <h3 class="cap-part small text-muted mt-3 mb-0">What it served</h3>
+        <div class="row g-3 mt-0">
           <div class="col-md-4">
-            <div class="cap-meter-label"><span>Busy</span><span>[models.busy]%</span></div>
-            <div class="progress" style="height:8px" role="progressbar" aria-label="Busy" aria-valuenow="[models.busy]" aria-valuemin="0" aria-valuemax="100">
-              <div class="progress-bar[if-any models.busy_hot] bg-warning[end]" style="width:[models.busy]%"></div>
+            <div class="cap-meter-label"><span>Busy</span><span>[cards.supply.busy]%</span></div>
+            <div class="progress" style="height:8px" role="progressbar" aria-label="Busy" aria-valuenow="[cards.supply.busy]" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-bar[if-any cards.supply.busy_hot] bg-warning[end]" style="width:[cards.supply.busy]%"></div>
             </div>
             <div class="small text-muted mt-1">share of the time a request was running</div>
           </div>
-          [if-any models.queued]
+          [if-any cards.supply.queued]
           <div class="col-md-4">
-            <div class="cap-meter-label"><span>Waiting</span><span>[models.waiting]%</span></div>
-            <div class="progress" style="height:8px" role="progressbar" aria-label="Waiting" aria-valuenow="[models.waiting]" aria-valuemin="0" aria-valuemax="100">
-              <div class="progress-bar[if-any models.waiting_hot] bg-danger[end]" style="width:[models.waiting]%"></div>
+            <div class="cap-meter-label"><span>Waiting</span><span>[cards.supply.waiting]%</span></div>
+            <div class="progress" style="height:8px" role="progressbar" aria-label="Waiting" aria-valuenow="[cards.supply.waiting]" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-bar[if-any cards.supply.waiting_hot] bg-danger[end]" style="width:[cards.supply.waiting]%"></div>
             </div>
-            <div class="small text-muted mt-1">share of the time a request queued &middot; up to [models.waiting_peak] at once[if-any models.queue_p95] &middot; worst wait [models.queue_p95][end]</div>
+            <div class="small text-muted mt-1">share of the time a request queued &middot; up to [cards.supply.waiting_peak] at once[if-any cards.supply.queue_p95] &middot; worst wait [cards.supply.queue_p95][end]</div>
           </div>
           [end]
           <div class="col-md-4">
-            <div class="cap-meter-label"><span>KV cache, peak</span><span>[models.kv_peak]%</span></div>
-            <div class="progress" style="height:8px" role="progressbar" aria-label="KV cache peak" aria-valuenow="[models.kv_peak]" aria-valuemin="0" aria-valuemax="100">
-              <div class="progress-bar[if-any models.kv_hot] bg-warning[end]" style="width:[models.kv_peak]%"></div>
+            <div class="cap-meter-label"><span>KV cache, peak</span><span>[cards.supply.kv_peak]%</span></div>
+            <div class="progress" style="height:8px" role="progressbar" aria-label="KV cache peak" aria-valuenow="[cards.supply.kv_peak]" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-bar[if-any cards.supply.kv_hot] bg-warning[end]" style="width:[cards.supply.kv_peak]%"></div>
             </div>
-            [if-any models.preemptions]<div class="small text-warning-emphasis mt-1">[models.preemptions] requests preempted for lack of cache</div>[end]
+            [if-any cards.supply.preemptions]<div class="small text-warning-emphasis mt-1">[cards.supply.preemptions] requests preempted for lack of cache</div>[end]
           </div>
         </div>
 
-        [if-any models.token_bars]
+        [if-any cards.supply.token_bars]
         <div class="mt-3">
           <div class="small text-muted mb-1">Tokens per day</div>
-          <div class="cap-bars" role="img" aria-label="Tokens per day for [models.model_name]">
-            [for models.token_bars]<span class="cap-bar" style="height:[models.token_bars.height]%" title="[models.token_bars.title]"></span>[end]
+          <div class="cap-bars" role="img" aria-label="Tokens per day for [cards.model_name]">
+            [for cards.supply.token_bars]<span class="cap-bar" style="height:[cards.supply.token_bars.height]%" title="[cards.supply.token_bars.title]"></span>[end]
           </div>
         </div>
         [end]
 
         <table class="table table-sm small mt-3 mb-0">
-          <thead><tr><th>Rental</th><th>Seen</th><th>Rental share</th><th class="text-end">Busy</th>[if-any models.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
+          <thead><tr><th>Rental</th><th>Seen</th><th>Rental share</th><th class="text-end">Busy</th>[if-any cards.supply.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
           <tbody>
-            [for models.servers]
-            <tr[if-any models.servers.status] class="text-muted"[end]>
-              <td>[models.servers.server][if-any models.servers.label] <span class="text-muted">[models.servers.label]</span>[end]</td>
-              <td>[models.servers.seen][if-any models.servers.status] <span class="badge text-bg-secondary">[models.servers.status]</span>[end]</td>
-              <td>[models.servers.usd_per_hour]</td>
-              <td class="text-end">[models.servers.busy]%</td>
-              [if-any models.servers_queued]<td class="text-end">[models.servers.waiting]%</td>[end]
-              <td class="text-end">[models.servers.kv_peak]%</td>
-              <td class="text-end">[models.servers.tokens]</td>
+            [for cards.supply.servers]
+            <tr[if-any cards.supply.servers.status] class="text-muted"[end]>
+              <td>[cards.supply.servers.server][if-any cards.supply.servers.label] <span class="text-muted">[cards.supply.servers.label]</span>[end]</td>
+              <td>[cards.supply.servers.seen][if-any cards.supply.servers.status] <span class="badge text-bg-secondary">[cards.supply.servers.status]</span>[end]</td>
+              <td>[cards.supply.servers.usd_per_hour]</td>
+              <td class="text-end">[cards.supply.servers.busy]%</td>
+              [if-any cards.supply.servers_queued]<td class="text-end">[cards.supply.servers.waiting]%</td>[end]
+              <td class="text-end">[cards.supply.servers.kv_peak]%</td>
+              <td class="text-end">[cards.supply.servers.tokens]</td>
             </tr>
             [end]
           </tbody>
         </table>
         <div class="small text-muted mt-1">
-          [models.prompt_tokens] in &middot; [models.generation_tokens] out &middot; [models.requests] requests
-          [if-any models.unpriced_hours]&middot; <span class="text-warning-emphasis">[models.unpriced_hours] hours unpriced</span>[end]
+          [cards.supply.prompt_tokens] in &middot; [cards.supply.generation_tokens] out &middot; [cards.supply.requests] requests
+          [if-any cards.supply.unpriced_hours]&middot; <span class="text-warning-emphasis">[cards.supply.unpriced_hours] hours unpriced</span>[end]
         </div>
-      </div>
-    </div>
-    [end]
-    [else]
-    <p class="text-muted small">No hourly records yet for this period. The first appear after an hour of sampling.</p>
-    [end]
-  </section>
+        [end]
 
-  <section class="mb-4">
-    <h2 class="h5 mb-2">What was asked</h2>
-    [if-any demand_down]
-    <div class="alert alert-warning small">The demand records could not be read from LiteLLM.</div>
-    [end]
-    [if-any demand]
-    [for demand]
-    <div class="card mb-3">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2">
-          <h3 class="h6 mb-0"><code>[demand.model]</code></h3>
-          <div class="small text-muted">
-            [demand.requests_per_day] requests/day &middot; [demand.prompt_tokens] in &middot; [demand.completion_tokens] out
-            &middot; <span title="A typical hour's median request, and the slowest hour's 95th percentile">[demand.duration_p50] typical, [demand.duration_p95_worst] worst hour</span>
-          </div>
+        [if-any cards.demand]
+        <h3 class="cap-part small text-muted mt-3 mb-0">What was asked of it</h3>
+        <div class="small text-muted mt-1">
+          [cards.demand.requests_per_day] requests/day &middot; [cards.demand.prompt_tokens] in &middot; [cards.demand.completion_tokens] out
+          &middot; <span title="A typical hour's median request, and the slowest hour's 95th percentile">[cards.demand.duration_p50] typical, [cards.demand.duration_p95_worst] worst hour</span>
         </div>
 
-        [if-any demand.request_bars]
+        [if-any cards.demand.request_bars]
         <div class="mt-3">
           <div class="small text-muted mb-1">Requests per day</div>
-          <div class="cap-bars" role="img" aria-label="Requests per day for [demand.model]">
-            [for demand.request_bars]<span class="cap-bar" style="height:[demand.request_bars.height]%" title="[demand.request_bars.title]"></span>[end]
+          <div class="cap-bars" role="img" aria-label="Requests per day for [cards.model_name]">
+            [for cards.demand.request_bars]<span class="cap-bar" style="height:[cards.demand.request_bars.height]%" title="[cards.demand.request_bars.title]"></span>[end]
           </div>
         </div>
         [end]
@@ -145,29 +139,40 @@
         <div class="row small mt-3">
           <div class="col-md-3">
             <div class="text-muted">Projects</div>
-            [for demand.by_project]<div class="d-flex justify-content-between"><span>[demand.by_project.name]</span><span>[demand.by_project.requests]</span></div>[end]
+            [for cards.demand.by_project]<div class="d-flex justify-content-between"><span>[cards.demand.by_project.name]</span><span>[cards.demand.by_project.requests]</span></div>[end]
           </div>
           <div class="col-md-3">
             <div class="text-muted">Tools</div>
-            [for demand.by_tool]<div class="d-flex justify-content-between"><span>[demand.by_tool.name]</span><span>[demand.by_tool.requests]</span></div>[end]
+            [for cards.demand.by_tool]<div class="d-flex justify-content-between"><span>[cards.demand.by_tool.name]</span><span>[cards.demand.by_tool.requests]</span></div>[end]
           </div>
           <div class="col-md-3">
             <div class="text-muted" title="Prompt length in tokens, successful requests">Prompt length</div>
-            [for demand.prompt_len]<div class="d-flex justify-content-between"><span>[demand.prompt_len.name]</span><span>[demand.prompt_len.count]</span></div>[end]
+            [for cards.demand.prompt_len]<div class="d-flex justify-content-between"><span>[cards.demand.prompt_len.name]</span><span>[cards.demand.prompt_len.count]</span></div>[end]
           </div>
-          [if-any demand.refused_any]
+          [if-any cards.demand.refused_any]
           <div class="col-md-3">
-            <div class="text-muted">Refused <span class="[if-any demand.refused_hot]text-danger[else]text-muted[end]">[demand.refused_pct]%</span></div>
-            [for demand.refused]<div class="d-flex justify-content-between"><span>[demand.refused.name]</span><span>[demand.refused.count]</span></div>[end]
+            <div class="text-muted">Refused <span class="[if-any cards.demand.refused_hot]text-danger[else]text-muted[end]">[cards.demand.refused_pct]%</span></div>
+            [for cards.demand.refused]<div class="d-flex justify-content-between"><span>[cards.demand.refused.name]</span><span>[cards.demand.refused.count]</span></div>[end]
           </div>
           [end]
         </div>
-        <div class="small text-muted mt-2">[demand.requests] requests over [demand.days] days</div>
+        <div class="small text-muted mt-2">[cards.demand.requests] requests over [cards.demand.days] days</div>
+        [end]
       </div>
     </div>
     [end]
     [else]
-    <p class="text-muted small">No demand records yet for this period. The first appear the morning after a day's traffic.</p>
+    <p class="text-muted small">
+      No records yet for this period. Hourly records appear after an hour of sampling; a day's demand the morning after.
+    </p>
+    [end]
+    [if-any dormant]
+    <p class="small text-muted mb-0">
+      Nothing serving them now, and nothing seen in the last week:
+      [for dormant]
+      [dormant.display_name] <code class="model-id">[dormant.model_name]</code>, last seen [dormant.last_seen][if-any dormant.cost] ([dormant.cost] over [dormant.hours] hours)[end].
+      [end]
+    </p>
     [end]
   </section>
 
@@ -212,7 +217,7 @@
   [end]
 
   <p class="small text-muted mb-0">
-    Rental is each box's hourly price from Vast or RunPod, a whole hour for every hour sampled; a box running two
+    Rental is each machine's hourly price from Vast or RunPod, a whole hour for every hour sampled; a machine running two
     servers puts half on each. Tokens, busy and waiting are what was sampled, every few seconds; an llmao restart
     loses the hour in progress. Provider spend is LiteLLM's price at the time of each request, not the provider's bill.
     [if-any unpriced_hours]<strong>[unpriced_hours] hours</strong> had no price from their provider and are left out of the cost.[end]
