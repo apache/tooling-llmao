@@ -39,25 +39,73 @@ Made 2026-11-01. Each is a choice, recorded so it is not re-derived.
    capacity page already reads. LiteLLM's spend data stays the truth for
    tokens and money; the log supplies what only it has, and one
    reconciliation figure compares the two.
-10. **No cron.** llmao runners spawn the post-process as a subprocess on
-    their own schedules: two runners, one rate each, so neither has to
-    negotiate how long to sleep. Scheduling is config.yaml, not Puppet.
+10. **No cron.** An llmao runner spawns the post-process as a subprocess
+    on its own schedule. Scheduling is config.yaml, not Puppet.
 11. **Parked: a Usage Analysis page** for admins in place of reading the
     script's output. The demand rows are shaped as that page's input now,
     so it is a second reader later, not a second pipeline.
+12. **loguru writes the files.** The hook hands each record to a loguru
+    sink, which owns the day file, the rotation at UTC midnight, the gzip
+    of the finished day and the deletion past retention, all in its own
+    writer thread. Nothing of ours opens, compresses or deletes a log file.
+    Verified in 0.7.3: rotation takes a `datetime.time` with a `tzinfo`,
+    the file name takes `!UTC`, a restart mid-day continues the same file
+    (it stamps the creation time in an xattr), and a write failure is
+    printed to stderr and dropped. Retention goes by the compressed file's
+    mtime, so N days keeps about N+1; the terms say "approximately".
 
-## Status
+## Development plan
+
+The record has two halves. The **envelope** is everything in the record
+table except the prompt: ids, timing, model, tokens, key, user agent,
+status, the parameters. It is the same class of data as LiteLLM's spend
+log, which already exists and which STATUS.md already describes, so it
+raises no new question of policy. The **content** is `messages`, the
+`tools` definitions inside `params`, and (as flagged in the table)
+`finish_reason`. Everything the post-process computes, demand rows,
+reconciliation and the first reports, needs only the envelope.
+
+So the work runs on two tracks. Track A builds the whole pipeline on the
+envelope and does not wait for anything. Track B is the parts under
+review: it adds the content and the words around it, and nothing in
+track A has to be redone when it lands. The rule that keeps the tracks
+apart: until track B lands, no code path writes prompt content, and the
+record builder's content half returns nothing.
+
+### Track A: now
 
 | Step | What | State |
 |---|---|---|
-| 1 | This design | written |
-| 2 | `prompt_log` callback in `litellm_hooks.py`, with tests | planned |
-| 3 | Switched on: `litellm.yaml.example`; p6 (callback settings, `ReadWritePaths`, directory parameter) | planned |
-| 4 | Terms of Service page, footer link, STATUS.md data handling | planned |
-| 5 | `llmao/prompt_log.py` (the module) and `bin/llmao-prompt-log` (the tool): housekeeping, rollup to JSON, first reports | planned |
-| 6 | Check `no-log` on the running proxy (see below) | planned |
-| 7 | The two runners; demand rows in `CapacityStore`; reconciliation and demand tables on `/admin/capacity` | planned |
-| 8 | Usage Analysis page | parked |
+| A1 | Two facts for the reviewers. Replace the Size paragraph's assumption with the real daily prompt-token figure from the capacity rows. Step 6 below: whether a client can set `no-log` or `turn_off_message_logging` through the proxy | planned |
+| A2 | `llmao/prompt_log.py`: the record builder in two halves (envelope, content), the day-file name pattern, reading day files plain and compressed, the cursor, the rollup. Pure functions, tested on synthetic records in `tests/test_prompt_log.py` | planned |
+| A3 | The `prompt_log` callback in `litellm_hooks.py`: settings from `callback_settings`, built once, fails the proxy at start when the section or the directory is missing, adds the loguru sink, hands it each envelope. loguru joins `pyproject.toml`. Tests in `tests/test_litellm_hooks.py` | planned |
+| A4 | `bin/llmao-prompt-log`: `rollup --json` and the first reports. All of them read the envelope only, by design | planned |
+| A5 | Demand rows in `CapacityStore` (key layout, write, read, prune), the reconciliation figure and the demand tables on `/admin/capacity` | planned |
+| A6 | The `demand-rollup` runner and its spawn helper, registered in `main.py` | planned |
+| A7 | Switched on: `litellm.yaml.example`; p6 (`init.pp` creates the directory and renders its path into both YAML files, `litellm.yaml.epp` gains the callback settings and the callback, the proxy unit gains `ReadWritePaths`). Production then logs envelopes and the capacity page gets demand rows | planned |
+
+### Track B: after review
+
+| Step | What | State |
+|---|---|---|
+| B1 | The content half of the record: `messages`, `params.tools`, and the decision on `finish_reason`. One change in the module, no change in the hook | under review |
+| B2 | The pre-call strip of `no-log` and `turn_off_message_logging`, if A1 shows a client can set them | under review |
+| B3 | Terms of Service page, footer link, STATUS.md data handling rewritten | under review |
+| B4 | The retention number, rendered into `litellm.yaml` for the sink, and the terms stating it ("approximately") and the backup policy | under review |
+| B5 | Which content analyses, and where they run | open |
+| B6 | Usage Analysis page | parked |
+
+### What is under review
+
+The sections of this document the reviewers are asked to read:
+decisions 2 and 4; "No opt-out"; in "The record", the `messages`,
+`params`, `finish_reason` and `client_headers` rows; "Files", for
+retention and backups; "Access"; and "The terms page".
+
+### Step numbers used elsewhere
+
+Earlier drafts numbered the steps 1 to 8; the text below still says
+"step 6" for the `no-log` check (now A1).
 
 ## How the proxy records
 
@@ -72,7 +120,8 @@ version:
   opposite of the 2026-07 incident that `litellm.yaml.epp` still warns
   about, where a spend-log write ran inline through Prisma and wedged the
   request path. The worker shares the event loop, so the write itself must
-  still be quick: one JSON dump and one append, milliseconds.
+  still be quick: one JSON dump and a put on loguru's queue; the append,
+  and once a day the gzip, happen in loguru's writer thread.
 - **Streaming fires once, at the end.** LiteLLM assembles the stream and
   calls the success event with the complete payload. Since we keep no
   response, a streamed request and a plain one produce the same record,
@@ -100,6 +149,7 @@ callback:
 callback_settings:
   prompt_log:
     dir: /x1/llmao/prompt-log
+    retention_days: 90
 
 litellm_settings:
   callbacks: ["litellm_hooks.empty_completion_guard", "litellm_hooks.prompt_log"]
@@ -175,33 +225,41 @@ one query away and should replace this paragraph.
 ## Files
 
 - **Directory:** `/x1/llmao/prompt-log/`, root-owned, mode 0700, created
-  by the hook at start if absent, and added to the proxy service's
-  `ReadWritePaths`. The same Puppet value is rendered into `litellm.yaml`
-  (for the hook) and `config.yaml` (for the post-process), so there is
-  one place to change it. The portal's own unit, `pipservice-llmao.service`
-  in this repository, needs the same `ReadWritePaths` if the housekeeping
-  child is to compress and delete there, and which user the portal runs
-  as decides whether a group or ACL is needed on the files. To check
-  before step 7.
-- **One file per UTC day,** `prompts-2026-11-01.jsonl`, mode 0600, opened
-  for append on every write, so the writer holds no state across midnight
-  and a finished day can be compressed out from under it.
-- **A write that fails** (disk full, permission lost) is logged as an
-  error through LiteLLM's logger and the record is dropped. It never
+  by Puppet (a `file` resource in `init.pp`) and added to the proxy
+  service's `ReadWritePaths`. The hook does not create it: in production
+  a missing directory means the data volume is not mounted, and creating
+  one would log to the root disk without anyone noticing. The hook
+  refuses to start instead (decision 7); the check is ours, since loguru
+  would otherwise create the directory itself. The same Puppet value is
+  rendered into `litellm.yaml` (for the hook) and `config.yaml` (for the
+  post-process), so there is one place to change it. The post-process
+  only reads there. Both the portal and the proxy run as root (the
+  pipservice define's default, which the node yaml does not override; the
+  proxy unit sets no `User=`), so the files need no group or ACL.
+- **One file per UTC day,** `prompts-2026-11-01.jsonl`, mode 0600 through
+  an `opener`, written by loguru's sink: the name pattern is
+  `prompts-{time:YYYY-MM-DD!UTC}.jsonl` and the rotation is
+  `datetime.time(0, 0, tzinfo=utc)`, so the day boundary is UTC whatever
+  the host's zone. The sink holds the file open and appends from its own
+  thread; a restart mid-day reopens the same file.
+- **A write that fails** (disk full, permission lost) is caught by loguru,
+  printed to stderr (the journal) and the record is dropped. It never
   reaches the request. Disk full is an incident, not something the hook
   manages.
-- **Housekeeping runs once a day** from the `prompt-log-housekeep` runner
-  (below): compress every day file older than today's, and delete files
-  past `prompt_log_retention_days`. It runs a few hours into the day, so
-  the file it compresses has been closed to writes for that long; the
-  logging worker drains its queue in seconds, so the leeway is for a
-  stalled worker, not a normal one. Compression is gzip: `zcat` and
-  Python's `gzip` read it, and the reports read both forms.
-- **Retention** is `prompt_log_retention_days` in `config.yaml`, beside
-  `capacity_retention_days` and `action_retention_days`. The number is
-  open; 90 matches the others, and the terms state whatever it is. The
-  files on `/x1` are also in the Foundation's backups, under the backup
-  policy's own retention; the terms should say so.
+- **At rotation,** the first write after UTC midnight, the sink gzips the
+  finished day and deletes files past retention, in the writer thread.
+  zlib releases the GIL while compressing, so the proxy keeps serving;
+  it is CPU on the gateway host once a day. Compression is gzip: `zcat`
+  and Python's `gzip` read it, and the reports read both forms. A quiet
+  night delays the rotation until the first request of the new day,
+  which changes nothing: the file is named for the day it started.
+- **Retention** is `prompt_log_retention_days` in `config.yaml` and the
+  same number in `litellm.yaml` under `callback_settings.prompt_log`,
+  both from one Puppet value. The number is open; 90 matches the others.
+  loguru measures from the compressed file's mtime, so N keeps about N+1
+  days, and the terms say "approximately". The files on `/x1` are also in
+  the Foundation's backups, under the backup policy's own retention; the
+  terms should say so.
 
 ## Access
 
@@ -215,26 +273,26 @@ one query away and should replace this paragraph.
 Two files with two names, because they are two concerns:
 
 - **`llmao/prompt_log.py`, the module:** where the work lives. The
-  record's field names, the file naming, reading day files plain and
-  compressed, the rollup, the housekeeping, the cursor. It imports
-  nothing heavy, because the hook imports it too, inside the proxy
+  record's field names, the file name pattern, reading day files plain
+  and compressed, the rollup, the cursor. It imports nothing heavy, not
+  even loguru, because the hook imports it too, inside the proxy
   process, for the record definition and the file naming.
 - **`bin/llmao-prompt-log`, the tool:** argparse over the module, named
   like the other admin tools in `bin/` (`llmao-fleet`, `llmao-budget`).
-  It never opens a connection to LiteLLM.
+  It never opens a connection to LiteLLM, and never writes in the log
+  directory.
 
 The dependency runs one way: the tool and the hook import the module,
 and the module imports neither.
 
-The tool has three subcommands:
+The tool has two subcommands:
 
-1. **`housekeep`:** compress finished days, delete past retention.
-2. **`rollup --json`:** read from a cursor forward and print one JSON
+1. **`rollup --json`:** read from a cursor forward and print one JSON
    document to stdout: the demand rows for every finished hour, and the
    new cursor. The cursor is a day file and a byte offset, so an hourly
    run reads only what was appended since, a compressed day is read once,
    and a restart or a day of downtime backfills by itself.
-3. **Reports,** for an admin at a shell on the host. The first ones,
+2. **Reports,** for an admin at a shell on the host. The first ones,
    chosen because they need no reading of prompt content: requests and
    prompt tokens per day by project, by user, by model and by user agent;
    the distribution of prompt length per model; the share of requests
@@ -257,24 +315,20 @@ called **demand** throughout: demand rows, the `demand-rollup` runner,
 the `llmao:demand:` keys. The two are compared once, below, and never
 mixed.
 
-### The two runners
+### The runner
 
-Both live in `llmao/prompt_log.py` and are registered in `main.py` beside
-the capacity writer. Each has one interval and one subcommand, so neither
-negotiates with the other about when to sleep:
+**`demand-rollup`** lives in `llmao/prompt_log.py` and is registered in
+`main.py` beside the capacity writer. Hourly, it spawns
+`llmao-prompt-log rollup --json`, parses the output, hands the rows to
+`CapacityStore`, and stores the new cursor.
 
-- **`demand-rollup`**, hourly: spawns `llmao-prompt-log rollup --json`,
-  parses the output, hands the rows to `CapacityStore`, and stores the
-  new cursor.
-- **`prompt-log-housekeep`**, daily: spawns `llmao-prompt-log housekeep`.
-
-They share one spawn helper: `asyncio.create_subprocess_exec`, the child
-under `nice` and `ionice` since it shares the host with the proxy, one
-run at a time (a tick that finds the last run still going skips, and
-says so if it happens twice), a timeout, and a non-zero exit recorded as
-an attention item, never raised. The parsing of gigabytes happens in the
-child on another core; the event loop waits on a pipe. llmao never opens
-a log file itself, and the tool never holds the master key.
+The spawn: `asyncio.create_subprocess_exec`, the child under `nice` and
+`ionice` since it shares the host with the proxy, one run at a time (a
+tick that finds the last run still going skips, and says so if it
+happens twice), a timeout, and a non-zero exit recorded as an attention
+item, never raised. The parsing of gigabytes happens in the child on
+another core; the event loop waits on a pipe. llmao never opens a log
+file itself, and the tool never holds the master key.
 
 ### Demand rows
 
@@ -333,16 +387,15 @@ that already owns the neighbouring role.
 
 | Role | Lives in |
 |---|---|
-| The callback: settings from `callback_settings`, built once by a module `__getattr__`, payload to record, the append, the pre-call strip | `litellm_hooks.py`; tests in `tests/test_litellm_hooks.py` |
-| Record shape, file naming, reading day files, rollup, housekeeping, cursor | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
-| The tool: `housekeep`, `rollup --json`, reports | `bin/llmao-prompt-log`, argparse over the module |
-| The two runners and their spawn helper | `llmao/prompt_log.py`; registered in `main.py` |
+| The callback: settings from `callback_settings`, built once by a module `__getattr__`, the directory check, the loguru sink, payload to record, the pre-call strip | `litellm_hooks.py`; tests in `tests/test_litellm_hooks.py` |
+| Record shape, file name pattern, reading day files, rollup, cursor | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
+| The tool: `rollup --json`, reports | `bin/llmao-prompt-log`, argparse over the module |
+| The runner and its spawn helper | `llmao/prompt_log.py`; registered in `main.py` |
 | Demand rows: key layout, write, read, prune | `llmao/capacity.py`, `CapacityStore` and `CapacityPruner` |
 | Reconciliation figure and demand tables | `llmao/capacity.py` beside `summarise_capacity`; rendered by the `/admin/capacity` handler in `pages.py` |
-| Settings: `prompt_log_dir`, `prompt_log_retention_days`, the two intervals | `config.yaml.example`, flat keys beside `capacity_retention_days` |
+| Settings: `prompt_log_dir`, `prompt_log_retention_days`, the rollup interval | `config.yaml.example`, flat keys beside `capacity_retention_days`; the sink reads its copy of the directory and retention from `litellm.yaml` |
 | Terms of Service | `docs/help/terms.md`; link in `templates/footer.ezt`; excluded from the guides list in `pages.py` |
-| p6 | `litellm.yaml.epp` (callback settings and the callback), `llmao-litellm.service.epp` (`ReadWritePaths`), a directory parameter rendered into both YAML files. No cron |
-| Portal unit | `pipservice-llmao.service`, in this repository: `ReadWritePaths` for the housekeeping child |
+| p6 | `init.pp` (the directory, root 0700; one parameter each for the directory and the retention, rendered into both YAML files), `litellm.yaml.epp` (callback settings and the callback), `llmao-litellm.service.epp` (`ReadWritePaths`). No cron |
 
 ## The terms page
 
@@ -351,8 +404,8 @@ linked from the footer as "Terms of Service" beside the Privacy Policy,
 and left out of the Help nav's guide list the way the FAQ is. It says, in
 user-facing words: prompts sent through the gateway are logged, with the
 key owner, project, model and time; responses are not; the llmao admins
-can read the log; it is kept for N days, and in the Foundation's backups
-beyond that; do not send credentials or embargoed material; the ASF
+can read the log; it is kept for approximately N days, and in the
+Foundation's backups beyond that; do not send credentials or embargoed material; the ASF
 privacy policy applies; using the service is agreeing to this. STATUS.md's
 "Data handling" section is rewritten when this lands, since it currently
 says prompt text is not retained.
