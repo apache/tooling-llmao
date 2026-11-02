@@ -27,11 +27,12 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.fleet import (
     Fleet,
+    FleetDeployment,
     normalize_peer_ip,
     snapshot_for_status,
     validate_fleet,
 )
-from llmao.intent import UnknownHostError, derive_vllm_api_key, vllm_api_key
+from llmao.intent import UnknownHostError, derive_vllm_api_key, provider_intent, vllm_api_key
 from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import VllmRecipe, load_models
 from llmao.provisioning import HOST_HEADER, config_for_host, rental_name
@@ -688,3 +689,22 @@ def test_the_box_is_told_the_kv_cache_its_context_needs():
     (server,) = config_for_host("10.0.0.1", models=models, cfg=cfg)["servers"]
     assert server["kv_bytes_per_token"] == 73728
     assert server["max_model_len"] == 40960
+
+
+def test_a_deployment_is_named_by_its_model_and_its_rental():
+    """One spelling for pages and logs: the model, then where. The rental's provider and id
+    outlive its address; before a provider places the server, its configured host stands in."""
+    cfg = _cfg({"53865410": [["qwen3-8b", 8001]], "10.0.0.1": [["gemma4-26b", 8001]]})
+    models = load_models(EXAMPLE)
+    validate_fleet(cfg, models=models)
+    fleet = Fleet.from_cfg(cfg, models)
+    legacy, named = sorted(fleet.servers, key=lambda s: s.host)
+    assert named.label == "qwen3-8b on 53865410:8001"
+    assert legacy.label == "gemma4-26b on 10.0.0.1:8001"
+    rental = _rental("203.0.113.9", id="53865410")
+    assert rental.ident == "Vast 53865410"
+    fleet.apply_rentals(ProviderRentals("Vast", {rental.id: rental}))
+    assert named.label == "qwen3-8b on Vast 53865410:8001"
+    assert sorted(d.label for d in fleet.deployments) == sorted([named.label, legacy.label])
+    bought = FleetDeployment.from_intended(provider_intent("xAI", "grok-4", "xai/grok-4", "https://api.x.ai/v1"))
+    assert bought.label == "grok-4 at xAI"

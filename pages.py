@@ -539,39 +539,31 @@ def _badge_class(state: str, *, routed: bool = True) -> str:
     return _BADGE_CLASS.get(state, _BADGE_DEFAULT)
 
 
-def _dep_ident(dep) -> str:
-    """The key's display form: host:port for a box (the listen port), the base for a provider."""
-    if dep.vllm is not None or dep.api_base:
-        return dep.key.display
-    return dep.name
-
-
 def _dep_where(dep) -> edict:
-    """Where a deployment lives, for finding it: the provider and its name for the machine.
+    """The line under a deployment's label: what the rental is, beyond its name.
 
-    Our machines: the provider, the Rental's label (Vast's GPUs, RunPod's
-    pod name) and its id, "Vast · RTX 3060 x2 (53865410)" or "RunPod ·
-    llmao-qwen3-8b (6jqrsngxdor2mc)", with the provider's status after it
-    when that is not running ("..., exited"): listed, not running. A host
-    no provider lists says so, which is how a machine whose rental has
-    gone shows up. A model provider's deployment is its account name; its
-    endpoint is the row's identity.
+    The label already says the provider and id. This adds the Rental's own
+    label (Vast's GPUs, RunPod's pod name), the provider's status when that
+    is not running ("RTX 3060 x2, exited": listed, not running), and the
+    console link. A host no provider lists says so, which is how a machine
+    whose rental has gone shows up. A model provider's deployment needs no
+    line: "grok-4 at xAI" is the whole of it.
     """
     srv = dep.vllm
     if srv is None:
-        return edict(label=dep.provider or "", url="", unknown=ezt.boolean(False))
+        return edict(label="", url="", unknown=ezt.boolean(False))
     rental = srv.rental
     if rental is None:
         return edict(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
-    label = f"{rental.provider} · {rental.label} ({rental.id})"
+    label = rental.label
     if rental.status and not rental.running:
         label += f", {rental.status}"
     return edict(label=label, url=rental.url or "", unknown=ezt.boolean(False))
 
 
 def _dep_anchor(dep) -> str:
-    """DOM id of the deployment's row, e.g. dep-10-0-0-1-8001."""
-    return "dep-" + re.sub(r"[^A-Za-z0-9]+", "-", _dep_ident(dep)).strip("-")
+    """DOM id of the deployment's row, from its key, e.g. dep-10-0-0-1-8001."""
+    return "dep-" + re.sub(r"[^A-Za-z0-9]+", "-", dep.key.display).strip("-")
 
 
 def _needs_attention(lifecycle: str, skew, *, unlisted: bool = False) -> bool:
@@ -698,7 +690,7 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> 
     if dep is None:
         return actions
     target = dep.vllm.host if dep.vllm is not None else host
-    ident = _dep_ident(dep)
+    ident = dep.label
     port = str(dep.vllm.listen_port) if dep.vllm is not None else ""
     if dep.self_hosted and not dep.in_litellm:
         reason = add_refusal(dep) or ""
@@ -765,8 +757,8 @@ def attention_items(fleet) -> list:
         if not _needs_attention(view.lifecycle, dep.skew, unlisted=unlisted):
             continue
         host = dep.vllm.host if dep.vllm is not None else ""
-        ident = _dep_ident(dep)
-        rest = f"{dep.model_name} — {view.lifecycle.replace('_', ' ')}"
+        ident = dep.label
+        rest = view.lifecycle.replace("_", " ")
         reason = _deployment_reason(dep)
         if unlisted and view.lifecycle in (STALLED, UNHEALTHY, FOREIGN):
             # What to do about it: nothing in llmao clears a host that is gone.
@@ -785,7 +777,7 @@ def attention_items(fleet) -> list:
         items.append(
             edict(
                 kind=kind,
-                what=f"{ident} · {rest}",
+                what=f"{ident} is {rest}",
                 ident=ident,
                 anchor=_dep_anchor(dep),
                 rest=rest,
@@ -802,7 +794,7 @@ def attention_items(fleet) -> list:
         items.append(
             edict(
                 kind="skew",
-                what=f"{row.display} · {row.model_name} — {SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG]}",
+                what=f"{row.model_name} on {row.display} is {SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG]}",
                 ident="",
                 anchor="",
                 rest="",
@@ -816,17 +808,18 @@ def attention_items(fleet) -> list:
 
 def _unintended_what(machine) -> str:
     """One machine nobody intends: a rental when a provider reports it, else the stranger that asked."""
-    if machine.rental is not None:
-        return f"{machine.name} · rented, nobody intends it"
+    rental = machine.rental
+    if rental is not None:
+        return f"{rental.ident} ({rental.label}) is rented, nobody intends it"
     return f"Fleet key presented from {machine.name} (not in fleet.hosts)"
 
 
 def _unintended_detail(fleet, machine) -> str:
-    """What each source says: the provider's row and the probe's finding; the asks, when it asked."""
+    """What each source says: the probe's finding on the rental; the asks, when it asked."""
     parts = []
     rental = machine.rental
     if rental is not None:
-        parts.append(f"{rental.provider} · {rental.label} ({rental.id}) — {machine.finding}")
+        parts.append(machine.finding)
     if machine.fetch is not None:
         asked = fetch_detail(machine.fetch)
         parts.append(f"fleet key presented, {asked}" if rental is not None else asked)
@@ -1086,7 +1079,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 actions=actions,
                 primary=primary,
                 menu=menu,
-                ident=_dep_ident(dep) if admin else "",
+                ident=dep.label if admin else "",
                 where=_dep_where(dep) if admin else edict(label="", url="", unknown=ezt.boolean(False)),
                 anchor=_dep_anchor(dep) if admin else "",
                 external=ezt.boolean(not dep.self_hosted),
@@ -1141,8 +1134,8 @@ async def do_add_deployment():
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
-    ident_s = _dep_ident(matches[0])
-    await _done(ident, "add_deployment", ident_s, f"Added {matches[0].name} on {ident_s} to LiteLLM.")
+    label = matches[0].label
+    await _done(ident, "add_deployment", label, f"Added {label} to LiteLLM.")
     return _see_other("/models")
 
 
@@ -1176,8 +1169,8 @@ async def do_remove_deployment():
     except BackendUnavailableError as e:
         await flash_danger(str(e))
         return _see_other("/models")
-    ident_s = _dep_ident(matches[0])
-    await _done(ident, "remove_deployment", ident_s, f"Stopped tracking {matches[0].name} on {ident_s}.")
+    label = matches[0].label
+    await _done(ident, "remove_deployment", label, f"Stopped tracking {label}.")
     return _see_other("/models")
 
 

@@ -72,6 +72,17 @@ class Rental:
     def running(self) -> bool:
         return self.status == "running"
 
+    @property
+    def ident(self) -> str:
+        """How a page or a log line names the machine: the provider and its id, "Vast 53865410".
+
+        The one name that survives what a provider does to a machine: an
+        address changes when it is moved or restarted, and goes when the
+        rental ends. The label (its GPUs, a pod name), status and console
+        link are facts a page shows beside the name, not part of it.
+        """
+        return f"{self.provider} {self.id}"
+
 
 @dataclass(frozen=True)
 class ProviderRentals:

@@ -190,7 +190,7 @@ def test_a_runpod_rental_is_dialed_on_the_port_its_provider_maps(caplog):
         fleet.place_servers()
     assert srv.public_port == 16643
     assert srv.api_base == "http://203.0.113.20:16643/v1"
-    assert "runpod: qwen3-8b-8002@203.0.113.20 listen 8002 public 16643" in caplog.text
+    assert "runpod: qwen3-8b on 203.0.113.20:8002 public port 16643" in caplog.text
     # Stopped: no map. The last port stands, and nothing is said.
     caplog.clear()
     fleet.runpod_rentals = _reported(_rental(0.89, provider="RunPod", id="p", host="", status="exited"))
@@ -208,7 +208,7 @@ def test_a_runpod_rental_is_dialed_on_the_port_its_provider_maps(caplog):
     fleet.runpod_rentals = _reported(_rental(2.49, provider="RunPod", id="p", host="203.0.113.20", ports={"22": 10341}))
     with caplog.at_level("WARNING", logger="llmao.fleet"):
         fleet.place_servers()
-    assert "runpod: no public port for qwen3-8b-8002@203.0.113.20 listen 8002" in caplog.text
+    assert "runpod: no public port for qwen3-8b on RunPod p:8002" in caplog.text
     assert srv.public_port == 17001
 
 

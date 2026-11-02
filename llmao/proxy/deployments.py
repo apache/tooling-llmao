@@ -297,15 +297,15 @@ class DeploymentManager:
         snapshot = await self.fetch_deployments()
         self.fleet.update_litellm_deployments(snapshot)
         if snapshot.has(key):
-            _LOGGER.info("model/new already present %s@%s", dep.name, key.display)
+            _LOGGER.info("model/new already present %s", dep.label)
             return False
         body = self.deployment_body(dep)
         resp = await self._transport.request("POST", "model/new", json=body)
         if resp.status_code in (400, 409):
-            _LOGGER.info("model/new already present %s@%s", dep.name, key.display)
+            _LOGGER.info("model/new already present %s", dep.label)
         else:
             self._transport.raise_http(resp)
-            _LOGGER.info("model/new %s@%s", dep.name, key.display)
+            _LOGGER.info("model/new %s", dep.label)
         await self._confirm()
         return True
 
@@ -323,12 +323,12 @@ class DeploymentManager:
         self.fleet.update_litellm_deployments(snapshot)
         ids = [row.id for row in snapshot.under(key) if row.id]
         if not ids:
-            _LOGGER.warning("model/delete: no LiteLLM id for %s@%s", dep.name, key.display)
+            _LOGGER.warning("model/delete: no LiteLLM id for %s", dep.label)
             return False
         for found in ids:
             resp = await self._transport.request("POST", "model/delete", json={"id": found})
             self._transport.raise_http(resp)
-            _LOGGER.info("model/delete %s@%s id=%s", dep.name, key.display, found)
+            _LOGGER.info("model/delete %s id=%s", dep.label, found)
         await self._confirm()
         return True
 
@@ -343,7 +343,7 @@ class DeploymentManager:
         try:
             wrote = await action(dep.key)
         except Exception as e:
-            _LOGGER.exception("%s failed for %s@%s", action.__name__, dep.name, dep.key.display)
+            _LOGGER.exception("%s failed for %s", action.__name__, dep.label)
             # Kept for /models, which otherwise shows only that it is missing.
             dep.litellm_error = str(e) or type(e).__name__
             dep.litellm_error_at = time.time()

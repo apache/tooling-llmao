@@ -15,13 +15,13 @@
       [for attention]
       <li class="mb-2">
         [if-any attention.anchor]
-        <a href="#[attention.anchor]" class="font-monospace js-dep-link">[attention.ident]</a>
-        · [attention.rest]
+        <a href="#[attention.anchor]" class="js-dep-link">[attention.ident]</a>
+        is [attention.rest][if-any attention.detail]:[end]
         [else]
-        [attention.what]
+        [attention.what][if-any attention.detail]:[end]
         [end]
         [if-any attention.detail]
-        <span class="text-muted">— [attention.detail]</span>
+        <span class="text-muted">[attention.detail]</span>
         [end]
         [if-any attention.flag]
         <span class="text-muted ms-1">[attention.flag]</span>
@@ -159,7 +159,7 @@
       <div class="dep-grid">
         <div class="dep-state"><span class="badge [models.deployments.badge_class]">[models.deployments.state]</span></div>
         <div class="dep-ident small">
-          <span class="font-monospace">[models.deployments.ident]</span>
+          <span class="fw-semibold">[models.deployments.ident]</span>
           [if-any models.deployments.where.label]
           <div class="dep-where[if-any models.deployments.where.unknown] text-warning-emphasis[else] text-muted[end]">
             [if-any models.deployments.where.url]<a href="[models.deployments.where.url]" class="link-secondary" target="_blank" rel="noopener">[models.deployments.where.label]</a>[else][models.deployments.where.label][end]

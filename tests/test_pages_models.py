@@ -389,7 +389,7 @@ def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_trackin
     assert pages.attention_items(fleet) == []
     _orphan(fleet, ORPHAN_PASSES)
     (item,) = pages.attention_items(fleet)
-    assert item.what == "198.51.100.9:18490 · gemma — in LiteLLM, not in config"
+    assert item.what == "gemma on 198.51.100.9:18490 is in LiteLLM, not in config"
     assert item.detail == "not added by llmao; someone added it in LiteLLM"
     assert [a.label for a in item.actions] == ["Stop tracking"]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=[item], admin=True)
@@ -474,11 +474,11 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
     fleet.provisioning.fetches["pod-1"] = ConfigFetch("pod-1", time.time() - 100, time.time() - 5, 3)
     items = pages.attention_items(fleet)
     assert [i.what for i in items] == [
-        "pod-1 · rented, nobody intends it",
-        "1 · rented, nobody intends it",
+        "RunPod pod-1 (llmao-q) is rented, nobody intends it",
+        "Vast 1 (1x RTX 4090) is rented, nobody intends it",
     ]
-    assert items[0].detail == "RunPod · llmao-q (pod-1) — nothing listening; fleet key presented, seen 5s · 3 requests"
-    assert items[1].detail == "Vast · 1x RTX 4090 (1) — 8001: serving gemma with our key"
+    assert items[0].detail == "nothing listening; fleet key presented, seen 5s · 3 requests"
+    assert items[1].detail == "8001: serving gemma with our key"
     # Approve is by the name the box sends: the provider's id for the machine.
     assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
@@ -523,7 +523,7 @@ def test_drill_down_renders_add_and_remove_actions():
     # Exactly one enabled Add (the healthy box not yet in LiteLLM) posts the row.
     assert out.count("/do-add-deployment") == 1
     assert 'name="host" value="10.0.0.2"' in out
-    assert 'aria-label="Add 10.0.0.2:8001"' in out
+    assert 'aria-label="Add gemma on 10.0.0.2:8001"' in out
     # The yellow badge says why, and Add says what it does.
     assert "Not in LiteLLM yet, so no traffic. llmao adds it on its next pass; Add does it now." in out
     assert 'title="Register this server in LiteLLM now, so it gets traffic"' in out
@@ -532,7 +532,7 @@ def test_drill_down_renders_add_and_remove_actions():
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="10.0.0.3"' in out
     assert "Stop tracking" in out
-    assert 'data-confirm="Stop tracking 10.0.0.3:8001?' in out
+    assert 'data-confirm="Stop tracking gemma on 10.0.0.3:8001?' in out
 
     # Actions that do not apply are not rendered in the Deployments list.
     assert "disabled" not in out
@@ -570,8 +570,8 @@ def test_two_ports_on_one_host_are_two_deployments():
     fleet = _fleet(up, down, also_down)
 
     items = pages.attention_items(fleet)
-    assert [i.ident for i in items] == ["10.0.0.9:8003", "10.0.0.9:8005"]
-    assert items[0].what == "10.0.0.9:8003 · qwen — unhealthy"
+    assert [i.ident for i in items] == ["qwen on 10.0.0.9:8003", "gemma on 10.0.0.9:8005"]
+    assert items[0].what == "qwen on 10.0.0.9:8003 is unhealthy"
     assert items[0].anchor == "dep-10-0-0-9-8003"
 
     rows = pages.deployment_rows(fleet, admin=True)
@@ -780,12 +780,15 @@ def test_each_deployment_says_where_to_find_it():
     )
     rows = pages.model_catalog_rows(_fleet(vast, runpod, lost), [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
+    # The label names the rental; the line under it says what the rental is.
+    assert "gemma on Vast 53865410:8001" in out
     assert '<a href="https://cloud.vast.ai/instances/"' in out
-    assert "Vast · RTX 3060 x2 (53865410)</a>" in out
+    assert "RTX 3060 x2</a>" in out
     # No link for RunPod yet; the pod is named so it can be found. Listed,
-    # not running: the provider's status follows the name.
-    assert "RunPod · llmao-qwen3-8b (6jqrsngxdor2mc), exited" in out
-    assert "RunPod · llmao-qwen3-8b (6jqrsngxdor2mc), exited</a>" not in out
+    # not running: the provider's status follows the label.
+    assert "gemma on RunPod 6jqrsngxdor2mc:8001" in out
+    assert "llmao-qwen3-8b, exited" in out
+    assert "llmao-qwen3-8b, exited</a>" not in out
     # A host no provider lists stands out.
     assert "location unknown: no provider lists this host" in out
     assert "text-warning-emphasis" in out
@@ -816,7 +819,7 @@ def test_an_unlisted_host_says_why_and_is_work_needed():
     fleet = _fleet(gone)
     reason = "No Vast or RunPod instance has this address; the rental may have ended."
     assert pages._deployment_reason(fleet.deployments[0]) == reason
-    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "gemma on 10.0.0.9:8001"]
     assert item.kind == "unlisted"
     assert item.detail == reason + " If so, remove it from fleet.hosts."
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
@@ -842,7 +845,7 @@ def test_an_unlisted_host_still_serving_gets_no_remove_sentence():
     srv = _server("gemma", host="10.0.0.9", ok=True)
     srv.unlisted = True
     fleet = _fleet(srv)
-    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "gemma on 10.0.0.9:8001"]
     assert item.kind == "unlisted"
     assert item.detail == "No Vast or RunPod instance has this address, but it is serving; the listing may be behind."
     assert pages.admin_actions(fleet, fleet.deployments[0]) == []
@@ -863,12 +866,12 @@ def test_an_unlisted_host_never_reached_gets_the_sentence_once_the_grace_is_out(
     reason = "No Vast or RunPod instance has this address; the rental may have ended."
 
     _record(srv, False, now=time.time() - 60, grace_s=1800, fail_threshold=3, err="no connection", reached=False)
-    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "gemma on 10.0.0.9:8001"]
     assert "awaiting" in item.rest
     assert item.detail == reason
 
     srv.first_probed_at = time.time() - 1801
-    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "gemma on 10.0.0.9:8001"]
     assert "stalled" in item.rest
     assert item.detail == reason + " If so, remove it from fleet.hosts."
 
@@ -883,7 +886,7 @@ def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
     fleet = _fleet(srv)
     dep = fleet.deployments[0]
     dep.litellm = ()  # the first 401 dropped it
-    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "gemma on 10.0.0.9:8001"]
     assert item.kind == "rejected"
     assert "rejected" in item.rest
     assert (
@@ -897,7 +900,7 @@ def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
     for n in (1, 2, 3):
         _record(srv, True, now=time.time() + n, grace_s=1800, fail_threshold=3, key_rejected=True)
     assert srv.state == FOREIGN
-    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "10.0.0.9:8001"]
+    (item,) = [i for i in pages.attention_items(fleet) if i.ident == "gemma on 10.0.0.9:8001"]
     assert item.kind == "unlisted"
     assert item.detail == (
         "No Vast or RunPod instance has this address, and the vLLM there rejects our key; "

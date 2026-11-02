@@ -154,11 +154,11 @@ def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
         return
     public = by_listen.get(str(srv.listen_port))
     if public is None:
-        _LOGGER.warning("%s: no public port for %s@%s listen %s", source, srv.name, srv.host, srv.listen_port)
+        _LOGGER.warning("%s: no public port for %s", source, srv.label)
         return
     public = int(public)
     if srv.public_port != public:
-        _LOGGER.info("%s: %s@%s listen %s public %s", source, srv.name, srv.host, srv.listen_port, public)
+        _LOGGER.info("%s: %s public port %s", source, srv.label, public)
         srv.public_port = public
 
 
@@ -410,6 +410,21 @@ class VllmServer:
         return deployment_key(self.model_name, host=self.host, listen_port=self.listen_port)
 
     @property
+    def label(self) -> str:
+        """How a page or a log line names this server: the model, then where it runs.
+
+        "qwen3-8b on Vast 53865410:8001". The rental's provider and id
+        (Rental.ident) are the stable part: an address changes when the
+        provider moves the machine, and is gone once the rental ends.
+        Before a provider's report places the server, the host it was
+        configured under stands in, which for a named box is already the
+        provider's id and for a legacy box is its address. The key stays
+        the identity for joining records; this is what people read.
+        """
+        where = self.rental.ident if self.rental is not None else self.host
+        return f"{self.model_name} on {where}:{self.listen_port}"
+
+    @property
     def root_url(self) -> str | None:
         if self.public_port is None or self.address is None:
             return None
@@ -500,13 +515,13 @@ class VllmServer:
         )
         self.state = self_hosted_lifecycle(snap, cfg, now)
         if self.state == HEALTHY and was != HEALTHY:
-            _LOGGER.info("fleet server %s@%s healthy", self.name, self.key.display)
+            _LOGGER.info("fleet server %s healthy", self.label)
         elif self.state in (UNHEALTHY, STALLED) and was not in (UNHEALTHY, STALLED):
-            _LOGGER.warning("fleet server %s@%s %s (%s)", self.name, self.key.display, self.state, self.last_error)
+            _LOGGER.warning("fleet server %s %s (%s)", self.label, self.state, self.last_error)
         elif self.state == REJECTED and was != REJECTED:
-            _LOGGER.warning("fleet server %s@%s up but rejects our key", self.name, self.key.display)
+            _LOGGER.warning("fleet server %s up but rejects our key", self.label)
         elif self.state == FOREIGN and was != FOREIGN:
-            _LOGGER.warning("fleet server %s@%s foreign: unlisted and rejects our key", self.name, self.key.display)
+            _LOGGER.warning("fleet server %s foreign: unlisted and rejects our key", self.label)
 
 
 # What a deployment's cost figure means, when it is not simply money owed.
@@ -588,6 +603,18 @@ class FleetDeployment:
         if self.vllm is not None:
             return self.vllm.key
         return deployment_key(self.model_name, api_base=self._api_base)
+
+    @property
+    def label(self) -> str:
+        """How a page or a log line names the deployment: the model, then where.
+
+        Our own: the server's label, "qwen3-8b on Vast 53865410:8001". A
+        provider's: "grok-4 at xAI". One spelling for the attention strip,
+        the Deployments rows, the flashes, the action log and the log lines.
+        """
+        if self.vllm is not None:
+            return self.vllm.label
+        return f"{self.model_name} at {self.provider}"
 
     @property
     def api_base(self) -> str | None:
@@ -892,7 +919,7 @@ class Fleet:
             fresh = [badge for badge in view.skew if badge not in dep.skew]
             dep.skew = list(view.skew)
             for badge in fresh:
-                _LOGGER.warning("skew: %s@%s %s", dep.name, dep.key.display, SKEW_PHRASE[badge])
+                _LOGGER.warning("skew: %s %s", dep.label, SKEW_PHRASE[badge])
 
     def _materialize_approved(self, host: str) -> None:
         """Servers and deployments for an approved IP that config.yaml does not list.
