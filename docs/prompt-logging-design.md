@@ -94,8 +94,8 @@ body is thrown away.
 
 | Step | What | State |
 |---|---|---|
-| H1 | The apparatus, with the probe as its body; `litellm.yaml.example` names the callback | planned |
-| H2 | The probe's answers written into "No opt-out"; the probe body removed | planned |
+| H1 | The apparatus, with the probe as its body; `litellm.yaml.example` names the callback | done 2026-11-01 |
+| H2 | The probe's answers written into "No opt-out"; the pre-call strip (N5, pulled forward: two switches reached us); `bin/check-no-log.py` kept for upgrades. The probe body stays until N3 replaces it | done 2026-11-01 |
 
 ### Track L: gathered from LiteLLM, for capacity planning
 
@@ -120,7 +120,7 @@ Nothing here waits for the review.
 | N2 | The writer: the loguru sink or what replaces it; directory, naming, rotation, compression, retention | "Files", decision 12 |
 | N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | N1, N2 |
 | N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | N2 |
-| N5 | The pre-call strip of `no-log` and `turn_off_message_logging` | H2, "No opt-out" |
+| N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
 | N6 | Terms of Service page, footer link, STATUS.md data handling rewritten; the retention number | decision 4, "Access", "The terms page" |
 | N7 | The reports in `bin/llmao-prompt-log` | N4 |
 | N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
@@ -201,16 +201,34 @@ Users cannot opt out of their prompts being recorded. Logging is a
 condition of use, stated in the terms, and no request parameter switches
 it off.
 
-LiteLLM has two per-request switches that would otherwise do exactly
-that: `no-log`, which skips every callback for the request, and
-`turn_off_message_logging`, which hands callbacks the message
-`redacted-by-litellm` in place of the prompt. Whether a client can set
-either through the proxy, as opposed to only through the SDK, is what
-step 6 checks on the running proxy. If a client can, we disable the
-feature on our side: the hook's `async_pre_call_hook` removes both
-parameters from every request before LiteLLM reads them, so the request
-is logged like any other. Nothing is rejected and the client is not told;
-the parameters simply have no effect here.
+LiteLLM has per-request switches that would otherwise do exactly that.
+Measured on the pinned 1.105.0, through a local proxy with the hook
+loaded and `bin/check-no-log.py` sending one request per switch
+(2026-11-01):
+
+| A client sends | What happened |
+|---|---|
+| `"no-log": true` in the body, streamed or not | every logging callback skipped, ours included; the pre-call hook still ran |
+| `"no-log": true` inside `metadata` | nothing; logged normally |
+| the header `litellm-enable-message-redaction: true`, or `x-litellm-enable-message-redaction: true` | the event fired with every message replaced by `redacted-by-litellm` |
+| `turn_off_message_logging` in the body, `metadata` or `litellm_metadata` | rejected by the proxy with a 401 before any hook ran |
+| the header `x-litellm-disable-callbacks` | ignored; it needs a premium licence |
+
+So two switches reach us. The hook's `async_pre_call_hook` removes the
+`no-log` field and both redaction headers from every request before
+LiteLLM reads them, and the request is logged like any other. Nothing is
+rejected and the client is not told; the switches simply have no effect
+here. The proxy's own log gets a WARNING naming the user, the key, the
+team and what was sent, so an attempt is visible to the admins even
+though it is invisible to the client. `litellm.yaml` also sets
+`global_disable_no_log_param: true`,
+LiteLLM's own switch for `no-log`; the strip is the one we control, and
+holds on its own (measured with the setting off).
+
+`bin/check-no-log.py` is kept for the next LiteLLM upgrade: it runs the
+same cases against any live proxy and reads the log back. A case that
+starts failing is a hole in the terms, and a case the proxy stops
+rejecting must then be logged like the rest.
 
 ## The record
 
