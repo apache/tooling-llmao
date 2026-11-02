@@ -70,6 +70,84 @@ def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, re
     return buf.getvalue()
 
 
+def test_capacity_page_renders_demand_beside_the_boxes():
+    """The template with one model's demand, from rows shaped like LiteLLM's, must render.
+
+    A template error would otherwise show up as a 500 on /admin/capacity.
+    """
+    import datetime as dt
+
+    import asfquart
+
+    from llmao.capacity import fold_demand, summarise_demand
+
+    if asfquart.APP is None:
+        asfquart.construct(
+            "llmao", app_dir=str(THIS_DIR), cfg_file="config.yaml.example", oauth=False, force_login=False
+        )
+    import pages
+
+    day = dt.date(2026, 11, 1)
+    spend = [
+        edict(
+            startTime=f"{day}T09:10:00.000+00:00",
+            model_group="gemma4-26b",
+            status=status,
+            prompt_tokens=580,
+            completion_tokens=46,
+            request_duration_ms=600,
+            metadata=edict(user_api_key_team_alias="spark", user_agent="OpenAI/Python 1.109.1", error_information=err),
+        )
+        for status, err in (("success", None), ("failure", edict(normalized_error="429_RATE_LIMIT_EXCEEDED")))
+    ]
+    summary = summarise_demand(fold_demand(day, spend), today=day, period_days=7)
+    data = edict(
+        title="Capacity",
+        is_site_admin=ezt.boolean(True),
+        nav="admin",
+        login_back="/admin/capacity",
+        restarted_at="",
+        reveal_supply=False,
+        uid="u@example.apache.org",
+        name="N",
+        can_create_automation=ezt.boolean(False),
+        projects=[],
+        projects_label=None,
+        admin_projects=[],
+        flashes=[],
+        notices=[],
+        work=None,
+        repo="https://github.com/apache/tooling-llmao",
+        commit="deadbeef",
+        period_days=7,
+        periods=[edict(days=7, active=ezt.boolean(True))],
+        fleet_cost_per_day="$0.00",
+        fleet_tokens_per_day="0",
+        spend_month_to_date="$0.00",
+        spend_projected="$0.00",
+        unpriced_hours=None,
+        capacity_down=ezt.boolean(False),
+        models=[],
+        demand_down=ezt.boolean(False),
+        demand=[pages._demand_model_row(m) for m in summary],
+        spend_down=ezt.boolean(False),
+        providers=[],
+    )
+    buf = io.StringIO()
+    template = ezt.Template(
+        str(THIS_DIR / "templates" / "capacity.ezt"), compress_whitespace=0, base_format=ezt.FORMAT_HTML
+    )
+    template.generate(buf, data)
+    out = buf.getvalue()
+    assert "What was asked" in out
+    assert "<code>gemma4-26b</code>" in out
+    assert "2 requests/day" in out
+    assert "spark" in out and "OpenAI" in out
+    assert "429_RATE_LIMIT_EXCEEDED" in out
+    assert "text-danger" in out  # half the requests refused is a warning
+    assert "0.6s typical" in out
+
+
 def test_admin_drops_models_and_shows_a_version_match():
     pin = pinned_litellm_version()
     out = _render(running=pin, expected=pin)

@@ -44,7 +44,7 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.access_requests import APPROVAL_TTL_DAYS
 from llmao.auth import current_identity
-from llmao.capacity import days_to_read, summarise_capacity, summarise_spend
+from llmao.capacity import days_to_read, summarise_capacity, summarise_demand, summarise_spend
 from llmao.fleet import (
     ORPHAN_PASSES,
     add_refusal,
@@ -1803,6 +1803,16 @@ async def admin_capacity(result):
     result.fleet_tokens_per_day = _tokens_h(int(fleet.tokens_per_day))
     result.unpriced_hours = fleet.unpriced_hours or None
 
+    # Demand: the same hours from the other side, what was asked of each
+    # model. Read on its own as well, so an empty answer is its own notice.
+    try:
+        demand_rows = await APP.capacity.read_demand(days)
+        result.demand_down = ezt.boolean(False)
+    except BackendUnavailableError:
+        demand_rows = []
+        result.demand_down = ezt.boolean(True)
+    result.demand = [_demand_model_row(m) for m in summarise_demand(demand_rows, today=today, period_days=days)]
+
     try:
         spent = await APP.backend.metering.provider_spend(days_to_read(days, today))
         result.spend_down = ezt.boolean(False)
@@ -1834,6 +1844,41 @@ def _bars(series: list, fmt) -> list:
         )
         for p in series
     ]
+
+
+def _seconds_h(value) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.1f}s" if value < 10 else f"{value:.0f}s"
+
+
+def _demand_model_row(m) -> edict:
+    """One model's demand over the period, for the template."""
+
+    def shares(items, top=6):
+        return [
+            edict(name=i.name, requests=f"{i.requests:,}", prompt_tokens=_tokens_h(i.prompt_tokens))
+            for i in items[:top]
+        ]
+
+    return edict(
+        model=m.model,
+        days=m.days,
+        requests=f"{m.requests:,}",
+        requests_per_day=f"{m.requests_per_day:,.0f}",
+        prompt_tokens=_tokens_h(m.prompt_tokens),
+        completion_tokens=_tokens_h(m.completion_tokens),
+        refused_total=f"{m.refused_total:,}",
+        refused_pct=_pct(m.refused_total / m.requests) if m.requests else 0,
+        refused_hot=ezt.boolean(m.requests > 0 and m.refused_total / m.requests >= 0.05),
+        refused=[edict(name=r.name, count=f"{r.count:,}") for r in m.refused[:6]],
+        by_project=shares(m.by_project),
+        by_tool=shares(m.by_tool),
+        prompt_len=[edict(name=b.name, count=f"{b.count:,}") for b in m.prompt_len],
+        duration_p50=_seconds_h(m.duration_p50_s),
+        duration_p95_worst=_seconds_h(m.duration_p95_worst_s),
+        request_bars=_bars(m.daily_requests, lambda v: f"{int(v):,} requests"),
+    )
 
 
 def _capacity_model_row(m) -> edict:
