@@ -294,6 +294,53 @@ def test_every_page_is_read():
 # ---------------------------------------------------------------------------
 
 
+def _spend_log_rows(day, n):
+    """n spend-log rows begun on `day`, an hour apart, as /spend/logs/v2 returns them."""
+    return [
+        {"request_id": f"r{i}", "startTime": f"{day}T{i % 24:02d}:10:00.000+00:00", "model_group": "gemma4-26b"}
+        for i in range(n)
+    ]
+
+
+def _spend_log_backend(rows, page_size):
+    def answer(call):
+        assert call.path == "spend/logs/v2"
+        p = call.params
+        # LiteLLM bounds on startTime between the two midnights, both inclusive.
+        hits = [r for r in rows if f"{p.start_date}T00:00:00.000" <= r["startTime"] <= f"{p.end_date}T00:00:00.000"]
+        first = (p.page - 1) * p.page_size
+        pages = (len(hits) + p.page_size - 1) // p.page_size
+        return {"data": hits[first : first + p.page_size], "total": len(hits), "page": p.page, "total_pages": pages}
+
+    b = UsageManager(FakeTransport(answer), None, _Teams(), _Tiers(7))
+    b._SPEND_LOG_PAGE_SIZE = page_size
+    return b
+
+
+def test_spend_log_reads_one_closed_day_page_by_page():
+    """The single reader of the spend log: both dates sent, every page, nothing else."""
+    rows = _spend_log_rows(YESTERDAY, 5) + _spend_log_rows(TODAY, 2)
+    b = _spend_log_backend(rows, page_size=2)
+    got = _run(b.spend_log(dt.date(2026, 10, 11)))
+    assert [r.request_id for r in got] == ["r0", "r1", "r2", "r3", "r4"]
+    assert _asked(b) == [
+        ("spend/logs/v2", {"start_date": YESTERDAY, "end_date": TODAY, "page": p, "page_size": 2}) for p in (1, 2, 3)
+    ]
+
+
+def test_spend_log_drops_a_request_begun_at_the_next_midnight():
+    """The endpoint's end bound is inclusive; a row at exactly 00:00 belongs to the next day."""
+    rows = [*_spend_log_rows(YESTERDAY, 1), {"request_id": "edge", "startTime": f"{TODAY}T00:00:00.000+00:00"}]
+    b = _spend_log_backend(rows, page_size=1000)
+    assert [r.request_id for r in _run(b.spend_log(dt.date(2026, 10, 11)))] == ["r0"]
+
+
+def test_spend_log_of_a_quiet_day_is_empty():
+    b = _spend_log_backend([], page_size=1000)
+    assert _run(b.spend_log(dt.date(2026, 10, 11))) == []
+    assert len(_asked(b)) == 1
+
+
 def test_the_first_read_asks_for_exactly_the_week():
     b = _usage(WEEK)
     _run(b._spend_rows())

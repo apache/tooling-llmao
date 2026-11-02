@@ -942,6 +942,45 @@ class UsageManager:
             page += 1
         return groups_out, models_out
 
+    _SPEND_LOG_PAGE_SIZE = 1000
+
+    async def spend_log(self, day: _dt.date) -> list[edict]:
+        """Every request LiteLLM logged on one UTC day, as LiteLLM stores it.
+
+        One row per request, from /spend/logs/v2, page by page. The older
+        /spend/logs is not used: it caps the answer at 10,000 rows, and
+        with a single date returns the most recent rows instead (the trap
+        _daily_rows documents). This is the one reader of the spend log;
+        the demand rollup (llmao/capacity.py) asks it for each closed day
+        once and keeps what it needs in the store.
+
+        The endpoint's bounds are inclusive at both ends, so a request
+        begun exactly at the next midnight is dropped here rather than
+        counted on two days.
+        """
+        start = day.isoformat()
+        end = (day + _dt.timedelta(days=1)).isoformat()
+        rows: list[edict] = []
+        page = 1
+        while True:
+            resp = await self._transport.request(
+                "GET",
+                "spend/logs/v2",
+                params={"start_date": start, "end_date": end, "page": page, "page_size": self._SPEND_LOG_PAGE_SIZE},
+            )
+            self._transport.raise_http(resp)
+            body = resp.json()
+            if not isinstance(body, dict):
+                break
+            for row in body.get("data") or []:
+                if isinstance(row, dict) and str(row.get("startTime") or "")[:10] == start:
+                    rows.append(edict(row))
+            if page >= int(body.get("total_pages") or 0):
+                break
+            page += 1
+        _LOGGER.info("spend log: %s, %d rows in %d pages", start, len(rows), page)
+        return rows
+
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
         """A principal's rolling allowance, derived from recorded usage.
 
