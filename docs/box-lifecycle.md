@@ -82,7 +82,7 @@ stateDiagram-v2
 
     [*] --> Awaiting: server created from fleet.hosts or an approval
 
-    Awaiting --> Loading: config fetched (loading start)
+    Awaiting --> Loading: config fetched, or a probe reached vLLM (a loading start)
     Awaiting --> Healthy: ok, key accepted
     Awaiting --> Rejected: ok, 401
     Awaiting --> Unhealthy: no loading start, in LiteLLM, probe failed
@@ -92,19 +92,17 @@ stateDiagram-v2
     Loading --> Rejected: ok, 401
     Loading --> Stalled: grace since loading start, never ok
 
-    Healthy --> Unhealthy: threshold failures (loading started)
-    Healthy --> Unhealthy: one failure (no loading start, in LiteLLM)
-    Healthy --> Awaiting: one failure (no loading start, not in LiteLLM)
+    Healthy --> Unhealthy: threshold failures
     Healthy --> Rejected: ok, 401 (when asked)
 
     Unhealthy --> Healthy: ok, key accepted
     Unhealthy --> Rejected: ok, 401
-    Unhealthy --> Awaiting: deployment deleted (no loading start)
+    Unhealthy --> Awaiting: deployment deleted (no loading start, inside the grace)
+    Unhealthy --> Stalled: deployment deleted (no loading start, grace since first attempt)
 
     Stalled --> Healthy: ok, key accepted
     Stalled --> Rejected: ok, 401
-    Stalled --> Loading: config fetched (loading start)
-    Stalled --> Awaiting: reached at last (no loading start)
+    Stalled --> Loading: config fetched, or reached at last (a loading start)
 
     Rejected --> Healthy: 200
     Rejected --> Foreign: unlisted and REJECTED_PASSES passes refused
@@ -119,6 +117,13 @@ A failed probe also resets `rejected_passes`, so after the hold-over a
 box that still refuses the key is Rejected again and needs three more
 refused passes to read Foreign. Unhealthy is reached from Rejected or
 Foreign only through the hold-over: three failures running.
+
+A Healthy, Rejected or Foreign server always has a loading start: a 200
+from `/health` is an answer, so `first_reached_at` is set by the probe
+that got it. That is why only the threshold takes Healthy to Unhealthy,
+and why a Stalled server that is reached at last goes to Loading, never
+back to Awaiting. The one-failure Unhealthy and the no-start Stalled are
+reachable only from Awaiting, before anything has answered.
 
 The loading start matters more than the diagram can show: the same observation
 names a different state depending on whether loading has started
