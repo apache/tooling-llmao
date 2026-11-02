@@ -14,7 +14,7 @@ install:
 db: install
 	uv run python bin/setup_litellm_db.py
 
-# Vendor Bootstrap + icons into static/ (see bin/fetch-thirdparty.sh).
+# Vendor Bootstrap, icons and Apache ECharts into static/ (see bin/fetch-thirdparty.sh).
 thirdparty:
 	./bin/fetch-thirdparty.sh
 

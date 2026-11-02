@@ -224,7 +224,7 @@ main.py                  entry: create_app, run_standalone / run_asgi
 pages.py                 HTML + /static
 api.py                   JSON /healthz, /vllm/config, /v1/*
 templates/ static/       EZT + Bootstrap
-bin/fetch-thirdparty.sh  vendor Bootstrap/icons
+bin/fetch-thirdparty.sh  vendor Bootstrap, icons, Apache ECharts
 bin/gen-litellm-master-key.sh   print sk-… for admin key
 bin/llmao-smoke          end-to-end checks across every model
 bin/llmao-saturate       concurrency ramp; finds the queueing point
