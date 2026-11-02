@@ -34,13 +34,15 @@ Made 2026-11-01. Each is a choice, recorded so it is not re-derived.
    service that cannot do what its config says does not start.
 8. **The numbers the post-process needs are in `config.yaml`,** beside the
    other retention settings.
-9. **The post-process feeds capacity planning.** It rolls the log up into
-   demand rows, one per model per hour, written into the store the
-   capacity page already reads. LiteLLM's spend data stays the truth for
-   tokens and money; the log supplies what only it has, and one
+9. **Demand rows feed capacity planning.** One row per model per hour,
+   in the store the capacity page already reads, built once a day from a
+   single reader of LiteLLM's spend log; everything LiteLLM has that the
+   rows might need moves into the store then. LiteLLM's spend data stays
+   the truth for tokens and money; the log fills only the gaps, and one
    reconciliation figure compares the two.
-10. **No cron.** An llmao runner spawns the post-process as a subprocess
-    on its own schedule. Scheduling is config.yaml, not Puppet.
+10. **No cron.** One llmao runner, daily, does the rollup and spawns the
+    log's post-process as a subprocess for the same day. Scheduling is
+    config.yaml, not Puppet.
 11. **Parked: a Usage Analysis page** for admins in place of reading the
     script's output. The demand rows are shaped as that page's input now,
     so it is a second reader later, not a second pipeline.
@@ -106,8 +108,8 @@ Nothing here waits for the review.
 | Step | What | State |
 |---|---|---|
 | L1 | The real daily prompt-token figure, from the capacity rows, replaces the Size paragraph's assumption | planned |
-| L2 | A per-request reader of LiteLLM's spend log in `llmao/proxy/client.py`, beside the daily reader: a day at a time with both dates sent, closed days kept, bucketed by hour here | planned |
-| L3 | The demand rows: key layout, write, read, prune in `CapacityStore` and `CapacityPruner`; the rollup from spend rows to demand rows, the log-only fields left empty | planned |
+| L2 | The single reader of `/spend/logs/v2` in `llmao/proxy/client.py`, beside the daily reader: one closed UTC day, page by page | planned |
+| L3 | The demand rows: key layout, write, read, prune in `CapacityStore` and `CapacityPruner`; the fold from a day of spend rows to 24 demand rows per model, carrying everything LiteLLM has that the rows might need; the `demand-rollup` runner, daily at 01:00 UTC and at start, which rolls up every closed day the store lacks | planned |
 | L4 | The demand tables on `/admin/capacity`, and the LiteLLM side of the reconciliation figure | planned |
 
 ### Track N: the new data, after review
@@ -117,7 +119,7 @@ Nothing here waits for the review.
 | N1 | The record: which fields, and the content (`messages`, `params`, `finish_reason`) | decision 2, "The record" |
 | N2 | The writer: the loguru sink or what replaces it; directory, naming, rotation, compression, retention | "Files", decision 12 |
 | N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | N1, N2 |
-| N4 | The reader: day files plain and compressed, the cursor, `rollup --json`; the log-only fields of the demand rows and the log side of the reconciliation; the `demand-rollup` runner and its spawn helper | N2 |
+| N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | N2 |
 | N5 | The pre-call strip of `no-log` and `turn_off_message_logging` | H2, "No opt-out" |
 | N6 | Terms of Service page, footer link, STATUS.md data handling rewritten; the retention number | decision 4, "Access", "The terms page" |
 | N7 | The reports in `bin/llmao-prompt-log` | N4 |
@@ -301,25 +303,27 @@ one query away and should replace this paragraph.
 Two files with two names, because they are two concerns:
 
 - **`llmao/prompt_log.py`, the module:** where the work lives. The
-  record's field names, the file name pattern, reading day files plain
-  and compressed, the rollup, the cursor. It imports nothing heavy, not
-  even loguru, because the hook imports it too, inside the proxy
-  process, for the record definition and the file naming.
+  record's field names, the file name pattern, reading a day file plain
+  or compressed, the rollup of a day, and `rollup_day(day)`, which the
+  runner calls: it spawns the tool as a child for that day and parses
+  the JSON it prints. It imports nothing heavy, not even loguru,
+  because the hook imports it too, inside the proxy process, for the
+  record definition and the file naming.
 - **`bin/llmao-prompt-log`, the tool:** argparse over the module, named
   like the other admin tools in `bin/` (`llmao-fleet`, `llmao-budget`).
   It never opens a connection to LiteLLM, and never writes in the log
   directory.
 
-The dependency runs one way: the tool and the hook import the module,
-and the module imports neither.
+The dependency runs one way: the tool, the hook and `capacity.py` (for
+`rollup_day`) import the module, and the module imports none of them.
 
 The tool has two subcommands:
 
-1. **`rollup --json`:** read from a cursor forward and print one JSON
-   document to stdout: the demand rows for every finished hour, and the
-   new cursor. The cursor is a day file and a byte offset, so an hourly
-   run reads only what was appended since, a compressed day is read once,
-   and a restart or a day of downtime backfills by itself.
+1. **`rollup --json <day>`:** read that day's file, plain or compressed,
+   and print one JSON document to stdout: the log-only fields for each of
+   the day's 24 hours per model, and the day's request count per model
+   for the reconciliation. No cursor: a day is the unit, and the runner
+   decides which days are missing.
 2. **Reports,** for an admin at a shell on the host. The first ones,
    chosen because they need no reading of prompt content: requests and
    prompt tokens per day by project, by user, by model and by user agent;
@@ -345,18 +349,37 @@ mixed.
 
 ### The runner
 
-**`demand-rollup`** lives in `llmao/prompt_log.py` and is registered in
-`main.py` beside the capacity writer. Hourly, it spawns
-`llmao-prompt-log rollup --json`, parses the output, hands the rows to
-`CapacityStore`, and stores the new cursor.
+One runner, **`demand-rollup`**, in `llmao/capacity.py` beside the
+capacity writer and registered in `main.py`. It runs at portal start and
+then once a day at 01:00 UTC, an hour after the day closes: the grace
+the daily reader already allows for LiteLLM's background flush. Each run
+lists the closed UTC days inside retention, subtracts the days the store
+already holds, and rolls up each missing one. On a normal day that is
+one day, yesterday. After downtime it is several, done in the same run.
+The current day is never read, and nothing is kept between runs.
 
-The spawn: `asyncio.create_subprocess_exec`, the child under `nice` and
-`ionice` since it shares the host with the proxy, one run at a time (a
-tick that finds the last run still going skips, and says so if it
-happens twice), a timeout, and a non-zero exit recorded as an attention
-item, never raised. The parsing of gigabytes happens in the child on
-another core; the event loop waits on a pipe. llmao never opens a log
-file itself, and the tool never holds the master key.
+Rolling up one day:
+
+1. Read the whole day from `/spend/logs/v2`, page by page.
+2. Fold the rows into 24 hourly rows per model, with everything LiteLLM
+   has that the rows might need.
+3. Once track N exists, call `prompt_log.rollup_day(day)`, which spawns
+   `llmao-prompt-log rollup --json <day>` for that day's file and
+   returns what it printed; fold those fields into the same rows.
+4. Write the rows to `CapacityStore`, and a marker that the day is done.
+
+One day, one write, both sources. Everything else, the capacity page,
+the reconciliation, the parked Usage Analysis page, reads the store;
+LiteLLM is not asked again for a day it has written.
+
+The spawn in step 3: `asyncio.create_subprocess_exec`, the child under
+`nice` and `ionice` since it shares the host with the proxy, a timeout,
+and a non-zero exit recorded as an attention item, never raised; the
+day is then written from LiteLLM alone, its marker says the log side
+is missing, and the next run tries that side again. The
+parsing of a day's file happens in the child on another core; the event
+loop waits on a pipe. llmao never opens a log file itself, and the tool
+never holds the master key.
 
 ### Demand rows
 
@@ -385,15 +408,18 @@ Size: six models by 24 hours by 90 days is about 13,000 small rows.
 
 LiteLLM's spend log keeps one row per request with most of what the
 record holds (the LiteLLM column above), and its daily aggregate is what
-budgets run on, so LiteLLM stays the truth for tokens and money. The
-demand rows are built from the spend log first, and the log fills in
-only the fields LiteLLM lacks: the stream flag, tools in the request,
-the finish reason, messages per request. The spend log is read through
-`/spend/logs` a day at a time, with both `start_date` and `end_date`
-sent: that call filters by date only when it has both, and with one it
-returns the 10,000 most recent rows instead, which is the trap the daily
-reader in `llmao/proxy/client.py` fell into and documents. A closed day
-is read once and kept, as the daily reader does.
+budgets run on, so LiteLLM stays the truth for tokens and money. There
+is a single reader of the spend log, the runner above, and everything
+LiteLLM has that the demand rows might ever need moves into the store
+when a day is rolled up. The log then fills only the gaps: the stream
+flag, tools in the request, the finish reason, messages per request.
+
+The endpoint is `/spend/logs/v2` (1.105.0): paginated, up to 1,000
+rows a page with the total in the response, and it takes a date or a
+date with a time. The older `/spend/logs` is not used: it takes dates
+only, caps the answer at 10,000 rows with a header saying so, and with
+a single date ignores it and returns the most recent rows, the trap the
+daily reader in `llmao/proxy/client.py` fell into and documents.
 
 Where the two overlap, one figure per day and model is kept: requests
 seen in the log against requests LiteLLM billed. A gap one way is logging
@@ -419,10 +445,11 @@ that already owns the neighbouring role.
 | Role | Lives in |
 |---|---|
 | The callback: settings from `callback_settings`, built once by a module `__getattr__`, the directory check, the loguru sink, payload to record, the pre-call strip | `litellm_hooks.py`; tests in `tests/test_litellm_hooks.py` |
-| Record shape, file name pattern, reading day files, rollup, cursor | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
+| Record shape, file name pattern, reading a day file, the rollup of a day | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
 | The tool: `rollup --json`, reports | `bin/llmao-prompt-log`, argparse over the module |
-| The runner and its spawn helper | `llmao/prompt_log.py`; registered in `main.py` |
-| Per-request reader of LiteLLM's spend log, a day at a time | `llmao/proxy/client.py`, beside the daily reader |
+| The `demand-rollup` runner, daily | `llmao/capacity.py` beside `CapacityWriter`; registered in `main.py`; calls `prompt_log.rollup_day` for the log side |
+| `rollup_day(day)`: spawns the tool for one day, parses its JSON | `llmao/prompt_log.py` |
+| The single reader of `/spend/logs/v2`, one closed day, page by page | `llmao/proxy/client.py`, beside the daily reader |
 | Demand rows: key layout, write, read, prune; the rollup from spend rows | `llmao/capacity.py`, `CapacityStore` and `CapacityPruner` |
 | Reconciliation figure and demand tables | `llmao/capacity.py` beside `summarise_capacity`; rendered by the `/admin/capacity` handler in `pages.py` |
 | Settings: `prompt_log_dir`, `prompt_log_retention_days`, the rollup interval | `config.yaml.example`, flat keys beside `capacity_retention_days`; the sink reads its copy of the directory and retention from `litellm.yaml` |
