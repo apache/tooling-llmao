@@ -104,6 +104,27 @@ def test_help_template_uses_the_page_frame(tmp_path):
     assert '<a href="https://www.apache.org/">The Apache Software Foundation</a>' in footer
     assert "™" not in out and "&trade;" not in out
     assert 'href="/help/faq"' in out
+    # The terms are linked beside the privacy policy, not listed as a guide.
+    assert 'href="/help/terms">Terms of Use</a>' in footer
+
+
+def test_terms_page_names_the_running_commit(tmp_path):
+    """An article may name the commit it is served from, and nothing else of basic_info."""
+    (tmp_path / "terms.md").write_text("# Terms\n\nFrom [[]commit [commit]]([repo]/blob/[commit]/x.md)\n")
+    pages = _pages()
+    doc = pages.help_article("terms", tmp_path)
+    assert f"commit {pages.COMMIT}" in doc.html
+    assert f'href="{pages.REPO_URL}/blob/{pages.COMMIT}/x.md"' in doc.html
+
+
+def test_terms_are_a_help_page_but_not_a_guide():
+    pages = _pages()
+    assert "terms" in pages.HELP_UNLISTED
+    doc = pages.help_article("terms")
+    assert "<h1>Terms of Use</h1>" in doc.html
+    for text in ("Private", "Approximately 90 days", "rai.apache.org", f"commit {pages.COMMIT}"):
+        assert text in doc.html
+    assert "terms" not in [g.slug for g in pages.help_articles() if g.slug not in pages.HELP_UNLISTED]
 
 
 def test_index_links_each_tool_page():

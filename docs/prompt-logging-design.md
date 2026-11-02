@@ -121,7 +121,7 @@ Nothing here waits for the review.
 | N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | N1, N2 |
 | N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | N2 |
 | N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
-| N6 | Terms of Service page, footer link, STATUS.md data handling rewritten; the retention number | decision 4, "Access", "The terms page" |
+| N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
 | N7 | The reports in `bin/llmao-prompt-log` | N4 |
 | N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
 | N9 | Which content analyses, and where they run | open |
@@ -477,12 +477,25 @@ that already owns the neighbouring role.
 ## The terms page
 
 `docs/help/terms.md`, served at `/help/terms` like the other help pages,
-linked from the footer as "Terms of Service" beside the Privacy Policy,
-and left out of the Help nav's guide list the way the FAQ is. It says, in
-user-facing words: prompts sent through the gateway are logged, with the
-key owner, project, model and time; responses are not; the llmao admins
-can read the log; it is kept for approximately N days, and in the
-Foundation's backups beyond that; do not send credentials or embargoed material; the ASF
-privacy policy applies; using the service is agreeing to this. STATUS.md's
-"Data handling" section is rewritten when this lands, since it currently
-says prompt text is not retained.
+linked from the footer as "Terms of Use" beside the Privacy Policy, and
+left out of the Help nav's guide list the way the FAQ is (`HELP_UNLISTED`
+in `pages.py`). It names the commit it is served from, through the
+`repo` and `commit` fields the help renderer hands an article.
+
+It says, in user-facing words: the service is the Responsible AI
+Initiative's, for PMC members and committers, for work on ASF codebases;
+prompts sent through the gateway are logged, with the key owner,
+project, model, tool and time; responses are not; no parameter switches
+the logging off; the site admins can read the log, and usage is
+monitored for non-ASF work, malicious use of AI and criminal activity;
+it is kept for approximately N days, and in the Foundation's backups
+beyond that; Private models are where unpublished security work belongs
+and External or Mixed ones are not, and credentials, secrets and other
+people's personal data go nowhere; keys are personal; the ASF privacy
+policy applies; using the service is agreeing to this; updates come
+through the initiative's list and Slack channel.
+
+The page went up before the log exists (N6, 2026-11-01), which errs on
+the side of telling people early. STATUS.md's "Data handling" section is
+rewritten at N8, when the log exists, since it currently says prompt
+text is not retained and that is still true.

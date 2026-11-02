@@ -422,13 +422,22 @@ def _help_title(text: str, slug: str) -> str:
     return slug
 
 
+# A help file that uses any of these is run through EZT first, with uid,
+# repo and commit as its data. basic_info() is not handed to an article:
+# this small context is all a page gets.
+_HELP_EZT_MARKS = ("[if-any ", "[repo]", "[commit]")
+
+# Help pages that are not guides: linked from elsewhere, not listed in the nav.
+HELP_UNLISTED = ("faq", "terms")
+
+
 def help_article(slug: str, directory: pathlib.Path | None = None, uid=None):
     """One help article, or None when the slug is not a file in the directory.
 
     Raw HTML in the markdown is left intact. The files are committed here.
-    A file that contains ``[if-any`` is EZT first. ``uid`` comes from
-    ``basic_info`` and is None when nobody is signed in. A literal ``[``
-    in that file is written ``[[]]``.
+    A file that contains one of ``_HELP_EZT_MARKS`` is EZT first, with
+    ``uid`` (from ``basic_info``, None when nobody is signed in), ``repo``
+    and ``commit``. A literal ``[`` in that file is written ``[[]]``.
     """
     if not _HELP_SLUG.fullmatch(slug):
         return None
@@ -438,11 +447,11 @@ def help_article(slug: str, directory: pathlib.Path | None = None, uid=None):
         return None
     text = path.read_text(encoding="utf-8")
     title = _help_title(text, slug)
-    if "[if-any " in text:
+    if any(mark in text for mark in _HELP_EZT_MARKS):
         template = ezt.Template(compress_whitespace=0)
         template.parse(text, base_format=ezt.FORMAT_RAW)
         buf = io.StringIO()
-        template.generate(buf, edict(uid=uid))
+        template.generate(buf, edict(uid=uid, repo=REPO_URL, commit=COMMIT))
         text = buf.getvalue()
     return edict(
         slug=slug,
@@ -474,7 +483,7 @@ async def help_page(result, slug: str = "index"):
         quart.abort(404)
     result.title = doc.title
     result.body = doc.html
-    result.guides = [item for item in help_articles() if item.slug != "faq"]
+    result.guides = [item for item in help_articles() if item.slug not in HELP_UNLISTED]
     return result
 
 
