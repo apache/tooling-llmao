@@ -9,6 +9,7 @@ Five scripts. Different questions, different times to reach for them.
 | `llmao-smoke` | after any change to a model, box or the gateway | ~1 min/model |
 | `llmao-saturate` | when deciding whether a card is the right size | 5–30 min |
 | `llmao-usage` | has this box ever served anything at all | instant |
+| `check-no-log.py` | after a LiteLLM upgrade: can a request still not opt out of the prompt log | ~10s |
 
 All stdlib-only Python 3 — nothing to install. All five share one discovery
 path in `_fleet.py`, so they see the same fleet.
