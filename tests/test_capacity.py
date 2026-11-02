@@ -262,12 +262,27 @@ def test_nothing_bought_is_nothing_to_show():
 
 
 def _hour_row(
-    hour, server, model, *, usd=0.1, covered=3600, busy=0.5, waiting=0.0, kv=0.2, prompt=1000, gen=100, q95=None
+    hour,
+    server,
+    model,
+    *,
+    usd=0.1,
+    covered=3600,
+    busy=0.5,
+    waiting=0.0,
+    kv=0.2,
+    prompt=1000,
+    gen=100,
+    q95=None,
+    rental="",
+    rental_label="",
 ):
     return edict(
         hour=hour,
         server=server,
         model_name=model,
+        rental=rental,
+        rental_label=rental_label,
         covered_s=covered,
         busy_frac=busy,
         waiting_frac=waiting,
@@ -306,12 +321,42 @@ def test_a_model_is_costed_by_the_hour_and_weighed_by_what_was_sampled():
     assert qwen.queue_p95_worst_s == 2.5
     assert qwen.usd_per_mtok == 1.25 / (3 * 1100 / 1e6)
     assert [(d.day, d.value) for d in qwen.daily_tokens] == [("2026-10-18", 1100), ("2026-10-19", 2200)]
+    # Unstamped rows: a line per address, named by it, first seen first.
     assert [s.server for s in qwen.servers] == ["198.51.100.8:8001", "203.0.113.10:8001"]
+    assert (qwen.servers[1].first_hour, qwen.servers[1].last_hour) == ("2026-10-19T08", "2026-10-19T09")
     # The costliest model first; the fleet's day is every model's.
     assert [m.model_name for m in report.models] == ["qwen3-8b", "gemma4-26b"]
     assert report.cost_usd == 2.25
     assert report.hours_seen == 3
     assert report.cost_per_day == 2.25 / 3 * 24
+
+
+def test_a_rentals_hours_are_one_line_across_an_address_change_and_from_before_the_stamp():
+    def stamped(hour, server, **kw):
+        return _hour_row(hour, server, "m", rental="Vast 1", rental_label="RTX 3060 x2", **kw)
+
+    rows = [
+        # Before the stamp, the same server as the stamped rows that follow.
+        _hour_row("2026-10-19T07", "203.0.113.10:8001", "m", usd=0.5),
+        stamped("2026-10-19T08", "203.0.113.10:8001", usd=0.5),
+        # The provider moved the machine: a new address, the same rental and port.
+        stamped("2026-10-19T09", "198.51.100.8:8001", usd=0.6),
+        # A second process on the same rental is its own line.
+        stamped("2026-10-19T09", "198.51.100.8:8002", usd=0.6),
+        # A server never stamped is a line of its own, by its address.
+        _hour_row("2026-10-19T09", "192.0.2.4:8001", "m"),
+    ]
+    (m,) = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7).models
+    # First seen first; the two seen in the same hour by name.
+    assert [s.server for s in m.servers] == ["Vast 1:8001", "192.0.2.4:8001", "Vast 1:8002"]
+    moved, loose, second = m.servers
+    assert moved.rental == "Vast 1" and moved.label == "RTX 3060 x2"
+    assert moved.addresses == ["198.51.100.8:8001", "203.0.113.10:8001"]
+    assert (moved.first_hour, moved.last_hour, moved.hours) == ("2026-10-19T07", "2026-10-19T09", 3)
+    # The last price seen: the machine's price where it is now.
+    assert moved.usd_per_hour == 0.6
+    assert second.hours == 1
+    assert loose.rental == "" and loose.addresses == ["192.0.2.4:8001"]
 
 
 def test_an_unpriced_hour_is_counted_as_unpriced_not_as_free():

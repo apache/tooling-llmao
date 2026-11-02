@@ -218,24 +218,59 @@ def test_the_worst_queue_time_reads_as_a_person_would_say_it():
     assert pages._capacity_model_row(_model(queue_p95_worst_s=2.5)).queue_p95 == "2.5s"
 
 
+def _line(**over):
+    line = edict(
+        server="Vast 1:8001",
+        rental="Vast 1",
+        label="RTX 3060 x2",
+        addresses=["203.0.113.10:8001"],
+        first_hour="2026-10-19T08",
+        last_hour="2026-11-02T10",
+        hours=300,
+        usd_per_hour=None,
+        busy=0,
+        waiting=0,
+        kv_peak=0,
+        tokens=0,
+    )
+    line.update(over)
+    return line
+
+
 def test_what_never_happened_is_not_shown():
     """A zero meter, a zero count and an empty column say nothing: each is left out."""
     pages = _app()
-    quiet = pages._capacity_model_row(
-        _model(servers=[edict(server="s", usd_per_hour=None, busy=0, waiting=0, kv_peak=0, tokens=0)])
-    )
+    quiet = pages._capacity_model_row(_model(servers=[_line()]))
     assert not quiet.queued and quiet.preemptions is None and not quiet.servers_queued
     busy = pages._capacity_model_row(
-        _model(
-            waiting=0.01,
-            waiting_peak=3,
-            preemptions=60,
-            servers=[edict(server="s", usd_per_hour=None, busy=0, waiting=0.01, kv_peak=0, tokens=0)],
-        )
+        _model(waiting=0.01, waiting_peak=3, preemptions=60, servers=[_line(waiting=0.01)])
     )
     assert busy.queued and busy.preemptions == 60 and busy.servers_queued
     # A peak with no share: a request queued once, briefly. Still told.
     assert pages._capacity_model_row(_model(waiting_peak=1)).queued
+
+
+def test_a_server_line_says_when_it_was_seen_and_what_became_of_its_machine():
+    pages = _app()
+    lines = [
+        _line(),
+        _line(server="RunPod p:8001", rental="RunPod p", label="llmao-q"),
+        _line(server="Vast 9:8001", rental="Vast 9", first_hour="2026-10-19T08", last_hour="2026-10-20T18"),
+        _line(server="192.0.2.4:8001", rental="", label="", addresses=["192.0.2.4:8001"], last_hour="2026-10-19T23"),
+        _line(server="192.0.2.5:8001", rental="", label="", addresses=["192.0.2.5:8001"]),
+    ]
+    listed = {"Vast 1": "running", "RunPod p": "exited"}
+    row = pages._capacity_model_row(_model(servers=lines), listed=listed, live_servers={"192.0.2.5:8001"})
+    assert [(s.server, s.label, s.seen, s.status) for s in row.servers] == [
+        ("Vast 1:8001", "RTX 3060 x2", "Oct 19 to Nov 2", ""),
+        ("RunPod p:8001", "llmao-q", "Oct 19 to Nov 2", "exited"),
+        ("Vast 9:8001", "RTX 3060 x2", "Oct 19 to Oct 20", "ended"),
+        ("192.0.2.4:8001", "", "Oct 19", "gone"),
+        ("192.0.2.5:8001", "", "Oct 19 to Nov 2", ""),
+    ]
+    # No provider read yet: nothing can be said about a stamped line.
+    row = pages._capacity_model_row(_model(servers=lines[:3]), listed=None)
+    assert [s.status for s in row.servers] == ["", "", ""]
 
 
 def test_a_busy_model_is_marked_and_a_day_series_becomes_bar_heights():

@@ -89,11 +89,12 @@
         [end]
 
         <table class="table table-sm small mt-3 mb-0">
-          <thead><tr><th>Server</th><th>Rental share</th><th class="text-end">Busy</th>[if-any models.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
+          <thead><tr><th>Rental</th><th>Seen</th><th>Rental share</th><th class="text-end">Busy</th>[if-any models.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
           <tbody>
             [for models.servers]
-            <tr>
-              <td class="font-monospace">[models.servers.server]</td>
+            <tr[if-any models.servers.status] class="text-muted"[end]>
+              <td>[models.servers.server][if-any models.servers.label] <span class="text-muted">[models.servers.label]</span>[end]</td>
+              <td>[models.servers.seen][if-any models.servers.status] <span class="badge text-bg-secondary">[models.servers.status]</span>[end]</td>
               <td>[models.servers.usd_per_hour]</td>
               <td class="text-end">[models.servers.busy]%</td>
               [if-any models.servers_queued]<td class="text-end">[models.servers.waiting]%</td>[end]
@@ -104,7 +105,7 @@
           </tbody>
         </table>
         <div class="small text-muted mt-1">
-          [models.prompt_tokens] in &middot; [models.generation_tokens] out &middot; [models.requests] requests &middot; [models.hours] hours sampled
+          [models.prompt_tokens] in &middot; [models.generation_tokens] out &middot; [models.requests] requests
           [if-any models.unpriced_hours]&middot; <span class="text-warning-emphasis">[models.unpriced_hours] hours unpriced</span>[end]
         </div>
       </div>

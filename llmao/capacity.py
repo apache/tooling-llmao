@@ -703,6 +703,53 @@ def _weighted(rows: list, field_name: str) -> float:
     return sum(r[field_name] * r.covered_s for r in rows) / covered if covered else 0.0
 
 
+def _port_of(server: str) -> str:
+    return server.rsplit(":", 1)[-1]
+
+
+def _server_lines(rows: list) -> list[edict]:
+    """One line per vLLM process over the rows, named by its rental where the rows say which.
+
+    A process is a rental and a listen port. Its rows are keyed by address
+    and port, so a process whose address changed sits under two servers;
+    here those are one line. Rows from before the stamp, which name only
+    the server, join the line that server was later stamped onto, and a
+    server never stamped is a line of its own, named by its address.
+    First to last hour seen, so a line that stopped reads as having
+    stopped.
+    """
+    stamped = {r.server: (r.rental, _port_of(r.server)) for r in rows if r.get("rental")}
+
+    def line_of(r) -> tuple[str, str]:
+        if r.get("rental"):
+            return (r.rental, _port_of(r.server))
+        return stamped.get(r.server) or ("", r.server)
+
+    by_line: dict[tuple[str, str], list] = defaultdict(list)
+    for r in rows:
+        by_line[line_of(r)].append(r)
+    lines = []
+    for (rental, port), theirs in by_line.items():
+        hours = sorted(r.hour for r in theirs)
+        lines.append(
+            edict(
+                server=f"{rental}:{port}" if rental else port,
+                rental=rental,
+                label=next((r.rental_label for r in theirs if r.get("rental_label")), ""),
+                addresses=sorted({r.server for r in theirs}),
+                first_hour=hours[0],
+                last_hour=hours[-1],
+                hours=len(theirs),
+                usd_per_hour=next((r.usd_per_hour for r in reversed(theirs) if r.usd_per_hour is not None), None),
+                busy=_weighted(theirs, "busy_frac"),
+                waiting=_weighted(theirs, "waiting_frac"),
+                kv_peak=max(r.kv_peak for r in theirs),
+                tokens=sum(r.prompt_tokens + r.generation_tokens for r in theirs),
+            )
+        )
+    return sorted(lines, key=lambda line: (line.first_hour, line.server))
+
+
 def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict:
     """The fleet and each model over the last `period_days` days, from hourly rows."""
     start = (today - dt.timedelta(days=period_days - 1)).isoformat()
@@ -723,19 +770,7 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
             daily_tokens[r.hour[:10]] += r.prompt_tokens + r.generation_tokens
             if r.usd_per_hour is not None:
                 daily_cost[r.hour[:10]] += r.usd_per_hour
-        servers = []
-        for server in sorted({r.server for r in mine}):
-            theirs = [r for r in mine if r.server == server]
-            servers.append(
-                edict(
-                    server=server,
-                    usd_per_hour=next((r.usd_per_hour for r in reversed(theirs) if r.usd_per_hour is not None), None),
-                    busy=_weighted(theirs, "busy_frac"),
-                    waiting=_weighted(theirs, "waiting_frac"),
-                    kv_peak=max(r.kv_peak for r in theirs),
-                    tokens=sum(r.prompt_tokens + r.generation_tokens for r in theirs),
-                )
-            )
+        servers = _server_lines(mine)
         queue = [r.queue_p95_s for r in mine if r.queue_p95_s is not None]
         # The cost of a million tokens: the rental paid in the hours that
         # have a price, divided by the tokens served in those same hours.

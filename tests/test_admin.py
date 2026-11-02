@@ -173,6 +173,45 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     # And a model that never refused a request has no Refused column.
     data.demand[0].refused_any = ezt.boolean(False)
     assert "Refused" not in render()
+    # A model's rentals: named, with when each was seen and what became of it.
+    line = edict(
+        server="Vast 9:8001",
+        rental="Vast 9",
+        label="RTX 3060 x2",
+        addresses=["203.0.113.10:8001"],
+        first_hour="2026-10-19T08",
+        last_hour="2026-10-20T18",
+        hours=35,
+        usd_per_hour=0.103,
+        busy=0.1,
+        waiting=0.0,
+        kv_peak=0.2,
+        tokens=514,
+    )
+    model = edict(
+        model_name="qwen3-8b-bf16",
+        cost_per_day=2.4,
+        tokens_per_day=250,
+        usd_per_mtok=None,
+        busy=0.1,
+        waiting=0.0,
+        kv_peak=0.2,
+        waiting_peak=0,
+        preemptions=0,
+        queue_p95_worst_s=None,
+        prompt_tokens=500,
+        generation_tokens=14,
+        requests=8,
+        hours=35,
+        unpriced_hours=0,
+        daily_tokens=[],
+        servers=[line],
+    )
+    data.models = [pages._capacity_model_row(model, listed={}, live_servers=set())]
+    out = render()
+    assert "Vast 9:8001" in out and "RTX 3060 x2" in out
+    assert "Oct 19 to Oct 20" in out and ">ended<" in out
+    assert "hours sampled" not in out
 
 
 def test_admin_drops_models_and_shows_a_version_match():

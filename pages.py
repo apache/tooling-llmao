@@ -1791,7 +1791,12 @@ async def admin_capacity(result):
         rows = []
         result.capacity_down = ezt.boolean(True)
     fleet = summarise_capacity(rows, today=today, period_days=days)
-    result.models = [_capacity_model_row(m) for m in fleet.models]
+    # What the providers report now, to say which rentals have ended; None
+    # until a provider has been read, which says nothing either way.
+    reported = [r for r in (APP.fleet.vast_rentals, APP.fleet.runpod_rentals) if r is not None]
+    listed = {r.ident: r.status for rentals in reported for r in rentals} if reported else None
+    live_servers = {f"{s.host}:{s.listen_port}" for s in APP.fleet.servers}
+    result.models = [_capacity_model_row(m, listed=listed, live_servers=live_servers) for m in fleet.models]
     result.fleet_cost_per_day = _money(fleet.cost_per_day)
     result.fleet_tokens_per_day = _tokens_h(int(fleet.tokens_per_day))
     result.unpriced_hours = fleet.unpriced_hours or None
@@ -1875,7 +1880,37 @@ def _demand_model_row(m) -> edict:
     )
 
 
-def _capacity_model_row(m) -> edict:
+def _day_h(hour: str) -> str:
+    """'Oct 19' from an hour label or a day."""
+    return dt.date.fromisoformat(hour[:10]).strftime("%b %-d")
+
+
+def _seen_h(first_hour: str, last_hour: str) -> str:
+    """'Oct 19 to Nov 2', or the one day."""
+    first, last = _day_h(first_hour), _day_h(last_hour)
+    return first if first == last else f"{first} to {last}"
+
+
+def _line_status(line, listed: dict[str, str] | None, live_servers: set[str]) -> str:
+    """What has become of a server line's machine: nothing to say while it is running.
+
+    A stamped line is checked against what the providers report now:
+    "ended" when no provider lists the rental, else the provider's own
+    word when it is not running ("exited"). While no provider has been
+    read, nothing can be said. A line from before the stamp, named by its
+    address, is "gone" when no server of ours has that address now.
+    """
+    if line.rental:
+        if listed is None:
+            return ""
+        status = listed.get(line.rental)
+        if status is None:
+            return "ended"
+        return "" if status == "running" else status
+    return "" if any(a in live_servers for a in line.addresses) else "gone"
+
+
+def _capacity_model_row(m, *, listed: dict[str, str] | None = None, live_servers: set[str] = frozenset()) -> edict:
     # How long requests sat in vLLM's queue before it started on them. Each
     # hourly row keeps the 95th percentile of that hour (95% of requests
     # waited no longer); this is the worst such hour in the period, the one
@@ -1922,6 +1957,9 @@ def _capacity_model_row(m) -> edict:
         servers=[
             edict(
                 server=srv.server,
+                label=srv.label,
+                seen=_seen_h(srv.first_hour, srv.last_hour),
+                status=_line_status(srv, listed, live_servers),
                 usd_per_hour=f"${srv.usd_per_hour:.3f}/hr" if srv.usd_per_hour is not None else "unpriced",
                 busy=_pct(srv.busy),
                 waiting=_pct(srv.waiting),
