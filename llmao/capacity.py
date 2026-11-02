@@ -37,8 +37,10 @@ The writer is not part of the sampler's loop on purpose. Writing goes to
 LiteLLM; a slow or absent LiteLLM must not stall sampling, so finished hours
 wait in memory until it answers.
 
-Also here, at the end: the totals of provider spend (summarise_spend), the
-other half of the same report.
+Also here: demand, what was asked of the gateway per model per hour, from
+LiteLLM's spend log (fold_demand, DemandRollup, summarise_demand), and at
+the end the totals of provider spend (summarise_spend), the other halves
+of the same report.
 
 An llmao restart loses the hour in progress. Each row says how much of its
 hour was sampled (covered_s), and the loss is accepted: the report is read
@@ -52,6 +54,7 @@ import calendar
 import datetime as dt
 import json
 import logging
+import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -66,6 +69,10 @@ from easydict import EasyDict as edict  # noqa: N813
 _LOGGER = logging.getLogger(__name__)
 
 KEY_PREFIX = "llmao:capacity:"
+# Demand rows (what was asked, per model per hour) and the per-day marker
+# that says a day has been rolled up. See "demand", below.
+DEMAND_PREFIX = "llmao:demand:"
+DEMAND_DAY_PREFIX = "llmao:demand-day:"
 HOUR_S = 3600
 DAY_S = 86400
 
@@ -240,19 +247,14 @@ class CapacityStore:
     async def write(self, row: edict) -> None:
         await self._memory.put(f"{KEY_PREFIX}{row.hour}:{row.server}", json.dumps(row, sort_keys=True))
 
-    async def _day(self, day: dt.date) -> list[edict]:
-        return [edict(item) for item in await self._memory.find(f"{KEY_PREFIX}{day.isoformat()}T")]
+    async def _day(self, prefix: str, day: dt.date) -> list[edict]:
+        return [edict(item) for item in await self._memory.find(f"{prefix}{day.isoformat()}T")]
 
-    async def read(self, days: int, *, today: dt.date | None = None) -> list[edict]:
-        """Every row of the last `days` days, today included.
-
-        One request per day, all at once. A day holds 24 rows per server, so
-        it fits one page of the memory API (500) up to twenty servers.
-        """
+    async def _read(self, prefix: str, days: int, today: dt.date | None) -> list[edict]:
         today = today or dt.datetime.now(dt.UTC).date()
         wanted = [today - dt.timedelta(days=n) for n in range(days)]
-        with Stopwatch(name=f"capacity read of {days} days"):
-            found = await asyncio.gather(*(self._day(day) for day in wanted))
+        with Stopwatch(name=f"{prefix} read of {days} days"):
+            found = await asyncio.gather(*(self._day(prefix, day) for day in wanted))
         rows = []
         for item in (item for day in found for item in day):
             try:
@@ -261,20 +263,61 @@ class CapacityStore:
                 continue
         return rows
 
+    async def read(self, days: int, *, today: dt.date | None = None) -> list[edict]:
+        """Every capacity row of the last `days` days, today included.
+
+        One request per day, all at once. A day holds 24 rows per server, so
+        it fits one page of the memory API (500) up to twenty servers.
+        """
+        return await self._read(KEY_PREFIX, days, today)
+
+    # --- demand: what was asked, per model per hour. Written once per
+    # closed day by DemandRollup; read by /admin/capacity beside the
+    # capacity rows. A day holds 24 rows per model: one page up to twenty
+    # models.
+
+    async def write_demand(self, row: edict) -> None:
+        await self._memory.put(f"{DEMAND_PREFIX}{row.hour}:{row.model}", json.dumps(row, sort_keys=True))
+
+    async def read_demand(self, days: int, *, today: dt.date | None = None) -> list[edict]:
+        """Every demand row of the last `days` days, today included."""
+        return await self._read(DEMAND_PREFIX, days, today)
+
+    async def demand_days_done(self) -> dict[str, edict]:
+        """Day -> what the rollup wrote for it ({sources, rows}); the days to skip."""
+        done = {}
+        for item in await self._memory.find(DEMAND_DAY_PREFIX):
+            try:
+                done[str(item.get("key") or "").removeprefix(DEMAND_DAY_PREFIX)] = edict(
+                    json.loads(item.get("value") or "")
+                )
+            except (TypeError, ValueError):
+                continue
+        return done
+
+    async def mark_demand_day(self, day: str, *, sources: list[str], rows: int) -> None:
+        """Record that `day` has been rolled up, from which sources, into how many rows."""
+        marker = json.dumps(dict(sources=sources, rows=rows), sort_keys=True)
+        await self._memory.put(f"{DEMAND_DAY_PREFIX}{day}", marker)
+
     async def prune(self, keep_days: int, *, today: dt.date | None = None, sweep_days: int = 7) -> int:
         """Delete the rows of the `sweep_days` days just past retention.
 
-        Run daily, each day is swept seven times before it slips out of
-        reach, so a few days with llmao down still get cleared.
+        Capacity rows, demand rows and the day's rollup marker alike. Run
+        daily, each day is swept seven times before it slips out of reach,
+        so a few days with llmao down still get cleared.
         """
         today = today or dt.datetime.now(dt.UTC).date()
         oldest_kept = today - dt.timedelta(days=keep_days - 1)
         gone = 0
         for n in range(1, sweep_days + 1):
-            for item in await self._day(oldest_kept - dt.timedelta(days=n)):
-                if item.get("key"):
-                    await self._memory.delete(item.key)
-                    gone += 1
+            day = oldest_kept - dt.timedelta(days=n)
+            for prefix in (KEY_PREFIX, DEMAND_PREFIX):
+                for item in await self._day(prefix, day):
+                    if item.get("key"):
+                        await self._memory.delete(item.key)
+                        gone += 1
+            await self._memory.delete(f"{DEMAND_DAY_PREFIX}{day.isoformat()}")
         return gone
 
 
@@ -326,6 +369,272 @@ class CapacityPruner:
             except Exception:
                 _LOGGER.exception("capacity: pruning failed")
             await asyncio.sleep(DAY_S)
+
+
+# ---- demand ---------------------------------------------------------------
+#
+# What was asked of the gateway, per model per UTC hour, from LiteLLM's
+# spend log: the other side of the capacity rows, which say what each
+# server did. Keyed llmao:demand:<hour>:<model>, so the two join on hour and
+# model. Design: docs/prompt-logging-design.md, "Demand rows".
+#
+# Everything LiteLLM has that the rows might need moves into the store when
+# a day is rolled up, once; the prompt log later fills only the fields
+# LiteLLM lacks (streamed, with_tools, finish_length, time to first token),
+# which are absent from a row until it does.
+#
+# What counts as demand: a call to a model. A spend row with no model group
+# (a bad key refused at the door, a /v1/models listing) is not use of a
+# model, and LiteLLM's own health checks, which run as their own team, are
+# not anyone's demand. Both are left out; measured on 2026-11-01 they were
+# nearly half of the day's rows.
+
+# LiteLLM's own health checks run as this team.
+_HEALTH_CHECK_TEAM = "litellm-internal-health-check"
+
+# Prompt length in tokens, bucketed: is anyone using the context we pay KV
+# cache for. The last bucket has no upper bound.
+PROMPT_BUCKETS = ((1_000, "<1k"), (8_000, "1k-8k"), (32_000, "8k-32k"), (128_000, "32k-128k"), (None, ">128k"))
+NO_PROJECT = "(no project)"
+
+
+def prompt_bucket(tokens: int) -> str:
+    for limit, name in PROMPT_BUCKETS:
+        if limit is None or tokens < limit:
+            return name
+    return PROMPT_BUCKETS[-1][1]
+
+
+def tool_family(user_agent: str | None) -> str:
+    """The tool behind a user agent: the product before the first slash.
+
+    "opencode/latest/2.2.1/acp" is opencode, "OpenAI/Python 1.109.1" is the
+    OpenAI SDK, "codex-tui/0.166.0 (...)" is codex-tui. Every browser says
+    Mozilla first, so those fold into one; a request with no user agent is
+    "unknown". This is the same cut LiteLLM makes for its User-Agent tags.
+    """
+    name = (user_agent or "").split("/", 1)[0].strip()
+    if not name:
+        return "unknown"
+    return "browser" if name == "Mozilla" else name
+
+
+def _percentile(values: list[float], p: float) -> float | None:
+    """Nearest-rank percentile: the smallest value that p of them are at or below."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(p * len(ordered)) - 1)]
+
+
+def _add(bucket: dict, name: str, *, requests: int = 1, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
+    if name not in bucket:
+        bucket[name] = dict(requests=0, prompt_tokens=0, completion_tokens=0)
+    # Looked up after the assignment: an EasyDict stores a COPY of a dict
+    # assigned into it, so the one created above is not the one it holds.
+    acc = bucket[name]
+    acc["requests"] += requests
+    acc["prompt_tokens"] += prompt_tokens
+    acc["completion_tokens"] += completion_tokens
+
+
+def _refusal(meta: dict) -> str:
+    """Why LiteLLM refused a request, as one word it already chose."""
+    info = meta.get("error_information") or {}
+    return str(info.get("normalized_error") or info.get("error_code") or info.get("error_class") or "unknown")
+
+
+def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
+    """A day of LiteLLM's spend log as demand rows, one per model per hour.
+
+    Pure: rows in, rows out, so the arithmetic is testable on its own.
+    `requests` counts every call to the model, refused ones included;
+    `refused` says how many and why, so refused is a share of requests.
+    Tokens and durations come from the successful calls only: a refusal
+    carries no tokens and takes no time worth measuring.
+    """
+    by_hour: dict[tuple[str, str], list] = defaultdict(list)
+    for r in spend_rows:
+        meta = r.metadata or edict()
+        start = str(r.startTime or "")
+        if (
+            not r.model_group
+            or meta.get("user_api_key_team_alias") == _HEALTH_CHECK_TEAM
+            or start[:10] != day.isoformat()
+        ):
+            continue
+        by_hour[(start[:13], r.model_group)].append((r, meta))
+
+    out = []
+    for (hour, model), items in sorted(by_hour.items()):
+        row = edict(
+            hour=hour,
+            model=model,
+            sources=["litellm"],
+            requests=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            by_project={},
+            by_tool={},
+            refused={},
+            prompt_len={},
+        )
+        durations = []
+        for r, meta in items:
+            refused = r.status == "failure"
+            prompt = 0 if refused else int(r.prompt_tokens or 0)
+            completion = 0 if refused else int(r.completion_tokens or 0)
+            row.requests += 1
+            row.prompt_tokens += prompt
+            row.completion_tokens += completion
+            counted = dict(prompt_tokens=prompt, completion_tokens=completion)
+            _add(row.by_project, meta.get("user_api_key_team_alias") or NO_PROJECT, **counted)
+            _add(row.by_tool, tool_family(meta.get("user_agent")), **counted)
+            if refused:
+                reason = _refusal(meta)
+                row.refused[reason] = row.refused.get(reason, 0) + 1
+                continue
+            bucket = prompt_bucket(prompt)
+            row.prompt_len[bucket] = row.prompt_len.get(bucket, 0) + 1
+            if r.request_duration_ms is not None:
+                durations.append(int(r.request_duration_ms) / 1000)
+        row.duration_p50_s = _percentile(durations, 0.5)
+        row.duration_p95_s = _percentile(durations, 0.95)
+        out.append(row)
+    return out
+
+
+def _seconds_until(hour: int, now: dt.datetime) -> float:
+    """Seconds from `now` to the next `hour`:00 UTC, never zero."""
+    target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += dt.timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+class DemandRollup:
+    """Runner: once a day, the demand rows for every closed day the store lacks.
+
+    Runs at start and then at `at_hour`:00 UTC, an hour after the day
+    closes: the grace the daily usage reader also allows for LiteLLM's
+    background flush. Each run lists the closed days inside retention,
+    subtracts the days the store has a marker for, and rolls up each
+    missing one, oldest first. On a normal day that is yesterday; after
+    downtime it is several, done in the same run. The current day is never
+    read, and nothing is kept between runs.
+
+    A day with no traffic is marked too, with no rows, or it would be asked
+    for again every day.
+    """
+
+    def __init__(self, metering: Any, store: CapacityStore, keep_days: int, *, at_hour: int = 1, grace_s: int = HOUR_S):
+        self._metering = metering
+        self._store = store
+        self._keep_days = keep_days
+        self._at_hour = at_hour
+        self._grace_s = grace_s
+
+    def missing_days(self, done: set[str], now: dt.datetime) -> list[dt.date]:
+        """Closed days inside retention with no marker, oldest first."""
+        last_closed = (now - dt.timedelta(seconds=self._grace_s)).date() - dt.timedelta(days=1)
+        day = now.date() - dt.timedelta(days=self._keep_days - 1)
+        out = []
+        while day <= last_closed:
+            if day.isoformat() not in done:
+                out.append(day)
+            day += dt.timedelta(days=1)
+        return out
+
+    async def roll_up(self, day: dt.date) -> int:
+        """One day: read it from LiteLLM, fold it, store it, mark it. The row count."""
+        rows = fold_demand(day, await self._metering.spend_log(day))
+        for row in rows:
+            await self._store.write_demand(row)
+        await self._store.mark_demand_day(day.isoformat(), sources=["litellm"], rows=len(rows))
+        return len(rows)
+
+    async def roll_up_missing(self, now: dt.datetime) -> list[dt.date]:
+        """Every missing closed day, oldest first; stops at the first that fails. The days done."""
+        done = await self._store.demand_days_done()
+        rolled = []
+        for day in self.missing_days(set(done), now):
+            try:
+                n = await self.roll_up(day)
+            except Exception as e:
+                # LiteLLM away, most likely: the rest wait for the next run too.
+                _LOGGER.warning("demand: could not roll up %s (%s)", day, e)
+                break
+            _LOGGER.info("demand: %s rolled up into %d rows", day, n)
+            rolled.append(day)
+        return rolled
+
+    async def run(self) -> None:
+        while True:
+            try:
+                await self.roll_up_missing(dt.datetime.now(dt.UTC))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("demand: rollup failed")
+            await asyncio.sleep(_seconds_until(self._at_hour, dt.datetime.now(dt.UTC)))
+
+
+def _ranked_counts(totals: dict[str, dict]) -> list[edict]:
+    """[{name, requests, prompt_tokens, completion_tokens}], most requests first."""
+    return [edict(name=name, **v) for name, v in sorted(totals.items(), key=lambda kv: -kv[1]["requests"])]
+
+
+def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[edict]:
+    """Each model over the last `period_days` days, from demand rows; most requests first.
+
+    Rates per day are over the days that have rows, so a period that
+    starts before the rollup did is not averaged over empty days.
+    """
+    start = (today - dt.timedelta(days=period_days - 1)).isoformat()
+    rows = [r for r in rows if r.hour[:10] >= start]
+    models = []
+    for name in sorted({r.model for r in rows}):
+        mine = [r for r in rows if r.model == name]
+        days = len({r.hour[:10] for r in mine})
+        requests = sum(r.requests for r in mine)
+        by_project: dict[str, dict] = {}
+        by_tool: dict[str, dict] = {}
+        refused: dict[str, int] = defaultdict(int)
+        prompt_len: dict[str, int] = defaultdict(int)
+        daily: dict[str, int] = defaultdict(int)
+        for r in mine:
+            daily[r.hour[:10]] += r.requests
+            for who, v in r.by_project.items():
+                _add(by_project, who, **v)
+            for who, v in r.by_tool.items():
+                _add(by_tool, who, **v)
+            for why, n in r.refused.items():
+                refused[why] += n
+            for bucket, n in r.prompt_len.items():
+                prompt_len[bucket] += n
+        p50s = [r.duration_p50_s for r in mine if r.duration_p50_s is not None]
+        p95s = [r.duration_p95_s for r in mine if r.duration_p95_s is not None]
+        models.append(
+            edict(
+                model=name,
+                days=days,
+                requests=requests,
+                requests_per_day=requests / days if days else 0.0,
+                prompt_tokens=sum(r.prompt_tokens for r in mine),
+                completion_tokens=sum(r.completion_tokens for r in mine),
+                refused_total=sum(refused.values()),
+                refused=[edict(name=k, count=v) for k, v in sorted(refused.items(), key=lambda kv: -kv[1])],
+                by_project=_ranked_counts(by_project),
+                by_tool=_ranked_counts(by_tool),
+                prompt_len=[edict(name=label, count=prompt_len.get(label, 0)) for _limit, label in PROMPT_BUCKETS],
+                # The median of the hourly medians: a typical hour. The worst
+                # p95 says how bad the slowest hour got.
+                duration_p50_s=_percentile(p50s, 0.5),
+                duration_p95_worst_s=max(p95s) if p95s else None,
+                daily_requests=[edict(day=d, value=daily[d]) for d in sorted(daily)],
+            )
+        )
+    return sorted(models, key=lambda m: -m.requests)
 
 
 # ---- the self-hosted report ----------------------------------------------

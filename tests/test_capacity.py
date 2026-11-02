@@ -26,15 +26,23 @@ import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.capacity import (
+    DEMAND_DAY_PREFIX,
+    DEMAND_PREFIX,
     HOUR_S,
+    NO_PROJECT,
     CapacityStore,
     CapacityWriter,
+    DemandRollup,
     HourlyRollup,
     days_to_read,
+    fold_demand,
     hour_label,
+    prompt_bucket,
     retention_days,
     summarise_capacity,
+    summarise_demand,
     summarise_spend,
+    tool_family,
 )
 from llmao.proxy.client import MemoryStore
 from llmao.vllm_client import Sample
@@ -296,3 +304,201 @@ def test_no_rows_is_an_empty_report():
     report = summarise_capacity([], today=dt.date(2026, 10, 19), period_days=30)
     assert report.models == []
     assert report.cost_per_day == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Demand: a day of LiteLLM's spend log, folded into one row per model per
+# hour. The rows look like what /spend/logs/v2 returned on 2026-11-01, cut
+# down to the fields the fold reads.
+# ---------------------------------------------------------------------------
+
+DAY = dt.date(2026, 11, 1)
+
+
+def _spend(
+    hour,
+    model="gemma4-26b",
+    *,
+    project="spark",
+    agent="OpenAI/Python 1.109.1",
+    prompt=580,
+    completion=46,
+    ms=600,
+    failure=None,
+    minute=10,
+):
+    """One spend-log row, as spend_log() hands them over. `failure` is LiteLLM's normalized_error."""
+    meta = edict(user_api_key_team_alias=project, user_agent=agent, error_information=None)
+    if failure:
+        meta.error_information = edict(normalized_error=failure, error_code=failure[:3])
+    return edict(
+        startTime=f"{DAY}T{hour:02d}:{minute:02d}:00.000+00:00",
+        model_group=model,
+        status="failure" if failure else "success",
+        prompt_tokens=0 if failure else prompt,
+        completion_tokens=0 if failure else completion,
+        request_duration_ms=ms,
+        metadata=meta,
+    )
+
+
+def test_tools_are_the_product_before_the_slash_and_browsers_are_one():
+    assert tool_family("opencode/latest/2.2.1/acp") == "opencode"
+    assert tool_family("codex-tui/0.166.0 (Linux Unknown; x86_64)") == "codex-tui"
+    assert tool_family("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36") == "browser"
+    assert tool_family(None) == "unknown"
+    assert tool_family("curl") == "curl"
+
+
+def test_prompt_length_buckets_cover_every_length():
+    assert [prompt_bucket(n) for n in (0, 999, 1_000, 7_999, 8_000, 31_999, 32_000, 127_999, 128_000, 10**7)] == [
+        "<1k", "<1k", "1k-8k", "1k-8k", "8k-32k", "8k-32k", "32k-128k", "32k-128k", ">128k", ">128k",
+    ]  # fmt: skip
+
+
+def test_a_day_folds_into_one_row_per_model_per_hour():
+    rows = fold_demand(
+        DAY,
+        [
+            _spend(9),
+            _spend(9, prompt=92_000, completion=100, ms=34_000, agent="opencode/latest", project="netbeans"),
+            _spend(9, model="qwen3.8-27b"),
+            _spend(10),
+        ],
+    )
+    assert [(r.hour, r.model) for r in rows] == [
+        ("2026-11-01T09", "gemma4-26b"),
+        ("2026-11-01T09", "qwen3.8-27b"),
+        ("2026-11-01T10", "gemma4-26b"),
+    ]
+    nine = rows[0]
+    assert nine.requests == 2
+    assert nine.prompt_tokens == 580 + 92_000
+    assert nine.completion_tokens == 146
+    assert nine.by_project == {
+        "spark": dict(requests=1, prompt_tokens=580, completion_tokens=46),
+        "netbeans": dict(requests=1, prompt_tokens=92_000, completion_tokens=100),
+    }
+    assert {k: v["requests"] for k, v in nine.by_tool.items()} == {"OpenAI": 1, "opencode": 1}
+    assert nine.prompt_len == {"<1k": 1, "32k-128k": 1}
+    assert nine.duration_p50_s == 0.6
+    assert nine.duration_p95_s == 34.0
+    assert nine.sources == ["litellm"]
+    assert nine.refused == {}
+
+
+def test_what_is_not_demand_is_left_out():
+    """A bad key at the door, a /v1/models listing, LiteLLM's own health checks, another day."""
+    rows = fold_demand(
+        DAY,
+        [
+            _spend(9),
+            edict(_spend(9), model_group="", call_type="/v1/models"),
+            _spend(9, project="litellm-internal-health-check"),
+            edict(_spend(9), startTime="2026-11-02T00:00:00.000+00:00"),
+        ],
+    )
+    assert [(r.hour, r.requests) for r in rows] == [("2026-11-01T09", 1)]
+
+
+def test_a_refused_request_counts_as_a_request_with_a_reason_and_no_tokens():
+    (row,) = fold_demand(
+        DAY,
+        [_spend(9), _spend(9, failure="429_RATE_LIMIT", ms=2), _spend(9, failure="429_RATE_LIMIT", project=None)],
+    )
+    assert row.requests == 3
+    assert row.refused == {"429_RATE_LIMIT": 2}
+    assert row.prompt_tokens == 580
+    assert row.by_project[NO_PROJECT]["requests"] == 1
+    # the 2ms refusals do not drag the latency down
+    assert row.duration_p50_s == 0.6
+    assert row.prompt_len == {"<1k": 1}
+
+
+def test_demand_rows_are_kept_by_hour_then_model_and_pruned_with_the_rest():
+    store, rows = _store()
+    (row,) = fold_demand(DAY, [_spend(9)])
+    asyncio.run(store.write_demand(row))
+    asyncio.run(store.mark_demand_day("2026-11-01", sources=["litellm"], rows=1))
+    assert sorted(rows) == [f"{DEMAND_DAY_PREFIX}2026-11-01", f"{DEMAND_PREFIX}2026-11-01T09:gemma4-26b"]
+    assert [r.model for r in asyncio.run(store.read_demand(1, today=DAY))] == ["gemma4-26b"]
+    assert asyncio.run(store.demand_days_done()) == {"2026-11-01": edict(sources=["litellm"], rows=1)}
+    # 90 days later the day, its rows and its marker go together.
+    rows[f"llmao:capacity:2026-11-01T09:{SERVER}"] = json.dumps({"hour": "2026-11-01T09"})
+    gone = asyncio.run(store.prune(90, today=DAY + dt.timedelta(days=91)))
+    assert gone == 2
+    assert rows == {}
+
+
+class _Metering:
+    """Stands in for UsageManager: hands back the spend log of each day it is asked for."""
+
+    def __init__(self, days: dict[str, list], *, down: bool = False):
+        self.days = days
+        self.down = down
+        self.asked: list[dt.date] = []
+
+    async def spend_log(self, day):
+        self.asked.append(day)
+        if self.down:
+            raise RuntimeError("LiteLLM away")
+        return self.days.get(day.isoformat(), [])
+
+
+def test_the_rollup_does_every_closed_day_the_store_lacks_oldest_first():
+    store, rows = _store()
+    halloween = [edict(_spend(h), startTime=f"2026-10-31T{h:02d}:10:00.000+00:00") for h in (9, 10)]
+    metering = _Metering({"2026-11-01": [_spend(9)], "2026-10-31": halloween})
+    rollup = DemandRollup(metering, store, keep_days=3)
+    # 01:30 on the 2nd: the 1st closed at 01:00, the 2nd is still open.
+    done = asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 1, 30, tzinfo=dt.UTC)))
+    assert done == [dt.date(2026, 10, 31), dt.date(2026, 11, 1)]
+    assert metering.asked == done
+    markers = asyncio.run(store.demand_days_done())
+    assert markers["2026-10-31"].rows == 2
+    assert markers["2026-11-01"].rows == 1
+    assert len([k for k in rows if k.startswith(DEMAND_PREFIX)]) == 3
+    # The next run finds nothing to do, and asks LiteLLM for nothing.
+    assert asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 2, 0, tzinfo=dt.UTC))) == []
+    assert metering.asked == done
+
+
+def test_a_day_is_not_closed_until_an_hour_after_midnight():
+    rollup = DemandRollup(_Metering({}), _store()[0], keep_days=90)
+    assert rollup.missing_days(set(), dt.datetime(2026, 11, 2, 0, 30, tzinfo=dt.UTC))[-1] == dt.date(2026, 10, 31)
+    assert rollup.missing_days(set(), dt.datetime(2026, 11, 2, 1, 0, tzinfo=dt.UTC))[-1] == dt.date(2026, 11, 1)
+
+
+def test_a_quiet_day_is_marked_so_it_is_not_asked_for_again():
+    store, _rows = _store()
+    rollup = DemandRollup(_Metering({}), store, keep_days=2)
+    asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 1, 30, tzinfo=dt.UTC)))
+    assert asyncio.run(store.demand_days_done())["2026-11-01"].rows == 0
+
+
+def test_a_day_that_cannot_be_read_waits_for_the_next_run_with_the_rest():
+    store, rows = _store()
+    rollup = DemandRollup(_Metering({}, down=True), store, keep_days=3)
+    assert asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 1, 30, tzinfo=dt.UTC))) == []
+    assert rows == {}
+
+
+def test_demand_is_summarised_per_model_over_the_period():
+    rows = fold_demand(DAY, [_spend(9), _spend(9, failure="429_RATE_LIMIT"), _spend(10, agent="codex-tui/1")])
+    (qwen_row,) = fold_demand(DAY, [_spend(9, model="qwen3.8-27b")])
+    qwen_row.hour = "2026-11-02T09"  # the next day
+    (gemma, qwen) = summarise_demand([*rows, qwen_row], today=dt.date(2026, 11, 2), period_days=7)
+    assert gemma.model == "gemma4-26b"
+    assert gemma.requests == 3
+    assert gemma.days == 1
+    assert gemma.requests_per_day == 3
+    assert gemma.refused_total == 1
+    assert gemma.refused == [edict(name="429_RATE_LIMIT", count=1)]
+    assert [t.name for t in gemma.by_tool] == ["OpenAI", "codex-tui"]
+    assert gemma.by_project[0].name == "spark"
+    assert [b.count for b in gemma.prompt_len] == [2, 0, 0, 0, 0]
+    assert gemma.duration_p50_s == 0.6
+    assert gemma.daily_requests == [edict(day="2026-11-01", value=3)]
+    assert qwen.requests == 1
+    # A period that excludes the days leaves nothing.
+    assert summarise_demand([*rows, qwen_row], today=dt.date(2026, 11, 20), period_days=7) == []
