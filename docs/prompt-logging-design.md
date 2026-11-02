@@ -56,56 +56,79 @@ Made 2026-11-01. Each is a choice, recorded so it is not re-derived.
 
 ## Development plan
 
-The record has two halves. The **envelope** is everything in the record
-table except the prompt: ids, timing, model, tokens, key, user agent,
-status, the parameters. It is the same class of data as LiteLLM's spend
-log, which already exists and which STATUS.md already describes, so it
-raises no new question of policy. The **content** is `messages`, the
-`tools` definitions inside `params`, and (as flagged in the table)
-`finish_reason`. Everything the post-process computes, demand rows,
-reconciliation and the first reports, needs only the envelope.
+This design is under review as a whole. The reviewers may change the
+record, the file layout, the writer, the retention, or say no to parts
+of it, and nothing below assumes the review comes back as written. The
+work sorts into what the review cannot invalidate and what it can.
 
-So the work runs on two tracks. Track A builds the whole pipeline on the
-envelope and does not wait for anything. Track B is the parts under
-review: it adds the content and the words around it, and nothing in
-track A has to be redone when it lands. The rule that keeps the tracks
-apart: until track B lands, no code path writes prompt content, and the
-record builder's content half returns nothing.
+The data split does the sorting. Of what the record holds, LiteLLM's
+own spend log already keeps most of it, per request (the LiteLLM column
+in the record table): tokens, model, deployment, provider, key, user,
+project, end user, call type, status and error class, the timings, and
+the user agent. That is data we gather from LiteLLM rather than manage
+ourselves, and nearly the whole demand row comes from it. The new data,
+which only our log can hold, is the stream flag, the parameters and the
+tools in the request, the finish reason, the messages per request, and
+the content. The review is about the new data and the machinery that
+keeps it.
 
-### Track A: now
+### First: the hook apparatus, with a probe inside
+
+The product needs a LiteLLM hook whatever the review says, and the
+apparatus is the stable part: the `callback_settings` section, the
+module-level build-once, fail-at-start, the registration in
+`litellm.yaml`, and the three methods LiteLLM calls (pre-call, success,
+failure). Its first body is a probe, not the writer. It prints what it
+sees for a request sent with `no-log` and with
+`turn_off_message_logging` in each place a client could put them (the
+body, `extra_body`, metadata, headers), against the local proxy and the
+mock backend. That answers whether the events fire at all, whether
+`messages` in the standard payload is redacted, and whether the pre-call
+hook sees the parameter early enough to strip it. The answer goes into
+"No opt-out" and decides whether the strip is needed. A user who can opt
+out would undo the whole design, so this comes before anything else. The
+apparatus keeps its tests in `tests/test_litellm_hooks.py`; the probe
+body is thrown away.
 
 | Step | What | State |
 |---|---|---|
-| A1 | Two facts for the reviewers. Replace the Size paragraph's assumption with the real daily prompt-token figure from the capacity rows. Step 6 below: whether a client can set `no-log` or `turn_off_message_logging` through the proxy | planned |
-| A2 | `llmao/prompt_log.py`: the record builder in two halves (envelope, content), the day-file name pattern, reading day files plain and compressed, the cursor, the rollup. Pure functions, tested on synthetic records in `tests/test_prompt_log.py` | planned |
-| A3 | The `prompt_log` callback in `litellm_hooks.py`: settings from `callback_settings`, built once, fails the proxy at start when the section or the directory is missing, adds the loguru sink, hands it each envelope. loguru joins `pyproject.toml`. Tests in `tests/test_litellm_hooks.py` | planned |
-| A4 | `bin/llmao-prompt-log`: `rollup --json` and the first reports. All of them read the envelope only, by design | planned |
-| A5 | Demand rows in `CapacityStore` (key layout, write, read, prune), the reconciliation figure and the demand tables on `/admin/capacity` | planned |
-| A6 | The `demand-rollup` runner and its spawn helper, registered in `main.py` | planned |
-| A7 | Switched on: `litellm.yaml.example`; p6 (`init.pp` creates the directory and renders its path into both YAML files, `litellm.yaml.epp` gains the callback settings and the callback, the proxy unit gains `ReadWritePaths`). Production then logs envelopes and the capacity page gets demand rows | planned |
+| H1 | The apparatus, with the probe as its body; `litellm.yaml.example` names the callback | planned |
+| H2 | The probe's answers written into "No opt-out"; the probe body removed | planned |
 
-### Track B: after review
+### Track L: gathered from LiteLLM, for capacity planning
+
+This track is capacity planning's, not the log's. The demand rows are
+what `/admin/capacity` needs to answer its four questions, and LiteLLM
+already holds the data for nearly all of them, so this work is wanted
+however prompts end up being logged, and whether or not they are.
+Nothing here waits for the review.
 
 | Step | What | State |
 |---|---|---|
-| B1 | The content half of the record: `messages`, `params.tools`, and the decision on `finish_reason`. One change in the module, no change in the hook | under review |
-| B2 | The pre-call strip of `no-log` and `turn_off_message_logging`, if A1 shows a client can set them | under review |
-| B3 | Terms of Service page, footer link, STATUS.md data handling rewritten | under review |
-| B4 | The retention number, rendered into `litellm.yaml` for the sink, and the terms stating it ("approximately") and the backup policy | under review |
-| B5 | Which content analyses, and where they run | open |
-| B6 | Usage Analysis page | parked |
+| L1 | The real daily prompt-token figure, from the capacity rows, replaces the Size paragraph's assumption | planned |
+| L2 | A per-request reader of LiteLLM's spend log in `llmao/proxy/client.py`, beside the daily reader: a day at a time with both dates sent, closed days kept, bucketed by hour here | planned |
+| L3 | The demand rows: key layout, write, read, prune in `CapacityStore` and `CapacityPruner`; the rollup from spend rows to demand rows, the log-only fields left empty | planned |
+| L4 | The demand tables on `/admin/capacity`, and the LiteLLM side of the reconciliation figure | planned |
 
-### What is under review
+### Track N: the new data, after review
 
-The sections of this document the reviewers are asked to read:
-decisions 2 and 4; "No opt-out"; in "The record", the `messages`,
-`params`, `finish_reason` and `client_headers` rows; "Files", for
-retention and backups; "Access"; and "The terms page".
+| Step | What | Waits for |
+|---|---|---|
+| N1 | The record: which fields, and the content (`messages`, `params`, `finish_reason`) | decision 2, "The record" |
+| N2 | The writer: the loguru sink or what replaces it; directory, naming, rotation, compression, retention | "Files", decision 12 |
+| N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | N1, N2 |
+| N4 | The reader: day files plain and compressed, the cursor, `rollup --json`; the log-only fields of the demand rows and the log side of the reconciliation; the `demand-rollup` runner and its spawn helper | N2 |
+| N5 | The pre-call strip of `no-log` and `turn_off_message_logging` | H2, "No opt-out" |
+| N6 | Terms of Service page, footer link, STATUS.md data handling rewritten; the retention number | decision 4, "Access", "The terms page" |
+| N7 | The reports in `bin/llmao-prompt-log` | N4 |
+| N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
+| N9 | Which content analyses, and where they run | open |
+| N10 | Usage Analysis page | parked |
 
 ### Step numbers used elsewhere
 
 Earlier drafts numbered the steps 1 to 8; the text below still says
-"step 6" for the `no-log` check (now A1).
+"step 6" for the `no-log` check (now H1).
 
 ## How the proxy records
 
@@ -192,21 +215,26 @@ the parameters simply have no effect here.
 One JSON object per line. Field names are ours; the source is the standard
 payload.
 
-| Field | From | Meaning |
-|---|---|---|
-| `ts`, `duration_s`, `ttft_s` | `endTime`, `startTime`, `completionStartTime` | when it finished (UTC, ISO 8601), how long it took, time to first token (`null` unless streamed) |
-| `call_id`, `trace_id` | `litellm_call_id`, `trace_id` | the id the client got in `x-litellm-call-id`, which also keys LiteLLM's spend row; the trace groups retries and fallbacks |
-| `call_type` | `call_type` | LiteLLM's name for the endpoint (`acompletion`, `aembedding`, ...) |
-| `status`, `error` | `status`, `error_information` | `success` or `failure`; on failure the class, code and provider, not the message (an error message can quote the prompt) |
-| `model`, `deployment`, `api_base`, `provider` | `model_group`, `model`, `api_base`, `custom_llm_provider` | what the user asked for; what served it; which box or provider |
-| `stream` | `stream` | |
-| `tokens` | `prompt_tokens`, `completion_tokens`, `total_tokens` | |
-| `finish_reason` | the response | the one word we keep from the response: it is how truncation and tool use show up in aggregate. **The exception to decision 2; drop it if that reads as a result.** |
-| `key` | `metadata.user_api_key_*` | `hash`, `alias`, `user` (the ASF uid for a personal key, `null` for automation), `project` (the team alias) |
-| `end_user` | `end_user` | the request's `user` field, when a tool sends one |
-| `user_agent`, `client_headers` | `user_agent`, `metadata.requester_custom_headers` | which tool, and any `x-` headers it sent |
-| `params` | `model_parameters` | the request minus the prompt: `temperature`, `max_tokens`, `tools` (the definitions an agent put in front of the model), `tool_choice`, `response_format`, `reasoning_effort`, `chat_template_kwargs`, ... |
-| `messages` | `messages` | the prompt as LiteLLM received it: the messages list for chat, the string for completions, the input for embeddings |
+The LiteLLM column says whether LiteLLM's own spend log
+(`LiteLLM_SpendLogs`, one row per request, checked against the 1.105.0
+schema) already keeps the field. Those are gathered from LiteLLM by
+track L; the rest is the new data the log exists for.
+
+| Field | From | LiteLLM | Meaning |
+|---|---|---|---|
+| `ts`, `duration_s`, `ttft_s` | `endTime`, `startTime`, `completionStartTime` | yes | when it finished (UTC, ISO 8601), how long it took, time to first token (`null` unless streamed) |
+| `call_id`, `trace_id` | `litellm_call_id`, `trace_id` | the call id | the id the client got in `x-litellm-call-id`, which also keys LiteLLM's spend row; the trace groups retries and fallbacks |
+| `call_type` | `call_type` | yes | LiteLLM's name for the endpoint (`acompletion`, `aembedding`, ...) |
+| `status`, `error` | `status`, `error_information` | yes | `success` or `failure`; on failure the class, code and provider, not the message (an error message can quote the prompt) |
+| `model`, `deployment`, `api_base`, `provider` | `model_group`, `model`, `api_base`, `custom_llm_provider` | yes | what the user asked for; what served it; which box or provider |
+| `stream` | `stream` | no | |
+| `tokens` | `prompt_tokens`, `completion_tokens`, `total_tokens` | yes | |
+| `finish_reason` | the response | no | the one word we keep from the response: it is how truncation and tool use show up in aggregate. **The exception to decision 2; drop it if that reads as a result.** |
+| `key` | `metadata.user_api_key_*` | yes | `hash`, `alias`, `user` (the ASF uid for a personal key, `null` for automation), `project` (the team alias) |
+| `end_user` | `end_user` | yes | the request's `user` field, when a tool sends one |
+| `user_agent`, `client_headers` | `user_agent`, `metadata.requester_custom_headers` | the user agent | which tool, and any `x-` headers it sent |
+| `params` | `model_parameters` | no | the request minus the prompt: `temperature`, `max_tokens`, `tools` (the definitions an agent put in front of the model), `tool_choice`, `response_format`, `reasoning_effort`, `chat_template_kwargs`, ... |
+| `messages` | `messages` | no | the prompt as LiteLLM received it: the messages list for chat, the string for completions, the input for embeddings. LiteLLM has the column, switched off |
 
 `requester_ip_address` is left out: the proxy sits behind the Apache vhost
 on loopback and does not read `X-Forwarded-For`, so it would say
@@ -338,14 +366,14 @@ the same `/v1/memory` store as the capacity rows, pruned by
 rows describe supply, what each server did; these describe demand, what
 was asked, and join to them on hour and model. Each holds:
 
-| Field | Meaning |
-|---|---|
-| `requests`, `prompt_tokens`, `completion_tokens` | totals for the hour |
-| `by_project`, `by_tool` | the same three, split by team alias and by user-agent family |
-| `refused` | requests that failed before reaching a box, by reason: rate limit, budget, parallel cap, upstream error. `waiting_frac` on the capacity rows sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
-| `prompt_len` | counts in length buckets, for whether anyone uses the context we pay KV cache for |
-| `ttft_p50`, `ttft_p95`, `duration_p50`, `duration_p95` | latency as the client felt it, to set against the box's queue times |
-| `streamed`, `with_tools`, `finish_length` | counts |
+| Field | Source | Meaning |
+|---|---|---|
+| `requests`, `prompt_tokens`, `completion_tokens` | LiteLLM | totals for the hour |
+| `by_project`, `by_tool` | LiteLLM | the same three, split by team alias and by user-agent family |
+| `refused` | LiteLLM | requests that failed before reaching a box, by reason: rate limit, budget, parallel cap, upstream error. `waiting_frac` on the capacity rows sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
+| `prompt_len` | LiteLLM | counts in token-length buckets, for whether anyone uses the context we pay KV cache for |
+| `ttft_p50`, `ttft_p95`, `duration_p50`, `duration_p95` | LiteLLM | latency as the client felt it, to set against the box's queue times |
+| `streamed`, `with_tools`, `finish_length` | the log | counts; empty until track N |
 
 No prompt content and no per-user split: the capacity page is for
 planning, and per project and per tool is what planning needs. Per user
@@ -355,14 +383,17 @@ Size: six models by 24 hours by 90 days is about 13,000 small rows.
 
 ### What LiteLLM already holds, and the reconciliation
 
-Tokens per project per model per day already exist in LiteLLM's usage
-data, and the capacity page reads some of it for provider spend. The log
-is not the only source of those counts, and LiteLLM's are the ones budgets
-run on, so they stay the truth for tokens and money. What the log adds
-that nothing else holds: the tool, the tools-in-request share, messages
-per request, client latency, and refusals in one place, in a store we
-query without the `/spend/logs` date-filtering that the code already
-records as the wrong path.
+LiteLLM's spend log keeps one row per request with most of what the
+record holds (the LiteLLM column above), and its daily aggregate is what
+budgets run on, so LiteLLM stays the truth for tokens and money. The
+demand rows are built from the spend log first, and the log fills in
+only the fields LiteLLM lacks: the stream flag, tools in the request,
+the finish reason, messages per request. The spend log is read through
+`/spend/logs` a day at a time, with both `start_date` and `end_date`
+sent: that call filters by date only when it has both, and with one it
+returns the 10,000 most recent rows instead, which is the trap the daily
+reader in `llmao/proxy/client.py` fell into and documents. A closed day
+is read once and kept, as the daily reader does.
 
 Where the two overlap, one figure per day and model is kept: requests
 seen in the log against requests LiteLLM billed. A gap one way is logging
@@ -391,7 +422,8 @@ that already owns the neighbouring role.
 | Record shape, file name pattern, reading day files, rollup, cursor | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
 | The tool: `rollup --json`, reports | `bin/llmao-prompt-log`, argparse over the module |
 | The runner and its spawn helper | `llmao/prompt_log.py`; registered in `main.py` |
-| Demand rows: key layout, write, read, prune | `llmao/capacity.py`, `CapacityStore` and `CapacityPruner` |
+| Per-request reader of LiteLLM's spend log, a day at a time | `llmao/proxy/client.py`, beside the daily reader |
+| Demand rows: key layout, write, read, prune; the rollup from spend rows | `llmao/capacity.py`, `CapacityStore` and `CapacityPruner` |
 | Reconciliation figure and demand tables | `llmao/capacity.py` beside `summarise_capacity`; rendered by the `/admin/capacity` handler in `pages.py` |
 | Settings: `prompt_log_dir`, `prompt_log_retention_days`, the rollup interval | `config.yaml.example`, flat keys beside `capacity_retention_days`; the sink reads its copy of the directory and retention from `litellm.yaml` |
 | Terms of Service | `docs/help/terms.md`; link in `templates/footer.ezt`; excluded from the guides list in `pages.py` |
