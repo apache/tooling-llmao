@@ -25,7 +25,7 @@ hand, and this page is not it.
 | 2 | Hourly rollups, stored | done |
 | 3 | Rental prices from the Vast and RunPod APIs | done |
 | 4 | Provider spend from LiteLLM's daily activity | done |
-| 5 | The page | planned |
+| 5 | The page, `/admin/capacity` | done |
 | 6 | "Add a box / remove a box" suggestions | after a few weeks of data |
 | 7 | Demand rows: what was asked per model per hour, from LiteLLM's spend log, rolled up once a day; "What was asked" on the page | done 2026-11-02 |
 
@@ -34,6 +34,17 @@ each server did), is designed in `docs/prompt-logging-design.md` under
 "Demand rows", and lives in the same module and store: `fold_demand`,
 `DemandRollup` and `summarise_demand` in `llmao/capacity.py`, keys
 `llmao:demand:<hour>:<model>` beside the capacity keys, pruned together.
+
+Each rolled-up day leaves a marker, `llmao:demand-day:<day>`, holding
+the row count, which sources wrote it, and the `FOLD_VERSION` the fold
+had at the time (a constant in `llmao/capacity.py`, 2 since the
+deployment-id exclusion of 2026-11-02). The runner treats a day whose
+marker carries an older version as missing, so bumping the constant
+makes the next run clear and re-roll every stored day, oldest first.
+That is how a change to what a demand row holds, or to what counts as
+demand, reaches history. Bump it whenever `fold_demand` changes its
+output; the capacity rows have no such version, since they are
+written once from readings that cannot be re-taken.
 
 **Future, on demand only:** a CSV download of the report. Not built until
 someone asks for it.
