@@ -276,6 +276,7 @@ def _hour_row(
     q95=None,
     rental="",
     rental_label="",
+    preemptions=0,
 ):
     return edict(
         hour=hour,
@@ -292,7 +293,7 @@ def _hour_row(
         prompt_tokens=prompt,
         generation_tokens=gen,
         requests=10,
-        preemptions=0,
+        preemptions=preemptions,
         queue_avg_s=None,
         queue_p95_s=q95,
         usd_per_hour=usd,
@@ -338,9 +339,9 @@ def test_a_rentals_hours_are_one_line_across_an_address_change_and_from_before_t
     rows = [
         # Before the stamp, the same server as the stamped rows that follow.
         _hour_row("2026-10-19T07", "203.0.113.10:8001", "m", usd=0.5),
-        stamped("2026-10-19T08", "203.0.113.10:8001", usd=0.5),
+        stamped("2026-10-19T08", "203.0.113.10:8001", usd=0.5, preemptions=4),
         # The provider moved the machine: a new address, the same rental and port.
-        stamped("2026-10-19T09", "198.51.100.8:8001", usd=0.6),
+        stamped("2026-10-19T09", "198.51.100.8:8001", usd=0.6, preemptions=6),
         # A second process on the same rental is its own line.
         stamped("2026-10-19T09", "198.51.100.8:8002", usd=0.6),
         # A server never stamped is a line of its own, by its address.
@@ -355,6 +356,8 @@ def test_a_rentals_hours_are_one_line_across_an_address_change_and_from_before_t
     assert (moved.first_hour, moved.last_hour, moved.hours) == ("2026-10-19T07", "2026-10-19T09", 3)
     # The last price seen: the machine's price where it is now.
     assert moved.usd_per_hour == 0.6
+    # Preemptions are kept per line: which rental ran out of cache.
+    assert (moved.preemptions, second.preemptions) == (10, 0)
     assert second.hours == 1
     assert loose.rental == "" and loose.addresses == ["192.0.2.4:8001"]
 

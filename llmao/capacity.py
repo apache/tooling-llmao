@@ -745,6 +745,7 @@ def _server_lines(rows: list) -> list[edict]:
                 busy=_weighted(theirs, "busy_frac"),
                 waiting=_weighted(theirs, "waiting_frac"),
                 kv_peak=max(r.kv_peak for r in theirs),
+                preemptions=sum(r.preemptions for r in theirs),
                 tokens=sum(r.prompt_tokens + r.generation_tokens for r in theirs),
             )
         )

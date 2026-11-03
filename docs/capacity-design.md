@@ -44,7 +44,10 @@ a rental and a listen port, named by the rental stamp on the rows ("Vast
 53865410:8001" with the rental's label beside it), with the first and
 last day seen and what became of the machine: "ended" when no provider
 lists it now, the provider's own word ("exited") when listed but not
-running, "gone" for a pre-stamp address no server has now.
+running, "gone" for a pre-stamp address no server has now. Each line
+carries its own preemptions, so when the model's total says vLLM ran
+out of cache, a Preempted column says on which rental; the column
+appears only when some line has a count.
 
 What never happened is left out rather than shown as zero: the waiting
 meter and the worst wait (vLLM's smallest bucket, under 0.3 s, is the

@@ -195,6 +195,7 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         busy=0.1,
         waiting=0.0,
         kv_peak=0.2,
+        preemptions=0,
         tokens=514,
     )
     model = edict(
@@ -235,6 +236,14 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     assert "Vast 9:8001" in out and "RTX 3060 x2" in out
     assert "Oct 19 to Oct 20" in out and ">ended<" in out
     assert "hours sampled" not in out
+    # No rental preempted anything: no column. One did: the column, with the count on its line.
+    assert "Preempted" not in out
+    model.servers[0].preemptions = 7  # edict copied the line on construction
+    data.cards, data.dormant = pages.capacity_cards(
+        [model], [], catalog={}, live={"qwen3-8b-bf16"}, today=day, period_days=7, listed={}
+    )
+    out = render()
+    assert "Preempted" in out and 'text-warning-emphasis">7</td>' in out
 
 
 def test_admin_drops_models_and_shows_a_version_match():

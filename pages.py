@@ -2018,6 +2018,9 @@ def _capacity_model_row(
         preemptions=m.preemptions or None,
         queue_p95=queue_p95,
         servers_queued=ezt.boolean(any(srv.waiting > 0 for srv in m.servers)),
+        # Which rental ran out of cache is the column's point: the model
+        # total above says it happened, this says where.
+        servers_preempted=ezt.boolean(any(srv.preemptions for srv in m.servers)),
         prompt_tokens=_tokens_h(m.prompt_tokens),
         generation_tokens=_tokens_h(m.generation_tokens),
         requests=f"{m.requests:,}",
@@ -2034,6 +2037,7 @@ def _capacity_model_row(
                 busy=_pct(srv.busy),
                 waiting=_pct(srv.waiting),
                 kv_peak=_pct(srv.kv_peak),
+                preempted=srv.preemptions or "",
                 tokens=_tokens_h(srv.tokens),
             )
             for srv in m.servers

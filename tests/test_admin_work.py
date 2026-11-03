@@ -283,6 +283,7 @@ def _line(**over):
         busy=0,
         waiting=0,
         kv_peak=0,
+        preemptions=0,
         tokens=0,
     )
     line.update(over)
@@ -294,10 +295,18 @@ def test_what_never_happened_is_not_shown():
     pages = _app()
     quiet = pages._capacity_model_row(_model(servers=[_line()]))
     assert not quiet.queued and quiet.preemptions is None and not quiet.servers_queued
+    assert not quiet.servers_preempted and quiet.servers[0].preempted == ""
     busy = pages._capacity_model_row(
-        _model(waiting=0.01, waiting_peak=3, preemptions=60, servers=[_line(waiting=0.01)])
+        _model(
+            waiting=0.01,
+            waiting_peak=3,
+            preemptions=60,
+            servers=[_line(waiting=0.01, preemptions=60), _line(server="Vast 2:8001", rental="Vast 2")],
+        )
     )
     assert busy.queued and busy.preemptions == 60 and busy.servers_queued
+    # The column says which rental: the one that preempted has the count, the other nothing.
+    assert busy.servers_preempted and [s.preempted for s in busy.servers] == [60, ""]
     # A peak with no share: a request queued once, briefly. Still told.
     assert pages._capacity_model_row(_model(waiting_peak=1)).queued
 

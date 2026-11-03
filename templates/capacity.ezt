@@ -97,7 +97,7 @@
         [end]
 
         <table class="table table-sm small mt-3 mb-0">
-          <thead><tr><th>Rental</th><th>Seen</th><th>Rental share</th><th class="text-end">Busy</th>[if-any cards.supply.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th><th class="text-end">Tokens</th></tr></thead>
+          <thead><tr><th>Rental</th><th>Seen</th><th>Rental share</th><th class="text-end">Busy</th>[if-any cards.supply.servers_queued]<th class="text-end">Waiting</th>[end]<th class="text-end">KV peak</th>[if-any cards.supply.servers_preempted]<th class="text-end" title="Requests vLLM evicted from a full KV cache and ran again later">Preempted</th>[end]<th class="text-end">Tokens</th></tr></thead>
           <tbody>
             [for cards.supply.servers]
             <tr[if-any cards.supply.servers.status] class="text-muted"[end]>
@@ -107,6 +107,7 @@
               <td class="text-end">[cards.supply.servers.busy]%</td>
               [if-any cards.supply.servers_queued]<td class="text-end">[cards.supply.servers.waiting]%</td>[end]
               <td class="text-end">[cards.supply.servers.kv_peak]%</td>
+              [if-any cards.supply.servers_preempted]<td class="text-end[if-any cards.supply.servers.preempted] text-warning-emphasis[end]">[cards.supply.servers.preempted]</td>[end]
               <td class="text-end">[cards.supply.servers.tokens]</td>
             </tr>
             [end]
