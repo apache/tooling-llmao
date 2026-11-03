@@ -88,15 +88,52 @@ The counts of hours over a threshold are what they turn on, not the
 period's averages. Rules decide deterministically: the same rows give
 the same advice two mornings in a row.
 
-Built: **Replace** a rental whose KV cache ran out, by preemptions or by
-queueing against a full cache. To come: **Add** a rental for a model busy
-or queueing in a meaningful share of its hours; **Retire** one of several
-idle rentals, never below the model's minimum; **Deploy** a model asked
-for with nothing serving it; **Retire** an unasked deployment; a minimum
-rental count per model in config, so that redundancy is policy rather
-than inference and a model under its minimum is reported; and
-**Snooze**, per recommendation key with an until date, in LiteLLM memory,
-the snoozed ones in a closed disclosure under the box.
+**Done (2026-11-03):**
+
+- The box, its "nothing to change" line, the three-part shape, and the
+  link from each recommendation to its model's card.
+- `Advisor` and `Recommendation` in `llmao/planning.py`, with the
+  hour-over-threshold counts on every model and rental line.
+- **Replace** a rental whose KV cache ran out, by preemptions or by
+  queueing against a full cache: the card's shape, not the fleet's
+  size, so the advice is more memory on one card, with the figures from
+  the recipe.
+
+**Later, in this order** (tracked in issue #70; none of it is being
+built now):
+
+- **Add** a rental for a model busy or queueing in a meaningful share
+  of its hours.
+- **A minimum rental count per model.** Redundancy is policy, not
+  something the rows can infer: a server was lost unseen and its model
+  went unserved until someone noticed. With a minimum, Retire never
+  advises going below it, and a rule reports a model under its minimum
+  the morning after a loss, from the fleet's live deployments. Open:
+  whether the setting lives in `models.yaml` `model_info`, beside the
+  recipe the page already reads, or in `config.yaml` `fleet`.
+- **Retire** one of several idle rentals, with the saving in dollars a
+  day tied to the "Rental per day" tile, never below the minimum.
+- **Deploy** a model asked for with nothing serving it.
+- **Retire** a deployment nobody asked for over the period.
+- **Snooze.** A recommendation an admin has decided to live with
+  becomes noise. One per recommendation key (rule, model, rental) with
+  an until date, in LiteLLM memory like access requests; keyed on the
+  rental so advice about another rental is not hidden with it. Snoozed
+  items sit in a closed disclosure under the box, "Snoozed (n)", each
+  with its headline and when it wakes; a small form on each item offers
+  a few durations.
+
+**Parked: an LLM-written analysis.** After the rules exist, a daily
+runner like the demand rollup gathers the same summaries as a table of
+figures, asks one of our own models for observations, stores the answer
+in LiteLLM memory with the timestamp and the model's name, and the page
+shows it as one more recommendation with the verb "Consider", visibly
+apart from the rule-based ones. Conditions: offline, never on page
+load; the numbers come from us, and the same table is rendered beside
+the paragraph so a misquoted figure shows; rules decide and the LLM
+comments; only our own strings go into the prompt, never tool names
+from user-agent headers or callers' error strings, which would be a
+way to put words in the advisor's mouth.
 
 ## Status
 
@@ -107,7 +144,7 @@ the snoozed ones in a closed disclosure under the box.
 | 3 | Rental prices from the Vast and RunPod APIs | done |
 | 4 | Provider spend from LiteLLM's daily activity | done |
 | 5 | The page, `/admin/capacity` | done |
-| 6 | Recommendations: what to do about what the rows say | the Replace rule built 2026-11-03; Add, Retire, Deploy, the minimum rentals per model, and Snooze to come |
+| 6 | Recommendations: what to do about what the rows say | the box and the Replace rule, 2026-11-03; the rest under "Recommendations" above and in issue #70 |
 | 7 | Demand rows: what was asked per model per hour, from LiteLLM's spend log, rolled up once a day; "What was asked" on the page | done 2026-11-02 |
 
 Demand, the other side of the capacity rows (what was asked, against what
