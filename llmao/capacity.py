@@ -462,7 +462,7 @@ def tool_family(user_agent: str | None) -> str:
     return "browser" if name == "Mozilla" else name
 
 
-def _percentile(values: list[float], p: float) -> float | None:
+def percentile(values: list[float], p: float) -> float | None:
     """Nearest-rank percentile: the smallest value that p of them are at or below."""
     if not values:
         return None
@@ -470,7 +470,9 @@ def _percentile(values: list[float], p: float) -> float | None:
     return ordered[max(0, math.ceil(p * len(ordered)) - 1)]
 
 
-def _add(bucket: dict, name: str, *, requests: int = 1, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
+def add_counts(
+    bucket: dict, name: str, *, requests: int = 1, prompt_tokens: int = 0, completion_tokens: int = 0
+) -> None:
     if name not in bucket:
         bucket[name] = dict(requests=0, prompt_tokens=0, completion_tokens=0)
     # Looked up after the assignment: an EasyDict stores a COPY of a dict
@@ -532,8 +534,8 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
             row.prompt_tokens += prompt
             row.completion_tokens += completion
             counted = dict(prompt_tokens=prompt, completion_tokens=completion)
-            _add(row.by_project, meta.get("user_api_key_team_alias") or NO_PROJECT, **counted)
-            _add(row.by_tool, tool_family(meta.get("user_agent")), **counted)
+            add_counts(row.by_project, meta.get("user_api_key_team_alias") or NO_PROJECT, **counted)
+            add_counts(row.by_tool, tool_family(meta.get("user_agent")), **counted)
             if refused:
                 reason = _refusal(meta)
                 row.refused[reason] = row.refused.get(reason, 0) + 1
@@ -542,8 +544,8 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
             row.prompt_len[bucket] = row.prompt_len.get(bucket, 0) + 1
             if r.request_duration_ms is not None:
                 durations.append(int(r.request_duration_ms) / 1000)
-        row.duration_p50_s = _percentile(durations, 0.5)
-        row.duration_p95_s = _percentile(durations, 0.95)
+        row.duration_p50_s = percentile(durations, 0.5)
+        row.duration_p95_s = percentile(durations, 0.95)
         out.append(row)
     return out
 

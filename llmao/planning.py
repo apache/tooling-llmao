@@ -33,7 +33,7 @@ from collections import defaultdict
 
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao.capacity import PROMPT_BUCKETS, _add, _percentile
+from llmao.capacity import PROMPT_BUCKETS, add_counts, percentile
 
 
 def _ranked_counts(totals: dict[str, dict]) -> list[edict]:
@@ -62,9 +62,9 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
         for r in mine:
             daily[r.hour[:10]] += r.requests
             for who, v in r.by_project.items():
-                _add(by_project, who, **v)
+                add_counts(by_project, who, **v)
             for who, v in r.by_tool.items():
-                _add(by_tool, who, **v)
+                add_counts(by_tool, who, **v)
             for why, n in r.refused.items():
                 refused[why] += n
             for bucket, n in r.prompt_len.items():
@@ -87,7 +87,7 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
                 prompt_len=[edict(name=label, count=prompt_len.get(label, 0)) for _limit, label in PROMPT_BUCKETS],
                 # The median of the hourly medians: a typical hour. The worst
                 # p95 says how bad the slowest hour got.
-                duration_p50_s=_percentile(p50s, 0.5),
+                duration_p50_s=percentile(p50s, 0.5),
                 duration_p95_worst_s=max(p95s) if p95s else None,
                 daily_requests=[edict(day=d, value=daily[d]) for d in sorted(daily)],
             )
