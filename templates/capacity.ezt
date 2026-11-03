@@ -45,8 +45,27 @@
     <div class="alert alert-warning small">The demand records could not be read from LiteLLM.</div>
     [end]
     [if-any cards]
+    <div class="card mb-4 cap-advice">
+      <div class="card-body">
+        <h2 class="h6 mb-2">Recommendations</h2>
+        [if-any recommendations]
+        [for recommendations]
+        <div class="cap-rec">
+          <div><span class="badge text-bg-warning me-1">[recommendations.verb]</span> <strong>[recommendations.headline]</strong>[if-any recommendations.saving] <span class="text-muted">saving [recommendations.saving] a day</span>[end]</div>
+          <p class="small mt-2 mb-1">[for recommendations.evidence][recommendations.evidence] [end]</p>
+          <ol class="small mb-1">
+            [for recommendations.action]<li>[recommendations.action]</li>[end]
+          </ol>
+          <a class="small" href="#cap-[recommendations.model]">The [recommendations.model] card</a>
+        </div>
+        [end]
+        [else]
+        <p class="small text-muted mb-0">Nothing to change: over the last [period_days] days every model stayed within what its rentals can do.</p>
+        [end]
+      </div>
+    </div>
     [for cards]
-    <div class="card mb-3">
+    <div class="card mb-3" id="cap-[cards.model_name]">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2">
           <h2 class="h6 mb-0">

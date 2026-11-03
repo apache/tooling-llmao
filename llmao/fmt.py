@@ -111,3 +111,8 @@ def ago_short(ts: float | None) -> str:
     if sec < 3600:
         return f"{sec // 60}m"
     return f"{sec // 3600}h"
+
+
+def plural(n: int, noun: str) -> str:
+    """'1 hour', '10 hours': a count with its noun, so a sentence never says '1 hours'."""
+    return f"{n:,} {noun}" if n == 1 else f"{n:,} {noun}s"

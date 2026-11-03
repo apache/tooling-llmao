@@ -68,6 +68,36 @@ The page speaks of rentals and deployments, never boxes or servers, and
 how its figures are made sits in a disclosure at the foot, closed until
 someone asks.
 
+### Recommendations
+
+Above the cards, a box says what to do, or says in one line that there
+is nothing to change; it is never blank. Each recommendation is three
+parts in a fixed order: a headline naming the verb and the rental
+("Replace Vast 53865410:8001 (RTX 3060 x2), serving qwen3-8b, with a
+rental that has more memory on one card"), the evidence as short
+sentences that each quote their figure and stand alone, and the action
+as numbered steps down to the shape to rent, from the recipe's declared
+weights and KV cache per token. An admin should understand without
+opening a card or a log; the card is for checking. Long is fine.
+
+The rules are methods of `Advisor` in `llmao/planning.py`, run in a
+fixed order, each holding its sentence, its threshold and the reason for
+it. They read the period's summaries, each model's recipe, and which
+rentals serve now, since advice about a rental that is gone is noise.
+The counts of hours over a threshold are what they turn on, not the
+period's averages. Rules decide deterministically: the same rows give
+the same advice two mornings in a row.
+
+Built: **Replace** a rental whose KV cache ran out, by preemptions or by
+queueing against a full cache. To come: **Add** a rental for a model busy
+or queueing in a meaningful share of its hours; **Retire** one of several
+idle rentals, never below the model's minimum; **Deploy** a model asked
+for with nothing serving it; **Retire** an unasked deployment; a minimum
+rental count per model in config, so that redundancy is policy rather
+than inference and a model under its minimum is reported; and
+**Snooze**, per recommendation key with an until date, in LiteLLM memory,
+the snoozed ones in a closed disclosure under the box.
+
 ## Status
 
 | Step | What | State |
@@ -77,7 +107,7 @@ someone asks.
 | 3 | Rental prices from the Vast and RunPod APIs | done |
 | 4 | Provider spend from LiteLLM's daily activity | done |
 | 5 | The page, `/admin/capacity` | done |
-| 6 | "Add a box / remove a box" suggestions | after a few weeks of data |
+| 6 | Recommendations: what to do about what the rows say | the Replace rule built 2026-11-03; Add, Retire, Deploy, the minimum rentals per model, and Snooze to come |
 | 7 | Demand rows: what was asked per model per hour, from LiteLLM's spend log, rolled up once a day; "What was asked" on the page | done 2026-11-02 |
 
 Demand, the other side of the capacity rows (what was asked, against what

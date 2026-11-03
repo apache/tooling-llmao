@@ -266,6 +266,12 @@ body {
   letter-spacing: 0.04em;
   font-size: 0.75rem;
 }
+/* Recommendations: one block each, a hairline between. */
+.capacity-page .cap-rec + .cap-rec {
+  border-top: 1px solid var(--bs-border-color);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
 /* Drawn by ECharts from the JSON on the element; the height is all the CSS decides. */
 .capacity-page .cap-chart {
   height: 9rem;

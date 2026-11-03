@@ -80,7 +80,7 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     import asfquart
 
     from llmao.capacity import fold_demand
-    from llmao.planning import summarise_demand
+    from llmao.planning import Recommendation, summarise_demand
 
     if asfquart.APP is None:
         asfquart.construct(
@@ -134,6 +134,7 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         demand_down=ezt.boolean(False),
         cards=cards,
         dormant=dormant,
+        recommendations=[],
         spend_down=ezt.boolean(False),
         providers=[],
     )
@@ -160,6 +161,27 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     assert 'data-chart="{&quot;days&quot;: [&quot;2026-10-26&quot;' in out
     assert "&quot;values&quot;: [0, 0, 0, 0, 0, 0, 2]" in out
     assert "/static/js/echarts.min.js" in out
+    # Nothing to recommend is said, not left blank; a recommendation is its sentences and a link to the card.
+    assert "Nothing to change" in out and 'id="cap-gemma4-26b"' in out
+    data.recommendations = [
+        pages._recommendation_row(
+            Recommendation(
+                rule="replace_cache_bound",
+                model="gemma4-26b",
+                rental="Vast 1",
+                verb="Replace",
+                headline="Replace Vast 1:8001 (RTX 3060 x2).",
+                evidence=("It ran out of cache.", "It was idle otherwise."),
+                action=("Rent a bigger card.", "Return the old one."),
+            )
+        )
+    ]
+    out = render()
+    assert "Nothing to change" not in out
+    assert ">Replace<" in out and "Replace Vast 1:8001 (RTX 3060 x2)." in out
+    assert "It ran out of cache. It was idle otherwise." in out
+    assert "<li>Rent a bigger card.</li>" in out and 'href="#cap-gemma4-26b"' in out
+    data.recommendations = []
     # Nothing bought from a model provider in the period: no section and no tiles for it.
     assert "Providers we pay" not in out
     assert "month to date" not in out

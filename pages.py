@@ -75,7 +75,7 @@ from llmao.model_status import (
     deployment_status,
 )
 from llmao.models import VllmRecipe, model_available_for, model_in_service, ux_models
-from llmao.planning import days_to_read, summarise_capacity, summarise_demand, summarise_spend
+from llmao.planning import Advisor, days_to_read, summarise_capacity, summarise_demand, summarise_spend
 from llmao.proxy.client import (
     PRETEND_PROJECTS,
     TIER_FREE,
@@ -1774,6 +1774,17 @@ async def admin_capacity(result):
         live_servers=live_servers,
     )
 
+    # What to do about it, over the same period: the rules in planning.py,
+    # given each model's recipe and which rentals serve now.
+    advisor = Advisor(
+        supply=fleet,
+        demand=demand,
+        recipes={str(m.model_name): VllmRecipe.from_model(m) for m in APP.models},
+        current={s.rental.ident for s in APP.fleet.servers if s.rental is not None},
+        period_days=days,
+    )
+    result.recommendations = [_recommendation_row(r) for r in advisor.advise()]
+
     try:
         spent = await APP.backend.metering.provider_spend(days_to_read(days, today))
         result.spend_down = ezt.boolean(False)
@@ -1785,6 +1796,18 @@ async def admin_capacity(result):
     result.spend_month_to_date = fmt.money(sum(p.month_to_date_usd for p in providers))
     result.spend_projected = fmt.money(sum(p.projected_month_usd for p in providers))
     return result
+
+
+def _recommendation_row(rec) -> edict:
+    """One recommendation for the template: the verb, the sentences, and the card it points at."""
+    return edict(
+        verb=rec.verb,
+        headline=rec.headline,
+        evidence=list(rec.evidence),
+        action=list(rec.action),
+        model=rec.model,
+        saving=fmt.money(rec.saving_usd_per_day) if rec.saving_usd_per_day else "",
+    )
 
 
 # A model with nothing serving it now and nothing seen for this long is a footnote.

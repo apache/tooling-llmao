@@ -30,9 +30,11 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 from collections import defaultdict
+from dataclasses import dataclass
 
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao import fmt
 from llmao.capacity import PROMPT_BUCKETS, add_counts, percentile
 
 
@@ -161,6 +163,7 @@ def _server_lines(rows: list) -> list[edict]:
     lines = []
     for (rental, port), theirs in by_line.items():
         hours = sorted(r.hour for r in theirs)
+        queue = [r.queue_p95_s for r in theirs if r.queue_p95_s is not None]
         lines.append(
             edict(
                 server=f"{rental}:{port}" if rental else port,
@@ -175,6 +178,7 @@ def _server_lines(rows: list) -> list[edict]:
                 waiting=_weighted(theirs, "waiting_frac"),
                 kv_peak=max(r.kv_peak for r in theirs),
                 preemptions=sum(r.preemptions for r in theirs),
+                queue_p95_worst_s=max(queue) if queue else None,
                 tokens=sum(r.prompt_tokens + r.generation_tokens for r in theirs),
                 **_hot_hours(theirs),
             )
@@ -300,3 +304,142 @@ def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[edi
             )
         )
     return sorted(out, key=lambda p: -p.period_usd)
+
+
+# ---- recommendations ------------------------------------------------------
+#
+# What to do about what the rows say: the planning answer the page is for.
+# Each rule is a method of Advisor, reading the summaries it holds and
+# returning Recommendations. The sentence a rule writes, the threshold it
+# turns on and the reason for that threshold sit together in the method.
+# Every evidence sentence stands alone, with its figure in it, so an admin
+# understands without opening a card or a log; no sentence points at one
+# that may be absent.
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    """One thing to do, with why and how.
+
+    ``rental`` is the rental it names (``Rental.ident``), "" when it is
+    about the model as a whole. ``key`` identifies it across days, for
+    snoozing: the same rule about the same rental is the same advice.
+    """
+
+    rule: str
+    model: str
+    rental: str
+    verb: str
+    headline: str
+    evidence: tuple[str, ...]
+    action: tuple[str, ...]
+    saving_usd_per_day: float = 0.0
+
+    @property
+    def key(self) -> str:
+        return f"{self.rule}:{self.model}:{self.rental}"
+
+
+def _top_prompt_bucket(demand) -> str:
+    """The prompt-length bucket most requests fell in ("8k-32k"), or ""."""
+    if demand is None or not demand.requests:
+        return ""
+    top = max(demand.prompt_len, key=lambda b: b.count)
+    return top.name if top.count else ""
+
+
+class Advisor:
+    """The rules, over one period's summaries.
+
+    ``supply`` is summarise_capacity's result, ``demand`` summarise_demand's
+    list, ``recipes`` each model's VllmRecipe (None when it has none),
+    ``current`` the idents of the rentals a vLLM server of ours runs on
+    now: advice about a rental that is gone is noise.
+    """
+
+    # In display order: what is broken before what could be better.
+    RULES = ("replace_cache_bound",)
+
+    def __init__(self, *, supply, demand: list, recipes: dict, current: set[str], period_days: int):
+        self.supply = supply
+        self.demand = {d.model: d for d in demand}
+        self.recipes = recipes
+        self.current = current
+        self.period_days = period_days
+
+    def advise(self) -> list[Recommendation]:
+        out: list[Recommendation] = []
+        for name in self.RULES:
+            out.extend(getattr(self, name)())
+        return out
+
+    def replace_cache_bound(self) -> list[Recommendation]:
+        """A rental whose KV cache ran out: vLLM evicted running requests, or queued them against a full cache.
+
+        A preemption is vLLM giving up on a running request for lack of
+        cache and starting it again later; one is enough to say the card
+        is too small for the prompts it gets. Queueing in an hour the
+        cache was full says the same without an eviction. Either is the
+        card's shape, not the fleet's size: the fix is more memory on one
+        card, not another rental like it.
+        """
+        out = []
+        for m in self.supply.models:
+            lines = [line for line in m.servers if line.rental in self.current]
+            for line in lines:
+                if not line.preemptions and not (line.hours_cache_full and line.hours_queued):
+                    continue
+                others = [o for o in lines if o is not line]
+                evidence = []
+                if line.preemptions:
+                    evidence.append(
+                        f"Over the last {self.period_days} days it ran out of KV cache in "
+                        f"{fmt.plural(line.hours_cache_full, 'hour')} and evicted "
+                        f"{fmt.plural(line.preemptions, 'running request')}, which were started again later."
+                    )
+                else:
+                    evidence.append(
+                        f"Over the last {self.period_days} days its KV cache was full in "
+                        f"{fmt.plural(line.hours_cache_full, 'hour')} and requests queued in "
+                        f"{fmt.plural(line.hours_queued, 'hour')}."
+                    )
+                if line.queue_p95_worst_s is not None and line.queue_p95_worst_s > 0.3:
+                    evidence.append(f"In the worst hour, requests waited up to {fmt.seconds(line.queue_p95_worst_s)}.")
+                if others and not any(o.preemptions for o in others):
+                    for o in others:
+                        evidence.append(
+                            f"The other rental, {o.server} ({o.label}), never ran out of cache in the same period."
+                        )
+                evidence.append(
+                    f"The model was busy {fmt.pct(m.busy)}% of the time, so this is the card's memory, not throughput."
+                )
+                bucket = _top_prompt_bucket(self.demand.get(m.model_name))
+                if bucket:
+                    evidence.append(f"Most prompts were {bucket} tokens long.")
+                out.append(
+                    Recommendation(
+                        rule="replace_cache_bound",
+                        model=m.model_name,
+                        rental=line.rental,
+                        verb="Replace",
+                        headline=f"Replace {line.server} ({line.label}), serving {m.model_name}, "
+                        "with a rental that has more memory on one card.",
+                        evidence=tuple(evidence),
+                        action=self._replace_steps(m.model_name, line),
+                    )
+                )
+        return out
+
+    def _replace_steps(self, model: str, line) -> tuple[str, ...]:
+        recipe = self.recipes.get(model)
+        steps = []
+        if recipe is not None and recipe.vram_gb:
+            need = f"Its weights need {recipe.vram_gb:g} GB"
+            if recipe.kv_bytes_per_token and recipe.max_model_len:
+                cache_gb = recipe.kv_bytes_per_token * recipe.max_model_len / 2**30
+                need += f", and a full {recipe.max_model_len:,}-token context another {cache_gb:.1f} GB of cache"
+            steps.append(f"Rent one card with room for {model} and several prompts at once. {need}.")
+        else:
+            steps.append(f"Rent one card with more memory for {model}; its recipe does not declare how much it needs.")
+        steps.append(f"Once the new rental serves {model}, return {line.server} ({line.label}).")
+        return tuple(steps)

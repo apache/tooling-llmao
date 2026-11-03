@@ -23,7 +23,8 @@ import datetime as dt
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.capacity import fold_demand
-from llmao.planning import days_to_read, summarise_capacity, summarise_demand, summarise_spend
+from llmao.models import VllmRecipe
+from llmao.planning import Advisor, days_to_read, summarise_capacity, summarise_demand, summarise_spend
 from tests.test_capacity import DAY, _spend
 
 SPEND_TODAY = dt.date(2026, 10, 19)
@@ -246,3 +247,81 @@ def test_demand_is_summarised_per_model_over_the_period():
     assert qwen.requests == 1
     # A period that excludes the days leaves nothing.
     assert summarise_demand([*rows, qwen_row], today=dt.date(2026, 11, 20), period_days=7) == []
+
+
+# ---- recommendations ----
+
+
+def _qwen_rows():
+    """The qwen3-8b shape of October: a cheap pair of 12GB cards that ran out of cache, a bigger rental that never did."""
+
+    def small(hour, **kw):
+        return _hour_row(hour, "203.0.113.10:8001", "qwen3-8b", rental="Vast 1", rental_label="RTX 3060 x2", **kw)
+
+    def big(hour, **kw):
+        return _hour_row(hour, "198.51.100.8:8003", "qwen3-8b", rental="RunPod p", rental_label="llmao-qwen3-8b", **kw)
+
+    rows = [small(f"2026-10-19T{h:02d}", busy=0.0) for h in range(20)]
+    rows += [big(f"2026-10-19T{h:02d}", busy=0.0) for h in range(20)]
+    rows += [
+        small("2026-10-19T20", busy=0.97, waiting=0.67, kv=1.0, preemptions=10, q95=120.0),
+        big("2026-10-19T20", busy=0.69, waiting=0.01, kv=0.76, q95=2.0),
+    ]
+    return rows
+
+
+QWEN_RECIPE = VllmRecipe(
+    hf_model="Qwen/Qwen3-8B-FP8", served_name="qwen3-8b", vram_gb=9, max_model_len=40960, kv_bytes_per_token=73728
+)
+
+
+def _advisor(rows, *, current=frozenset({"Vast 1", "RunPod p"}), recipe=QWEN_RECIPE, demand=()):
+    supply = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7)
+    return Advisor(
+        supply=supply, demand=list(demand), recipes={"qwen3-8b": recipe}, current=set(current), period_days=7
+    )
+
+
+def test_a_rental_that_ran_out_of_cache_is_to_be_replaced_with_more_memory_on_one_card():
+    demand = summarise_demand(fold_demand(DAY, [_spend(9, model="qwen3-8b", prompt=10_000)]), today=DAY, period_days=7)
+    (rec,) = _advisor(_qwen_rows(), demand=demand).advise()
+    assert (rec.verb, rec.model, rec.rental, rec.key) == (
+        "Replace",
+        "qwen3-8b",
+        "Vast 1",
+        "replace_cache_bound:qwen3-8b:Vast 1",
+    )
+    assert rec.headline == (
+        "Replace Vast 1:8001 (RTX 3060 x2), serving qwen3-8b, with a rental that has more memory on one card."
+    )
+    # Every sentence stands alone, with its figure in it.
+    assert rec.evidence == (
+        "Over the last 7 days it ran out of KV cache in 1 hour and evicted 10 running requests, "
+        "which were started again later.",
+        "In the worst hour, requests waited up to 120s.",
+        "The other rental, RunPod p:8003 (llmao-qwen3-8b), never ran out of cache in the same period.",
+        "The model was busy 4% of the time, so this is the card's memory, not throughput.",
+        "Most prompts were 8k-32k tokens long.",
+    )
+    assert rec.action == (
+        "Rent one card with room for qwen3-8b and several prompts at once. Its weights need 9 GB, "
+        "and a full 40,960-token context another 2.8 GB of cache.",
+        "Once the new rental serves qwen3-8b, return Vast 1:8001 (RTX 3060 x2).",
+    )
+    assert rec.saving_usd_per_day == 0.0
+
+
+def test_what_the_replace_rule_cannot_say_it_leaves_out():
+    # No demand rows and a recipe that declares nothing: no prompt-length sentence, a plainer step.
+    (rec,) = _advisor(_qwen_rows(), recipe=VllmRecipe(hf_model="x", served_name="qwen3-8b")).advise()
+    assert not any("prompts were" in s for s in rec.evidence)
+    assert (
+        rec.action[0] == "Rent one card with more memory for qwen3-8b; its recipe does not declare how much it needs."
+    )
+    # The cheap pair is gone already: nothing to replace.
+    assert _advisor(_qwen_rows(), current={"RunPod p"}).advise() == []
+
+
+def test_a_fleet_that_never_ran_short_gets_no_advice():
+    rows = [_hour_row("2026-10-19T08", "203.0.113.10:8001", "qwen3-8b", rental="Vast 1", busy=0.3, kv=0.5)]
+    assert _advisor(rows).advise() == []
