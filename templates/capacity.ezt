@@ -210,12 +210,17 @@
   </section>
   [end]
 
-  <p class="small text-muted mb-0">
-    Rental is each machine's hourly price from Vast or RunPod, a whole hour for every hour sampled; a machine running two
-    servers puts half on each. Tokens, busy and waiting are what was sampled, every few seconds; an llmao restart
-    loses the hour in progress. Provider spend is LiteLLM's price at the time of each request, not the provider's bill.
-    [if-any unpriced_hours]<strong>[unpriced_hours] hours</strong> had no price from their provider and are left out of the cost.[end]
-  </p>
+  <details class="small text-muted">
+    <summary>How these figures are made</summary>
+    <p class="mt-2 mb-0">
+      Rental is the hourly price Vast or RunPod charges for each rental, counted for every hour a deployment on it was
+      sampled; a rental serving two deployments splits its price between them. Tokens, busy and waiting are what was
+      sampled from each deployment, every few seconds; an llmao restart loses the hour in progress. What was asked of
+      a model comes from LiteLLM's log of requests, rolled up the morning after. Provider spend is LiteLLM's price at
+      the time of each request, not the provider's bill.
+      [if-any unpriced_hours]<strong>[unpriced_hours] hours</strong> had no price from their provider and are left out of the cost.[end]
+    </p>
+  </details>
 </div>
 <script src="/static/js/echarts.min.js"
         integrity="sha384-C2iskrW/uPW46KzOjrvJIQo4YkV8lkD+QS0CrDN18IIPIpT/g2USu8bTP3nvmIAD"></script>

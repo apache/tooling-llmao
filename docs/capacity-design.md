@@ -61,8 +61,9 @@ reads as having stopped, and one that started late starts late. The
 look is set in `llmao.js`: one hue, bars no wider than 24px, a hairline
 grid, a tooltip per day, no legend since each chart is one series.
 
-**Next (not built as of 2026-11-02):** the tiles and the page's wording
-(rental and deployment, not box and server).
+The page speaks of rentals and deployments, never boxes or servers, and
+how its figures are made sits in a disclosure at the foot, closed until
+someone asks.
 
 ## Status
 

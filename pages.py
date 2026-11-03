@@ -1769,7 +1769,7 @@ CAPACITY_PERIODS = (7, 30, 90)
 async def admin_capacity(result):
     """What the fleet did and cost, and what the providers we pay were paid.
 
-    For deciding whether to add a box or return one, and for budgeting.
+    For deciding whether to rent another machine or return one, and for budgeting.
     Built from the hourly capacity rows and LiteLLM's daily activity; each
     half is read on its own, so one being down leaves the other.
     """
@@ -1960,7 +1960,7 @@ def _seen_h(first_hour: str, last_hour: str) -> str:
 
 
 def _line_status(line, listed: dict[str, str] | None, live_servers: set[str]) -> str:
-    """What has become of a server line's machine: nothing to say while it is running.
+    """What has become of a line's rental: nothing to say while it is running.
 
     A stamped line is checked against what the providers report now:
     "ended" when no provider lists the rental, else the provider's own
