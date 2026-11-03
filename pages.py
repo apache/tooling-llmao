@@ -43,6 +43,7 @@ from cmarkgfm.cmark import Options
 from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao import fmt
 from llmao.access_requests import APPROVAL_TTL_DAYS
 from llmao.auth import current_identity
 from llmao.fleet import (
@@ -394,7 +395,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
                 created_by=k.created_by or "—",
                 spend=f"${k.spend:.6f}",
                 max_budget=budget_s,
-                used_h=(_tokens_h(used_by_token[k.token_id]) if k.token_id in used_by_token else "—"),
+                used_h=(fmt.tokens(used_by_token[k.token_id]) if k.token_id in used_by_token else "—"),
                 last_used=k.last_used or "—",
                 created_at=k.created_at or "—",
                 blocked=k.blocked,
@@ -1225,10 +1226,6 @@ async def do_approve_box():
     return _see_other("/models")
 
 
-def _money(amount: float) -> str:
-    return f"${amount:,.2f}"
-
-
 def _project_list_rows(rows) -> list:
     out = []
     for r in rows:
@@ -1241,9 +1238,9 @@ def _project_list_rows(rows) -> list:
                 name=r.project,
                 href=f"/projects/{r.project}",
                 is_steward=ezt.boolean(r.is_steward),
-                spend=_money(r.spend),
-                max_budget=_money(r.max_budget),
-                remaining=_money(r.remaining),
+                spend=fmt.money(r.spend),
+                max_budget=fmt.money(r.max_budget),
+                remaining=fmt.money(r.remaining),
                 pct_label=pct_label,
                 budget_duration=r.budget_duration,
                 grantor=r.grantor,
@@ -1296,8 +1293,8 @@ async def project_overview(result, project: str):
     tokens = sum(r.tokens for r in rows)
     spend = sum(r.spend for r in rows)
 
-    result.tokens_h = _tokens_h(tokens)
-    result.cap_h = _tokens_h(cap) if cap else None
+    result.tokens_h = fmt.tokens(tokens)
+    result.cap_h = fmt.tokens(cap) if cap else None
     result.tokens_pct = min(100, int(tokens / cap * 100)) if cap else 0
     # A capacity estimate at the fleet rate. Shown beside the token count
     # rather than instead of it: the tokens are what constrains the project,
@@ -1321,7 +1318,7 @@ async def project_overview(result, project: str):
         edict(
             name=r.name,
             is_service=ezt.boolean(r.is_service),
-            tokens_h=_tokens_h(r.tokens),
+            tokens_h=fmt.tokens(r.tokens),
             spend_h=f"${r.spend:,.2f}",
             keys=r.key_count,
         )
@@ -1408,8 +1405,8 @@ async def keys_list(result):
                 # What this key will be allowed to do, said plainly. The
                 # person about to create it has one question -- is this
                 # what I asked for -- and the parameters are the answer.
-                limits_h=(f"{_tokens_h(a.token_cap)} tokens/week" if a.token_cap else "tier defaults"),
-                expires_h=(_when_h(a.expires_at.date()) if a.expires_at else ""),
+                limits_h=(f"{fmt.tokens(a.token_cap)} tokens/week" if a.token_cap else "tier defaults"),
+                expires_h=(fmt.when(a.expires_at.date()) if a.expires_at else ""),
             )
             for a in APP.seam.actionable_key_approvals(mine)
         ]
@@ -1432,9 +1429,9 @@ def _allowance_row(a):
     pct = min(100, int(a.used() / a.cap * 100)) if a.cap else 0
     returns = a.returns()
     row = edict(
-        cap_h=_tokens_h(a.cap),
-        used_h=_tokens_h(a.used()),
-        remaining_h=_tokens_h(a.remaining()),
+        cap_h=fmt.tokens(a.cap),
+        used_h=fmt.tokens(a.used()),
+        remaining_h=fmt.tokens(a.remaining()),
         window_days=a.window_days,
         pct=pct,
         exhausted=ezt.boolean(a.exhausted()),
@@ -1449,8 +1446,8 @@ def _allowance_row(a):
     )
     if returns:
         day, amount = returns[0]
-        row.next_return = _when_h(day)
-        row.next_return_amount_h = _tokens_h(amount)
+        row.next_return = fmt.when(day)
+        row.next_return_amount_h = fmt.tokens(amount)
     return row
 
 
@@ -1458,36 +1455,6 @@ def _allowance_row(a):
 # throughput at a 50% planning utilisation -- it exists so self-hosted and
 # commercial work can appear in the same units, and is not an amount payable.
 CAPACITY_USD_PER_MTOK = 0.32
-
-
-def _tokens_h(n: int) -> str:
-    """Human token count. 340k reads faster than 340,000 and this is a glance."""
-    n = int(n or 0)
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
-    if n >= 1_000:
-        return f"{n // 1_000}k"
-    return str(n)
-
-
-def _when_h(day) -> str:
-    """'tomorrow' / 'Tuesday' / a date, whichever is most useful.
-
-    'Your tokens return 2026-09-23' is technically complete and makes the
-    reader do arithmetic. The point of showing a return date at all is to turn
-    a dead end into a plan.
-    """
-    import datetime as dt
-
-    today = dt.datetime.now(dt.UTC).date()
-    delta = (day - today).days
-    if delta <= 0:
-        return "today"
-    if delta == 1:
-        return "tomorrow"
-    if delta < 7:
-        return f"on {day.strftime('%A')}"
-    return f"on {day.isoformat()}"
 
 
 @APP.get("/usage")
@@ -1578,7 +1545,7 @@ def _key_ask(r) -> str:
 def _approval_means(r) -> str:
     """What saying yes to a pending request does, in words."""
     if r.kind == "capacity":
-        return f"Sets {r.project}'s weekly allocation to {_tokens_h(r.wanted.get('token_cap') or 0)} tokens, at once."
+        return f"Sets {r.project}'s weekly allocation to {fmt.tokens(r.wanted.get('token_cap') or 0)} tokens, at once."
     return (
         f"Lets {r.requester} create {_key_ask(r)}. Nothing is created until they do; "
         f"they have {APPROVAL_TTL_DAYS} days."
@@ -1599,31 +1566,15 @@ def _open_approval_rows(stored) -> list:
                 ask=_key_ask(r),
                 decided_by=r.decided_by,
                 decided_on=(r.decided_at or "")[:10],
-                expires_h=_when_h(exp.date()) if exp else "",
+                expires_h=fmt.when(exp.date()) if exp else "",
                 soon=ezt.boolean(days_left is not None and days_left <= 3),
             )
         )
     return sorted(rows, key=lambda row: row.expires_h)
 
 
-def _ago_h(stamp: str) -> str:
-    """'5m ago', '3h ago', '2d ago' from an ISO stamp; '' if unreadable."""
-    try:
-        at = dt.datetime.fromisoformat(stamp)
-    except (TypeError, ValueError):
-        return ""
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=dt.UTC)
-    secs = max(0, int((dt.datetime.now(dt.UTC) - at).total_seconds()))
-    if secs < 3600:
-        return f"{max(1, secs // 60)}m ago"
-    if secs < 86400:
-        return f"{secs // 3600}h ago"
-    return f"{secs // 86400}d ago"
-
-
 def _work(at: str, by: str, kind: str, sentence: str) -> edict:
-    return edict(at=at or "", by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=_ago_h(at))
+    return edict(at=at or "", by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=fmt.ago(at))
 
 
 async def _recent_work(stored, *, only: str | None = None) -> list:
@@ -1643,7 +1594,7 @@ async def _recent_work(stored, *, only: str | None = None) -> list:
             if r.state == "denied":
                 work.append(_work(r.decided_at, r.decided_by, "denied", f"Denied {subject}'s request for {what}."))
             elif r.kind == "capacity":
-                cap = _tokens_h((r.granted or r.wanted).get("token_cap") or 0)
+                cap = fmt.tokens((r.granted or r.wanted).get("token_cap") or 0)
                 work.append(
                     _work(r.decided_at, r.decided_by, "approved", f"Raised {r.project}'s weekly allocation to {cap}.")
                 )
@@ -1718,8 +1669,8 @@ def _request_rows(reqs) -> list:
     out = []
     for r in reqs:
         if r.kind == "capacity":
-            wanted = _tokens_h(r.wanted.get("token_cap") or 0)
-            granted = _tokens_h(r.granted.get("token_cap") or 0) if r.granted else ""
+            wanted = fmt.tokens(r.wanted.get("token_cap") or 0)
+            granted = fmt.tokens(r.granted.get("token_cap") or 0) if r.granted else ""
             what = "capacity"
         else:
             wanted = r.wanted.get("purpose") or "?"
@@ -1751,7 +1702,7 @@ def _request_rows(reqs) -> list:
                 means=_approval_means(r) if r.state == "pending" else "",
                 # The question a requester actually has: how long have I
                 # got to act on this.
-                expires_h=_when_h(exp.date()) if exp else "",
+                expires_h=fmt.when(exp.date()) if exp else "",
                 created_at=(r.created_at or "")[:10],
             )
         )
@@ -1792,8 +1743,8 @@ async def admin_capacity(result):
         rows = []
         result.capacity_down = ezt.boolean(True)
     fleet = summarise_capacity(rows, today=today, period_days=days)
-    result.fleet_cost_per_day = _money(fleet.cost_per_day)
-    result.fleet_tokens_per_day = _tokens_h(int(fleet.tokens_per_day))
+    result.fleet_cost_per_day = fmt.money(fleet.cost_per_day)
+    result.fleet_tokens_per_day = fmt.tokens(int(fleet.tokens_per_day))
     result.unpriced_hours = fleet.unpriced_hours or None
 
     # Demand: the same hours from the other side, what was asked of each
@@ -1831,8 +1782,8 @@ async def admin_capacity(result):
         result.spend_down = ezt.boolean(True)
     providers = summarise_spend(spent, today=today, period_days=days)
     result.providers = [_spend_provider_row(p, days=_period(today, days)) for p in providers]
-    result.spend_month_to_date = _money(sum(p.month_to_date_usd for p in providers))
-    result.spend_projected = _money(sum(p.projected_month_usd for p in providers))
+    result.spend_month_to_date = fmt.money(sum(p.month_to_date_usd for p in providers))
+    result.spend_projected = fmt.money(sum(p.projected_month_usd for p in providers))
     return result
 
 
@@ -1878,8 +1829,8 @@ def capacity_cards(
             supply=pair.supply
             and _capacity_model_row(pair.supply, days=days, listed=listed, live_servers=live_servers),
             demand=pair.demand and _demand_model_row(pair.demand, days=days),
-            last_seen=_day_h(last),
-            cost=_money(pair.supply.cost_usd) if pair.supply else "",
+            last_seen=fmt.day(last),
+            cost=fmt.money(pair.supply.cost_usd) if pair.supply else "",
             hours=pair.supply.hours if pair.supply else 0,
         )
         cost[name] = pair.supply.cost_usd if pair.supply else 0.0
@@ -1887,10 +1838,6 @@ def capacity_cards(
     cards.sort(key=lambda c: (not c.live, -cost[c.model_name], c.model_name))
     dormant.sort(key=lambda c: c.model_name)
     return cards, dormant
-
-
-def _pct(fraction: float) -> int:
-    return max(0, min(100, round(fraction * 100)))
 
 
 def _period(today: dt.date, period_days: int) -> list[str]:
@@ -1912,18 +1859,12 @@ def _chart(series: list, days: list[str], unit: str) -> str:
     return json.dumps(edict(days=days, values=[have.get(d, 0) for d in days], unit=unit))
 
 
-def _seconds_h(value) -> str:
-    if value is None:
-        return "—"
-    return f"{value:.1f}s" if value < 10 else f"{value:.0f}s"
-
-
 def _demand_model_row(m, *, days: list[str] = ()) -> edict:
     """One model's demand over the period, for the template."""
 
     def shares(items, top=6):
         return [
-            edict(name=i.name, requests=f"{i.requests:,}", prompt_tokens=_tokens_h(i.prompt_tokens))
+            edict(name=i.name, requests=f"{i.requests:,}", prompt_tokens=fmt.tokens(i.prompt_tokens))
             for i in items[:top]
         ]
 
@@ -1932,31 +1873,20 @@ def _demand_model_row(m, *, days: list[str] = ()) -> edict:
         days=m.days,
         requests=f"{m.requests:,}",
         requests_per_day=f"{m.requests_per_day:,.0f}",
-        prompt_tokens=_tokens_h(m.prompt_tokens),
-        completion_tokens=_tokens_h(m.completion_tokens),
+        prompt_tokens=fmt.tokens(m.prompt_tokens),
+        completion_tokens=fmt.tokens(m.completion_tokens),
         refused_total=f"{m.refused_total:,}",
         refused_any=ezt.boolean(m.refused_total > 0),
-        refused_pct=_pct(m.refused_total / m.requests) if m.requests else 0,
+        refused_pct=fmt.pct(m.refused_total / m.requests) if m.requests else 0,
         refused_hot=ezt.boolean(m.requests > 0 and m.refused_total / m.requests >= 0.05),
         refused=[edict(name=r.name, count=f"{r.count:,}") for r in m.refused[:6]],
         by_project=shares(m.by_project),
         by_tool=shares(m.by_tool),
         prompt_len=[edict(name=b.name, count=f"{b.count:,}") for b in m.prompt_len],
-        duration_p50=_seconds_h(m.duration_p50_s),
-        duration_p95_worst=_seconds_h(m.duration_p95_worst_s),
+        duration_p50=fmt.seconds(m.duration_p50_s),
+        duration_p95_worst=fmt.seconds(m.duration_p95_worst_s),
         request_chart=_chart(m.daily_requests, days, "requests"),
     )
-
-
-def _day_h(hour: str) -> str:
-    """'Oct 19' from an hour label or a day."""
-    return dt.date.fromisoformat(hour[:10]).strftime("%b %-d")
-
-
-def _seen_h(first_hour: str, last_hour: str) -> str:
-    """'Oct 19 to Nov 2', or the one day."""
-    first, last = _day_h(first_hour), _day_h(last_hour)
-    return first if first == last else f"{first} to {last}"
 
 
 def _line_status(line, listed: dict[str, str] | None, live_servers: set[str]) -> str:
@@ -1998,21 +1928,21 @@ def _capacity_model_row(
 
     return edict(
         model_name=m.model_name,
-        cost_per_day=_money(m.cost_per_day),
-        tokens_per_day=_tokens_h(int(m.tokens_per_day)),
+        cost_per_day=fmt.money(m.cost_per_day),
+        tokens_per_day=fmt.tokens(int(m.tokens_per_day)),
         # Empty, not a dash, when nothing priced served anything: the template
         # leaves it out. The long form because $0.00 is a real figure (a free
         # machine), distinct from unknown.
-        usd_per_mtok=_money(m.usd_per_mtok) if m.usd_per_mtok is not None else "",
-        busy=_pct(m.busy),
+        usd_per_mtok=fmt.money(m.usd_per_mtok) if m.usd_per_mtok is not None else "",
+        busy=fmt.pct(m.busy),
         busy_hot=ezt.boolean(m.busy >= 0.8),
         # The waiting meter, the peak and the worst queue are one story,
         # told only when a request queued at all in the period. A meter at
         # 0% on every card said nothing.
         queued=ezt.boolean(m.waiting > 0 or m.waiting_peak > 0),
-        waiting=_pct(m.waiting),
+        waiting=fmt.pct(m.waiting),
         waiting_hot=ezt.boolean(m.waiting >= 0.05),
-        kv_peak=_pct(m.kv_peak),
+        kv_peak=fmt.pct(m.kv_peak),
         kv_hot=ezt.boolean(m.kv_peak >= 0.9),
         waiting_peak=m.waiting_peak,
         preemptions=m.preemptions or None,
@@ -2021,8 +1951,8 @@ def _capacity_model_row(
         # Which rental ran out of cache is the column's point: the model
         # total above says it happened, this says where.
         servers_preempted=ezt.boolean(any(srv.preemptions for srv in m.servers)),
-        prompt_tokens=_tokens_h(m.prompt_tokens),
-        generation_tokens=_tokens_h(m.generation_tokens),
+        prompt_tokens=fmt.tokens(m.prompt_tokens),
+        generation_tokens=fmt.tokens(m.generation_tokens),
         requests=f"{m.requests:,}",
         hours=m.hours,
         unpriced_hours=m.unpriced_hours or None,
@@ -2031,14 +1961,14 @@ def _capacity_model_row(
             edict(
                 server=srv.server,
                 label=srv.label,
-                seen=_seen_h(srv.first_hour, srv.last_hour),
+                seen=fmt.span(srv.first_hour, srv.last_hour),
                 status=_line_status(srv, listed, live_servers),
                 usd_per_hour=f"${srv.usd_per_hour:.3f}/hr" if srv.usd_per_hour is not None else "unpriced",
-                busy=_pct(srv.busy),
-                waiting=_pct(srv.waiting),
-                kv_peak=_pct(srv.kv_peak),
+                busy=fmt.pct(srv.busy),
+                waiting=fmt.pct(srv.waiting),
+                kv_peak=fmt.pct(srv.kv_peak),
                 preempted=srv.preemptions or "",
-                tokens=_tokens_h(srv.tokens),
+                tokens=fmt.tokens(srv.tokens),
             )
             for srv in m.servers
         ],
@@ -2049,12 +1979,12 @@ def _spend_provider_row(p, *, days: list[str] = ()) -> edict:
     projected = p.projected_month_usd
     return edict(
         provider=p.provider,
-        period=_money(p.period_usd),
-        today=_money(p.today_usd),
-        month_to_date=_money(p.month_to_date_usd),
-        projected=_money(projected),
-        models=[edict(name=x.name, usd=_money(x.usd)) for x in p.models],
-        projects=[edict(name=x.name, usd=_money(x.usd)) for x in p.projects],
+        period=fmt.money(p.period_usd),
+        today=fmt.money(p.today_usd),
+        month_to_date=fmt.money(p.month_to_date_usd),
+        projected=fmt.money(projected),
+        models=[edict(name=x.name, usd=fmt.money(x.usd)) for x in p.models],
+        projects=[edict(name=x.name, usd=fmt.money(x.usd)) for x in p.projects],
         spend_chart=_chart([edict(day=d.day, value=d.usd) for d in p.daily], days, "usd"),
     )
 
@@ -2199,7 +2129,7 @@ def _decided_h(r) -> str:
         subject = r.project if r.kind == "capacity" else r.requester
         return f"Denied {subject}'s request. They will see your reason."
     if r.kind == "capacity":
-        cap = _tokens_h(r.granted.get("token_cap") or 0)
+        cap = fmt.tokens(r.granted.get("token_cap") or 0)
         return f"Raised {r.project}'s weekly allocation to {cap}. It applies now."
     exp = r.expires_at()
     until = f" until {exp.date().isoformat()}" if exp else ""

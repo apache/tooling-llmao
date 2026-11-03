@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao import fmt
 from llmao.intent import (
     LEGACY_SERVERS,
     VLLM_LISTEN_PORTS,
@@ -87,17 +88,6 @@ _FLEET_NUMBERS = (
     "skew_interval_s",
     "litellm_health_interval_s",
 )
-
-
-def _ago(ts: float | None) -> str:
-    if ts is None:
-        return "never"
-    sec = max(0, int(time.time() - ts))
-    if sec < 60:
-        return f"{sec}s"
-    if sec < 3600:
-        return f"{sec // 60}m"
-    return f"{sec // 3600}h"
 
 
 def _is_ip_literal(name: str) -> bool:
@@ -388,14 +378,14 @@ class VllmServer:
     @property
     def last_ok_display(self) -> str:
         """Human-readable 'last_ok' timestamp."""
-        return _ago(self.last_ok)
+        return fmt.ago_short(self.last_ok)
 
     @property
     def probe_display(self) -> str:
         """Last probe attempt, including a failure. Empty when never probed."""
         if self.vllm_probed_at is None:
             return ""
-        age = _ago(self.vllm_probed_at)
+        age = fmt.ago_short(self.vllm_probed_at)
         if self.last_probe_ok:
             return f"probed {age}"
         if self.reached is False:
@@ -663,14 +653,14 @@ class FleetDeployment:
         """Human-readable 'litellm_health_at'; a dash when unknown."""
         if self.litellm_health is None:
             return "—"
-        return _ago(self.litellm_health.at)
+        return fmt.ago_short(self.litellm_health.at)
 
     @property
     def litellm_error_display(self) -> str:
         """Human-readable 'litellm_error_at'; a dash when unknown."""
         if self.litellm_error_at is None:
             return "—"
-        return _ago(self.litellm_error_at)
+        return fmt.ago_short(self.litellm_error_at)
 
 
 @dataclass(frozen=True)
@@ -762,7 +752,7 @@ def discovery_finding(rental: Rental, probes: dict[int, VllmProbe], name_of) -> 
 
 def fetch_detail(fetch: ConfigFetch) -> str:
     """The strip's line for a stranger's config fetches: 'seen 5s · 3 requests'."""
-    return f"seen {_ago(fetch.last_at)} · {fetch.count} requests"
+    return f"seen {fmt.ago_short(fetch.last_at)} · {fetch.count} requests"
 
 
 class Fleet:
@@ -948,14 +938,14 @@ class Fleet:
     def approval_display(self, host: str) -> str:
         """'Approved · 15h ago' beside the rows of an approved host; "" for a fleet.hosts member."""
         approval = self.approvals.get(normalize_peer_ip(host))
-        return (approval and f"Approved · {_ago(approval.at)} ago") or ""
+        return (approval and f"Approved · {fmt.ago_short(approval.at)} ago") or ""
 
     def config_fetch_display(self, host: str) -> str:
         """Human-readable age of the last config fetch for a host, "—" if never."""
         at = self.provisioning.fetched_at(host)
         if at is None:
             return "—"
-        return _ago(at)
+        return fmt.ago_short(at)
 
     def approve_models(self, host: str, names: list[str], *, now: float | None = None) -> Approval:
         """An admin names the models an unknown box loads: the host is intended from here on.
