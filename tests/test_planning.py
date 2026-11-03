@@ -145,6 +145,30 @@ def test_a_model_is_costed_by_the_hour_and_weighed_by_what_was_sampled():
     assert report.cost_per_day == 2.25 / 3 * 24
 
 
+def test_hours_over_a_threshold_are_counted_so_a_burst_is_not_lost_in_the_average():
+    """A model busy 1% of the period can still have run flat out for hours; the count says so."""
+    quiet = "203.0.113.10:8001"
+    rows = [_hour_row(f"2026-10-19T{h:02d}", quiet, "m", busy=0.0) for h in range(20)]
+    rows += [
+        _hour_row("2026-10-19T20", quiet, "m", busy=0.97, waiting=0.67, kv=1.0, preemptions=10),
+        _hour_row("2026-10-19T21", quiet, "m", busy=0.5, waiting=0.04, kv=0.96),
+        _hour_row("2026-10-19T22", quiet, "m", busy=0.49, waiting=0.05, kv=0.9, preemptions=1),
+        # Another rental the same hour, never short of room.
+        _hour_row("2026-10-19T20", "198.51.100.8:8001", "m", busy=0.69, waiting=0.01, kv=0.76),
+    ]
+    (m,) = summarise_capacity(rows, today=dt.date(2026, 10, 19), period_days=7).models
+    assert m.busy < 0.12  # the average says idle
+    assert (m.hours_busy, m.hours_queued, m.hours_cache_full, m.hours_preempting) == (3, 2, 2, 2)
+    busy_one, other = m.servers  # first seen first: the quiet one from midnight, the other at 20:00
+    assert (busy_one.hours_busy, busy_one.hours_queued, busy_one.hours_cache_full, busy_one.hours_preempting) == (
+        2,
+        2,
+        2,
+        2,
+    )
+    assert (other.hours_busy, other.hours_queued, other.hours_cache_full, other.hours_preempting) == (1, 0, 0, 0)
+
+
 def test_a_rentals_hours_are_one_line_across_an_address_change_and_from_before_the_stamp():
     def stamped(hour, server, **kw):
         return _hour_row(hour, server, "m", rental="Vast 1", rental_label="RTX 3060 x2", **kw)

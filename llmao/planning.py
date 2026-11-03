@@ -112,6 +112,27 @@ def _weighted(rows: list, field_name: str) -> float:
     return sum(r[field_name] * r.covered_s for r in rows) / covered if covered else 0.0
 
 
+# An hour counts as busy when a request was running for at least half of
+# it, as queued when one waited for at least a twentieth of it (three
+# minutes), and as cache-full when the KV cache reached 95%. Averages over
+# a period hide bursts: a model busy 1% of the month can still have run
+# flat out for ten hours of it, and those hours are what a decision to add
+# or replace a rental turns on.
+BUSY_HOUR = 0.5
+QUEUED_HOUR = 0.05
+CACHE_FULL_HOUR = 0.95
+
+
+def _hot_hours(rows: list) -> dict:
+    """How many of the rows' hours were busy, queued, cache-full, or preempting."""
+    return dict(
+        hours_busy=sum(1 for r in rows if r.busy_frac >= BUSY_HOUR),
+        hours_queued=sum(1 for r in rows if r.waiting_frac >= QUEUED_HOUR),
+        hours_cache_full=sum(1 for r in rows if r.kv_peak >= CACHE_FULL_HOUR),
+        hours_preempting=sum(1 for r in rows if r.preemptions),
+    )
+
+
 def _port_of(server: str) -> str:
     return server.rsplit(":", 1)[-1]
 
@@ -155,6 +176,7 @@ def _server_lines(rows: list) -> list[edict]:
                 kv_peak=max(r.kv_peak for r in theirs),
                 preemptions=sum(r.preemptions for r in theirs),
                 tokens=sum(r.prompt_tokens + r.generation_tokens for r in theirs),
+                **_hot_hours(theirs),
             )
         )
     return sorted(lines, key=lambda line: (line.first_hour, line.server))
@@ -210,6 +232,7 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
                 usd_per_mtok=cost / (priced_tokens / 1e6) if priced_tokens else None,
                 daily_tokens=[edict(day=d, value=daily_tokens[d]) for d in sorted(daily_tokens)],
                 daily_cost=[edict(day=d, value=round(daily_cost[d], 2)) for d in sorted(daily_cost)],
+                **_hot_hours(mine),
             )
         )
     hours_seen = len({r.hour for r in rows})

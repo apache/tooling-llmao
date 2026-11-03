@@ -156,6 +156,13 @@ than crediting the gap to one hour.
 actually queue, which the spend log cannot (it records what ran, not what
 waited). It replaces the contention log lines the sampler used to write.
 
+The summaries (`llmao/planning.py`) average these over the period and
+also count the hours over a threshold: busy for half the hour or more,
+queued for a twentieth, the cache at 95%, any preemption. The counts are
+kept per model and per rental line. An average hides a burst: qwen3-8b
+was busy 1% of October and still ran out of cache for ten hours of it,
+and those hours are what a recommendation turns on.
+
 The price is on each row because a box's rental price is fixed for as long
 as we hold it, and a returned box vanishes from its provider's API. Kept on
 the row, a returned box keeps its price in history.
