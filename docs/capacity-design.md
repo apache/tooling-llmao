@@ -82,9 +82,11 @@ someone asks.
 
 Demand, the other side of the capacity rows (what was asked, against what
 each server did), is designed in `docs/prompt-logging-design.md` under
-"Demand rows", and lives in the same module and store: `fold_demand`,
-`DemandRollup` and `summarise_demand` in `llmao/capacity.py`, keys
-`llmao:demand:<hour>:<model>` beside the capacity keys, pruned together.
+"Demand rows", and lives in the same module and store: `fold_demand` and
+`DemandRollup` in `llmao/capacity.py`, keys `llmao:demand:<hour>:<model>`
+beside the capacity keys, pruned together. What the rows say is read in
+`llmao/planning.py`: `summarise_capacity`, `summarise_demand` and
+`summarise_spend`, the summaries behind the page.
 
 Each rolled-up day leaves a marker, `llmao:demand-day:<day>`, holding
 the row count, which sources wrote it, and the `FOLD_VERSION` the fold

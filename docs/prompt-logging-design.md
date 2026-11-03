@@ -499,7 +499,7 @@ that already owns the neighbouring role.
 | `rollup_day(day)`: spawns the tool for one day, parses its JSON | `llmao/prompt_log.py` |
 | The single reader of `/spend/logs/v2`, one closed day, page by page | `llmao/proxy/client.py`, beside the daily reader |
 | Demand rows: key layout, write, read, prune; the rollup from spend rows | `llmao/capacity.py`, `CapacityStore` and `CapacityPruner` |
-| Reconciliation figure and demand tables | `llmao/capacity.py` beside `summarise_capacity`; rendered by the `/admin/capacity` handler in `pages.py` |
+| Reconciliation figure and demand tables | `llmao/planning.py` beside `summarise_capacity`; rendered by the `/admin/capacity` handler in `pages.py` |
 | Settings: `prompt_log_dir`, `prompt_log_retention_days`, the rollup interval | `config.yaml.example`, flat keys beside `capacity_retention_days`; the sink reads its copy of the directory and retention from `litellm.yaml` |
 | Terms of Service | `docs/help/terms.md`; link in `templates/footer.ezt`; excluded from the guides list in `pages.py` |
 | p6 | `init.pp` (the directory, root 0700; one parameter each for the directory and the retention, rendered into both YAML files), `litellm.yaml.epp` (callback settings and the callback), `llmao-litellm.service.epp` (`ReadWritePaths`). No cron |

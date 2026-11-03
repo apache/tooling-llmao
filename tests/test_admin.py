@@ -79,7 +79,8 @@ def test_capacity_page_renders_demand_beside_the_boxes():
 
     import asfquart
 
-    from llmao.capacity import fold_demand, summarise_demand
+    from llmao.capacity import fold_demand
+    from llmao.planning import summarise_demand
 
     if asfquart.APP is None:
         asfquart.construct(

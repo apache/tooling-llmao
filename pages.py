@@ -45,7 +45,6 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.access_requests import APPROVAL_TTL_DAYS
 from llmao.auth import current_identity
-from llmao.capacity import days_to_read, summarise_capacity, summarise_demand, summarise_spend
 from llmao.fleet import (
     ORPHAN_PASSES,
     add_refusal,
@@ -75,6 +74,7 @@ from llmao.model_status import (
     deployment_status,
 )
 from llmao.models import VllmRecipe, model_available_for, model_in_service, ux_models
+from llmao.planning import days_to_read, summarise_capacity, summarise_demand, summarise_spend
 from llmao.proxy.client import (
     PRETEND_PROJECTS,
     TIER_FREE,
