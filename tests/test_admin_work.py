@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import pathlib
 
 import asfquart
@@ -246,7 +247,7 @@ def test_one_card_per_model_live_first_and_the_forgotten_as_a_footnote():
     ]
     demand = [_demand(model="dear"), _demand(model="asked-only")]
     cards, dormant = pages.capacity_cards(
-        supply, demand, catalog={"dear": "Dear Model"}, live={"cheap", "dear", "asked-only"}, today=today
+        supply, demand, catalog={"dear": "Dear Model"}, live={"cheap", "dear", "asked-only"}, today=today, period_days=7
     )
     # Live by cost, then the rest; a model from the demand rows alone is a card too.
     assert [c.model_name for c in cards] == ["dear", "cheap", "asked-only", "paused"]
@@ -324,17 +325,23 @@ def test_a_server_line_says_when_it_was_seen_and_what_became_of_its_machine():
     assert [s.status for s in row.servers] == ["", "", ""]
 
 
-def test_a_busy_model_is_marked_and_a_day_series_becomes_bar_heights():
+def test_a_busy_model_is_marked():
     pages = _app()
-    row = pages._capacity_model_row(
-        _model(
-            daily_tokens=[
-                edict(day="2026-10-18", value=50),
-                edict(day="2026-10-19", value=200),
-                edict(day="d", value=0),
-            ]
-        )
-    )
+    row = pages._capacity_model_row(_model())
     assert row.busy == 85 and bool(row.busy_hot)
-    assert [b.height for b in row.token_bars] == [25, 100, 2]
-    assert row.token_bars[1].title == "2026-10-19: 200 tokens"
+
+
+def test_a_day_series_is_charted_over_every_day_of_the_period_a_missing_day_as_zero():
+    pages = _app()
+    days = pages._period(dt.date(2026, 10, 20), 3)
+    assert days == ["2026-10-18", "2026-10-19", "2026-10-20"]
+    series = [edict(day="2026-10-18", value=50), edict(day="2026-10-20", value=200)]
+    assert json.loads(pages._chart(series, days, "tokens")) == {
+        "days": days,
+        "values": [50, 0, 200],
+        "unit": "tokens",
+    }
+    # Nothing recorded at all: no chart, rather than a row of zeros.
+    assert pages._chart([], days, "tokens") == ""
+    row = pages._capacity_model_row(_model(daily_tokens=series), days=days)
+    assert json.loads(row.token_chart)["values"] == [50, 0, 200]

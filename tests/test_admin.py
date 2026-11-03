@@ -102,7 +102,7 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     ]
     summary = summarise_demand(fold_demand(day, spend), today=day, period_days=7)
     cards, dormant = pages.capacity_cards(
-        [], summary, catalog={"gemma4-26b": "Gemma 4 26B"}, live={"gemma4-26b"}, today=day
+        [], summary, catalog={"gemma4-26b": "Gemma 4 26B"}, live={"gemma4-26b"}, today=day, period_days=7
     )
     data = edict(
         title="Capacity",
@@ -155,6 +155,10 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     assert "429_RATE_LIMIT_EXCEEDED" in out
     assert "text-danger" in out  # half the requests refused is a warning
     assert "0.6s typical" in out
+    # The day's requests, charted over the whole week, the six empty days as zero.
+    assert 'data-chart="{&quot;days&quot;: [&quot;2026-10-26&quot;' in out
+    assert "&quot;values&quot;: [0, 0, 0, 0, 0, 0, 2]" in out
+    assert "/static/js/echarts.min.js" in out
     # Nothing bought from a model provider in the period: no section and no tiles for it.
     assert "Providers we pay" not in out
     assert "month to date" not in out
@@ -215,14 +219,16 @@ def test_capacity_page_renders_demand_beside_the_boxes():
         servers=[line],
     )
     # Nothing serves it now and nothing was seen for a week: a footnote, not a card.
-    data.cards, data.dormant = pages.capacity_cards([model], [], catalog={}, live=set(), today=day, listed={})
+    data.cards, data.dormant = pages.capacity_cards(
+        [model], [], catalog={}, live=set(), today=day, period_days=7, listed={}
+    )
     assert data.cards == [] and [c.model_name for c in data.dormant] == ["qwen3-8b-bf16"]
     out = render()
     assert "last seen Oct 20 ($3.60 over 35 hours)" in out
     assert "Vast 9:8001" not in out
     # Still deployed: a card, with its rentals.
     data.cards, data.dormant = pages.capacity_cards(
-        [model], [], catalog={}, live={"qwen3-8b-bf16"}, today=day, listed={}
+        [model], [], catalog={}, live={"qwen3-8b-bf16"}, today=day, period_days=7, listed={}
     )
     out = render()
     assert "What it served" in out and "What was asked of it" not in out

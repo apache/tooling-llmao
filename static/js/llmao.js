@@ -119,6 +119,79 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
+  // Capacity: one bar per day of the period, drawn by ECharts from the JSON
+  // on each element: {days: ["2026-10-19", ...], values: [...], unit: "tokens"}.
+  // Every day of the period is on the axis, a day with nothing as zero, so a
+  // series that stopped reads as having stopped.
+  if (window.echarts) {
+    var style = getComputedStyle(document.documentElement);
+    var bar = style.getPropertyValue("--bs-primary").trim() || "#0d6efd";
+    var ink = style.getPropertyValue("--bs-secondary-color").trim() || "#6c757d";
+    var hairline = style.getPropertyValue("--bs-border-color").trim() || "#dee2e6";
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    function dayLabel(iso) {
+      return months[parseInt(iso.slice(5, 7), 10) - 1] + " " + parseInt(iso.slice(8, 10), 10);
+    }
+    // The axis wants a short figure; the tooltip the whole one.
+    function compact(unit) {
+      return function (v) {
+        if (unit === "usd") return "$" + (v >= 100 ? Math.round(v) : v);
+        if (v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+        if (v >= 1e3) return Math.floor(v / 1e3) + "k";
+        return String(v);
+      };
+    }
+    function whole(unit, v) {
+      if (unit === "usd") return "$" + v.toFixed(2);
+      return v.toLocaleString() + " " + unit;
+    }
+    var charts = [];
+    document.querySelectorAll(".cap-chart[data-chart]").forEach(function (el) {
+      var spec = JSON.parse(el.getAttribute("data-chart"));
+      var chart = echarts.init(el, null, { renderer: "svg" });
+      chart.setOption({
+        color: [bar],
+        grid: { left: 4, right: 4, top: 8, bottom: 4, containLabel: true },
+        tooltip: {
+          trigger: "axis",
+          axisPointer: { type: "shadow" },
+          formatter: function (params) {
+            var p = params[0];
+            return dayLabel(p.name) + ": " + whole(spec.unit, p.value);
+          },
+        },
+        xAxis: {
+          type: "category",
+          data: spec.days,
+          axisTick: { show: false },
+          axisLine: { lineStyle: { color: hairline } },
+          axisLabel: { color: ink, formatter: dayLabel },
+        },
+        yAxis: {
+          type: "value",
+          minInterval: spec.unit === "usd" ? 0 : 1,
+          splitLine: { lineStyle: { color: hairline } },
+          axisLabel: { color: ink, formatter: compact(spec.unit) },
+        },
+        series: [
+          {
+            type: "bar",
+            data: spec.values,
+            barMaxWidth: 24,
+            barCategoryGap: "20%",
+            itemStyle: { borderRadius: [4, 4, 0, 0] },
+          },
+        ],
+      });
+      charts.push(chart);
+    });
+    window.addEventListener("resize", function () {
+      charts.forEach(function (c) {
+        c.resize();
+      });
+    });
+  }
+
   var copyBtn = document.querySelector(".js-copy-btn");
   if (copyBtn) {
     copyBtn.addEventListener("click", function () {

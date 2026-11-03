@@ -250,7 +250,7 @@ body {
   color: var(--bs-secondary-color);
 }
 
-/* Capacity: a meter's label above it, and a day-by-day strip of bars. */
+/* Capacity: a meter's label above it, and a day-by-day chart. */
 .capacity-page .cap-meter-label {
   display: flex;
   justify-content: space-between;
@@ -266,25 +266,7 @@ body {
   letter-spacing: 0.04em;
   font-size: 0.75rem;
 }
-.capacity-page .cap-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 4rem;
-  padding-bottom: 1px;
-  border-bottom: 1px solid var(--bs-border-color);
-}
-.capacity-page .cap-bars-short {
-  height: 3rem;
-}
-.capacity-page .cap-bar {
-  flex: 1 1 0;
-  max-width: 1.5rem;
-  min-height: 2px;
-  border-radius: 3px 3px 0 0;
-  background-color: var(--bs-primary);
-  opacity: 0.85;
-}
-.capacity-page .cap-bar:hover {
-  opacity: 1;
+/* Drawn by ECharts from the JSON on the element; the height is all the CSS decides. */
+.capacity-page .cap-chart {
+  height: 9rem;
 }

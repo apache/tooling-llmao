@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import functools
 import io
+import json
 import logging
 import pathlib
 import re
@@ -1817,6 +1818,7 @@ async def admin_capacity(result):
         catalog=catalog,
         live={d.model_name for d in APP.fleet.deployments},
         today=today,
+        period_days=days,
         listed=listed,
         live_servers=live_servers,
     )
@@ -1828,7 +1830,7 @@ async def admin_capacity(result):
         spent = []
         result.spend_down = ezt.boolean(True)
     providers = summarise_spend(spent, today=today, period_days=days)
-    result.providers = [_spend_provider_row(p) for p in providers]
+    result.providers = [_spend_provider_row(p, days=_period(today, days)) for p in providers]
     result.spend_month_to_date = _money(sum(p.month_to_date_usd for p in providers))
     result.spend_projected = _money(sum(p.projected_month_usd for p in providers))
     return result
@@ -1845,6 +1847,7 @@ def capacity_cards(
     catalog: dict[str, str],
     live: set[str],
     today: dt.date,
+    period_days: int,
     listed: dict[str, str] | None = None,
     live_servers: set[str] = frozenset(),
 ) -> tuple[list, list]:
@@ -1864,6 +1867,7 @@ def capacity_cards(
     for d in demand:
         pairs.setdefault(d.model, edict(supply=None, demand=None)).demand = d
     recent = (today - dt.timedelta(days=DORMANT_DAYS)).isoformat()
+    days = _period(today, period_days)
     cards, dormant, cost = [], [], {}
     for name, pair in pairs.items():
         last = max(h for h in ((pair.supply and pair.supply.last_hour), (pair.demand and pair.demand.last_hour)) if h)
@@ -1871,8 +1875,9 @@ def capacity_cards(
             model_name=name,
             display_name=catalog.get(name, name),
             live=ezt.boolean(name in live),
-            supply=pair.supply and _capacity_model_row(pair.supply, listed=listed, live_servers=live_servers),
-            demand=pair.demand and _demand_model_row(pair.demand),
+            supply=pair.supply
+            and _capacity_model_row(pair.supply, days=days, listed=listed, live_servers=live_servers),
+            demand=pair.demand and _demand_model_row(pair.demand, days=days),
             last_seen=_day_h(last),
             cost=_money(pair.supply.cost_usd) if pair.supply else "",
             hours=pair.supply.hours if pair.supply else 0,
@@ -1888,20 +1893,23 @@ def _pct(fraction: float) -> int:
     return max(0, min(100, round(fraction * 100)))
 
 
-def _bars(series: list, fmt) -> list:
-    """A day-by-day series as bar heights, tallest 100: [{height, title}].
+def _period(today: dt.date, period_days: int) -> list[str]:
+    """Every day of the period as ISO dates, oldest first, today last."""
+    first = today - dt.timedelta(days=period_days - 1)
+    return [(first + dt.timedelta(days=i)).isoformat() for i in range(period_days)]
 
-    A bar too small to see still gets a sliver, so a quiet day reads as
-    quiet rather than as missing.
+
+def _chart(series: list, days: list[str], unit: str) -> str:
+    """A day-by-day series as the JSON a chart is drawn from, or "" with nothing to draw.
+
+    The chart's axis is the calendar, every day of the period, so a day
+    with no row is drawn as zero and a series that stopped reads as having
+    stopped. The unit names how the page formats the values.
     """
-    top = max((p.value for p in series), default=0)
-    return [
-        edict(
-            height=max(2, round(p.value / top * 100)) if top else 2,
-            title=f"{p.day}: {fmt(p.value)}",
-        )
-        for p in series
-    ]
+    if not series:
+        return ""
+    have = {p.day: p.value for p in series}
+    return json.dumps(edict(days=days, values=[have.get(d, 0) for d in days], unit=unit))
 
 
 def _seconds_h(value) -> str:
@@ -1910,7 +1918,7 @@ def _seconds_h(value) -> str:
     return f"{value:.1f}s" if value < 10 else f"{value:.0f}s"
 
 
-def _demand_model_row(m) -> edict:
+def _demand_model_row(m, *, days: list[str] = ()) -> edict:
     """One model's demand over the period, for the template."""
 
     def shares(items, top=6):
@@ -1936,7 +1944,7 @@ def _demand_model_row(m) -> edict:
         prompt_len=[edict(name=b.name, count=f"{b.count:,}") for b in m.prompt_len],
         duration_p50=_seconds_h(m.duration_p50_s),
         duration_p95_worst=_seconds_h(m.duration_p95_worst_s),
-        request_bars=_bars(m.daily_requests, lambda v: f"{int(v):,} requests"),
+        request_chart=_chart(m.daily_requests, days, "requests"),
     )
 
 
@@ -1970,7 +1978,9 @@ def _line_status(line, listed: dict[str, str] | None, live_servers: set[str]) ->
     return "" if any(a in live_servers for a in line.addresses) else "gone"
 
 
-def _capacity_model_row(m, *, listed: dict[str, str] | None = None, live_servers: set[str] = frozenset()) -> edict:
+def _capacity_model_row(
+    m, *, days: list[str] = (), listed: dict[str, str] | None = None, live_servers: set[str] = frozenset()
+) -> edict:
     # How long requests sat in vLLM's queue before it started on them. Each
     # hourly row keeps the 95th percentile of that hour (95% of requests
     # waited no longer); this is the worst such hour in the period, the one
@@ -2013,7 +2023,7 @@ def _capacity_model_row(m, *, listed: dict[str, str] | None = None, live_servers
         requests=f"{m.requests:,}",
         hours=m.hours,
         unpriced_hours=m.unpriced_hours or None,
-        token_bars=_bars(m.daily_tokens, lambda v: f"{_tokens_h(int(v))} tokens"),
+        token_chart=_chart(m.daily_tokens, days, "tokens"),
         servers=[
             edict(
                 server=srv.server,
@@ -2031,7 +2041,7 @@ def _capacity_model_row(m, *, listed: dict[str, str] | None = None, live_servers
     )
 
 
-def _spend_provider_row(p) -> edict:
+def _spend_provider_row(p, *, days: list[str] = ()) -> edict:
     projected = p.projected_month_usd
     return edict(
         provider=p.provider,
@@ -2041,7 +2051,7 @@ def _spend_provider_row(p) -> edict:
         projected=_money(projected),
         models=[edict(name=x.name, usd=_money(x.usd)) for x in p.models],
         projects=[edict(name=x.name, usd=_money(x.usd)) for x in p.projects],
-        spend_bars=_bars([edict(day=d.day, value=d.usd) for d in p.daily], _money),
+        spend_chart=_chart([edict(day=d.day, value=d.usd) for d in p.daily], days, "usd"),
     )
 
 

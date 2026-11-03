@@ -52,13 +52,17 @@ same news as none), preemptions, the Refused column, the Waiting column.
 The cost per million tokens is over the priced hours alone, so the few
 unpriced hours after a start neither hide it nor dilute it.
 
-**Next (not built as of 2026-11-02):** the day-by-day charts (tokens,
-requests, spend) move from CSS bars over only the days that had rows to
-Apache ECharts, vendored by `bin/fetch-thirdparty.sh`, drawn from a JSON
-payload per chart that covers every day of the period, a day with no row
-as zero: the x-axis is the calendar, so a series that stopped reads as
-having stopped. Then the tiles and the page's wording (rental and
-deployment, not box and server).
+The day-by-day charts (tokens, requests, spend) are drawn by Apache
+ECharts, vendored by `bin/fetch-thirdparty.sh` and loaded by this page
+alone, from a JSON payload per chart (`_chart` in `pages.py`, on a
+`data-chart` attribute) that covers every day of the period, a day with
+no row as zero: the x-axis is the calendar, so a series that stopped
+reads as having stopped, and one that started late starts late. The
+look is set in `llmao.js`: one hue, bars no wider than 24px, a hairline
+grid, a tooltip per day, no legend since each chart is one series.
+
+**Next (not built as of 2026-11-02):** the tiles and the page's wording
+(rental and deployment, not box and server).
 
 ## Status
 
