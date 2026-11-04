@@ -5,6 +5,12 @@ body {
 .llmao-lede {
   max-width: 40rem;
 }
+/* A short form ("5m ago") whose exact value is in the title: say that a hover has more. */
+.llmao-hover {
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+  cursor: help;
+}
 
 /* Home: the steps, numbered down a rail. */
 .home-page .home-steps {

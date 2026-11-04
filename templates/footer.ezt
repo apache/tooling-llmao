@@ -5,7 +5,7 @@
             &middot; <a href="[repo]">Source on GitHub</a>
             &middot; <a href="https://www.apache.org/licenses/">License</a>
             &middot; running <a href="[repo]/commit/[commit]">[commit]</a>
-            [if-any is_site_admin]&middot; last restarted [restarted_at][end]
+            [if-any is_site_admin]&middot; last restarted <span class="llmao-hover" title="[restarted_at]">[restarted_ago]</span>[end]
         </p>
         <p class="text-muted mt-2 mb-0 small">
             Apache and the Apache logo are either registered trademarks or

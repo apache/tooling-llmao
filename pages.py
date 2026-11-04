@@ -26,7 +26,6 @@ import json
 import logging
 import pathlib
 import re
-import time
 from urllib.parse import quote, urlsplit
 
 import asfquart
@@ -100,8 +99,7 @@ STATICDIR = THIS_DIR / "static"
 
 REPO_URL = "https://github.com/apache/tooling-llmao"
 # Import is process start: create_app loads this module once, and a restart is a new process.
-# The server clock is UTC. The label says so, rather than shifting to an admin's zone.
-RESTARTED_AT = time.strftime("%m/%d %H:%M", time.gmtime()) + " (UTC)"
+RESTARTED_AT = dt.datetime.now(dt.UTC)
 # Read once, for the same reason: the commit this process loaded is the one it is running,
 # whatever is checked out since. Asking git per request also blocked the event loop.
 COMMIT = Version.from_git().commit
@@ -365,7 +363,10 @@ async def basic_info(title: str = "llmao") -> edict:
 
     basic.commit = COMMIT
     basic.repo = REPO_URL
-    basic.restarted_at = RESTARTED_AT
+    # "5m ago" at a glance; the exact moment under the pointer. The server clock is UTC and
+    # the label says so, rather than shifting to an admin's zone.
+    basic.restarted_ago = fmt.ago(RESTARTED_AT.isoformat())
+    basic.restarted_at = RESTARTED_AT.strftime("%Y-%m-%d %H:%M UTC")
 
     return basic
 
