@@ -263,16 +263,28 @@ def test_a_day_folds_into_one_row_per_model_per_hour():
     assert nine.requests == 2
     assert nine.prompt_tokens == 580 + 92_000
     assert nine.completion_tokens == 146
-    assert nine.by_project == {
-        "spark": dict(requests=1, prompt_tokens=580, completion_tokens=46),
-        "netbeans": dict(requests=1, prompt_tokens=92_000, completion_tokens=100),
-    }
-    assert {k: v["requests"] for k, v in nine.by_tool.items()} == {"OpenAI": 1, "opencode": 1}
-    assert nine.prompt_len == {"<1k": 1, "32k-128k": 1}
     assert nine.duration_p50_s == 0.6
     assert nine.duration_p95_s == 34.0
     assert nine.sources == ["litellm"]
-    assert nine.refused == {}
+    # Each project's share carries its own tools, refusals, prompt lengths
+    # and latency; nothing of that is repeated at the top.
+    assert set(nine.by_project) == {"spark", "netbeans"}
+    assert nine.by_project.spark == dict(
+        requests=1,
+        prompt_tokens=580,
+        completion_tokens=46,
+        by_tool={"OpenAI": dict(requests=1, prompt_tokens=580, completion_tokens=46)},
+        refused={},
+        prompt_len={"<1k": 1},
+        duration_p50_s=0.6,
+        duration_p95_s=0.6,
+    )
+    netbeans = nine.by_project.netbeans
+    assert (netbeans.requests, netbeans.prompt_tokens) == (1, 92_000)
+    assert list(netbeans.by_tool) == ["opencode"]
+    assert netbeans.prompt_len == {"32k-128k": 1}
+    assert (netbeans.duration_p50_s, netbeans.duration_p95_s) == (34.0, 34.0)
+    assert not any(k in nine for k in ("by_tool", "refused", "prompt_len"))
 
 
 def test_what_is_not_demand_is_left_out():
@@ -295,12 +307,16 @@ def test_a_refused_request_counts_as_a_request_with_a_reason_and_no_tokens():
         [_spend(9), _spend(9, failure="429_RATE_LIMIT", ms=2), _spend(9, failure="429_RATE_LIMIT", project=None)],
     )
     assert row.requests == 3
-    assert row.refused == {"429_RATE_LIMIT": 2}
     assert row.prompt_tokens == 580
-    assert row.by_project[NO_PROJECT]["requests"] == 1
-    # the 2ms refusals do not drag the latency down
+    spark, nobody = row.by_project["spark"], row.by_project[NO_PROJECT]
+    assert (spark.requests, spark.refused) == (2, {"429_RATE_LIMIT": 1})
+    assert (nobody.requests, nobody.refused) == (1, {"429_RATE_LIMIT": 1})
+    # the 2ms refusals do not drag the latency down, and a project with
+    # nothing but refusals has no latency at all
     assert row.duration_p50_s == 0.6
-    assert row.prompt_len == {"<1k": 1}
+    assert spark.duration_p50_s == 0.6
+    assert nobody.duration_p50_s is None
+    assert spark.prompt_len == {"<1k": 1}
 
 
 def test_demand_rows_are_kept_by_hour_then_model_and_pruned_with_the_rest():

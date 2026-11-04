@@ -147,24 +147,27 @@ way to put words in the advisor's mouth.
 | 6 | Recommendations: what to do about what the rows say | the box and the Replace rule, 2026-11-03; the rest under "Recommendations" above and in issue #70 |
 | 7 | Demand rows: what was asked per model per hour, from LiteLLM's spend log, rolled up once a day; "What was asked" on the page | done 2026-11-02 |
 
-Demand, the other side of the capacity rows (what was asked, against what
-each server did), is designed in `docs/prompt-logging-design.md` under
-"Demand rows", and lives in the same module and store: `fold_demand` and
-`DemandRollup` in `llmao/capacity.py`, keys `llmao:demand:<hour>:<model>`
-beside the capacity keys, pruned together. What the rows say is read in
-`llmao/planning.py`: `summarise_capacity`, `summarise_demand` and
-`summarise_spend`, the summaries behind the page.
+Demand, the other side of the capacity values (what was asked, against
+what each server did), is designed in `docs/prompt-logging-design.md`
+under "Demand values", which also fixes the names: capacity value,
+demand value, day marker. It lives in the same module and store:
+`fold_demand` and `DemandRollup` in `llmao/capacity.py`, keys
+`llmao:demand:<hour>:<model>` beside the capacity keys, pruned together.
+What the values say is read in `llmao/planning.py`: `summarise_capacity`,
+`summarise_demand` and `summarise_spend`, the summaries behind the page.
 
-Each rolled-up day leaves a marker, `llmao:demand-day:<day>`, holding
-the row count, which sources wrote it, and the `FOLD_VERSION` the fold
-had at the time (a constant in `llmao/capacity.py`, 2 since the
-deployment-id exclusion of 2026-11-02). The runner treats a day whose
-marker carries an older version as missing, so bumping the constant
-makes the next run clear and re-roll every stored day, oldest first.
-That is how a change to what a demand row holds, or to what counts as
-demand, reaches history. Bump it whenever `fold_demand` changes its
-output; the capacity rows have no such version, since they are
-written once from readings that cannot be re-taken.
+Each rolled-up day leaves a day marker, `llmao:demand-day:<day>`,
+holding the count of demand values, which sources wrote them, and the
+`FOLD_VERSION` the fold had at the time (a constant in
+`llmao/capacity.py`: 2 since the deployment-id exclusion of 2026-11-02,
+3 since 2026-11-04, when each project's share of a demand value gained
+its own tools, refusals, prompt lengths and latency). The runner treats
+a day whose marker carries an older version as missing, so bumping the
+constant makes the next run clear and re-roll every stored day, oldest
+first. That is how a change to what a demand value holds, or to what
+counts as demand, reaches history. Bump it whenever `fold_demand`
+changes its output; the capacity values have no such version, since
+they are written once from readings that cannot be re-taken.
 
 **Future, on demand only:** a CSV download of the report. Not built until
 someone asks for it.

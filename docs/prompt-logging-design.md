@@ -418,25 +418,39 @@ parsing of a day's file happens in the child on another core; the event
 loop waits on a pipe. llmao never opens a log file itself, and the tool
 never holds the master key.
 
-### Demand rows
+### Demand values
 
-One row per model per UTC hour, keyed `llmao:demand:<hour>:<model>`, in
-the same `/v1/memory` store as the capacity rows, pruned by
-`CapacityPruner` under the same `capacity_retention_days`. The capacity
-rows describe supply, what each server did; these describe demand, what
-was asked, and join to them on hour and model. Each holds:
+Three kinds of value share the `/v1/memory` store here, and each has
+one name: a **capacity value** at `llmao:capacity:<hour>:<server>`,
+supply, what one server did in one hour; a **demand value** at
+`llmao:demand:<hour>:<model>`, what was asked of one model in one hour;
+and a **day marker** at `llmao:demand-day:<day>`, the rollup's
+bookkeeping for a day. "Row" means a row of LiteLLM's spend log, or a
+line of a rendered table, never a stored value.
+
+A demand value is pruned by `CapacityPruner` under the same
+`capacity_retention_days` as the capacity values, and joins them on
+hour and model. It holds the model-hour's totals and latency, and under
+`by_project` each project's share of it:
 
 | Field | Source | Meaning |
 |---|---|---|
-| `requests`, `prompt_tokens`, `completion_tokens` | LiteLLM | totals for the hour |
-| `by_project`, `by_tool` | LiteLLM | the same three, split by team alias and by user-agent family |
-| `refused` | LiteLLM | requests that failed, by LiteLLM's `normalized_error` (`429_RATE_LIMIT_EXCEEDED`, `400_CONTEXT_WINDOW_EXCEEDED`, ...). `waiting_frac` on the capacity rows sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
-| `prompt_len` | LiteLLM | counts in token-length buckets (`<1k`, `1k-8k`, `8k-32k`, `32k-128k`, `>128k`), for whether anyone uses the context we pay KV cache for |
+| `requests`, `prompt_tokens`, `completion_tokens` | LiteLLM | totals for the model-hour |
 | `duration_p50_s`, `duration_p95_s` | LiteLLM | latency as the client felt it, successful requests, to set against the box's queue times |
+| `by_project` | LiteLLM | each project's share, keyed by team alias: its `requests`, `prompt_tokens`, `completion_tokens`; `by_tool`, the same three split by user-agent family; `refused`; `prompt_len`; and its own `duration_p50_s`, `duration_p95_s` |
+| `refused`, in a share | LiteLLM | the project's requests that failed, by LiteLLM's `normalized_error` (`429_RATE_LIMIT_EXCEEDED`, `400_CONTEXT_WINDOW_EXCEEDED`, ...). `waiting_frac` on a capacity value sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
+| `prompt_len`, in a share | LiteLLM | counts in token-length buckets (`<1k`, `1k-8k`, `8k-32k`, `32k-128k`, `>128k`), for whether anyone uses the context we pay KV cache for |
 | `ttft_p50_s`, `ttft_p95_s` | the log | time to first token: the spend log sets `completionStartTime` on every request, streamed or not, so it cannot tell |
 | `streamed`, `with_tools`, `finish_length` | the log | counts |
 | `log_requests` | the log | the log's count of requests for the hour, against `requests`: the reconciliation |
-| `sources` | | which of the two have written to the row |
+| `sources` | | which of the two have written to the demand value |
+
+Nothing a share says is repeated at the top of the demand value: the
+reader sums the shares for a model's tools, refusals and prompt
+lengths. Latency is the one exception, kept at both levels, since a
+model's percentile across projects cannot be derived from the projects'
+percentiles. The shares are what a per-project view would read (fold
+version 3, 2026-11-04); the capacity page reads the sums.
 
 What counts: a call to a model. A spend row with no model group (a bad
 key refused at the door, a `/v1/models` listing) is not use of a model,
@@ -447,13 +461,15 @@ a request that names a deployment by its LiteLLM id instead of a model:
 the fleet tools and health probes do that, one eight-token completion
 per deployment, and the id then appears as the model group (sixty of
 them over 281 rows in early October 2026). A refused call to a model
-does count, in `requests` and in `refused`, with no tokens. The
-log-only fields are absent from a row until track N writes them.
+does count, in `requests` and in its project's `refused`, with no
+tokens. The log-only fields are absent from a demand value until track
+N writes them.
 
-The day marker carries `FOLD_VERSION`. When the fold changes what a row
-holds or what counts, the constant is bumped and the next run rolls
-every stored day up again, clearing the day's old rows first, so a
-correction reaches history without anyone touching the store.
+The day marker carries `FOLD_VERSION`. When the fold changes what a
+demand value holds or what counts, the constant is bumped and the next
+run rolls every stored day up again, clearing the day's old demand
+values first, so a correction reaches history without anyone touching
+the store.
 
 No prompt content and no per-user split: the capacity page is for
 planning, and per project and per tool is what planning needs. Per user

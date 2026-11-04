@@ -413,14 +413,23 @@ class CapacityPruner:
 # ---- demand ---------------------------------------------------------------
 #
 # What was asked of the gateway, per model per UTC hour, from LiteLLM's
-# spend log: the other side of the capacity rows, which say what each
-# server did. Keyed llmao:demand:<hour>:<model>, so the two join on hour and
-# model. Design: docs/prompt-logging-design.md, "Demand rows".
+# spend log: a demand value, the other side of the capacity values, which
+# say what each server did. Keyed llmao:demand:<hour>:<model>, so the two
+# join on hour and model. Design: docs/prompt-logging-design.md, "Demand
+# values".
 #
-# Everything LiteLLM has that the rows might need moves into the store when
-# a day is rolled up, once; the prompt log later fills only the fields
-# LiteLLM lacks (streamed, with_tools, finish_length, time to first token),
-# which are absent from a row until it does.
+# A demand value holds the model-hour's totals and latency, and under
+# by_project each project's share of it: that project's requests and
+# tokens, split by tool, with its refusals, prompt lengths and latency.
+# Nothing a project's share says is repeated at the top: the reader sums
+# the shares. Latency is the exception, kept at both levels, because a
+# model's percentile across projects cannot be derived from the projects'
+# percentiles.
+#
+# Everything LiteLLM has that a demand value might need moves into the
+# store when a day is rolled up, once; the prompt log later fills only the
+# fields LiteLLM lacks (streamed, with_tools, finish_length, time to first
+# token), which are absent from a demand value until it does.
 #
 # What counts as demand: a call to a model. A spend row with no model group
 # (a bad key refused at the door, a /v1/models listing) is not use of a
@@ -429,13 +438,17 @@ class CapacityPruner:
 # nearly half of the day's rows.
 
 # What counts is decided once, in llmao/prompt_log.py (counts_as_demand),
-# so the log side of a row agrees with this side. The deployment-id case
-# was seen on 2026-11-02: sixty ids over 281 rows, eight tokens each.
+# so the log side of a demand value agrees with this side. The
+# deployment-id case was seen on 2026-11-02: sixty ids over 281 rows,
+# eight tokens each.
 
-# Bumped whenever fold_demand changes what a row holds or what counts. A
-# day whose marker carries an older version is rolled up again, so a
-# correction here reaches every stored day on the next run.
-FOLD_VERSION = 2
+# Bumped whenever fold_demand changes what a demand value holds or what
+# counts. A day whose marker carries an older version is rolled up again,
+# so a correction here reaches every stored day on the next run. 3 since
+# 2026-11-04: each project's share carries its own tools, refusals, prompt
+# lengths and latency, and the flat by_tool, refused and prompt_len at the
+# top are gone.
+FOLD_VERSION = 3
 
 
 def add_counts(
@@ -457,8 +470,8 @@ def _refusal(meta: dict) -> str:
     return str(info.get("normalized_error") or info.get("error_code") or info.get("error_class") or "unknown")
 
 
-def _empty_demand_row(hour: str, model: str) -> edict:
-    """A demand row before either source has written to it."""
+def _empty_demand_value(hour: str, model: str) -> edict:
+    """A demand value before either source has written to it."""
     return edict(
         hour=hour,
         model=model,
@@ -467,20 +480,33 @@ def _empty_demand_row(hour: str, model: str) -> edict:
         prompt_tokens=0,
         completion_tokens=0,
         by_project={},
-        by_tool={},
-        refused={},
-        prompt_len={},
         duration_p50_s=None,
         duration_p95_s=None,
     )
 
 
-def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
-    """A day of LiteLLM's spend log as demand rows, one per model per hour.
+def _project_share(by_project: edict, project: str) -> edict:
+    """A project's share of a demand value, created the first time the project is seen."""
+    if project not in by_project:
+        by_project[project] = edict(
+            requests=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            by_tool={},
+            refused={},
+            prompt_len={},
+            duration_p50_s=None,
+            duration_p95_s=None,
+        )
+    return by_project[project]
 
-    Pure: rows in, rows out, so the arithmetic is testable on its own.
-    `requests` counts every call to the model, refused ones included;
-    `refused` says how many and why, so refused is a share of requests.
+
+def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
+    """A day of LiteLLM's spend log as demand values, one per model per hour.
+
+    Pure: spend rows in, demand values out, so the arithmetic is testable
+    on its own. `requests` counts every call to the model, refused ones
+    included; a project's `refused` says how many of its requests and why.
     Tokens and durations come from the successful calls only: a refusal
     carries no tokens and takes no time worth measuring.
     """
@@ -494,30 +520,41 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
 
     out = []
     for (hour, model), items in sorted(by_hour.items()):
-        row = _empty_demand_row(hour, model)
-        durations = []
+        value = _empty_demand_value(hour, model)
+        # Durations of the model-hour's successful calls, and each project's;
+        # a percentile is taken over each list at the end.
+        durations: dict[str | None, list[float]] = defaultdict(list)
         for r, meta in items:
             refused = r.status == "failure"
             prompt = 0 if refused else int(r.prompt_tokens or 0)
             completion = 0 if refused else int(r.completion_tokens or 0)
-            row.requests += 1
-            row.prompt_tokens += prompt
-            row.completion_tokens += completion
-            counted = dict(prompt_tokens=prompt, completion_tokens=completion)
-            add_counts(row.by_project, meta.get("user_api_key_team_alias") or NO_PROJECT, **counted)
-            add_counts(row.by_tool, tool_family(meta.get("user_agent")), **counted)
+            project = meta.get("user_api_key_team_alias") or NO_PROJECT
+            value.requests += 1
+            value.prompt_tokens += prompt
+            value.completion_tokens += completion
+            share = _project_share(value.by_project, project)
+            share.requests += 1
+            share.prompt_tokens += prompt
+            share.completion_tokens += completion
+            tool = tool_family(meta.get("user_agent"))
+            add_counts(share.by_tool, tool, prompt_tokens=prompt, completion_tokens=completion)
             if refused:
                 reason = _refusal(meta)
-                row.refused[reason] = row.refused.get(reason, 0) + 1
+                share.refused[reason] = share.refused.get(reason, 0) + 1
                 continue
             bucket = prompt_bucket(prompt)
-            row.prompt_len[bucket] = row.prompt_len.get(bucket, 0) + 1
+            share.prompt_len[bucket] = share.prompt_len.get(bucket, 0) + 1
             if r.request_duration_ms is not None:
-                durations.append(int(r.request_duration_ms) / 1000)
-        row.sources = ["litellm"]
-        row.duration_p50_s = percentile(durations, 0.5)
-        row.duration_p95_s = percentile(durations, 0.95)
-        out.append(row)
+                seconds = int(r.request_duration_ms) / 1000
+                durations[None].append(seconds)
+                durations[project].append(seconds)
+        value.sources = ["litellm"]
+        value.duration_p50_s = percentile(durations[None], 0.5)
+        value.duration_p95_s = percentile(durations[None], 0.95)
+        for project, share in value.by_project.items():
+            share.duration_p50_s = percentile(durations[project], 0.5)
+            share.duration_p95_s = percentile(durations[project], 0.95)
+        out.append(value)
     return out
 
 
@@ -621,7 +658,7 @@ class DemandRollup:
             if row is None:
                 # The log saw a request LiteLLM has no row for: the
                 # reconciliation's other direction, kept as a row of its own.
-                row = by_key[(h.hour, h.model)] = _empty_demand_row(h.hour, h.model)
+                row = by_key[(h.hour, h.model)] = _empty_demand_value(h.hour, h.model)
                 rows.append(row)
             row.update(
                 log_requests=h.requests,

@@ -242,6 +242,12 @@ def test_demand_is_summarised_per_model_over_the_period():
     assert [t.name for t in gemma.by_tool] == ["OpenAI", "codex-tui"]
     assert gemma.by_project[0].name == "spark"
     assert [b.count for b in gemma.prompt_len] == [2, 0, 0, 0, 0]
+    # A demand value from before fold version 3: the project's share has
+    # only its counts. Those still count; the rest waits for the re-roll.
+    old = edict(rows[0], by_project={"spark": dict(requests=2, prompt_tokens=580, completion_tokens=46)})
+    (gemma_old,) = summarise_demand([old], today=dt.date(2026, 11, 2), period_days=7)
+    assert (gemma_old.requests, gemma_old.by_project[0].requests) == (2, 2)
+    assert (gemma_old.by_tool, gemma_old.refused) == ([], [])
     assert gemma.duration_p50_s == 0.6
     assert gemma.daily_requests == [edict(day="2026-11-01", value=3)]
     assert qwen.requests == 1

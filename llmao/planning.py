@@ -45,10 +45,13 @@ def _ranked_counts(totals: dict[str, dict]) -> list[edict]:
 
 
 def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[edict]:
-    """Each model over the last `period_days` days, from demand rows; most requests first.
+    """Each model over the last `period_days` days, from demand values; most requests first.
 
-    Rates per day are over the days that have rows, so a period that
-    starts before the rollup did is not averaged over empty days.
+    Rates per day are over the days that have demand values, so a period
+    that starts before the rollup did is not averaged over empty days.
+    Tools, refusals and prompt lengths are summed over the projects'
+    shares, where the demand value keeps them. A share from before fold
+    version 3 lacks them, until its day is rolled up again.
     """
     start = (today - dt.timedelta(days=period_days - 1)).isoformat()
     rows = [r for r in rows if r.hour[:10] >= start]
@@ -64,14 +67,20 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
         daily: dict[str, int] = defaultdict(int)
         for r in mine:
             daily[r.hour[:10]] += r.requests
-            for who, v in r.by_project.items():
-                add_counts(by_project, who, **v)
-            for who, v in r.by_tool.items():
-                add_counts(by_tool, who, **v)
-            for why, n in r.refused.items():
-                refused[why] += n
-            for bucket, n in r.prompt_len.items():
-                prompt_len[bucket] += n
+            for who, share in r.by_project.items():
+                add_counts(
+                    by_project,
+                    who,
+                    requests=share.requests,
+                    prompt_tokens=share.prompt_tokens,
+                    completion_tokens=share.completion_tokens,
+                )
+                for tool, v in (share.get("by_tool") or {}).items():
+                    add_counts(by_tool, tool, **v)
+                for why, n in (share.get("refused") or {}).items():
+                    refused[why] += n
+                for bucket, n in (share.get("prompt_len") or {}).items():
+                    prompt_len[bucket] += n
         p50s = [r.duration_p50_s for r in mine if r.duration_p50_s is not None]
         p95s = [r.duration_p95_s for r in mine if r.duration_p95_s is not None]
         # What only the prompt log says; absent from rows written before it existed.
