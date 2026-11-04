@@ -100,8 +100,10 @@ rows and the `models.yaml` recipe each names.
   `served_model_name` is the name vLLM advertises on `/v1/models`.
 - `port`: the **listen** port, what `vllm serve --port` binds. Never the
   public port a provider maps it to; the box does not need to know that.
-- `api_key`: the bearer this vLLM must require (`--api-key`), derived as
-  below. LiteLLM presents the same value.
+- `api_key`: the bearer this vLLM must require, derived as below. LiteLLM
+  presents the same value, and so does llmao's sampler on `/metrics`:
+  vLLM's own check covers only `/v1`, so the installer adds `RequireKey`
+  (`--middleware`), which asks the same bearer of every path but `/health`.
 - `args`: extra `vllm serve` arguments. A list of strings, or one string
   the installer splits.
 - `gpu_memory_utilization`, `max_model_len`, `vram_gb`, `disk_gb`,
@@ -226,9 +228,10 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
   instance; the unlisted verdict in `box-lifecycle.md` is the answer to
   the second.
 - `GET /vllm/config` is served over HTTPS only.
-- vLLM's `/health` takes no key. A passing probe says something answers at
-  that address, not that it is ours; `/v1/models` with the bearer is the
-  check that it is. A 401 makes the server Rejected (its deployment is
+- vLLM's `/health` takes no key; every other path on our rentals does
+  (`RequireKey`, above). A passing probe says something answers at that
+  address, not that it is ours; `/v1/models` with the bearer is the check
+  that it is. A 401 makes the server Rejected (its deployment is
   deleted, the probe continues); Rejected on `REJECTED_PASSES` passes at an
   address no listing names is Foreign. See `box-lifecycle.md`.
 - Hardening that is possible without changing the rest: instance binding,

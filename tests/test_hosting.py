@@ -76,6 +76,8 @@ def test_build_argv(monkeypatch):
         "0.0.0.0",
         "--port",
         "8000",
+        "--middleware",
+        "install_set.RequireKey",
         "--gpu-memory-utilization",
         "0.42",
         "--max-model-len",
@@ -166,6 +168,8 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     assert "--api-key" not in text
     assert "sk-aaa" not in text.split("environment=", 1)[0]
     assert 'VLLM_API_KEY="sk-aaa"' in text
+    # vLLM imports RequireKey from the installer itself, wherever it was saved.
+    assert f'PYTHONPATH="{HOSTING}"' in text
     assert "autorestart=true" in text
     assert f'HF_HOME="{tmp_path / "hf-cache"}"' in text
     assert f'VLLM_CACHE_ROOT="{tmp_path / ".vllm_cache"}"' in text

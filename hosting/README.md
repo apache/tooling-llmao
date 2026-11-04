@@ -18,7 +18,7 @@ write Supervisor units; there is no long-lived Python launcher.
 
 | Path | Role |
 |------|------|
-| `install_set.py` | Shared by every provider: GET JSON, write a `vllm-*.conf` per server, `supervisorctl update` (or not, with `--no-reload`) |
+| `install_set.py` | Shared by every provider: GET JSON, write a `vllm-*.conf` per server, `supervisorctl update` (or not, with `--no-reload`). Also the module each `vllm serve` imports (`--middleware install_set.RequireKey`): the bearer on every path but `/health`, since vLLM's own check covers only `/v1` |
 | `vast/provision.sh` | Vast on-create: set `LLMAO_HOST`, curl the installer from GitHub, run it |
 | `vast/README.md` | Vast.ai runbook |
 | `runpod/Dockerfile` | RunPod image: stock vLLM plus vendored supervisor (`runpod/bin/`, `runpod/requirements.txt`) and `runpod/provision.sh`; built and pushed to ghcr by `.github/workflows/runpod-image.yml` |

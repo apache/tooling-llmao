@@ -446,6 +446,14 @@ class RequireKey:
         await send({"type": "http.response.body", "body": b'{"error": "Unauthorized"}'})
 
 
+# How vLLM finds RequireKey: this file's name as the module, its directory
+# on PYTHONPATH. Both from __file__, so wherever a provider's provision.sh
+# saved the installer is where vLLM imports it from.
+_HERE = Path(__file__).resolve()
+MIDDLEWARE = f"{_HERE.stem}.RequireKey"
+PYTHONPATH = str(_HERE.parent)
+
+
 def build_argv(spec: dict[str, Any]) -> list[str]:
     cmd = [
         VLLM_BIN,
@@ -455,6 +463,8 @@ def build_argv(spec: dict[str, Any]) -> list[str]:
         "0.0.0.0",
         "--port",
         str(spec["port"]),
+        "--middleware",
+        MIDDLEWARE,
     ]
     # The name LiteLLM asks for. Without it vLLM answers only to the Hugging
     # Face id, and every request through LiteLLM is a 404 while /health still
@@ -505,6 +515,8 @@ def program_ini(
         'VLLM_ENABLE_STARTUP_PLAN="1"',
         'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
         f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"',
+        # RequireKey (--middleware above) is imported from this file.
+        f'PYTHONPATH="{_ini_escape(PYTHONPATH)}"',
     ]
     # Hugging Face's rate limit for unauthenticated downloads, and gated
     # repositories. Not a speed-up by itself. Optional: a control plane
