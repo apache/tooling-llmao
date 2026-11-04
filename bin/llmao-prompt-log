@@ -45,18 +45,7 @@ import json
 import pathlib
 import sys
 
-import yaml
-
 from llmao import fmt, prompt_log
-
-
-def _default_log_dir() -> pathlib.Path:
-    cfg = pathlib.Path("config.yaml")
-    if cfg.exists():
-        raw = (yaml.safe_load(cfg.read_text()) or {}).get("prompt_log_dir")
-        if raw:
-            return pathlib.Path(str(raw))
-    return pathlib.Path("prompt-log")
 
 
 def _table(title: str, columns: list[str], rows: list[list], *, csv_out: bool) -> None:
@@ -152,16 +141,15 @@ def main(argv: list[str] | None = None) -> int:
     for parser in (roll, rep):
         parser.add_argument("--log-dir", type=pathlib.Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
-    log_dir = args.log_dir or _default_log_dir()
+    log_dir = args.log_dir or prompt_log.configured_log_dir()
     if args.command == "rollup":
         json.dump(prompt_log.rollup_json(log_dir, args.day), sys.stdout)
         sys.stdout.write("\n")
     else:
-        end = args.end or dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-        start = args.start or end - dt.timedelta(days=args.days - 1)
-        if start > end:
+        try:
+            days = prompt_log.span(days=args.days, start=args.start, end=args.end)
+        except ValueError:
             ap.error("--from is after --to")
-        days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
         _report(log_dir, days, csv_out=args.csv)
     return 0
 

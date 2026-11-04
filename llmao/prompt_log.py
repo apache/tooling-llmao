@@ -401,3 +401,42 @@ def read_days(log_dir: pathlib.Path, days: Iterable[dt.date]) -> Iterator[edict]
     """Every record of several days, in day order."""
     for day in days:
         yield from read_day(log_dir, day)
+
+
+# ---- the accessor for scripts -------------------------------------------
+#
+# What a script at a shell on the host needs to get at the records, and
+# nothing of what it then does with them: the content analyses are R&D in
+# bin/ (docs/prompt-logging-design.md, "The post-process") and stay out of
+# the library until they settle.
+
+CONFIG = pathlib.Path("config.yaml")
+DEFAULT_LOG_DIR = pathlib.Path("prompt-log")
+
+
+def configured_log_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
+    """prompt_log_dir from config.yaml in the current directory, else ./prompt-log.
+
+    The lenient cousin of ``log_dir``: a script run from a checkout without a
+    config.yaml gets the development default, where the portal gets an error.
+    """
+    if config.exists():
+        import yaml
+
+        raw = (yaml.safe_load(config.read_text()) or {}).get("prompt_log_dir")
+        if raw:
+            return pathlib.Path(str(raw))
+    return DEFAULT_LOG_DIR
+
+
+def span(*, days: int = 7, start: dt.date | None = None, end: dt.date | None = None) -> list[dt.date]:
+    """The UTC days to read: the last ``days`` closed ones, or ``start`` to ``end``, in order.
+
+    ``end`` defaults to yesterday, the last closed day; ``start`` to ``days``
+    before it. A start after its end is a ValueError.
+    """
+    end = end or dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    start = start or end - dt.timedelta(days=days - 1)
+    if start > end:
+        raise ValueError(f"span starts {start}, after it ends {end}")
+    return [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]

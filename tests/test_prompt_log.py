@@ -241,6 +241,32 @@ def test_rollup_day_spawns_the_tool_and_a_tool_that_fails_is_an_error_with_its_l
         raise AssertionError("a tool past its timeout must be an error")
 
 
+def test_a_script_finds_the_log_directory_in_config_or_takes_the_default(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    assert prompt_log.configured_log_dir(cfg) == prompt_log.DEFAULT_LOG_DIR
+    cfg.write_text("prompt_log_dir: /x1/llmao/prompt-log\n")
+    assert prompt_log.configured_log_dir(cfg).as_posix() == "/x1/llmao/prompt-log"
+    cfg.write_text("other: 1\n")
+    assert prompt_log.configured_log_dir(cfg) == prompt_log.DEFAULT_LOG_DIR
+
+
+def test_a_span_is_the_last_closed_days_or_from_to():
+    today = dt.datetime.now(dt.UTC).date()
+    last = prompt_log.span(days=3)
+    assert last == [today - dt.timedelta(days=3), today - dt.timedelta(days=2), today - dt.timedelta(days=1)]
+    assert prompt_log.span(start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 2)) == [
+        dt.date(2026, 11, 1),
+        dt.date(2026, 11, 2),
+    ]
+    assert prompt_log.span(days=2, end=dt.date(2026, 11, 3)) == [dt.date(2026, 11, 2), dt.date(2026, 11, 3)]
+    try:
+        prompt_log.span(start=dt.date(2026, 11, 3), end=dt.date(2026, 11, 2))
+    except ValueError as e:
+        assert "after it ends" in str(e)
+    else:
+        raise AssertionError("a start after its end must be an error")
+
+
 def test_the_log_directory_is_required_in_config():
     assert prompt_log.log_dir(edict(prompt_log_dir="/x1/llmao/prompt-log")).as_posix() == "/x1/llmao/prompt-log"
     try:
