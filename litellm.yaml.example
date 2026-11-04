@@ -41,6 +41,9 @@ callback_settings:
     # /x1/llmao/prompt-log, created by Puppet. Developer: `make proxy`
     # creates ./prompt-log, which is gitignored.
     dir: ./prompt-log
+    # Days a finished day's file is kept before loguru deletes it; the terms
+    # promise this number. Production: 90, from Puppet.
+    retention_days: 90
 
 general_settings:
   # Proxy admin key (must start with sk-). Same value as config.yaml → litellm.master_key.

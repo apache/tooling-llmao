@@ -81,6 +81,7 @@ documents the budget floor for them.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -90,6 +91,9 @@ from typing import Any
 import litellm
 from easydict import EasyDict as edict  # noqa: N813
 from litellm.integrations.custom_logger import CustomLogger
+from loguru import logger as _loguru
+
+from llmao import prompt_log as _record
 
 # One logger per hook, named for the callback path litellm.yaml uses, so a
 # log line says which hook spoke. Not __name__: the file-path load (see the
@@ -203,12 +207,13 @@ empty_completion_guard = EmptyCompletionGuard()
 
 # ============================================================ the prompt log
 #
-# Design: docs/prompt-logging-design.md. This is the apparatus of step H1:
-# the settings, the build-once, the fail-at-start, and the three methods
-# LiteLLM calls. Its body is the step H1 PROBE, not the writer: it records
-# what the hook sees for requests that try to opt out of logging, so the
-# "No opt-out" section of the design can be written from fact. The probe
-# body goes in step N3; the apparatus stays.
+# Design: docs/prompt-logging-design.md. Every request that flows through
+# the proxy is written as one JSON record (llmao/prompt_log.py says what
+# it holds) to one file per UTC day. loguru owns the file: the rotation at
+# UTC midnight, the gzip of the finished day and the deletion past
+# retention happen in its writer thread; the hook hands it a line and
+# nothing more. The success and failure events run on LiteLLM's logging
+# worker, off the request path, after the reply has gone to the client.
 #
 # Settings come from litellm.yaml, which LiteLLM stores on its module
 # before it loads any callback (proxy_server.py, "callback_settings"):
@@ -216,6 +221,7 @@ empty_completion_guard = EmptyCompletionGuard()
 #     callback_settings:
 #       prompt_log:
 #         dir: /x1/llmao/prompt-log
+#         retention_days: 90
 #
 # The instance is built the first time LiteLLM asks this module for
 # "prompt_log" (the module-level __getattr__ at the bottom), so a plain
@@ -250,6 +256,18 @@ def _prompt_log_dir(settings: edict) -> Path:
             " The hook does not create it; see docs/prompt-logging-design.md, Files."
         )
     return path
+
+
+def _prompt_log_retention(settings: edict) -> int:
+    """Days a finished day's file is kept, which the terms promise; required, like the directory."""
+    raw = settings.get("retention_days")
+    try:
+        days = int(raw)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(f"litellm.yaml: {_PROMPT_LOG_SETTING}.retention_days must be a whole number of days") from e
+    if days <= 0:
+        raise RuntimeError(f"litellm.yaml: {_PROMPT_LOG_SETTING}.retention_days must be > 0")
+    return days
 
 
 # What a client can send to switch logging off, measured on 1.105.0 with
@@ -287,52 +305,64 @@ def _strip_opt_outs(data: dict) -> list[str]:
     return removed
 
 
-def _probe_view(data: dict) -> dict:
-    """The opt-out switches as they appear in a request, for the probe."""
-    meta = data.get("metadata") or data.get("litellm_metadata") or {}
-    headers = meta.get("headers") or {}
-    return dict(
-        no_log=data.get("no-log"),
-        turn_off=data.get("turn_off_message_logging"),
-        meta_no_log=meta.get("no-log"),
-        meta_turn_off=meta.get("turn_off_message_logging"),
-        headers={k: v for k, v in headers.items() if "redaction" in k or "callbacks" in k or "log" in k},
-    )
+def _opener(path: str, flags: int) -> int:
+    """Every file 0600: the records hold prompts, and the directory is already root's alone."""
+    return os.open(path, flags, 0o600)
 
 
 class PromptLog(CustomLogger):
-    """Records every request that flows through the proxy. PROBE BODY, see above."""
+    """Records every request that flows through the proxy, one JSON line each, to the day's file."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, retention_days: int):
         super().__init__()
         self.dir = directory
+        self.retention_days = retention_days
+        # loguru's default handler prints to stderr; a record there would
+        # put every prompt in the journal. Gone before the sink is added.
+        try:
+            _loguru.remove(0)
+        except ValueError:
+            pass
+        self._sink = _loguru.add(
+            str(directory / _record.SINK_PATTERN),
+            format="{message}",
+            level="INFO",
+            filter=lambda r: bool(r["extra"].get("prompt_log")),
+            rotation=dt.time(0, 0, tzinfo=dt.UTC),
+            retention=f"{retention_days} days",
+            compression="gz",
+            enqueue=True,
+            encoding="utf-8",
+            opener=_opener,
+        )
+        self._log = _loguru.bind(prompt_log=True)
 
     @classmethod
     def from_settings(cls) -> PromptLog:
-        return cls(_prompt_log_dir(_prompt_log_settings()))
+        settings = _prompt_log_settings()
+        return cls(_prompt_log_dir(settings), _prompt_log_retention(settings))
 
-    # --- the probe. Each method appends one line saying what it saw; the
-    # request's `user` field is the tag that pairs the lines of one request.
+    def close(self) -> None:
+        """Flush and drop the sink; for tests that build more than one."""
+        _loguru.remove(self._sink)
 
-    def _probe(self, event: str, **fields: Any) -> None:
-        with (self.dir / "probe.jsonl").open("a") as f:
-            f.write(json.dumps(dict(event=event, **fields), default=str) + "\n")
+    def complete(self) -> None:
+        """Wait for every queued record to reach the file; for tests and shutdown."""
+        _loguru.complete()
 
-    def _probe_event(self, event: str, kwargs: dict) -> None:
-        payload = kwargs.get("standard_logging_object") or {}
-        params = kwargs.get("litellm_params") or {}
-        dynamic = kwargs.get("standard_callback_dynamic_params") or {}
-        self._probe(
-            event,
-            tag=payload.get("end_user"),
-            status=payload.get("status"),
-            messages=repr(payload.get("messages"))[:160],
-            no_log=params.get("no-log"),
-            dynamic_turn_off=dynamic.get("turn_off_message_logging"),
-        )
+    def _write(self, kwargs: dict) -> None:
+        payload = kwargs.get("standard_logging_object")
+        if not payload:
+            # LiteLLM builds the payload for every event it fires; its
+            # absence is a LiteLLM change, worth a line in the journal and
+            # nothing in the log.
+            _PROMPT_LOGGER.warning(
+                "prompt log: event without a standard_logging_object, call=%s", kwargs.get("litellm_call_id")
+            )
+            return
+        self._log.info(json.dumps(_record.record(payload), default=str, ensure_ascii=False))
 
     async def async_pre_call_hook(self, user_api_key_dict: Any, cache: Any, data: dict, call_type: str) -> dict:
-        self._probe("pre_call", tag=data.get("user"), call_type=call_type, **_probe_view(data))
         removed = _strip_opt_outs(data)
         if removed:
             _PROMPT_LOGGER.warning(
@@ -346,10 +376,10 @@ class PromptLog(CustomLogger):
         return data
 
     async def async_log_success_event(self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any) -> None:
-        self._probe_event("success", kwargs)
+        self._write(kwargs)
 
     async def async_log_failure_event(self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any) -> None:
-        self._probe_event("failure", kwargs)
+        self._write(kwargs)
 
 
 _prompt_log: PromptLog | None = None
@@ -362,5 +392,5 @@ def __getattr__(name: str) -> Any:
     global _prompt_log
     if _prompt_log is None:
         _prompt_log = PromptLog.from_settings()
-        _PROMPT_LOGGER.info("prompt log: writing to %s", _prompt_log.dir)
+        _PROMPT_LOGGER.info("prompt log: writing to %s, kept %d days", _prompt_log.dir, _prompt_log.retention_days)
     return _prompt_log

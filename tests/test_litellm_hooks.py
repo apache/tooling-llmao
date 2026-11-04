@@ -24,6 +24,8 @@ the false-positive cases matter more than the one it exists to catch.
 """
 
 import asyncio
+import datetime as dt
+import json
 import types
 
 import litellm
@@ -137,18 +139,26 @@ def test_message_without_a_requested_budget():
 
 # ================================================================ prompt log
 #
-# The apparatus only: settings, build-once, fail-at-start. What the hook
-# writes is step N3 of docs/prompt-logging-design.md and is not tested yet.
+# The apparatus (settings, build-once, fail-at-start), the pre-call strip,
+# and the body: one record per event, written to the day's file.
 
 
 @pytest.fixture
 def unbuilt(monkeypatch):
     """A fresh module: no instance built, no settings on litellm."""
+    built = litellm_hooks._prompt_log
+    if built is not None:
+        built.close()
     monkeypatch.setattr(litellm_hooks, "_prompt_log", None)
     monkeypatch.setattr(litellm, "callback_settings", {}, raising=False)
+    yield
+    built = litellm_hooks._prompt_log
+    if built is not None:
+        built.close()
 
 
 def _settings(monkeypatch, **section):
+    section.setdefault("retention_days", 90)
     monkeypatch.setattr(litellm, "callback_settings", {"prompt_log": section}, raising=False)
 
 
@@ -169,6 +179,14 @@ def test_missing_dir_setting_stops_the_proxy(unbuilt, monkeypatch):
         _ = litellm_hooks.prompt_log
 
 
+def test_missing_or_bad_retention_stops_the_proxy(unbuilt, monkeypatch, tmp_path):
+    for bad in (None, "soon", 0):
+        monkeypatch.setattr(litellm_hooks, "_prompt_log", None)
+        monkeypatch.setattr(litellm, "callback_settings", {"prompt_log": {"dir": str(tmp_path), "retention_days": bad}})
+        with pytest.raises(RuntimeError, match=r"callback_settings.prompt_log.retention_days must be"):
+            _ = litellm_hooks.prompt_log
+
+
 def test_absent_directory_is_not_created(unbuilt, monkeypatch, tmp_path):
     """A missing directory in production means /x1 is not mounted."""
     missing = tmp_path / "prompt-log"
@@ -182,7 +200,7 @@ def test_built_once(unbuilt, monkeypatch, tmp_path):
     _settings(monkeypatch, dir=str(tmp_path))
     first = litellm_hooks.prompt_log
     assert isinstance(first, litellm_hooks.PromptLog)
-    assert first.dir == tmp_path
+    assert (first.dir, first.retention_days) == (tmp_path, 90)
     assert litellm_hooks.prompt_log is first
 
 
@@ -275,3 +293,74 @@ def test_litellm_would_redact_before_the_strip_and_not_after():
         assert should_redact_message_logging({"litellm_params": data})
         litellm_hooks._strip_opt_outs(data)
         assert not should_redact_message_logging({"litellm_params": data})
+
+
+# ------------------------------------------------------------- the body
+
+
+def _event(**payload):
+    """kwargs as LiteLLM hands them to a success or failure event: the payload is what matters."""
+    base = dict(
+        litellm_call_id="call-1",
+        call_type="acompletion",
+        status="success",
+        stream=False,
+        startTime=1793525400.0,
+        endTime=1793525401.0,
+        model_group="qwen3-8b",
+        model="qwen3-8b",
+        prompt_tokens=5,
+        completion_tokens=1,
+        total_tokens=6,
+        metadata=dict(user_api_key_user_id="someone", user_api_key_team_alias="tooling"),
+        messages=[{"role": "user", "content": "hello from the test"}],
+        response={"choices": [{"finish_reason": "stop", "message": {"content": "hi"}}]},
+        model_parameters={},
+    )
+    base.update(payload)
+    return {"litellm_call_id": "call-1", "standard_logging_object": base}
+
+
+def _today_file(directory):
+    return directory / f"prompts-{dt.datetime.now(dt.UTC).date().isoformat()}.jsonl"
+
+
+def test_each_event_is_one_record_line_in_the_days_file_owned_by_root_alone(unbuilt, monkeypatch, tmp_path):
+    _settings(monkeypatch, dir=str(tmp_path))
+    hook = litellm_hooks.prompt_log
+    asyncio.run(hook.async_log_success_event(_event(), None, None, None))
+    asyncio.run(
+        hook.async_log_failure_event(
+            _event(status="failure", response=None, litellm_call_id="call-2"), None, None, None
+        )
+    )
+    hook.complete()
+    path = _today_file(tmp_path)
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [(r["call_id"], r["status"]) for r in lines] == [("call-1", "success"), ("call-2", "failure")]
+    assert lines[0]["messages"] == [{"role": "user", "content": "hello from the test"}]
+    assert lines[0]["key"] == {"hash": None, "alias": None, "user": "someone", "project": "tooling"}
+    # The response's text is not in the file.
+    assert "hi" not in [v for r in lines for v in (r["finish_reason"],)]
+    assert '"hi"' not in path.read_text()
+
+
+def test_an_event_without_a_payload_is_warned_and_not_written(unbuilt, monkeypatch, tmp_path, caplog):
+    _settings(monkeypatch, dir=str(tmp_path))
+    hook = litellm_hooks.prompt_log
+    with caplog.at_level("WARNING", logger="litellm_hooks.prompt_log"):
+        asyncio.run(hook.async_log_success_event({"litellm_call_id": "call-9"}, None, None, None))
+    hook.complete()
+    assert "standard_logging_object" in caplog.text and "call-9" in caplog.text
+    # loguru opens the day's file when the sink is added; nothing went into it.
+    assert _today_file(tmp_path).read_text() == ""
+
+
+def test_records_never_reach_stderr(unbuilt, monkeypatch, tmp_path, capsys):
+    """loguru's default handler prints to stderr, which is the journal; it is removed."""
+    _settings(monkeypatch, dir=str(tmp_path))
+    hook = litellm_hooks.prompt_log
+    asyncio.run(hook.async_log_success_event(_event(), None, None, None))
+    hook.complete()
+    assert "hello from the test" not in capsys.readouterr().err

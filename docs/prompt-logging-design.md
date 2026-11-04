@@ -116,9 +116,9 @@ Nothing here waits for the review.
 
 | Step | What | Waits for |
 |---|---|---|
-| N1 | The record: which fields, and the content (`messages`, `params`, `finish_reason`) | decision 2, "The record" |
-| N2 | The writer: the loguru sink or what replaces it; directory, naming, rotation, compression, retention | "Files", decision 12 |
-| N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | N1, N2 |
+| N1 | The record: which fields, and the content (`messages`, `params`, `finish_reason`) | done 2026-11-03 (`llmao/prompt_log.py`) |
+| N2 | The writer: the loguru sink or what replaces it; directory, naming, rotation, compression, retention | done 2026-11-03 (the sink in `litellm_hooks.py`) |
+| N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | done 2026-11-03; the probe is gone |
 | N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | N2 |
 | N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
 | N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
