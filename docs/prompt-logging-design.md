@@ -119,7 +119,7 @@ Nothing here waits for the review.
 | N1 | The record: which fields, and the content (`messages`, `params`, `finish_reason`) | done 2026-11-03 (`llmao/prompt_log.py`) |
 | N2 | The writer: the loguru sink or what replaces it; directory, naming, rotation, compression, retention | done 2026-11-03 (the sink in `litellm_hooks.py`) |
 | N3 | The hook's real body: payload to record, the write; the dependency in `pyproject.toml` | done 2026-11-03; the probe is gone |
-| N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | N2 |
+| N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | done 2026-11-03 |
 | N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
 | N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
 | N7 | The reports in `bin/llmao-prompt-log` | N4 |
@@ -392,9 +392,12 @@ Rolling up one day:
 1. Read the whole day from `/spend/logs/v2`, page by page.
 2. Fold the rows into 24 hourly rows per model, with everything LiteLLM
    has that the rows might need.
-3. Once track N exists, call `prompt_log.rollup_day(day)`, which spawns
+3. Call `prompt_log.rollup_day(day)`, which spawns
    `llmao-prompt-log rollup --json <day>` for that day's file and
-   returns what it printed; fold those fields into the same rows.
+   returns what it printed; fold those fields into the same rows. An
+   hour and model the log saw and LiteLLM has no row for becomes a row
+   of its own, with `requests` 0, so the reconciliation can see that
+   direction too.
 4. Write the rows to `CapacityStore`, and a marker that the day is done.
 
 One day, one write, both sources. Everything else, the capacity page,
@@ -403,9 +406,14 @@ LiteLLM is not asked again for a day it has written.
 
 The spawn in step 3: `asyncio.create_subprocess_exec`, the child under
 `nice` and `ionice` since it shares the host with the proxy, a timeout,
-and a non-zero exit recorded as an attention item, never raised; the
-day is then written from LiteLLM alone, its marker says the log side
-is missing, and the next run tries that side again. The
+and a non-zero exit recorded as a notice for the admins, never raised;
+the day is then written from LiteLLM alone, its marker says `log:
+failed`, and the next run tries that side again. A day with no file at
+all (before the log existed, or a day the proxy was down) is marked
+`log: absent` and is final. The directory the runner reads is
+`prompt_log_dir` in `config.yaml`, required; `rollup_day` lives in
+`llmao/prompt_log.py` and the tool finds the directory from `--log-dir`,
+which the runner passes. The
 parsing of a day's file happens in the child on another core; the event
 loop waits on a pipe. llmao never opens a log file itself, and the tool
 never holds the master key.
@@ -427,6 +435,7 @@ was asked, and join to them on hour and model. Each holds:
 | `duration_p50_s`, `duration_p95_s` | LiteLLM | latency as the client felt it, successful requests, to set against the box's queue times |
 | `ttft_p50_s`, `ttft_p95_s` | the log | time to first token: the spend log sets `completionStartTime` on every request, streamed or not, so it cannot tell |
 | `streamed`, `with_tools`, `finish_length` | the log | counts |
+| `log_requests` | the log | the log's count of requests for the hour, against `requests`: the reconciliation |
 | `sources` | | which of the two have written to the row |
 
 What counts: a call to a model. A spend row with no model group (a bad

@@ -35,7 +35,8 @@ from dataclasses import dataclass
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import fmt
-from llmao.capacity import PROMPT_BUCKETS, add_counts, percentile
+from llmao.capacity import PROMPT_BUCKETS, add_counts
+from llmao.prompt_log import percentile
 
 
 def _ranked_counts(totals: dict[str, dict]) -> list[edict]:
@@ -73,6 +74,9 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
                 prompt_len[bucket] += n
         p50s = [r.duration_p50_s for r in mine if r.duration_p50_s is not None]
         p95s = [r.duration_p95_s for r in mine if r.duration_p95_s is not None]
+        # What only the prompt log says; absent from rows written before it existed.
+        ttft_p50s = [r.ttft_p50_s for r in mine if r.get("ttft_p50_s") is not None]
+        ttft_p95s = [r.ttft_p95_s for r in mine if r.get("ttft_p95_s") is not None]
         models.append(
             edict(
                 model=name,
@@ -92,6 +96,12 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
                 duration_p50_s=percentile(p50s, 0.5),
                 duration_p95_worst_s=max(p95s) if p95s else None,
                 daily_requests=[edict(day=d, value=daily[d]) for d in sorted(daily)],
+                log_requests=sum(r.get("log_requests") or 0 for r in mine),
+                streamed=sum(r.get("streamed") or 0 for r in mine),
+                with_tools=sum(r.get("with_tools") or 0 for r in mine),
+                finish_length=sum(r.get("finish_length") or 0 for r in mine),
+                ttft_p50_s=percentile(ttft_p50s, 0.5),
+                ttft_p95_worst_s=max(ttft_p95s) if ttft_p95s else None,
             )
         )
     return sorted(models, key=lambda m: -m.requests)

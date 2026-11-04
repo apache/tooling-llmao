@@ -67,7 +67,7 @@ def create_app():
     )
 
     # Fail-fast: models.yaml is required (same presumption as config.yaml).
-    from llmao import actions
+    from llmao import actions, prompt_log
     from llmao.auth import make_token_handler
     from llmao.capacity import (
         CapacityPruner,
@@ -121,7 +121,12 @@ def create_app():
     app.add_runner(CapacityPruner(app.capacity, keep_days).run, name="capacity-prune")
     # Demand: what was asked, per model per hour, from LiteLLM's spend log,
     # rolled up once a day for each closed day (docs/prompt-logging-design.md).
-    app.add_runner(DemandRollup(backend.metering, app.capacity, keep_days).run, name="demand-rollup")
+    app.add_runner(
+        DemandRollup(
+            backend.metering, app.capacity, keep_days, log_dir=prompt_log.log_dir(app.cfg), notices=backend.log
+        ).run,
+        name="demand-rollup",
+    )
 
     # Daily pruning of the other records kept in LiteLLM's memory store. Each
     # line is one kind of record and its store's own rule; this list is the

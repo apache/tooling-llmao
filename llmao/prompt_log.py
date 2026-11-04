@@ -32,16 +32,22 @@ change what is written.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import gzip
 import json
+import math
+import pathlib
+import re
+import shutil
+import sys
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from easydict import EasyDict as edict  # noqa: N813
 
 if TYPE_CHECKING:
-    import pathlib
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterable, Iterator, Mapping
 
 # One file per UTC day. The sink's pattern is loguru's; the plain name is
 # what the reader looks for, then the gzipped one the rotation leaves.
@@ -157,3 +163,127 @@ def read_day(log_dir: pathlib.Path, day: dt.date) -> Iterator[edict]:
                 yield edict(json.loads(line))
             except ValueError:
                 continue
+
+
+# ---- what counts as demand ----------------------------------------------
+#
+# Shared with the fold of LiteLLM's spend log in llmao/capacity.py, so the
+# two sides of a demand row agree on what a request to a model is. A row
+# with no model group (a bad key refused at the door, a /v1/models listing)
+# is not use of a model, and LiteLLM's own health checks, which run as
+# their own team, are not anyone's demand. Nor is a request that names a
+# deployment by its LiteLLM id instead of a model: the fleet tools and
+# health probes do that, one eight-token completion per deployment.
+
+HEALTH_CHECK_TEAM = "litellm-internal-health-check"
+DEPLOYMENT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def counts_as_demand(model: str | None, project: str | None) -> bool:
+    """Whether a request to `model` from `project` is someone's use of a model."""
+    return bool(model) and not DEPLOYMENT_ID.match(model) and project != HEALTH_CHECK_TEAM
+
+
+def percentile(values: list[float], p: float) -> float | None:
+    """Nearest-rank percentile: the smallest value that p of them are at or below."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(p * len(ordered)) - 1)]
+
+
+# ---- the rollup of a day ------------------------------------------------
+#
+# What only the log can say, per model per hour, folded into the demand
+# rows beside what LiteLLM's spend log said (docs/prompt-logging-design.md,
+# "Demand rows"): the stream flag, tools in the request, the finish
+# reason, the time to first token. And the day's request count per model
+# per hour, the log side of the reconciliation with LiteLLM's count.
+
+
+def rollup(records: Iterable[Mapping]) -> edict:
+    """A day's records as {records, hours}: per model per hour, what only the log can say, and the request count."""
+    by_hour: dict[tuple[str, str], list] = defaultdict(list)
+    seen = 0
+    for r in records:
+        seen += 1
+        key = r.get("key") or {}
+        if not counts_as_demand(r.get("model"), key.get("project")) or not r.get("ts"):
+            continue
+        by_hour[(r["ts"][:13], r["model"])].append(r)
+    hours = []
+    for (hour, model), mine in sorted(by_hour.items()):
+        ttft = [r["ttft_s"] for r in mine if r.get("ttft_s") is not None]
+        hours.append(
+            edict(
+                hour=hour,
+                model=model,
+                requests=len(mine),
+                streamed=sum(1 for r in mine if r.get("stream")),
+                with_tools=sum(1 for r in mine if (r.get("params") or {}).get("tools")),
+                finish_length=sum(1 for r in mine if r.get("finish_reason") == "length"),
+                ttft_p50_s=percentile(ttft, 0.5),
+                ttft_p95_s=percentile(ttft, 0.95),
+            )
+        )
+    return edict(records=seen, hours=hours)
+
+
+def rollup_json(log_dir: pathlib.Path, day: dt.date) -> edict:
+    """What `llmao-prompt-log rollup --json <day>` prints: the rollup, and whether the day had a file."""
+    found = day_file(log_dir, day) is not None
+    out = rollup(read_day(log_dir, day)) if found else edict(records=0, hours=[])
+    return edict(day=day.isoformat(), found=found, **out)
+
+
+class RollupError(Exception):
+    """The tool did not produce a day's rollup: it failed, or took too long."""
+
+
+# The tool, beside the module's package; run by the portal's own interpreter.
+TOOL = pathlib.Path(__file__).resolve().parent.parent / "bin" / "llmao-prompt-log"
+
+
+async def rollup_day(
+    day: dt.date, log_dir: pathlib.Path, *, timeout_s: float = 600, tool: pathlib.Path = TOOL
+) -> edict:
+    """A day's rollup from the tool, run as a child: the parsing happens on another core.
+
+    The child runs under nice and ionice where they exist, since it shares
+    the host with the proxy, and is killed at the timeout. A failure is
+    RollupError, with the tool's last words; the caller decides what a
+    day without its log side means. llmao never opens a log file itself.
+    """
+    argv = [sys.executable, str(tool), "rollup", "--json", day.isoformat(), "--log-dir", str(log_dir)]
+    if shutil.which("ionice"):
+        argv = ["ionice", "-c", "3", *argv]
+    if shutil.which("nice"):
+        argv = ["nice", "-n", "10", *argv]
+    proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout_s)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RollupError(f"{tool.name} took longer than {timeout_s:g}s on {day}") from None
+    if proc.returncode != 0:
+        last = err.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no output"]
+        raise RollupError(f"{tool.name} exited {proc.returncode} on {day}: {last[0]}")
+    try:
+        return edict(json.loads(out))
+    except ValueError as e:
+        raise RollupError(f"{tool.name} printed no JSON for {day}") from e
+
+
+def log_dir(cfg: Any) -> pathlib.Path:
+    """config.yaml prompt_log_dir: where the proxy's hook writes the day files. Call at startup.
+
+    Required, like every other setting with an operational effect: the
+    rollup reads there, and a missing value is a startup error rather
+    than a quiet day without its log side. Puppet renders the same path
+    into litellm.yaml for the hook.
+    """
+    raw = cfg.get("prompt_log_dir")
+    if not raw:
+        raise ValueError("config.yaml: prompt_log_dir is required")
+    return pathlib.Path(str(raw))

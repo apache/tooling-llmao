@@ -1909,6 +1909,19 @@ def _demand_model_row(m, *, days: list[str] = ()) -> edict:
         duration_p50=fmt.seconds(m.duration_p50_s),
         duration_p95_worst=fmt.seconds(m.duration_p95_worst_s),
         request_chart=_chart(m.daily_requests, days, "requests"),
+        # What only the prompt log says, present once a day has been rolled
+        # up with its log side; nothing is shown for a period without one.
+        log_any=ezt.boolean(m.log_requests > 0),
+        log_requests=f"{m.log_requests:,}",
+        streamed=f"{m.streamed:,}",
+        with_tools=f"{m.with_tools:,}",
+        finish_length=f"{m.finish_length:,}",
+        ttft_p50=fmt.seconds(m.ttft_p50_s) if m.ttft_p50_s is not None else "",
+        ttft_p95_worst=fmt.seconds(m.ttft_p95_worst_s) if m.ttft_p95_worst_s is not None else "",
+        # The reconciliation: the two pipelines should have seen the same
+        # requests. A gap one way is logging loss, the other way spend-log
+        # loss; either is worth a look.
+        log_gap_any=ezt.boolean(m.log_requests > 0 and m.log_requests != m.requests),
     )
 
 

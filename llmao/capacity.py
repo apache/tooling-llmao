@@ -53,19 +53,22 @@ import asyncio
 import datetime as dt
 import json
 import logging
-import math
-import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    import pathlib
+
     from llmao.rental import Rental
     from llmao.vllm_client import Sample
 
 from asfpy.stopwatch import Stopwatch
 from easydict import EasyDict as edict  # noqa: N813
+
+from llmao import prompt_log
+from llmao.prompt_log import counts_as_demand, percentile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -317,9 +320,14 @@ class CapacityStore:
                 continue
         return done
 
-    async def mark_demand_day(self, day: str, *, sources: list[str], rows: int) -> None:
-        """Record that `day` has been rolled up, by which fold, from which sources, into how many rows."""
-        marker = json.dumps(dict(version=FOLD_VERSION, sources=sources, rows=rows), sort_keys=True)
+    async def mark_demand_day(self, day: str, *, sources: list[str], rows: int, log: str = "off") -> None:
+        """Record that `day` has been rolled up, by which fold, from which sources, into how many rows.
+
+        `log` is what became of the prompt log side: "ok", "absent" (no
+        file for the day), "failed" (the tool did not answer; tried again
+        next run), or "off" (no log directory configured).
+        """
+        marker = json.dumps(dict(version=FOLD_VERSION, sources=sources, rows=rows, log=log), sort_keys=True)
         await self._memory.put(f"{DEMAND_DAY_PREFIX}{day}", marker)
 
     async def clear_demand_day(self, day: dt.date) -> int:
@@ -420,15 +428,9 @@ class CapacityPruner:
 # not anyone's demand. Both are left out; measured on 2026-11-01 they were
 # nearly half of the day's rows.
 
-# LiteLLM's own health checks run as this team.
-_HEALTH_CHECK_TEAM = "litellm-internal-health-check"
-
-# A request can name a deployment by its LiteLLM id instead of a model, and
-# the spend row then carries the id as the model group. Nobody's tool does
-# that; the fleet tools and health probes do (one eight-token completion
-# per deployment), so such a row is a probe of one box, not demand. Seen on
-# 2026-11-02: sixty ids over 281 rows, eight tokens each, no project.
-_DEPLOYMENT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# What counts is decided once, in llmao/prompt_log.py (counts_as_demand),
+# so the log side of a row agrees with this side. The deployment-id case
+# was seen on 2026-11-02: sixty ids over 281 rows, eight tokens each.
 
 # Bumped whenever fold_demand changes what a row holds or what counts. A
 # day whose marker carries an older version is rolled up again, so a
@@ -462,14 +464,6 @@ def tool_family(user_agent: str | None) -> str:
     return "browser" if name == "Mozilla" else name
 
 
-def percentile(values: list[float], p: float) -> float | None:
-    """Nearest-rank percentile: the smallest value that p of them are at or below."""
-    if not values:
-        return None
-    ordered = sorted(values)
-    return ordered[max(0, math.ceil(p * len(ordered)) - 1)]
-
-
 def add_counts(
     bucket: dict, name: str, *, requests: int = 1, prompt_tokens: int = 0, completion_tokens: int = 0
 ) -> None:
@@ -489,6 +483,24 @@ def _refusal(meta: dict) -> str:
     return str(info.get("normalized_error") or info.get("error_code") or info.get("error_class") or "unknown")
 
 
+def _empty_demand_row(hour: str, model: str) -> edict:
+    """A demand row before either source has written to it."""
+    return edict(
+        hour=hour,
+        model=model,
+        sources=[],
+        requests=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        by_project={},
+        by_tool={},
+        refused={},
+        prompt_len={},
+        duration_p50_s=None,
+        duration_p95_s=None,
+    )
+
+
 def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
     """A day of LiteLLM's spend log as demand rows, one per model per hour.
 
@@ -502,29 +514,13 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
     for r in spend_rows:
         meta = r.metadata or edict()
         start = str(r.startTime or "")
-        if (
-            not r.model_group
-            or _DEPLOYMENT_ID.match(r.model_group)
-            or meta.get("user_api_key_team_alias") == _HEALTH_CHECK_TEAM
-            or start[:10] != day.isoformat()
-        ):
+        if not counts_as_demand(r.model_group, meta.get("user_api_key_team_alias")) or start[:10] != day.isoformat():
             continue
         by_hour[(start[:13], r.model_group)].append((r, meta))
 
     out = []
     for (hour, model), items in sorted(by_hour.items()):
-        row = edict(
-            hour=hour,
-            model=model,
-            sources=["litellm"],
-            requests=0,
-            prompt_tokens=0,
-            completion_tokens=0,
-            by_project={},
-            by_tool={},
-            refused={},
-            prompt_len={},
-        )
+        row = _empty_demand_row(hour, model)
         durations = []
         for r, meta in items:
             refused = r.status == "failure"
@@ -544,6 +540,7 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
             row.prompt_len[bucket] = row.prompt_len.get(bucket, 0) + 1
             if r.request_duration_ms is not None:
                 durations.append(int(r.request_duration_ms) / 1000)
+        row.sources = ["litellm"]
         row.duration_p50_s = percentile(durations, 0.5)
         row.duration_p95_s = percentile(durations, 0.95)
         out.append(row)
@@ -571,14 +568,34 @@ class DemandRollup:
 
     A day with no traffic is marked too, with no rows, or it would be asked
     for again every day.
+
+    With a `log_dir`, each day's rollup also spawns the prompt log tool for
+    that day (prompt_log.rollup_day) and folds what only the log can say
+    into the same rows. A day whose log side failed is written from
+    LiteLLM alone, noted for the admins through `notices`, and tried again
+    next run; a day with no log file is final.
     """
 
-    def __init__(self, metering: Any, store: CapacityStore, keep_days: int, *, at_hour: int = 1, grace_s: int = HOUR_S):
+    def __init__(
+        self,
+        metering: Any,
+        store: CapacityStore,
+        keep_days: int,
+        *,
+        at_hour: int = 1,
+        grace_s: int = HOUR_S,
+        log_dir: pathlib.Path | None = None,
+        notices: Any = None,
+        tool: pathlib.Path = prompt_log.TOOL,
+    ):
         self._metering = metering
         self._store = store
         self._keep_days = keep_days
         self._at_hour = at_hour
         self._grace_s = grace_s
+        self._log_dir = log_dir
+        self._notices = notices
+        self._tool = tool
 
     def missing_days(self, done: dict[str, edict], now: dt.datetime) -> list[dt.date]:
         """Closed days inside retention with no marker, or one from an older fold; oldest first."""
@@ -587,21 +604,61 @@ class DemandRollup:
         out = []
         while day <= last_closed:
             marker = done.get(day.isoformat())
-            if marker is None or marker.get("version") != FOLD_VERSION:
+            if (
+                marker is None
+                or marker.get("version") != FOLD_VERSION
+                or (self._log_dir is not None and marker.get("log") == "failed")
+            ):
                 out.append(day)
             day += dt.timedelta(days=1)
         return out
 
     async def roll_up(self, day: dt.date) -> int:
-        """One day: read it from LiteLLM, fold it, replace what the store had, mark it. The row count."""
+        """One day: read from LiteLLM, fold, add the log's side, replace what the store had, mark it. The row count."""
         rows = fold_demand(day, await self._metering.spend_log(day))
+        log = "off" if self._log_dir is None else await self._fold_log(day, rows)
         # Cleared first: a row the new fold no longer produces (a model that
         # no longer counts) would otherwise outlive it under its old key.
         await self._store.clear_demand_day(day)
         for row in rows:
             await self._store.write_demand(row)
-        await self._store.mark_demand_day(day.isoformat(), sources=["litellm"], rows=len(rows))
+        sources = ["litellm", "log"] if log == "ok" else ["litellm"]
+        await self._store.mark_demand_day(day.isoformat(), sources=sources, rows=len(rows), log=log)
         return len(rows)
+
+    async def _fold_log(self, day: dt.date, rows: list[edict]) -> str:
+        """The prompt log's side of the day into `rows`; "ok", "absent" or "failed"."""
+        try:
+            result = await prompt_log.rollup_day(day, self._log_dir, tool=self._tool)
+        except prompt_log.RollupError as e:
+            _LOGGER.warning("demand: the prompt log side of %s failed: %s", day, e)
+            if self._notices is not None:
+                await self._notices.note(
+                    f"The prompt log rollup for {day} failed ({e}). That day's demand rows are from LiteLLM"
+                    " alone; the next run tries the log again.",
+                    subject="prompt-log-rollup",
+                )
+            return "failed"
+        if not result.found:
+            return "absent"
+        by_key = {(r.hour, r.model): r for r in rows}
+        for h in result.hours:
+            row = by_key.get((h.hour, h.model))
+            if row is None:
+                # The log saw a request LiteLLM has no row for: the
+                # reconciliation's other direction, kept as a row of its own.
+                row = by_key[(h.hour, h.model)] = _empty_demand_row(h.hour, h.model)
+                rows.append(row)
+            row.update(
+                log_requests=h.requests,
+                streamed=h.streamed,
+                with_tools=h.with_tools,
+                finish_length=h.finish_length,
+                ttft_p50_s=h.ttft_p50_s,
+                ttft_p95_s=h.ttft_p95_s,
+            )
+            row.sources = [*row.sources, "log"]
+        return "ok"
 
     async def roll_up_missing(self, now: dt.datetime) -> list[dt.date]:
         """Every missing closed day, oldest first; stops at the first that fails. The days done."""

@@ -325,3 +325,14 @@ def test_what_the_replace_rule_cannot_say_it_leaves_out():
 def test_a_fleet_that_never_ran_short_gets_no_advice():
     rows = [_hour_row("2026-10-19T08", "203.0.113.10:8001", "qwen3-8b", rental="Vast 1", busy=0.3, kv=0.5)]
     assert _advisor(rows).advise() == []
+
+
+def test_the_log_only_fields_are_summed_and_absent_rows_from_before_the_log_count_as_nothing():
+    rows = fold_demand(DAY, [_spend(9), _spend(10)])
+    rows[0].update(log_requests=1, streamed=1, with_tools=0, finish_length=1, ttft_p50_s=0.4, ttft_p95_s=2.0)
+    # rows[1] was written before the log existed: no log fields at all.
+    (m,) = summarise_demand(rows, today=DAY, period_days=7)
+    assert (m.log_requests, m.streamed, m.with_tools, m.finish_length) == (1, 1, 0, 1)
+    assert (m.ttft_p50_s, m.ttft_p95_worst_s) == (0.4, 2.0)
+    (quiet,) = summarise_demand(fold_demand(DAY, [_spend(9)]), today=DAY, period_days=7)
+    assert quiet.log_requests == 0 and quiet.ttft_p50_s is None

@@ -327,7 +327,7 @@ def test_demand_rows_are_kept_by_hour_then_model_and_pruned_with_the_rest():
     assert sorted(rows) == [f"{DEMAND_DAY_PREFIX}2026-11-01", f"{DEMAND_PREFIX}2026-11-01T09:gemma4-26b"]
     assert [r.model for r in asyncio.run(store.read_demand(1, today=DAY))] == ["gemma4-26b"]
     assert asyncio.run(store.demand_days_done()) == {
-        "2026-11-01": edict(version=FOLD_VERSION, sources=["litellm"], rows=1)
+        "2026-11-01": edict(version=FOLD_VERSION, sources=["litellm"], rows=1, log="off")
     }
     # 90 days later the day, its rows and its marker go together.
     rows[f"llmao:capacity:2026-11-01T09:{SERVER}"] = json.dumps({"hour": "2026-11-01T09"})
@@ -408,3 +408,91 @@ def test_a_day_that_cannot_be_read_waits_for_the_next_run_with_the_rest():
     rollup = DemandRollup(_Metering({}, down=True), store, keep_days=3)
     assert asyncio.run(rollup.roll_up_missing(dt.datetime(2026, 11, 2, 1, 30, tzinfo=dt.UTC))) == []
     assert rows == {}
+
+
+# ---------------------------------------------------------------------------
+# The prompt log's side of a day: the runner spawns the tool for the day and
+# folds what only the log can say into the same rows.
+# ---------------------------------------------------------------------------
+
+
+def _log_record(hour, model="gemma4-26b", *, stream=False, tools=False, finish="stop", ttft=None, project="spark"):
+    return dict(
+        ts=f"2026-11-01T{hour:02d}:15:00.000Z",
+        model=model,
+        stream=stream,
+        ttft_s=ttft,
+        finish_reason=finish,
+        params={"tools": [{"type": "function"}]} if tools else {},
+        key={"project": project},
+    )
+
+
+def _log_day(tmp_path, records):
+    (tmp_path / "prompts-2026-11-01.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    return tmp_path
+
+
+class _Notices:
+    def __init__(self):
+        self.noted = []
+
+    async def note(self, what, *, subject=None, **detail):
+        self.noted.append((subject, what))
+
+
+def test_a_day_is_rolled_up_from_both_sides_and_the_log_only_fields_join_litellms_rows(tmp_path):
+    store, _rows = _store()
+    log_dir = _log_day(
+        tmp_path,
+        [
+            _log_record(9, stream=True, ttft=0.4, tools=True),
+            _log_record(9, stream=True, ttft=1.2, finish="length"),
+            # An hour LiteLLM has no row for: the log's side alone, for the reconciliation.
+            _log_record(11),
+        ],
+    )
+    metering = _Metering({"2026-11-01": [_spend(9), _spend(9)]})
+    rollup = DemandRollup(metering, store, keep_days=3, log_dir=log_dir)
+    asyncio.run(rollup.roll_up(DAY))
+    nine, eleven = sorted(asyncio.run(store.read_demand(1, today=DAY)), key=lambda r: r.hour)
+    assert nine.sources == ["litellm", "log"] and nine.requests == 2 and nine.log_requests == 2
+    assert (nine.streamed, nine.with_tools, nine.finish_length) == (2, 1, 1)
+    assert (nine.ttft_p50_s, nine.ttft_p95_s) == (0.4, 1.2)
+    assert eleven.sources == ["log"] and eleven.requests == 0 and eleven.log_requests == 1
+    marker = asyncio.run(store.demand_days_done())["2026-11-01"]
+    assert (marker.sources, marker.log, marker.rows) == (["litellm", "log"], "ok", 2)
+
+
+def test_a_day_without_a_log_file_is_final_and_one_whose_tool_failed_is_tried_again(tmp_path):
+    store, _rows = _store()
+    notices = _Notices()
+    metering = _Metering({"2026-11-01": [_spend(9)]})
+    # No file for the day: LiteLLM's side alone, and nothing to retry.
+    rollup = DemandRollup(metering, store, keep_days=2, log_dir=tmp_path, notices=notices)
+    asyncio.run(rollup.roll_up(DAY))
+    marker = asyncio.run(store.demand_days_done())["2026-11-01"]
+    assert (marker.sources, marker.log) == (["litellm"], "absent")
+    assert notices.noted == []
+    assert rollup.missing_days(asyncio.run(store.demand_days_done()), dt.datetime(2026, 11, 2, 2, tzinfo=dt.UTC)) == []
+    # The tool cannot run: the day is written from LiteLLM, the admins are
+    # told once, and the day is missing again next run.
+    broken = DemandRollup(
+        metering, store, keep_days=2, log_dir=tmp_path, notices=notices, tool=tmp_path / "no-such-tool"
+    )
+    asyncio.run(broken.roll_up(DAY))
+    marker = asyncio.run(store.demand_days_done())["2026-11-01"]
+    assert (marker.sources, marker.log) == (["litellm"], "failed")
+    ((subject, what),) = notices.noted
+    assert subject == "prompt-log-rollup" and "2026-11-01" in what and "tries the log again" in what
+    assert broken.missing_days(asyncio.run(store.demand_days_done()), dt.datetime(2026, 11, 2, 2, tzinfo=dt.UTC)) == [
+        DAY
+    ]
+    # Without a log directory a failed marker is not the runner's concern.
+    plain = DemandRollup(metering, store, keep_days=2)
+    assert (
+        plain.missing_days(
+            {"2026-11-01": edict(version=FOLD_VERSION, log="failed")}, dt.datetime(2026, 11, 2, 2, tzinfo=dt.UTC)
+        )
+        == []
+    )

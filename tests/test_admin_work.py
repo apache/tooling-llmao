@@ -229,6 +229,12 @@ def _demand(**over):
         duration_p50_s=0.3,
         duration_p95_worst_s=4.0,
         daily_requests=[],
+        log_requests=0,
+        streamed=0,
+        with_tools=0,
+        finish_length=0,
+        ttft_p50_s=None,
+        ttft_p95_worst_s=None,
     )
     d.update(over)
     return d
@@ -354,3 +360,25 @@ def test_a_day_series_is_charted_over_every_day_of_the_period_a_missing_day_as_z
     assert pages._chart([], days, "tokens") == ""
     row = pages._capacity_model_row(_model(daily_tokens=series), days=days)
     assert json.loads(row.token_chart)["values"] == [50, 0, 200]
+
+
+def test_what_only_the_prompt_log_says_is_shown_once_it_has_said_it():
+    pages = _app()
+    before = pages._demand_model_row(_demand())
+    assert not before.log_any and not before.log_gap_any and before.ttft_p50 == ""
+    after = pages._demand_model_row(
+        _demand(
+            requests=30,
+            log_requests=28,
+            streamed=20,
+            with_tools=3,
+            finish_length=2,
+            ttft_p50_s=0.4,
+            ttft_p95_worst_s=12.0,
+        )
+    )
+    assert after.log_any and (after.streamed, after.with_tools, after.finish_length) == ("20", "3", "2")
+    assert (after.ttft_p50, after.ttft_p95_worst) == ("0.4s", "12s")
+    # Two fewer in the log than LiteLLM billed: a gap worth a look.
+    assert after.log_gap_any and after.log_requests == "28"
+    assert not pages._demand_model_row(_demand(requests=30, log_requests=30)).log_gap_any

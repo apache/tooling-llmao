@@ -19,9 +19,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import gzip
 import json
+import subprocess
+import sys
+
+from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import prompt_log
 
@@ -140,3 +145,107 @@ def test_a_day_is_read_plain_or_gzipped_and_a_broken_line_is_skipped(tmp_path):
     assert [r["call_id"] for r in prompt_log.read_day(tmp_path, DAY)] == ["z"]
     # A day with no file at all is simply empty.
     assert list(prompt_log.read_day(tmp_path, dt.date(2026, 10, 31))) == []
+
+
+# ---- the rollup of a day
+
+
+def _rec(hour, model="qwen3-8b", **over):
+    r = dict(
+        ts=f"2026-11-01T{hour:02d}:30:00.000Z",
+        model=model,
+        stream=False,
+        ttft_s=None,
+        finish_reason="stop",
+        params={},
+        key={"project": "tooling"},
+    )
+    r.update(over)
+    return r
+
+
+def test_what_counts_as_demand_is_decided_once_for_both_sides():
+    assert prompt_log.counts_as_demand("qwen3-8b", "tooling")
+    assert not prompt_log.counts_as_demand(None, "tooling")
+    assert not prompt_log.counts_as_demand("", "tooling")
+    assert not prompt_log.counts_as_demand("qwen3-8b", prompt_log.HEALTH_CHECK_TEAM)
+    assert not prompt_log.counts_as_demand("0a1b2c3d-0a1b-0a1b-0a1b-0a1b2c3d4e5f", "tooling")
+
+
+def test_a_day_rolls_up_per_model_per_hour_with_what_only_the_log_can_say():
+    out = prompt_log.rollup(
+        [
+            _rec(9, stream=True, ttft_s=0.5, params={"tools": [{}]}),
+            _rec(9, stream=True, ttft_s=2.0, finish_reason="length"),
+            _rec(9, stream=False),
+            _rec(10, model="gemma4-26b"),
+            # Not demand: a health check, a deployment id, a record with no time.
+            _rec(10, key={"project": prompt_log.HEALTH_CHECK_TEAM}),
+            _rec(10, model="0a1b2c3d-0a1b-0a1b-0a1b-0a1b2c3d4e5f"),
+            _rec(10, ts=None),
+        ]
+    )
+    assert out.records == 7
+    assert [(h.hour, h.model, h.requests) for h in out.hours] == [
+        ("2026-11-01T09", "qwen3-8b", 3),
+        ("2026-11-01T10", "gemma4-26b", 1),
+    ]
+    nine = out.hours[0]
+    assert (nine.streamed, nine.with_tools, nine.finish_length) == (2, 1, 1)
+    assert (nine.ttft_p50_s, nine.ttft_p95_s) == (0.5, 2.0)
+    assert out.hours[1].ttft_p50_s is None
+
+
+def test_the_tool_prints_the_rollup_and_says_whether_the_day_had_a_file(tmp_path):
+    (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_rec(9)) + "\n")
+    tool = prompt_log.TOOL
+    run = subprocess.run(
+        [sys.executable, str(tool), "--log-dir", str(tmp_path), "rollup", "--json", "2026-11-01"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    out = json.loads(run.stdout)
+    assert (out["day"], out["found"], out["records"]) == ("2026-11-01", True, 1)
+    assert out["hours"][0]["model"] == "qwen3-8b"
+    absent = json.loads(
+        subprocess.run(
+            [sys.executable, str(tool), "--log-dir", str(tmp_path), "rollup", "--json", "2026-10-31"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    assert absent == {"day": "2026-10-31", "found": False, "records": 0, "hours": []}
+
+
+def test_rollup_day_spawns_the_tool_and_a_tool_that_fails_is_an_error_with_its_last_words(tmp_path):
+    (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_rec(9)) + "\n")
+    result = asyncio.run(prompt_log.rollup_day(DAY, tmp_path))
+    assert result.found and result.hours[0].requests == 1
+    broken = tmp_path / "broken"
+    broken.write_text("import sys; print('the disk is on fire', file=sys.stderr); sys.exit(3)\n")
+    try:
+        asyncio.run(prompt_log.rollup_day(DAY, tmp_path, tool=broken))
+    except prompt_log.RollupError as e:
+        assert "exited 3" in str(e) and "the disk is on fire" in str(e)
+    else:
+        raise AssertionError("a failed tool must be an error")
+    slow = tmp_path / "slow"
+    slow.write_text("import time; time.sleep(5)\n")
+    try:
+        asyncio.run(prompt_log.rollup_day(DAY, tmp_path, tool=slow, timeout_s=0.5))
+    except prompt_log.RollupError as e:
+        assert "longer than" in str(e)
+    else:
+        raise AssertionError("a tool past its timeout must be an error")
+
+
+def test_the_log_directory_is_required_in_config():
+    assert prompt_log.log_dir(edict(prompt_log_dir="/x1/llmao/prompt-log")).as_posix() == "/x1/llmao/prompt-log"
+    try:
+        prompt_log.log_dir(edict())
+    except ValueError as e:
+        assert "prompt_log_dir is required" in str(e)
+    else:
+        raise AssertionError("missing prompt_log_dir must stop startup")

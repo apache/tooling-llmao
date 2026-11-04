@@ -144,6 +144,14 @@
           [cards.demand.requests_per_day] requests/day &middot; [cards.demand.prompt_tokens] in &middot; [cards.demand.completion_tokens] out
           &middot; <span title="A typical hour's median request, and the slowest hour's 95th percentile">[cards.demand.duration_p50] typical, [cards.demand.duration_p95_worst] worst hour</span>
         </div>
+        [if-any cards.demand.log_any]
+        <div class="small text-muted mt-1">
+          From the prompt log: [cards.demand.streamed] streamed[if-any cards.demand.ttft_p50] &middot;
+          <span title="Time to first token on streamed requests: a typical hour's median, and the slowest hour's 95th percentile">first token [cards.demand.ttft_p50] typical, [cards.demand.ttft_p95_worst] worst hour</span>[end]
+          &middot; [cards.demand.with_tools] with tools &middot; [cards.demand.finish_length] cut off at max_tokens
+          [if-any cards.demand.log_gap_any]&middot; <span class="text-warning-emphasis" title="The prompt log and LiteLLM's spend log should agree; a gap one way is logging loss, the other way spend-log loss">the log saw [cards.demand.log_requests] of [cards.demand.requests] requests</span>[end]
+        </div>
+        [end]
 
         [if-any cards.demand.request_chart]
         <div class="mt-3">
