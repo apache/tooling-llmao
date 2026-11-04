@@ -32,6 +32,7 @@ written, and supervisord reads them when it starts.
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
 import re
@@ -391,6 +392,58 @@ def apportion(
         # Rounded down so the fractions never add up to more than the budget.
         spec["gpu_memory_utilization"] = int(gb / total_gb * 1000 + 1e-6) / 1000
     return specs
+
+
+# The paths vLLM may answer without the key. llmao's probe and LiteLLM's
+# health check read /health bare; everything else, including /metrics, is
+# asked for the bearer. vLLM's own --api-key check covers only /v1.
+OPEN_PATHS = frozenset({"/health"})
+
+
+class RequireKey:
+    """ASGI middleware: the vLLM bearer on every path but ``OPEN_PATHS``.
+
+    vLLM's ``--api-key`` guards only paths under ``/v1``. ``/metrics``,
+    ``/tokenize``, ``/version`` and the rest answer anyone who reaches the
+    port, and a rental's port is on the public internet: a stranger polling
+    ``/metrics`` was how this came up. vLLM accepts extra middleware by
+    dotted name (``--middleware install_set.RequireKey``), so this class
+    runs inside the vLLM process. This file is both the installer and the
+    module vLLM imports; the program's environment sets PYTHONPATH to the
+    directory the installer was fetched to.
+
+    The key is ``VLLM_API_KEY`` from the environment, the same variable vLLM
+    reads, so the two checks can never disagree. No key is a configuration
+    error, not an open server. A refusal is vLLM's own: 401, the same JSON.
+    """
+
+    def __init__(self, app: Any, key: str | None = None):
+        self.app = app
+        self.key = (key or os.environ.get("VLLM_API_KEY", "")).strip()
+        if not self.key:
+            raise ValueError("RequireKey: VLLM_API_KEY is not set; refusing to serve without a key")
+
+    def _presented(self, scope: dict[str, Any]) -> bool:
+        for name, value in scope.get("headers") or ():
+            if name == b"authorization":
+                scheme, _, token = value.decode("latin-1").partition(" ")
+                return scheme.lower() == "bearer" and hmac.compare_digest(token.strip(), self.key)
+        return False
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        # Lifespan and websocket scopes pass; CORS preflight carries no bearer.
+        passes = scope["type"] != "http" or scope.get("method") == "OPTIONS" or scope["path"] in OPEN_PATHS
+        if passes or self._presented(scope):
+            await self.app(scope, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b'{"error": "Unauthorized"}'})
 
 
 def build_argv(spec: dict[str, Any]) -> list[str]:

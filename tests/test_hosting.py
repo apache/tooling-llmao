@@ -17,6 +17,7 @@
 
 """GPU-free tests for hosting/install_set.py (no vLLM, no supervisord)."""
 
+import asyncio
 import http.server
 import json
 import sys
@@ -96,6 +97,62 @@ def test_missing_required_field():
 def test_empty_servers():
     with pytest.raises(SystemExit, match="no servers"):
         inst.servers_from_config({"servers": []})
+
+
+# ---- RequireKey: the bearer on every path but /health ----------------------
+
+
+def _ask(path, *, bearer=None, method="GET", scope_type="http", key="sk-aaa"):
+    """One request through RequireKey: (reached the app, status sent by the middleware)."""
+    reached = []
+    sent = []
+
+    async def app(scope, receive, send):
+        reached.append(scope["path"])
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": scope_type, "method": method, "path": path, "headers": []}
+    if bearer is not None:
+        scope["headers"].append((b"authorization", bearer.encode()))
+    asyncio.run(inst.RequireKey(app, key=key)(scope, None, send))
+    status = next((m["status"] for m in sent if m["type"] == "http.response.start"), None)
+    return bool(reached), status
+
+
+def test_metrics_needs_the_key():
+    assert _ask("/metrics") == (False, 401)
+    assert _ask("/metrics", bearer="Bearer wrong") == (False, 401)
+    assert _ask("/metrics", bearer="Basic sk-aaa") == (False, 401)
+    assert _ask("/metrics", bearer="Bearer sk-aaa") == (True, None)
+    # Everything vLLM's own check leaves open, and /v1 again (harmlessly twice).
+    assert _ask("/tokenize") == (False, 401)
+    assert _ask("/version") == (False, 401)
+    assert _ask("/v1/models") == (False, 401)
+
+
+def test_health_stays_open():
+    # llmao's probe and LiteLLM read it bare; /healthz is not it.
+    assert _ask("/health") == (True, None)
+    assert _ask("/healthz") == (False, 401)
+
+
+def test_preflight_and_lifespan_pass():
+    assert _ask("/metrics", method="OPTIONS") == (True, None)
+    assert _ask("/metrics", scope_type="lifespan") == (True, None)
+
+
+def test_the_key_comes_from_the_environment_vllm_reads(monkeypatch):
+    async def app(scope, receive, send):
+        pass
+
+    monkeypatch.setenv("VLLM_API_KEY", " sk-env ")
+    assert inst.RequireKey(app).key == "sk-env"
+    # No key is a configuration error, never an open server.
+    monkeypatch.delenv("VLLM_API_KEY")
+    with pytest.raises(ValueError, match="VLLM_API_KEY"):
+        inst.RequireKey(app)
 
 
 def test_program_ini_and_write(tmp_path, monkeypatch):
