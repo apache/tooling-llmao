@@ -99,12 +99,12 @@ class MetricsSampler:
             out.append((srv, f"{srv.host}:{srv.listen_port}", dep.model_name, root))
         return out
 
-    async def _read(self, client: httpx.AsyncClient, server: str, root: str) -> Sample | None:
+    async def _read(self, client: httpx.AsyncClient, server: str, root: str, api_key: str) -> Sample | None:
         # The wait is bounded here, where the reading is asked for: a box
         # that takes longer than the sampler allows is one that did not answer.
         try:
             async with asyncio.timeout(self._timeout):
-                sample = await fetch_metrics(client, root)
+                sample = await fetch_metrics(client, root, api_key)
         except (httpx.HTTPError, TimeoutError) as e:
             if server not in self._down:
                 self._down.add(server)
@@ -123,7 +123,9 @@ class MetricsSampler:
         # hour carries its share and adding rows up gives the real bill.
         # Every server on the box counts, reachable or not.
         per_box = Counter(srv.host for srv in self._fleet.servers)
-        readings = await asyncio.gather(*(self._read(client, server, root) for _srv, server, _model, root in targets))
+        readings = await asyncio.gather(
+            *(self._read(client, server, root, srv.api_key) for srv, server, _model, root in targets)
+        )
         for (srv, server, model_name, _root), sample in zip(targets, readings, strict=True):
             if sample is None:
                 self._rollup.missed(server)

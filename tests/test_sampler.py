@@ -123,6 +123,9 @@ def test_a_pass_feeds_the_rollup_and_notes_a_box_that_did_not_answer():
     sampler = MetricsSampler(fleet, rollup, interval_s=15)
 
     def answer(request):
+        # Each reading presents its server's key: our rentals ask it of
+        # /metrics (RequireKey in hosting/install_set.py).
+        assert request.headers["Authorization"] == "Bearer sk-x"
         if request.url.host == "198.51.100.8":
             raise httpx.ConnectError("refused")
         return httpx.Response(200, text=METRICS)

@@ -294,14 +294,20 @@ class Sample:
     kv_cache_tokens: int | None = None
 
 
-async def fetch_metrics(client: httpx.AsyncClient, root: str, *, now: float | None = None) -> Sample:
-    """GET /metrics as a Sample.
+async def fetch_metrics(client: httpx.AsyncClient, root: str, api_key: str, *, now: float | None = None) -> Sample:
+    """GET /metrics with the server's key, as a Sample.
+
+    vLLM's own --api-key check leaves /metrics open; our rentals add
+    RequireKey (hosting/install_set.py), which asks the bearer of every
+    path but /health. A vLLM without it ignores the header, so sending it
+    is right for both.
 
     Raises httpx.HTTPError when the box does not answer: the sampler says
     what an outage means (logged once per outage, not per reading), and
     bounds the wait at its call (asyncio.timeout), not here.
     """
-    resp = await client.get(f"{root}/metrics")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    resp = await client.get(f"{root}/metrics", headers=headers)
     resp.raise_for_status()
     return parse_metrics(resp.text, now=now)
 

@@ -185,7 +185,9 @@ Four parts, each knowing one thing:
 
 Plus the **pruner** (`CapacityPruner`), once a day.
 
-The sampler is the only reader of each box's `/metrics`. The writer is
+The sampler is the only reader of each box's `/metrics`, and it presents
+the server's bearer: vLLM alone leaves `/metrics` open, our rentals do not
+(`RequireKey` in `hosting/install_set.py`). The writer is
 separate from the sampler so that a slow or absent LiteLLM delays storing
 rows without stalling the readings; finished hours wait in memory until it
 answers.
