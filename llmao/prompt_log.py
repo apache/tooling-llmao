@@ -184,6 +184,33 @@ def counts_as_demand(model: str | None, project: str | None) -> bool:
     return bool(model) and not DEPLOYMENT_ID.match(model) and project != HEALTH_CHECK_TEAM
 
 
+# Prompt length in tokens, bucketed: is anyone using the context we pay KV
+# cache for. The last bucket has no upper bound.
+PROMPT_BUCKETS = ((1_000, "<1k"), (8_000, "1k-8k"), (32_000, "8k-32k"), (128_000, "32k-128k"), (None, ">128k"))
+NO_PROJECT = "(no project)"
+
+
+def prompt_bucket(tokens: int) -> str:
+    for limit, name in PROMPT_BUCKETS:
+        if limit is None or tokens < limit:
+            return name
+    return PROMPT_BUCKETS[-1][1]
+
+
+def tool_family(user_agent: str | None) -> str:
+    """The tool behind a user agent: the product before the first slash.
+
+    "opencode/latest/2.2.1/acp" is opencode, "OpenAI/Python 1.109.1" is the
+    OpenAI SDK, "codex-tui/0.166.0 (...)" is codex-tui. Every browser says
+    Mozilla first, so those fold into one; a request with no user agent is
+    "unknown". This is the same cut LiteLLM makes for its User-Agent tags.
+    """
+    name = (user_agent or "").split("/", 1)[0].strip()
+    if not name:
+        return "unknown"
+    return "browser" if name == "Mozilla" else name
+
+
 def percentile(values: list[float], p: float) -> float | None:
     """Nearest-rank percentile: the smallest value that p of them are at or below."""
     if not values:
@@ -287,3 +314,90 @@ def log_dir(cfg: Any) -> pathlib.Path:
     if not raw:
         raise ValueError("config.yaml: prompt_log_dir is required")
     return pathlib.Path(str(raw))
+
+
+# ---- the reports --------------------------------------------------------
+#
+# For an admin at a shell on the host: the first analyses, chosen because
+# they need no reading of prompt content. The module makes the figures;
+# the tool prints them as text or CSV.
+
+
+def _tally(bucket: dict, name: str, tokens: int) -> None:
+    acc = bucket.setdefault(name, edict(requests=0, prompt_tokens=0))
+    acc.requests += 1
+    acc.prompt_tokens += tokens
+
+
+def _ranked(bucket: dict) -> list[edict]:
+    return [edict(name=k, **v) for k, v in sorted(bucket.items(), key=lambda kv: -kv[1].requests)]
+
+
+def report(records: Iterable[Mapping]) -> edict:
+    """The figures of the design's first reports, over whatever records are given.
+
+    ``by_project``, ``by_user``, ``by_model``, ``by_agent``: requests and
+    prompt tokens, most requests first. ``prompt_len``: per model, counts
+    in the length buckets. ``shares``: per model, how many requests
+    streamed, carried tools, or ended at max_tokens. ``failures``: per
+    model and error class. ``conversation``: per model, messages per
+    request at the median and the 95th percentile.
+    """
+    by_project: dict = {}
+    by_user: dict = {}
+    by_model: dict = {}
+    by_agent: dict = {}
+    prompt_len: dict[str, dict] = defaultdict(lambda: dict.fromkeys([b for _l, b in PROMPT_BUCKETS], 0))
+    shares: dict[str, edict] = defaultdict(lambda: edict(requests=0, streamed=0, with_tools=0, finish_length=0))
+    failures: dict[tuple[str, str], int] = defaultdict(int)
+    messages: dict[str, list[int]] = defaultdict(list)
+    days: set[str] = set()
+    seen = 0
+    for r in records:
+        key = r.get("key") or {}
+        model = r.get("model")
+        if not counts_as_demand(model, key.get("project")):
+            continue
+        seen += 1
+        if r.get("ts"):
+            days.add(r["ts"][:10])
+        tokens = (r.get("tokens") or {}).get("prompt") or 0
+        _tally(by_project, key.get("project") or NO_PROJECT, tokens)
+        _tally(by_user, key.get("user") or "(automation)", tokens)
+        _tally(by_model, model, tokens)
+        _tally(by_agent, tool_family(r.get("user_agent")), tokens)
+        share = shares[model]
+        share.requests += 1
+        share.streamed += bool(r.get("stream"))
+        share.with_tools += bool((r.get("params") or {}).get("tools"))
+        share.finish_length += r.get("finish_reason") == "length"
+        if r.get("status") == "failure":
+            failures[(model, ((r.get("error") or {}).get("class")) or "unknown")] += 1
+            continue
+        prompt_len[model][prompt_bucket(tokens)] += 1
+        if isinstance(r.get("messages"), list):
+            messages[model].append(len(r["messages"]))
+    return edict(
+        records=seen,
+        days=sorted(days),
+        by_project=_ranked(by_project),
+        by_user=_ranked(by_user),
+        by_model=_ranked(by_model),
+        by_agent=_ranked(by_agent),
+        prompt_len=[edict(model=m, **prompt_len[m]) for m in sorted(prompt_len)],
+        shares=[edict(model=m, **shares[m]) for m in sorted(shares)],
+        failures=[
+            edict(model=m, error=e, count=n)
+            for (m, e), n in sorted(failures.items(), key=lambda kv: (kv[0][0], -kv[1]))
+        ],
+        conversation=[
+            edict(model=m, p50=percentile(messages[m], 0.5), p95=percentile(messages[m], 0.95))
+            for m in sorted(messages)
+        ],
+    )
+
+
+def read_days(log_dir: pathlib.Path, days: Iterable[dt.date]) -> Iterator[edict]:
+    """Every record of several days, in day order."""
+    for day in days:
+        yield from read_day(log_dir, day)

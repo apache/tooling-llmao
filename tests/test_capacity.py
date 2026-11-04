@@ -37,9 +37,7 @@ from llmao.capacity import (
     HourlyRollup,
     fold_demand,
     hour_label,
-    prompt_bucket,
     retention_days,
-    tool_family,
 )
 from llmao.proxy.client import MemoryStore
 from llmao.rental import Rental
@@ -244,20 +242,6 @@ def _spend(
         request_duration_ms=ms,
         metadata=meta,
     )
-
-
-def test_tools_are_the_product_before_the_slash_and_browsers_are_one():
-    assert tool_family("opencode/latest/2.2.1/acp") == "opencode"
-    assert tool_family("codex-tui/0.166.0 (Linux Unknown; x86_64)") == "codex-tui"
-    assert tool_family("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36") == "browser"
-    assert tool_family(None) == "unknown"
-    assert tool_family("curl") == "curl"
-
-
-def test_prompt_length_buckets_cover_every_length():
-    assert [prompt_bucket(n) for n in (0, 999, 1_000, 7_999, 8_000, 31_999, 32_000, 127_999, 128_000, 10**7)] == [
-        "<1k", "<1k", "1k-8k", "1k-8k", "8k-32k", "8k-32k", "32k-128k", "32k-128k", ">128k", ">128k",
-    ]  # fmt: skip
 
 
 def test_a_day_folds_into_one_row_per_model_per_hour():

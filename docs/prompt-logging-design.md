@@ -122,7 +122,7 @@ Nothing here waits for the review.
 | N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | done 2026-11-03 |
 | N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
 | N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
-| N7 | The reports in `bin/llmao-prompt-log` | N4 |
+| N7 | The reports in `bin/llmao-prompt-log` | done 2026-11-04 (`report`, text or `--csv`) |
 | N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
 | N9 | Which content analyses, and where they run | open |
 | N10 | Usage Analysis page | parked |

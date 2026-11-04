@@ -249,3 +249,88 @@ def test_the_log_directory_is_required_in_config():
         assert "prompt_log_dir is required" in str(e)
     else:
         raise AssertionError("missing prompt_log_dir must stop startup")
+
+
+# ---- the helpers both sides share, and the reports
+
+
+def test_tools_are_the_product_before_the_slash_and_browsers_are_one():
+    assert prompt_log.tool_family("opencode/latest/2.2.1/acp") == "opencode"
+    assert prompt_log.tool_family("codex-tui/0.166.0 (Linux Unknown; x86_64)") == "codex-tui"
+    assert prompt_log.tool_family("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36") == "browser"
+    assert prompt_log.tool_family(None) == "unknown"
+    assert prompt_log.tool_family("curl") == "curl"
+
+
+def test_prompt_length_buckets_cover_every_length():
+    lengths = (0, 999, 1_000, 7_999, 8_000, 31_999, 32_000, 127_999, 128_000, 10**7)
+    assert [prompt_log.prompt_bucket(n) for n in lengths] == [
+        "<1k", "<1k", "1k-8k", "1k-8k", "8k-32k", "8k-32k", "32k-128k", "32k-128k", ">128k", ">128k",
+    ]  # fmt: skip
+
+
+def _full(hour, model="qwen3-8b", **over):
+    r = dict(
+        ts=f"2026-11-01T{hour:02d}:30:00.000Z",
+        model=model,
+        status="success",
+        error=None,
+        stream=False,
+        finish_reason="stop",
+        params={},
+        tokens={"prompt": 500, "completion": 20, "total": 520},
+        key={"project": "tooling", "user": "someone"},
+        user_agent="OpenAI/Python 1.109.1",
+        messages=[{"role": "user", "content": "x"}],
+    )
+    r.update(over)
+    return r
+
+
+def test_the_reports_count_requests_by_who_what_and_how_without_reading_a_prompt():
+    rep = prompt_log.report(
+        [
+            _full(9, stream=True, params={"tools": [{}]}, messages=[{}, {}, {}]),
+            _full(9, key={"project": "spark", "user": None}, user_agent="opencode/1", tokens={"prompt": 9000}),
+            _full(10, model="gemma4-26b", finish_reason="length"),
+            _full(10, status="failure", error={"class": "RateLimitError"}, tokens={"prompt": 0}),
+            _full(11, key={"project": prompt_log.HEALTH_CHECK_TEAM}),  # not demand
+        ]
+    )
+    assert rep.records == 4 and rep.days == ["2026-11-01"]
+    assert [(r.name, r.requests, r.prompt_tokens) for r in rep.by_project] == [("tooling", 3, 1000), ("spark", 1, 9000)]
+    assert [(r.name, r.requests) for r in rep.by_user] == [("someone", 3), ("(automation)", 1)]
+    assert [(r.name, r.requests) for r in rep.by_model] == [("qwen3-8b", 3), ("gemma4-26b", 1)]
+    assert [(r.name, r.requests) for r in rep.by_agent] == [("OpenAI", 3), ("opencode", 1)]
+    (gemma, qwen) = rep.prompt_len
+    assert (qwen.model, qwen["<1k"], qwen["8k-32k"]) == ("qwen3-8b", 1, 1)  # the failure is not a length
+    assert (gemma.model, gemma["<1k"]) == ("gemma4-26b", 1)
+    assert [(s.model, s.requests, s.streamed, s.with_tools, s.finish_length) for s in rep.shares] == [
+        ("gemma4-26b", 1, 0, 0, 1),
+        ("qwen3-8b", 3, 1, 1, 0),
+    ]
+    assert [(f.model, f.error, f.count) for f in rep.failures] == [("qwen3-8b", "RateLimitError", 1)]
+    assert [(c.model, c.p50, c.p95) for c in rep.conversation] == [("gemma4-26b", 1, 1), ("qwen3-8b", 1, 3)]
+
+
+def test_the_tool_prints_the_reports_as_text_and_as_csv(tmp_path):
+    (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_full(9)) + "\n")
+    second = _full(9, model="gemma4-26b", ts="2026-11-02T09:30:00.000Z")
+    (tmp_path / "prompts-2026-11-02.jsonl").write_text(json.dumps(second) + "\n")
+    base = [
+        sys.executable,
+        str(prompt_log.TOOL),
+        "--log-dir",
+        str(tmp_path),
+        "report",
+        "--from",
+        "2026-11-01",
+        "--to",
+        "2026-11-02",
+    ]
+    text = subprocess.run(base, capture_output=True, text=True, check=True).stdout
+    assert "2 requests over 2026-11-01 to 2026-11-02, 2 days with records" in text
+    assert "By project" in text and "tooling" in text and "Messages per request" in text
+    as_csv = subprocess.run([*base, "--csv"], capture_output=True, text=True, check=True).stdout
+    assert "# By model\nname,requests,per day,prompt tokens\n" in as_csv
+    assert "gemma4-26b,1,0.5,500\n" in as_csv

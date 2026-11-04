@@ -35,8 +35,8 @@ from dataclasses import dataclass
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import fmt
-from llmao.capacity import PROMPT_BUCKETS, add_counts
-from llmao.prompt_log import percentile
+from llmao.capacity import add_counts
+from llmao.prompt_log import PROMPT_BUCKETS, percentile
 
 
 def _ranked_counts(totals: dict[str, dict]) -> list[edict]:

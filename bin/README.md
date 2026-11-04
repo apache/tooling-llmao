@@ -10,6 +10,7 @@ Five scripts. Different questions, different times to reach for them.
 | `llmao-saturate` | when deciding whether a card is the right size | 5–30 min |
 | `llmao-usage` | has this box ever served anything at all | instant |
 | `check-no-log.py` | after a LiteLLM upgrade: can a request still not opt out of the prompt log | ~10s |
+| `llmao-prompt-log` | who asks what of which model, from the prompt log: `report`, or `rollup --json <day>` for the portal (needs the venv: `sudo uv run bin/llmao-prompt-log ...`) | seconds per day of records |
 
 All stdlib-only Python 3 — nothing to install. All five share one discovery
 path in `_fleet.py`, so they see the same fleet.

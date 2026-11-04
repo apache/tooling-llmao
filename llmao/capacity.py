@@ -68,7 +68,7 @@ from asfpy.stopwatch import Stopwatch
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import prompt_log
-from llmao.prompt_log import counts_as_demand, percentile
+from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, prompt_bucket, tool_family
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -436,32 +436,6 @@ class CapacityPruner:
 # day whose marker carries an older version is rolled up again, so a
 # correction here reaches every stored day on the next run.
 FOLD_VERSION = 2
-
-# Prompt length in tokens, bucketed: is anyone using the context we pay KV
-# cache for. The last bucket has no upper bound.
-PROMPT_BUCKETS = ((1_000, "<1k"), (8_000, "1k-8k"), (32_000, "8k-32k"), (128_000, "32k-128k"), (None, ">128k"))
-NO_PROJECT = "(no project)"
-
-
-def prompt_bucket(tokens: int) -> str:
-    for limit, name in PROMPT_BUCKETS:
-        if limit is None or tokens < limit:
-            return name
-    return PROMPT_BUCKETS[-1][1]
-
-
-def tool_family(user_agent: str | None) -> str:
-    """The tool behind a user agent: the product before the first slash.
-
-    "opencode/latest/2.2.1/acp" is opencode, "OpenAI/Python 1.109.1" is the
-    OpenAI SDK, "codex-tui/0.166.0 (...)" is codex-tui. Every browser says
-    Mozilla first, so those fold into one; a request with no user agent is
-    "unknown". This is the same cut LiteLLM makes for its User-Agent tags.
-    """
-    name = (user_agent or "").split("/", 1)[0].strip()
-    if not name:
-        return "unknown"
-    return "browser" if name == "Mozilla" else name
 
 
 def add_counts(
