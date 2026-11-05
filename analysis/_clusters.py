@@ -15,19 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""The prompt log's clusters: who is sending what kind of request, one exemplar each.
+"""The store's clusters: build them from the day files, list them, show one.
 
-    sudo ./analysis/prompt-clusters                    # the last 7 closed days
-    sudo ./analysis/prompt-clusters --days 30 --json
-    sudo ./analysis/prompt-clusters --show 1f2e3d4c5b6a7980   # one cluster, exemplar in full
-    sudo ./analysis/prompt-clusters --rebuild           # forget the scans and read the days again
+    prompts build                  # read the last 7 closed days into the store, those not yet in
+    prompts build --rebuild        # forget the days and clusters, read the span again
+    prompts clusters               # who is sending what kind of request, over the span
+    prompts clusters --json
+    prompts show 1f2e3d4c5b6a7980  # one cluster, exemplar in full
 
 A cluster is the set of records sharing a fingerprint: the project, the
-person, the tool family and the opening of the system prompt. Each run scans
-the days of the span that the store has not seen, prunes what is past
-the retention, and lists the clusters over the span with their figures.
-No model is involved: that is the judge, a later script, which reads the
-exemplars from the same store.
+person, the tool family and the opening of the system prompt. build reads
+each day of the span the store has not seen, prunes what is past the
+retention, and writes the clusters and their figures: a day is read once.
+clusters and show only read the store. No model is involved in any of
+this; that is `prompts judge`.
 
 The store is analysis_dir in config.yaml (default ./analysis-data); the
 log directory is --log-dir, else prompt_log_dir in config.yaml.
@@ -111,34 +112,56 @@ def _show(store: _core.Store, fp: str) -> int:
     return 0
 
 
-def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
-    try:
-        days = _core.span(days=args.days, start=args.start, end=args.end)
-    except ValueError:
-        ap.error("--from is after --to")
+def _open(args: argparse.Namespace) -> _core.Store:
+    return _core.Store(args.analysis_dir or _core.analysis_dir())
 
-    store = _core.Store(args.analysis_dir or _core.analysis_dir())
+
+def run_build(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """Read the span's day files the store has not seen, prune, and say what is in the store now."""
+    days = _core.span_of(ap, args)
+    store = _open(args)
     try:
-        if args.show:
-            return _show(store, args.show)
         if args.rebuild:
             store.rebuild()
         gone = store.prune(_core.retention_days())
         log_dir = args.log_dir or _core.log_dir()
         scanned = store.scanned_days()
+        read = 0
         for day in days:
             if day in scanned:
                 continue
             n = store.scan_day(log_dir, day)
-            print(f"scanned {day}: {fmt.plural(n, 'record')}", file=sys.stderr)
+            read += 1
+            print(f"read {day}: {fmt.plural(n, 'record')}")
         if gone:
-            print(f"pruned {fmt.plural(gone, 'cluster')} past the retention", file=sys.stderr)
-        clusters = list(store.clusters_over(days))
-        if args.json:
-            json.dump(clusters, sys.stdout, indent=1)
-            sys.stdout.write("\n")
-        else:
-            _list(clusters, days)
+            print(f"pruned {fmt.plural(gone, 'cluster')} past the retention")
+        clusters = store.clusters_over(days)
+        total = sum(1 for _ in clusters)
     finally:
         store.close()
+    print(f"{fmt.plural(read, 'day')} read; {fmt.plural(total, 'cluster')} over {_core.span_text(days)} in the store")
+    print("\nnext: prompts clusters, to see them; prompts judge, for the judges' verdicts on those that lack one")
     return 0
+
+
+def run_clusters(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    days = _core.span_of(ap, args)
+    store = _open(args)
+    try:
+        clusters = list(store.clusters_over(days))
+    finally:
+        store.close()
+    if args.json:
+        json.dump(clusters, sys.stdout, indent=1)
+        sys.stdout.write("\n")
+    else:
+        _list(clusters, days)
+    return 0
+
+
+def run_show(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    store = _open(args)
+    try:
+        return _show(store, args.fingerprint)
+    finally:
+        store.close()

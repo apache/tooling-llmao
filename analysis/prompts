@@ -18,8 +18,10 @@
 
 """The prompt log's analysis, one entry point: `prompts <command> --help` for each.
 
+    sudo ./analysis/prompts build       # cluster the span's day files into the store
+    sudo ./analysis/prompts clusters    # who is sending what kind of request, over the span
+    sudo ./analysis/prompts show <fp>   # one cluster, exemplar in full
     sudo ./analysis/prompts report      # who asks what of which model, no content, from the day files
-    sudo ./analysis/prompts clusters    # the records of a span clustered, one exemplar each, into the store
     sudo ./analysis/prompts judge       # the judges' verdict on each cluster, and the reports on them
 
 The commands share --days, --from and --to for the span of UTC days,
@@ -60,27 +62,62 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True, metavar="command")
 
-    def command(name: str, module, help_text: str) -> argparse.ArgumentParser:
-        p = sub.add_parser(
-            name, help=help_text, description=module.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-        )
-        p.set_defaults(run=module.run, parser=p)
+    def command(name: str, run, help_text: str, description: str) -> argparse.ArgumentParser:
+        p = sub.add_parser(name, help=help_text, description=description)
+        p.set_defaults(run=run, parser=p)
         return p
 
-    p = command("report", _report, "who asks what of which model, no content")
+    p = command(
+        "build",
+        _clusters.run_build,
+        "cluster the span's day files into the store",
+        "Writes the store: each day of the span it has not seen is read and its records clustered, "
+        "and what is past the retention is pruned. A day is read once; --rebuild reads them all again.",
+    )
+    _span(p)
+    _log_dir(p)
+    _store(p)
+    p.add_argument("--rebuild", action="store_true", help="forget every day and cluster, read the span again")
+
+    p = command(
+        "clusters",
+        _clusters.run_clusters,
+        "who is sending what kind of request, over the span",
+        "Lists the store's clusters over the span: project, person, tool, requests, token figures, "
+        "models used, and the opening of the instructions.",
+    )
+    _span(p)
+    _store(p)
+    p.add_argument("--json", action="store_true", help="the clusters over the span as JSON, exemplars included")
+
+    p = command(
+        "show",
+        _clusters.run_show,
+        "one cluster, exemplar in full",
+        "Prints one cluster: its opening, and the exemplar the judges read, head and messages in full.",
+    )
+    p.add_argument("fingerprint", help="the cluster, as the listings print it")
+    _store(p)
+
+    p = command(
+        "report",
+        _report.run,
+        "who asks what of which model, no content",
+        "Reads the day files, never the store, and prints the reports that need no prompt content: "
+        "requests and tokens by project, user, model and tool; prompt lengths; shares; failures; "
+        "messages per request.",
+    )
     _span(p)
     p.add_argument("--csv", action="store_true", help="CSV, one block per report, instead of text")
     _log_dir(p)
 
-    p = command("clusters", _clusters, "the records of a span clustered, into the store")
-    _span(p)
-    _log_dir(p)
-    _store(p)
-    p.add_argument("--rebuild", action="store_true", help="forget every scanned day and read the span again")
-    p.add_argument("--json", action="store_true", help="the clusters over the span as JSON, exemplars included")
-    p.add_argument("--show", metavar="FINGERPRINT", help="one cluster in full, instead of the listing")
-
-    p = command("judge", _judge, "the judges' verdict on each cluster")
+    p = command(
+        "judge",
+        _judge.run,
+        "the judges' verdict on each cluster",
+        "Asks each judge the three questions about every cluster of the span that lacks its verdict, "
+        "then lists the consensus. A dry run unless --judge is given.",
+    )
     _span(p)
     _store(p)
     p.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")

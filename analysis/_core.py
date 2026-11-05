@@ -55,6 +55,7 @@ from llmao.models import load_models, models_path_from_cfg
 from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, read_day, tool_family
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Iterable, Iterator
 
 # ---- settings -----------------------------------------------------------
@@ -896,3 +897,20 @@ def tier_report(clusters: Iterable[edict], by_tier: dict[str, list[str]]) -> lis
             edict(cluster=c, tier=c.verdict.tier, recommended=recommended, above=above, below=below, unranked=unranked)
         )
     return sorted(out, key=lambda r: (-r.above, -r.below, r.cluster.fingerprint))
+
+
+# ---- for the commands ---------------------------------------------------
+#
+# What every subcommand of analysis/prompts shares once its arguments are
+# parsed: the span of days they name.
+
+
+def span_of(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[dt.date]:
+    try:
+        return span(days=args.days, start=args.start, end=args.end)
+    except ValueError:
+        ap.error("--from is after --to")
+
+
+def span_text(days: list[dt.date]) -> str:
+    return f"{days[0]} to {days[-1]}" if len(days) > 1 else str(days[0])
