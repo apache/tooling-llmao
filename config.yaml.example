@@ -130,6 +130,14 @@ action_retention_days: 90
 prompt_log_dir: ./prompt-log
 prompt_log_retention_days: 90
 
+# The analysis scripts (analysis/README.md): where their store lives, and
+# how long every row of it is kept (one value for all analysis output;
+# defaults to the prompt log's retention, since the store holds text from
+# the log). Optional with these defaults until p6 renders them; required
+# after that.
+analysis_dir: ./analysis-data
+analysis_retention_days: 90
+
 # uids that may view any project's activity, and reach /admin and the
 # Deployments on /models (plus asfquart isRoot).
 site_admins: []

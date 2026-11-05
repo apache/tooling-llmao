@@ -9,8 +9,36 @@ out of the `llmao` package until it settles: nothing in `llmao/` or
 | | what | reads |
 |---|---|---|
 | `prompt-report` | requests and prompt tokens by project, user, model and tool; prompt length per model; the share that stream, carry tools or end at max_tokens; failures by class; messages per request. No prompt content | the day files |
-| `_core.py` | what the scripts share: `config.yaml`, the log directory, a span of days | |
+| `prompt-clusters` | who is sending what kind of request: the records of a span clustered by fingerprint, with figures per cluster and one exemplar each, kept in the store so a day is read once. `--show <fingerprint>` prints a cluster's exemplar in full. No model involved | the day files, the store |
+| `_core.py` | what the scripts share: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the SQLite store | |
 | `tests/` | the scripts' tests, in the suite with `uv run pytest` | |
+
+## Words
+
+- **Fingerprint:** the hash key over a record: the project, the person
+  (the key's user, else its alias), the tool family, and the opening of
+  the system prompt, its first sentence or line. Not the key, because a
+  person evaluating models holds one key per model and the work is the
+  same. Not more of the prompt, because a template carries its variable
+  part early and a longer cut makes a cluster per file. blake2b at 8 bytes.
+- **Cluster:** the records sharing a fingerprint. Pure string work over
+  the day files.
+- **Exemplar:** what a person or the judge reads to understand a cluster:
+  the first 1,024 characters of one record's instructions and up to
+  three of the cluster's last user messages, the ones whose prompt length
+  is nearest the cluster's median. Chosen when the cluster is first seen,
+  re-picked only when the cluster has at least doubled since.
+- **Activity:** what the people behind a cluster were doing. The judge's
+  answer, never the cluster's name.
+
+## The store
+
+`analysis_dir/prompts.db`, SQLite, three tables: `days` (which days are
+in), `clusters` (what does not change per day, plus the exemplar), and
+`cluster_days` (the figures per cluster per day). Every row older than
+`analysis_retention_days` is pruned at each run; `--rebuild` forgets the
+days and clusters and reads the span again, and will never touch a
+judge's verdict.
 
 ## Running on the gateway host
 
@@ -23,6 +51,8 @@ cd /opt/llmao
 sudo ./analysis/prompt-report                 # the last 7 closed UTC days
 sudo ./analysis/prompt-report --days 30
 sudo ./analysis/prompt-report --from 2026-11-01 --to 2026-11-03 --csv
+sudo ./analysis/prompt-clusters --days 30
+sudo ./analysis/prompt-clusters --show 1f2e3d4c5b6a7980
 ```
 
 The log directory is `--log-dir`, else `prompt_log_dir` from `config.yaml`

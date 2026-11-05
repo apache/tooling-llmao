@@ -1,0 +1,160 @@
+#!/usr/bin/env -S uv run --script
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""The prompt log's clusters: who is sending what kind of request, one exemplar each.
+
+    sudo ./analysis/prompt-clusters                    # the last 7 closed days
+    sudo ./analysis/prompt-clusters --days 30 --json
+    sudo ./analysis/prompt-clusters --show 1f2e3d4c5b6a7980   # one cluster, exemplar in full
+    sudo ./analysis/prompt-clusters --rebuild           # forget the scans and read the days again
+
+A cluster is the set of records sharing a fingerprint: the project, the
+person, the tool family and the opening of the system prompt. Each run scans
+the days of the span that the store has not seen, prunes what is past
+the retention, and lists the clusters over the span with their figures.
+No model is involved: that is the judge, a later script, which reads the
+exemplars from the same store.
+
+The store is analysis_dir in config.yaml (default ./analysis-data); the
+log directory is --log-dir, else prompt_log_dir in config.yaml.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import pathlib
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import _core
+
+from llmao import fmt
+
+OPENING_SHOWN = 72
+
+
+def _list(clusters: list, days: list[dt.date]) -> None:
+    span = f"{days[0]} to {days[-1]}" if len(days) > 1 else str(days[0])
+    total = sum(c.requests for c in clusters)
+    print(f"{fmt.plural(len(clusters), 'cluster')}, {fmt.plural(total, 'request')} over {span}\n")
+    columns = [
+        "fingerprint", "project", "who", "tool", "requests", "days", "prompt/req", "compl/req", "models", "opening",
+    ]  # fmt: skip
+    rows = []
+    for c in clusters:
+        ok = max(1, c.requests - c.failures)
+        models = ", ".join(f"{m} {n}" for m, n in sorted(c.models.items(), key=lambda kv: -kv[1]))
+        start = c.opening[:OPENING_SHOWN] + ("…" if len(c.opening) > OPENING_SHOWN else "")
+        rows.append(
+            [
+                c.fingerprint,
+                c.project,
+                c.who,
+                c.tool,
+                f"{c.requests:,}",
+                str(c.days),
+                f"{c.prompt_tokens // ok:,}",
+                f"{c.completion_tokens // ok:,}",
+                models,
+                f"{c.source}: {start}" if c.opening else "(no text)",
+            ]
+        )
+    widths = [max(len(col), *(len(r[i]) for r in rows)) if rows else len(col) for i, col in enumerate(columns)]
+    numeric = {4, 5, 6, 7}
+
+    def line(values):
+        return "  ".join(
+            v.rjust(w) if i in numeric else v.ljust(w) for i, (v, w) in enumerate(zip(values, widths, strict=True))
+        )
+
+    print(line(columns))
+    print(line(["-" * w for w in widths]))
+    for r in rows:
+        print(line(r))
+
+
+def _show(store: _core.Store, fp: str) -> int:
+    c = store.cluster(fp)
+    if c is None:
+        print(f"no cluster {fp}", file=sys.stderr)
+        return 1
+    print(f"cluster {c.fingerprint}: project {c.project}, {c.who}, tool {c.tool}")
+    print(f"seen {c.first_seen} to {c.last_seen}, {fmt.plural(c.records, 'record')} in the store")
+    print(f"\nopening ({c.source}):\n  {c.opening or '(no text)'}")
+    if c.exemplar_json:
+        print(
+            f"\nexemplar: call {c.exemplar_call_id}, picked {c.exemplar_picked} "
+            f"at {fmt.plural(c.exemplar_records, 'record')}, hash {c.exemplar_hash}"
+        )
+        print(f"\n  head (first {_core.HEAD_CHARS} characters):\n  {c.exemplar_head}")
+        for i, m in enumerate(json.loads(c.exemplar_json), 1):
+            print(f"\n  [{i}] {m}")
+    else:
+        print("\nno exemplar: no user message of text in any of its records")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
+    ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
+    ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
+    ap.add_argument("--log-dir", type=pathlib.Path, default=None, help="the prompt log directory")
+    ap.add_argument("--analysis-dir", type=pathlib.Path, default=None, help="where the store lives")
+    ap.add_argument("--rebuild", action="store_true", help="forget every scanned day and read the span again")
+    ap.add_argument("--json", action="store_true", help="the clusters over the span as JSON, exemplars included")
+    ap.add_argument("--show", metavar="FINGERPRINT", help="one cluster in full, instead of the listing")
+    args = ap.parse_args(argv)
+    try:
+        days = _core.span(days=args.days, start=args.start, end=args.end)
+    except ValueError:
+        ap.error("--from is after --to")
+
+    store = _core.Store(args.analysis_dir or _core.analysis_dir())
+    try:
+        if args.show:
+            return _show(store, args.show)
+        if args.rebuild:
+            store.rebuild()
+        gone = store.prune(_core.retention_days())
+        log_dir = args.log_dir or _core.log_dir()
+        scanned = store.scanned_days()
+        for day in days:
+            if day in scanned:
+                continue
+            n = store.scan_day(log_dir, day)
+            print(f"scanned {day}: {fmt.plural(n, 'record')}", file=sys.stderr)
+        if gone:
+            print(f"pruned {fmt.plural(gone, 'cluster')} past the retention", file=sys.stderr)
+        clusters = list(store.clusters_over(days))
+        if args.json:
+            json.dump(clusters, sys.stdout, indent=1)
+            sys.stdout.write("\n")
+        else:
+            _list(clusters, days)
+    finally:
+        store.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
