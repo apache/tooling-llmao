@@ -44,6 +44,19 @@ Every row older than `analysis_retention_days` is pruned at each run, a
 pruned cluster's verdicts with it; `--rebuild` forgets the days and
 clusters and reads the span again, and never touches a verdict.
 
+The store is derived from the day files, and the scan writes what the
+code of the day said: the fingerprint's parts, the person's name, the
+exemplar. While this is R&D, a change to any of that leaves an existing
+store stale until the days are scanned again, so after pulling such a
+change run `prompt-clusters --rebuild` over your span. A verdict keyed
+on a fingerprint that no longer exists is dropped at the next prune.
+
+A rebuild is cheap: about 12 seconds for a day of 4,800 records, string
+work and SQLite. Judging is what takes time, about 2.5 seconds per
+cluster on the gateway, one request in flight, which is why verdicts are
+kept across rebuilds and only re-judged when the judge prompt, the
+exemplar or the model changed.
+
 ## Running on the gateway host
 
 The log directory is root only, and each script's shebang runs it through

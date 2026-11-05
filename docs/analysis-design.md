@@ -218,6 +218,21 @@ value for all analysis output; it defaults to the prompt log's
 retention, since the store holds text from the log and must not outlive
 it.
 
+The store is derived, and the scan writes what the code of the day
+said. A change to the fingerprint's parts, the person's name or the
+exemplar leaves an existing store stale until its days are scanned
+again: `--rebuild` over the span, after pulling such a change. There is
+no versioning of the store while it is R&D, unlike the demand values'
+fold version; the first stale listing on 2026-11-05 was the master-key
+naming, fixed by a rebuild. A verdict whose fingerprint no longer exists
+is dropped at the next prune.
+
+A rebuild is cheap, about 12 seconds for a day of 4,800 records; it is
+string work and SQLite. Judging is the slow part, about 2.5 seconds per
+cluster through the gateway with one request in flight, so verdicts are
+what the store protects: kept across rebuilds, re-judged only when the
+judge prompt, the exemplar or the model changed.
+
 ### The judge
 
 One call per cluster, carrying the judge prompt and the exemplar: the
