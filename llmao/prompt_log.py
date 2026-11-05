@@ -19,12 +19,15 @@
 
 A record of every request that flowed through the gateway, one JSON
 object per line in one file per UTC day, written by the hook in
-litellm_hooks.py and read by bin/llmao-prompt-log and the demand rollup.
-Design: docs/prompt-logging-design.md, "The record" and "Files".
+litellm_hooks.py and read by bin/llmao-prompt-log for the demand rollup
+and by the scripts in analysis/. Design: docs/prompt-logging-design.md,
+"The record" and "Files".
 
 This module is imported by the hook inside the proxy process, by the
-tool, and by the rollup in llmao/capacity.py, so it imports nothing
-heavy: no loguru (the hook owns the sink), nothing of LiteLLM. The
+tool, by the scripts, and by the rollup in llmao/capacity.py, so it
+imports nothing heavy: no loguru (the hook owns the sink), nothing of
+LiteLLM, and it never reads config.yaml (the portal has APP.cfg, the
+scripts have analysis/_core.py). The
 record is built from LiteLLM's StandardLoggingPayload alone, never from
 the raw request, so a change in how the proxy parses requests does not
 change what is written.
@@ -320,7 +323,7 @@ def log_dir(cfg: Any) -> pathlib.Path:
 #
 # For an admin at a shell on the host: the first analyses, chosen because
 # they need no reading of prompt content. The module makes the figures;
-# the tool prints them as text or CSV.
+# analysis/prompt-report prints them as text or CSV.
 
 
 def _tally(bucket: dict, name: str, tokens: int) -> None:
@@ -401,42 +404,3 @@ def read_days(log_dir: pathlib.Path, days: Iterable[dt.date]) -> Iterator[edict]
     """Every record of several days, in day order."""
     for day in days:
         yield from read_day(log_dir, day)
-
-
-# ---- the accessor for scripts -------------------------------------------
-#
-# What a script at a shell on the host needs to get at the records, and
-# nothing of what it then does with them: the content analyses are R&D in
-# bin/ (docs/prompt-logging-design.md, "The post-process") and stay out of
-# the library until they settle.
-
-CONFIG = pathlib.Path("config.yaml")
-DEFAULT_LOG_DIR = pathlib.Path("prompt-log")
-
-
-def configured_log_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
-    """prompt_log_dir from config.yaml in the current directory, else ./prompt-log.
-
-    The lenient cousin of ``log_dir``: a script run from a checkout without a
-    config.yaml gets the development default, where the portal gets an error.
-    """
-    if config.exists():
-        import yaml
-
-        raw = (yaml.safe_load(config.read_text()) or {}).get("prompt_log_dir")
-        if raw:
-            return pathlib.Path(str(raw))
-    return DEFAULT_LOG_DIR
-
-
-def span(*, days: int = 7, start: dt.date | None = None, end: dt.date | None = None) -> list[dt.date]:
-    """The UTC days to read: the last ``days`` closed ones, or ``start`` to ``end``, in order.
-
-    ``end`` defaults to yesterday, the last closed day; ``start`` to ``days``
-    before it. A start after its end is a ValueError.
-    """
-    end = end or dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-    start = start or end - dt.timedelta(days=days - 1)
-    if start > end:
-        raise ValueError(f"span starts {start}, after it ends {end}")
-    return [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]

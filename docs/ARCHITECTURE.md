@@ -261,11 +261,12 @@ for how a change reaches history.
 | `llmao/model_status.py` | the lifecycle verdicts and the model roll-up, as pure functions of a snapshot | `docs/box-lifecycle.md` |
 | `llmao/models.py` | `models.yaml` | |
 | `llmao/sampler.py`, `llmao/capacity.py`, `llmao/planning.py` | reading `/metrics`; capacity values, demand values, the rollup and the pruner; what the values say, for the page | `docs/capacity-design.md` |
-| `llmao/prompt_log.py`, `litellm_hooks.py`, `bin/llmao-prompt-log` | the record, the day files and the accessor; the hooks LiteLLM loads; the admin tool | `docs/prompt-logging-design.md` |
+| `llmao/prompt_log.py`, `litellm_hooks.py`, `bin/llmao-prompt-log` | the record, the day files and the rollup of a day; the hooks LiteLLM loads; the tool the runner spawns | `docs/prompt-logging-design.md` |
 | `llmao/access_requests.py`, `llmao/actions.py`, `llmao/pruner.py` | requests a person makes and an admin answers; the admin action log; daily retention | |
 | `llmao/token_window.py` | a rolling token allowance as daily buckets | |
 | `llmao/fmt.py` | figures and moments as a person reads them | |
 | `bin/` | the admin tools run at a shell on the host | `bin/README.md` |
+| `analysis/` | the prompt log's reports and content analyses, R&D outside the package; nothing in `llmao/` or `bin/` imports from it | `analysis/README.md` |
 | `hosting/` | what runs on the boxes: `provision.sh`, the installer, the RunPod image | `hosting/README.md` |
 | `tests/` | the suite, with `MockBackend` and a fake transport; injected only by tests, never a runtime mode | `docs/llmao-harnesses.md` |
 

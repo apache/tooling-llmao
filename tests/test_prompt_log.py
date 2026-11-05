@@ -241,30 +241,15 @@ def test_rollup_day_spawns_the_tool_and_a_tool_that_fails_is_an_error_with_its_l
         raise AssertionError("a tool past its timeout must be an error")
 
 
-def test_a_script_finds_the_log_directory_in_config_or_takes_the_default(tmp_path):
-    cfg = tmp_path / "config.yaml"
-    assert prompt_log.configured_log_dir(cfg) == prompt_log.DEFAULT_LOG_DIR
-    cfg.write_text("prompt_log_dir: /x1/llmao/prompt-log\n")
-    assert prompt_log.configured_log_dir(cfg).as_posix() == "/x1/llmao/prompt-log"
-    cfg.write_text("other: 1\n")
-    assert prompt_log.configured_log_dir(cfg) == prompt_log.DEFAULT_LOG_DIR
-
-
-def test_a_span_is_the_last_closed_days_or_from_to():
-    today = dt.datetime.now(dt.UTC).date()
-    last = prompt_log.span(days=3)
-    assert last == [today - dt.timedelta(days=3), today - dt.timedelta(days=2), today - dt.timedelta(days=1)]
-    assert prompt_log.span(start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 2)) == [
-        dt.date(2026, 11, 1),
-        dt.date(2026, 11, 2),
-    ]
-    assert prompt_log.span(days=2, end=dt.date(2026, 11, 3)) == [dt.date(2026, 11, 2), dt.date(2026, 11, 3)]
-    try:
-        prompt_log.span(start=dt.date(2026, 11, 3), end=dt.date(2026, 11, 2))
-    except ValueError as e:
-        assert "after it ends" in str(e)
-    else:
-        raise AssertionError("a start after its end must be an error")
+def test_the_tool_requires_its_log_directory(tmp_path):
+    run = subprocess.run(
+        [sys.executable, str(prompt_log.TOOL), "rollup", "--json", "2026-11-01"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode != 0
+    assert "--log-dir is required" in run.stderr
 
 
 def test_the_log_directory_is_required_in_config():
@@ -337,26 +322,3 @@ def test_the_reports_count_requests_by_who_what_and_how_without_reading_a_prompt
     ]
     assert [(f.model, f.error, f.count) for f in rep.failures] == [("qwen3-8b", "RateLimitError", 1)]
     assert [(c.model, c.p50, c.p95) for c in rep.conversation] == [("gemma4-26b", 1, 1), ("qwen3-8b", 1, 3)]
-
-
-def test_the_tool_prints_the_reports_as_text_and_as_csv(tmp_path):
-    (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_full(9)) + "\n")
-    second = _full(9, model="gemma4-26b", ts="2026-11-02T09:30:00.000Z")
-    (tmp_path / "prompts-2026-11-02.jsonl").write_text(json.dumps(second) + "\n")
-    base = [
-        sys.executable,
-        str(prompt_log.TOOL),
-        "--log-dir",
-        str(tmp_path),
-        "report",
-        "--from",
-        "2026-11-01",
-        "--to",
-        "2026-11-02",
-    ]
-    text = subprocess.run(base, capture_output=True, text=True, check=True).stdout
-    assert "2 requests over 2026-11-01 to 2026-11-02, 2 days with records" in text
-    assert "By project" in text and "tooling" in text and "Messages per request" in text
-    as_csv = subprocess.run([*base, "--csv"], capture_output=True, text=True, check=True).stdout
-    assert "# By model\nname,requests,per day,prompt tokens\n" in as_csv
-    assert "gemma4-26b,1,0.5,500\n" in as_csv

@@ -35,11 +35,15 @@ build-backend = "hatchling.build"
 packages = ["llmao"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "analysis/tests"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# Scripts without an extension. The ones with a uv shebang are not recognised
+# as Python by pre-commit's file identification, so the hooks run ruff over the
+# tree and ruff decides what is Python from this list.
+extend-include = ["bin/llmao-*", "bin/check-*", "analysis/prompt-*"]
 
 [tool.ruff.lint]
 ignore = [
@@ -76,6 +80,10 @@ select = [
 # ASYNC240 goes: reading a fixture file with pathlib inside an async test blocks a loop that
 # serves one test and nothing else, where in `llmao/` the same call is worth an argument.
 "tests/**" = ["S101", "S104", "S105", "S108", "S701", "ASYNC109", "ASYNC240", "E501", "F841"]
+"analysis/tests/**" = ["S101", "S104", "S105", "S108", "S701", "ASYNC109", "ASYNC240", "E501", "F841"]
+# The analysis scripts are command line tools like bin/, and they import their
+# shared module from their own directory after putting it on the path (E402).
+"analysis/**" = ["ASYNC240", "S310", "E402"]
 # One-shot command line tools: they own their event loop and nothing waits on it (ASYNC240).
 # The urlopen URLs (S310) are literals or built with a pinned http(s) scheme against
 # endpoints discovered at runtime - a file: scheme is not reachable.

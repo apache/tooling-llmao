@@ -10,7 +10,7 @@ Five scripts. Different questions, different times to reach for them.
 | `llmao-saturate` | when deciding whether a card is the right size | 5–30 min |
 | `llmao-usage` | has this box ever served anything at all | instant |
 | `check-no-log.py` | after a LiteLLM upgrade: can a request still not opt out of the prompt log | ~10s |
-| `llmao-prompt-log` | who asks what of which model, from the prompt log: `report`, or `rollup --json <day>` for the portal (needs the venv: `sudo uv run bin/llmao-prompt-log ...`) | seconds per day of records |
+| `llmao-prompt-log` | one day of the prompt log rolled up for the portal: `rollup --json <day> --log-dir <dir>`, what the demand-rollup runner spawns. Runs through uv. The reports for a person are in `analysis/prompt-report` | seconds per day of records |
 
 All stdlib-only Python 3 — nothing to install. All five share one discovery
 path in `_fleet.py`, so they see the same fleet.

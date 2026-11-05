@@ -122,7 +122,7 @@ Nothing here waits for the review.
 | N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | done 2026-11-03 |
 | N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
 | N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
-| N7 | The reports in `bin/llmao-prompt-log` | done 2026-11-04 (`report`, text or `--csv`) |
+| N7 | The reports | done 2026-11-04 (text or `--csv`); moved from the tool to `analysis/prompt-report` the same day, when `analysis/` was made for the content analyses |
 | N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
 | N9 | Which content analyses, and where they run | open |
 | N10 | Usage Analysis page | parked |
@@ -329,43 +329,56 @@ free-space figure on `/admin` beside the LiteLLM version check.
 
 ## The post-process
 
-Two files with two names, because they are two concerns:
+Three places with three names, because they are three concerns:
 
-- **`llmao/prompt_log.py`, the module:** where the work lives. The
-  record's field names, the file name pattern, reading a day file plain
-  or compressed, the rollup of a day, and `rollup_day(day)`, which the
-  runner calls: it spawns the tool as a child for that day and parses
-  the JSON it prints. It imports nothing heavy, not even loguru,
-  because the hook imports it too, inside the proxy process, for the
-  record definition and the file naming.
+- **`llmao/prompt_log.py`, the module:** where the shared work lives.
+  The record's field names, the file name pattern, reading a day file
+  plain or compressed, the rollup of a day, the figures of the reports,
+  and `rollup_day(day)`, which the runner calls: it spawns the tool as a
+  child for that day and parses the JSON it prints. It imports nothing
+  heavy, not even loguru, because the hook imports it too, inside the
+  proxy process, for the record definition and the file naming. It
+  never reads `config.yaml`: the portal has `APP.cfg`, and the scripts
+  have their own reader.
 - **`bin/llmao-prompt-log`, the tool:** argparse over the module, named
   like the other admin tools in `bin/` (`llmao-fleet`, `llmao-budget`).
-  It never opens a connection to LiteLLM, and never writes in the log
-  directory.
+  One subcommand, `rollup --json <day> --log-dir <dir>`, and it is the
+  portal's: the runner spawns it and always gives it the directory. It
+  never opens a connection to LiteLLM, never writes in the log directory,
+  and never reads `config.yaml`.
+- **`analysis/`, the scripts:** everything done with the records for a
+  person, from the reports to the content analyses. R&D, outside the
+  package, so nothing graduates into the module until it settles.
+  `_core.py` holds what the scripts share, starting with the reader of
+  `config.yaml` (from the current directory, and a missing key stops the
+  script: a script can fail harder than the portal, where the same error
+  would take a service down) and the span of days to read.
+  `prompt-report` holds the reports. The content analyses (N9) join it.
 
-The dependency runs one way: the tool, the hook and `capacity.py` (for
-`rollup_day`) import the module, and the module imports none of them.
+The dependency runs one way: the tool, the hook, `capacity.py` (for
+`rollup_day`) and the scripts import the module; the module imports none
+of them, and nothing in `llmao/` or `bin/` imports from `analysis/`.
 
-The tool has two subcommands:
+What the tool prints for **`rollup --json <day>`:** that day's file, plain
+or compressed, as one JSON document on stdout: the log-only fields for
+each of the day's 24 hours per model, and the day's request count per
+model for the reconciliation. No cursor: a day is the unit, and the
+runner decides which days are missing.
 
-1. **`rollup --json <day>`:** read that day's file, plain or compressed,
-   and print one JSON document to stdout: the log-only fields for each of
-   the day's 24 hours per model, and the day's request count per model
-   for the reconciliation. No cursor: a day is the unit, and the runner
-   decides which days are missing.
-2. **Reports,** for an admin at a shell on the host. The first ones,
-   chosen because they need no reading of prompt content: requests and
-   prompt tokens per day by project, by user, by model and by user agent;
-   the distribution of prompt length per model; the share of requests
-   that carry tools, that stream, that end in `length`; failures by class
-   per model; conversation length (messages per request). Text tables,
-   or CSV when someone wants a spreadsheet.
+What **`analysis/prompt-report`** prints, for an admin at a shell on the
+host: the first reports, chosen because they need no reading of prompt
+content. Requests and prompt tokens per day by project, by user, by model
+and by user agent; the distribution of prompt length per model; the
+share of requests that carry tools, that stream, that end in `length`;
+failures by class per model; conversation length (messages per request).
+Text tables, or CSV when someone wants a spreadsheet.
 
 Analyses of the content itself, which is the reason the content is kept
 (what people ask for, how agents are used, what a project's work looks
-like), come after, and which ones is open. Anything heavy, such as a model
-classifying prompts, runs off the gateway host on exported files, and is
-not designed here.
+like), are the scripts that follow `prompt-report` in `analysis/`, and
+which ones is N9. A model judging prompts runs on the host too, through
+one of the gateway's own self-hosted models, one request in flight; its
+shape is N9's.
 
 ### Two words, kept apart
 
@@ -519,7 +532,8 @@ that already owns the neighbouring role.
 |---|---|
 | The callback: settings from `callback_settings`, built once by a module `__getattr__`, the directory check, the loguru sink, payload to record, the pre-call strip | `litellm_hooks.py`; tests in `tests/test_litellm_hooks.py` |
 | Record shape, file name pattern, reading a day file, the rollup of a day | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
-| The tool: `rollup --json`, reports | `bin/llmao-prompt-log`, argparse over the module |
+| The tool: `rollup --json` | `bin/llmao-prompt-log`, argparse over the module; the directory always on the command line |
+| The reports, and the content analyses to come | `analysis/`: `prompt-report`, `_core.py` (the `config.yaml` reader, the span of days), `tests/`; nothing in `llmao/` or `bin/` imports from it |
 | The `demand-rollup` runner, daily | `llmao/capacity.py` beside `CapacityWriter`; registered in `main.py`; calls `prompt_log.rollup_day` for the log side |
 | `rollup_day(day)`: spawns the tool for one day, parses its JSON | `llmao/prompt_log.py` |
 | The single reader of `/spend/logs/v2`, one closed day, page by page | `llmao/proxy/client.py`, beside the daily reader |
