@@ -132,12 +132,17 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         said = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
         print(f"{model}: {fmt.plural(n, 'verdict')} this run" + (f" ({said})" if n else ""))
     print("\nnext:")
-    for command, what in (
-        ("verdicts", "the consensus, marked where the judges split"),
-        ("verdicts --compare --reasons", "each judge's answers and reasons"),
-        ("tiers", "what a cheaper model would have served"),
-    ):
-        print(f"  prompts {command} {span_args}".rstrip().ljust(62) + f"# {what}")
+    nexts = [
+        (f"  prompts {command} {span_args}".rstrip(), what)
+        for command, what in (
+            ("verdicts", "the consensus, marked where the judges split"),
+            ("verdicts --compare --reasons", "each judge's answers and reasons"),
+            ("tiers", "what a cheaper model would have served"),
+        )
+    ]
+    width = max(len(line) for line, _ in nexts) + 2
+    for line, what in nexts:
+        print(line.ljust(width) + f"# {what}")
     return 0
 
 
