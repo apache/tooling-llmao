@@ -62,30 +62,6 @@ if TYPE_CHECKING:
 OPENING_SHOWN = 48
 
 
-def _table(title: str, columns: list[str], rows: list[list[str]], *, numeric: set[int]) -> None:
-    print(title)
-    widths = [max(len(col), *(len(r[i]) for r in rows)) if rows else len(col) for i, col in enumerate(columns)]
-
-    def line(values):
-        return "  ".join(
-            v.rjust(w) if i in numeric else v.ljust(w) for i, (v, w) in enumerate(zip(values, widths, strict=True))
-        )
-
-    print(line(columns))
-    print(line(["-" * w for w in widths]))
-    for r in rows:
-        print(line(r))
-    print()
-
-
-def _models(c) -> str:
-    return ", ".join(f"{m} {n}" for m, n in sorted(c.models.items(), key=lambda kv: -kv[1]))
-
-
-def _opening(c) -> str:
-    return c.opening[:OPENING_SHOWN] + ("…" if len(c.opening) > OPENING_SHOWN else "")
-
-
 def _said(v) -> str:
     return f"{v.asf_work} {v.tier} {v.activity}" if v else "-"
 
@@ -161,7 +137,7 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         ("verdicts --compare --reasons", "each judge's answers and reasons"),
         ("tiers", "what a cheaper model would have served"),
     ):
-        print(f"  prompts {command} {span_args}".rstrip().ljust(56) + f"# {what}")
+        print(f"  prompts {command} {span_args}".rstrip().ljust(62) + f"# {what}")
     return 0
 
 
@@ -193,29 +169,27 @@ def _verdicts(clusters: list, days: list[dt.date], *, compare: bool, reasons: bo
             split = split or v.asf_answers > 1 or v.tier_answers > 1 or v.activity_answers > 1
         else:
             answers = ["-", "-", "-" if c.exemplar_hash else "(no exemplar)"]
-        judges_n = str(v.judges) if v else ""
-        rows.append([c.fingerprint, c.project, c.who, c.tool, f"{c.requests:,}", judges_n, *answers, _models(c)])
-        rows[-1].append(_opening(c))
-    _table(
+        judges_n = v.judges if v else None
+        rows.append([c.fingerprint, c.project, c.who, c.tool, c.requests, judges_n, *answers, _core.models_text(c)])
+        rows[-1].append(_core.opening_text(c, OPENING_SHOWN))
+    _core.table(
         "Verdicts: the judges' consensus",
         ["fingerprint", "project", "who", "tool", "requests", "judges", "asf", "tier", "activity", "models", "opening"],
         rows,
-        numeric={4, 5},
     )
     if split:
         print("* the judges did not all say the same; --compare shows each one's answer.\n")
 
     if compare and judges:
         differ = [c for c in judged if len({_said(v) for v in c.verdicts}) > 1]
-        _table(
+        _core.table(
             f"Where the judges differ ({len(differ)} of {len(judged)} judged)",
             ["fingerprint", "project", "who", "requests", *judges],
             [
-                [c.fingerprint, c.project, c.who, f"{c.requests:,}"]
+                [c.fingerprint, c.project, c.who, c.requests]
                 + [_said(next((v for v in c.verdicts if v.model == m), None)) for m in judges]
                 for c in differ
             ],
-            numeric={3},
         )
 
     if reasons:
@@ -250,7 +224,7 @@ def run_tiers(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     judged = [c for c in clusters if c.verdict and c.who != _core.MASTER_KEY]
     report = [r for r in _core.tier_report(judged, by_tier) if r.above or r.below or r.unranked]
     print(f"{fmt.plural(len(judged), 'judged cluster')} over {_core.span_text(days)}, {len(report)} off their tier\n")
-    _table(
+    _core.table(
         "Tier: what was used against what the judges say would do",
         [
             "fingerprint",
@@ -269,17 +243,16 @@ def run_tiers(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                 r.cluster.fingerprint,
                 r.cluster.project,
                 r.cluster.who,
-                f"{r.cluster.requests:,}",
+                r.cluster.requests,
                 r.tier,
                 r.recommended,
-                _models(r.cluster),
-                f"{r.above:,}" if r.above else "",
-                f"{r.below:,}" if r.below else "",
-                f"{r.unranked:,}" if r.unranked else "",
+                _core.models_text(r.cluster),
+                r.above or None,
+                r.below or None,
+                r.unranked or None,
             ]
             for r in report
         ],
-        numeric={3, 7, 8, 9},
     )
     print(
         "heavier: requests on a model above the consensus tier, which a cheaper model would have served; "

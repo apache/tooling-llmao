@@ -34,8 +34,6 @@ the current directory; without either the script stops.
 
 from __future__ import annotations
 
-import csv
-import sys
 from typing import TYPE_CHECKING
 
 import _core
@@ -46,36 +44,6 @@ if TYPE_CHECKING:
     import argparse
     import datetime as dt
     import pathlib
-
-
-def _table(title: str, columns: list[str], rows: list[list], *, csv_out: bool) -> None:
-    """One report, as aligned text with a title, or as CSV with the title as a comment."""
-    cells = [
-        [
-            ("" if v is None else f"{v:,}" if isinstance(v, int) else f"{v:g}" if isinstance(v, float) else str(v))
-            for v in row
-        ]
-        for row in rows
-    ]
-    if csv_out:
-        out = csv.writer(sys.stdout)
-        sys.stdout.write(f"# {title}\n")
-        out.writerow(columns)
-        out.writerows(cells)
-        sys.stdout.write("\n")
-        return
-    widths = [max(len(c), *(len(r[i]) for r in cells)) if cells else len(c) for i, c in enumerate(columns)]
-    numeric = [all(isinstance(r[i], (int, float)) or r[i] is None for r in rows) for i in range(len(columns))]
-
-    def line(values):
-        return "  ".join(v.rjust(w) if n else v.ljust(w) for v, w, n in zip(values, widths, numeric, strict=True))
-
-    print(title)
-    print(line(columns))
-    print(line(["-" * w for w in widths]))
-    for row in cells:
-        print(line(row))
-    print()
 
 
 def report(log_dir: pathlib.Path, days: list[dt.date], *, csv_out: bool) -> None:
@@ -90,32 +58,32 @@ def report(log_dir: pathlib.Path, days: list[dt.date], *, csv_out: bool) -> None
         ("By model", rep.by_model),
         ("By tool", rep.by_agent),
     ):
-        _table(
+        _core.table(
             title,
             ["name", "requests", "per day", "prompt tokens"],
             [[r.name, r.requests, round(r.requests / n, 1), r.prompt_tokens] for r in rows],
             csv_out=csv_out,
         )
     buckets = [b for _l, b in prompt_log.PROMPT_BUCKETS]
-    _table(
+    _core.table(
         "Prompt length, successful requests",
         ["model", *buckets],
         [[r.model, *(r[b] for b in buckets)] for r in rep.prompt_len],
         csv_out=csv_out,
     )
-    _table(
+    _core.table(
         "Shares, all requests",
         ["model", "requests", "streamed", "with tools", "cut off at max_tokens"],
         [[r.model, r.requests, r.streamed, r.with_tools, r.finish_length] for r in rep.shares],
         csv_out=csv_out,
     )
-    _table(
+    _core.table(
         "Failures by class",
         ["model", "error", "count"],
         [[r.model, r.error, r.count] for r in rep.failures],
         csv_out=csv_out,
     )
-    _table(
+    _core.table(
         "Messages per request",
         ["model", "median", "95th percentile"],
         [[r.model, r.p50, r.p95] for r in rep.conversation],

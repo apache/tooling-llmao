@@ -40,12 +40,14 @@ later script) and which is never the cluster's name.
 
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import hashlib
 import json
 import pathlib
 import re
 import sqlite3
+import sys
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -914,3 +916,52 @@ def span_of(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[dt.da
 
 def span_text(days: list[dt.date]) -> str:
     return f"{days[0]} to {days[-1]}" if len(days) > 1 else str(days[0])
+
+
+OPENING_SHOWN = 72
+
+
+def models_text(c: edict) -> str:
+    """A cluster's models with their request counts, most used first."""
+    return ", ".join(f"{m} {n}" for m, n in sorted(c.models.items(), key=lambda kv: -kv[1]))
+
+
+def opening_text(c: edict, shown: int = OPENING_SHOWN) -> str:
+    """A cluster's opening for a listing: where it came from, and its first characters."""
+    if not c.opening:
+        return "(no text)"
+    return f"{c.source}: {c.opening[:shown]}" + ("…" if len(c.opening) > shown else "")
+
+
+def table(title: str, columns: list[str], rows: list[list], *, csv_out: bool = False) -> None:
+    """One table, as aligned text with a title, or as CSV with the title as a comment.
+
+    Cells are values, not text: an int gets its thousands separator and
+    a numeric column is right-aligned; None prints as nothing.
+    """
+    cells = [
+        [
+            ("" if v is None else f"{v:,}" if isinstance(v, int) else f"{v:g}" if isinstance(v, float) else str(v))
+            for v in row
+        ]
+        for row in rows
+    ]
+    if csv_out:
+        out = csv.writer(sys.stdout)
+        sys.stdout.write(f"# {title}\n")
+        out.writerow(columns)
+        out.writerows(cells)
+        sys.stdout.write("\n")
+        return
+    widths = [max(len(c), *(len(r[i]) for r in cells)) if cells else len(c) for i, c in enumerate(columns)]
+    numeric = [all(isinstance(r[i], (int, float)) or r[i] is None for r in rows) for i in range(len(columns))]
+
+    def line(values):
+        return "  ".join(v.rjust(w) if n else v.ljust(w) for v, w, n in zip(values, widths, numeric, strict=True))
+
+    print(title)
+    print(line(columns))
+    print(line(["-" * w for w in widths]))
+    for row in cells:
+        print(line(row))
+    print()

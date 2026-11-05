@@ -48,47 +48,20 @@ if TYPE_CHECKING:
     import argparse
     import datetime as dt
 
-OPENING_SHOWN = 72
-
 
 def _list(clusters: list, days: list[dt.date]) -> None:
-    span = f"{days[0]} to {days[-1]}" if len(days) > 1 else str(days[0])
     total = sum(c.requests for c in clusters)
-    print(f"{fmt.plural(len(clusters), 'cluster')}, {fmt.plural(total, 'request')} over {span}\n")
-    columns = [
-        "fingerprint", "project", "who", "tool", "requests", "days", "prompt/req", "compl/req", "models", "opening",
-    ]  # fmt: skip
+    print(f"{fmt.plural(len(clusters), 'cluster')}, {fmt.plural(total, 'request')} over {_core.span_text(days)}\n")
     rows = []
     for c in clusters:
         ok = max(1, c.requests - c.failures)
-        models = ", ".join(f"{m} {n}" for m, n in sorted(c.models.items(), key=lambda kv: -kv[1]))
-        start = c.opening[:OPENING_SHOWN] + ("…" if len(c.opening) > OPENING_SHOWN else "")
-        rows.append(
-            [
-                c.fingerprint,
-                c.project,
-                c.who,
-                c.tool,
-                f"{c.requests:,}",
-                str(c.days),
-                f"{c.prompt_tokens // ok:,}",
-                f"{c.completion_tokens // ok:,}",
-                models,
-                f"{c.source}: {start}" if c.opening else "(no text)",
-            ]
-        )
-    widths = [max(len(col), *(len(r[i]) for r in rows)) if rows else len(col) for i, col in enumerate(columns)]
-    numeric = {4, 5, 6, 7}
-
-    def line(values):
-        return "  ".join(
-            v.rjust(w) if i in numeric else v.ljust(w) for i, (v, w) in enumerate(zip(values, widths, strict=True))
-        )
-
-    print(line(columns))
-    print(line(["-" * w for w in widths]))
-    for r in rows:
-        print(line(r))
+        figures = [c.requests, c.days, c.prompt_tokens // ok, c.completion_tokens // ok]
+        rows.append([c.fingerprint, c.project, c.who, c.tool, *figures, _core.models_text(c), _core.opening_text(c)])
+    _core.table(
+        "Clusters",
+        ["fingerprint", "project", "who", "tool", "requests", "days", "prompt/req", "compl/req", "models", "opening"],
+        rows,
+    )
 
 
 def _show(store: _core.Store, fp: str) -> int:
