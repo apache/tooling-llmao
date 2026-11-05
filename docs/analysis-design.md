@@ -102,8 +102,8 @@ flowchart LR
 | The shared module: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the store | `analysis/_core.py` | built |
 | The reports that need no content: by project, user, model, tool; prompt lengths; shares; failures; messages per request | `analysis/prompt-report` | built; moved out of `bin/llmao-prompt-log` |
 | The clusters: scan, store, list, show one | `analysis/prompt-clusters` | built |
-| The judge: the questions, the call, the verdicts, the findings | `analysis/prompt-judge`, `analysis/judge-prompt.md` | next |
-| The settings | `config.yaml`: `analysis_dir`, `analysis_retention_days`, `analysis_model`, `analysis_key` | the first two built, optional with defaults; required once p6 renders them |
+| The judge: the questions, the call, the verdicts, the findings | `analysis/prompt-judge`, `analysis/judge-prompt.md` | built; a dry run by default, `--judge` sends; no call made until the key exists |
+| The settings | `config.yaml`: `analysis_dir`, `analysis_retention_days`, `analysis_gateway`, `analysis_model`, `analysis_key` | built, optional with defaults except the key; required once p6 renders them |
 | The judge's key | a service key named `llmao-analysis` under the `rai` project | the user creates it |
 | The project page's panels: tools by model, refusals, latency, prompt lengths, a daily trend, from each project's share of the demand values | `pages.py`, `templates/project.ezt`, `llmao/planning.py` | planned; the data has been in the demand values since fold version 3 |
 | A note to a project: written by an admin, dated, shown on the project page until a PMC member acknowledges it | the notices mechanism, a prefix of its own | planned |
@@ -240,12 +240,18 @@ and a sentence of reasoning, as JSON.
   returns. A run that stops at 200 of 1,000 keeps 200 and resumes at
   201. The judge skips every cluster whose verdict is not stale, so the
   normal daily run judges only the clusters the day brought.
-- **Through the gateway,** with a service key named `llmao-analysis`
-  under the `rai` project, so its calls are attributed and show in the
-  demand values like anyone's. The script excludes that key's own
-  clusters from the analysis. Its calls also land in the prompt log,
-  carrying other projects' exemplars; that is the same content under the
-  same access, and accepted.
+- **Through the front door,** `https://llm.apache.org` by default
+  (`analysis_gateway`), not the proxy's local address: the judge is a
+  client like any other, so it runs the same from a developer's machine
+  against a copy of the store as from the host, and its calls are
+  attributed, logged and counted like anyone's. The key is a service key
+  named `llmao-analysis` under the `rai` project. The scan never
+  clusters that key's own requests. Its calls land in the prompt log
+  carrying other projects' exemplars; that is the same content under
+  the same access, and accepted.
+- **A dry run by default.** Without `--judge` the script prints the
+  first request it would send and how many clusters lack a verdict, and
+  sends nothing. The synchronous httpx client, one request at a time.
 - **Yielding to users:** one request in flight, run in the quiet hours
   after the 01:00 UTC rollup. A request-level priority on our boxes,
   which would let the judge's calls queue behind everyone's, is
@@ -261,6 +267,7 @@ Four flat keys in `config.yaml` beside `prompt_log_dir`:
 |---|---|---|
 | `analysis_dir` | where the store lives | `./analysis-data` |
 | `analysis_retention_days` | how long every row of the store is kept | `prompt_log_retention_days`, then 90 |
+| `analysis_gateway` | the gateway the judge calls, through the front door | `https://llm.apache.org` |
 | `analysis_model` | the judge's model | `qwen3-8b` |
 | `analysis_key` | the judge's gateway key | none: the judge stops before its first call |
 
@@ -336,8 +343,8 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
 |---|---|---|
 | A1 | The split: `analysis/` with `_core.py`, `prompt-report`, `tests/`; `bin/llmao-prompt-log` down to `rollup` | done 2026-11-04 (c8c4f46) |
 | A2 | `prompt-clusters`: fingerprint, cluster, exemplar, the store, prune, rebuild, list, show, JSON | done 2026-11-04 (43ed1de); the full day of 2026-11-04 ran in 12 s: 4,847 records, 66 clusters |
-| A3 | The judge: `judge-prompt.md`, `prompt-judge`, the verdicts table, the stale check, one verdict per transaction, `analysis_model` and `analysis_key` | next; the judge prompt is shown before any call is made |
-| A4 | Findings: the clusters that need a decision, with figures and verdicts, text or JSON | after A3 |
+| A3 | The judge: `judge-prompt.md`, `prompt-judge`, the verdicts table, the stale check, one verdict per transaction, the settings | built 2026-11-04; dry run verified against the day's 66 clusters, 64 with an exemplar; the first real run waits on the `llmao-analysis` key |
+| A4 | Findings: the clusters of the span with their verdicts, text or JSON, and the reasons | built with A3 as `prompt-judge --findings`; what counts as a finding worth acting on is refined once verdicts exist |
 | A5 | p6: the four keys rendered, the directory created; then the keys become required | a PR beside A3, not waited on |
 | A6 | The project page's panels from each project's share of the demand values; the sharper form of the "Usage Analysis page" the logging design parked | planned, in `llmao/` |
 | A7 | A note to a project, written by an admin, shown until acknowledged | planned, in `llmao/` |

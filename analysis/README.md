@@ -11,6 +11,8 @@ out of the `llmao` package until it settles: nothing in `llmao/` or
 |---|---|---|
 | `prompt-report` | requests and prompt tokens by project, user, model and tool; prompt length per model; the share that stream, carry tools or end at max_tokens; failures by class; messages per request. No prompt content | the day files |
 | `prompt-clusters` | who is sending what kind of request: the records of a span clustered by fingerprint, with figures per cluster and one exemplar each, kept in the store so a day is read once. `--show <fingerprint>` prints a cluster's exemplar in full. No model involved | the day files, the store |
+| `prompt-judge` | a model's verdict per cluster, from `judge-prompt.md`: Foundation work or not, the lowest tier that would do, the activity. A dry run by default: the first request and the count, nothing sent. `--judge` sends them, one in flight through the front door with the `llmao-analysis` key, each verdict written as it returns; a cluster is judged again only when the judge prompt, the exemplar or the model changed. `--findings` is the listing alone | the store, the gateway |
+| `judge-prompt.md` | the judge's fixed questions and answer shape; its hash is part of what makes a verdict stale, so rewording it re-judges every cluster | |
 | `_core.py` | what the scripts share: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the SQLite store | |
 | `tests/` | the scripts' tests, in the suite with `uv run pytest` | |
 
@@ -34,12 +36,13 @@ out of the `llmao` package until it settles: nothing in `llmao/` or
 
 ## The store
 
-`analysis_dir/prompts.db`, SQLite, three tables: `days` (which days are
-in), `clusters` (what does not change per day, plus the exemplar), and
-`cluster_days` (the figures per cluster per day). Every row older than
-`analysis_retention_days` is pruned at each run; `--rebuild` forgets the
-days and clusters and reads the span again, and will never touch a
-judge's verdict.
+`analysis_dir/prompts.db`, SQLite, four tables: `days` (which days are
+in), `clusters` (what does not change per day, plus the exemplar),
+`cluster_days` (the figures per cluster per day), and `verdicts` (one
+per cluster, judge prompt and model, with the exemplar hash it was given).
+Every row older than `analysis_retention_days` is pruned at each run, a
+pruned cluster's verdicts with it; `--rebuild` forgets the days and
+clusters and reads the span again, and never touches a verdict.
 
 ## Running on the gateway host
 
@@ -54,7 +57,16 @@ sudo ./analysis/prompt-report --days 30
 sudo ./analysis/prompt-report --from 2026-11-01 --to 2026-11-03 --csv
 sudo ./analysis/prompt-clusters --days 30
 sudo ./analysis/prompt-clusters --show 1f2e3d4c5b6a7980
+sudo ./analysis/prompt-judge --days 30                # dry run: the first request, the count
+sudo ./analysis/prompt-judge --days 30 --judge --limit 20
+sudo ./analysis/prompt-judge --findings
 ```
+
+The judge needs `analysis_key` in `config.yaml`, a service key named
+`llmao-analysis` under the `rai` project, and calls `analysis_gateway`
+(the front door, `https://llm.apache.org`) with `analysis_model`
+(`qwen3-8b`), so it runs the same from a developer's machine against a
+copy of the store as from the host.
 
 The log directory is `--log-dir`, else `prompt_log_dir` from `config.yaml`
 in the current directory; without either the script stops. A script fails

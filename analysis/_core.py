@@ -45,6 +45,7 @@ import re
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, read_day, tool_family
@@ -57,6 +58,9 @@ if TYPE_CHECKING:
 CONFIG = pathlib.Path("config.yaml")
 DEFAULT_ANALYSIS_DIR = pathlib.Path("analysis-data")
 DEFAULT_RETENTION_DAYS = 90
+DEFAULT_MODEL = "qwen3-8b"
+DEFAULT_GATEWAY = "https://llm.apache.org"
+ANALYSIS_KEY_ALIAS = "llmao-analysis"  # the judge's service key; its own requests are never clustered
 
 
 def _settings(config: pathlib.Path) -> dict:
@@ -104,6 +108,27 @@ def retention_days(config: pathlib.Path = CONFIG) -> int:
     """
     s = _settings(config)
     return int(s.get("analysis_retention_days") or s.get("prompt_log_retention_days") or DEFAULT_RETENTION_DAYS)
+
+
+def judge_settings(config: pathlib.Path = CONFIG) -> edict:
+    """What the judge needs to call the gateway: its URL, the model, the key.
+
+    The front door, ``analysis_gateway``, not the proxy's local address:
+    the judge is a client like any other, so it runs the same from a
+    developer's machine as from the host, and its requests are logged and
+    counted like anyone's. The model defaults until p6 renders
+    ``analysis_model``. The key has no default: without ``analysis_key``
+    the judge stops before its first call.
+    """
+    s = _settings(config)
+    key = s.get("analysis_key")
+    if not key:
+        raise SystemExit(f"{config}: analysis_key is required (a service key named {ANALYSIS_KEY_ALIAS})")
+    return edict(
+        gateway=str(s.get("analysis_gateway") or DEFAULT_GATEWAY).rstrip("/"),
+        model=str(s.get("analysis_model") or DEFAULT_MODEL),
+        key=str(key),
+    )
 
 
 def span(*, days: int = 7, start: dt.date | None = None, end: dt.date | None = None) -> list[dt.date]:
@@ -212,15 +237,24 @@ def head(text: str) -> str:
     return normalised(text)[:HEAD_CHARS]
 
 
+MASTER_KEY_HASH = "litellm_proxy_master_key"  # LiteLLM's placeholder: no team, user default_user_id
+
+
 def who(key: dict) -> str:
-    """The person behind a key, else the key's alias, else the start of its hash: never empty."""
+    """The person behind a key, else the key's alias, else the start of its hash: never empty.
+
+    The master key is named as such: LiteLLM files it under a placeholder
+    user, and "default_user_id" in a listing reads as a person.
+    """
+    if key.get("hash") == MASTER_KEY_HASH:
+        return "(master key)"
     return key.get("user") or key.get("alias") or (key.get("hash") or "?")[:12]
 
 
 def fingerprint(record: dict) -> edict | None:
     """The record's fingerprint with the parts it is made of; None when the record is not demand."""
     key = record.get("key") or {}
-    if not counts_as_demand(record.get("model"), key.get("project")):
+    if not counts_as_demand(record.get("model"), key.get("project")) or key.get("alias") == ANALYSIS_KEY_ALIAS:
         return None
     project = key.get("project") or NO_PROJECT
     tool = tool_family(record.get("user_agent"))
@@ -359,6 +393,15 @@ CREATE TABLE IF NOT EXISTS cluster_days (
     models_json TEXT NOT NULL,
     PRIMARY KEY (fingerprint, day)
 );
+CREATE TABLE IF NOT EXISTS verdicts (
+    fingerprint TEXT NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    exemplar_hash TEXT NOT NULL,
+    judged_at TEXT NOT NULL,
+    verdict_json TEXT NOT NULL,
+    PRIMARY KEY (fingerprint, prompt_hash, model)
+);
 """
 
 
@@ -399,6 +442,7 @@ class Store:
                 "(SELECT SUM(requests) FROM cluster_days d WHERE d.fingerprint = clusters.fingerprint), 0)"
             )
             gone = self.db.execute("DELETE FROM clusters WHERE records = 0").rowcount
+            self.db.execute("DELETE FROM verdicts WHERE fingerprint NOT IN (SELECT fingerprint FROM clusters)")
         return gone
 
     def scan_day(self, log_dir: pathlib.Path, day: dt.date) -> int:
@@ -498,3 +542,159 @@ class Store:
             c.models = models
             c.exemplar = json.loads(c.exemplar_json) if c.exemplar_json else []
             yield c
+
+    # ---- verdicts -------------------------------------------------------
+
+    def stale(self, clusters: Iterable[edict], prompt_hash: str, model: str) -> list[edict]:
+        """The clusters with an exemplar and no verdict from this judge prompt, this model and this exemplar."""
+        out = []
+        for c in clusters:
+            if not c.exemplar_hash:
+                continue
+            row = self.db.execute(
+                "SELECT exemplar_hash FROM verdicts WHERE fingerprint = ? AND prompt_hash = ? AND model = ?",
+                (c.fingerprint, prompt_hash, model),
+            ).fetchone()
+            if row is None or row["exemplar_hash"] != c.exemplar_hash:
+                out.append(c)
+        return out
+
+    def write_verdict(self, c: edict, prompt_hash: str, model: str, verdict: dict) -> None:
+        """One verdict, one transaction: a run that stops keeps every verdict before the stop."""
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO verdicts (fingerprint, prompt_hash, model, exemplar_hash, judged_at, "
+                "verdict_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    c.fingerprint,
+                    prompt_hash,
+                    model,
+                    c.exemplar_hash,
+                    dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+                    json.dumps(verdict),
+                ),
+            )
+
+    def with_verdicts(self, clusters: Iterable[edict], prompt_hash: str, model: str) -> Iterator[edict]:
+        """Each cluster with its current verdict under ``verdict`` (None when there is none or it is stale)."""
+        for c in clusters:
+            row = self.db.execute(
+                "SELECT exemplar_hash, judged_at, verdict_json FROM verdicts "
+                "WHERE fingerprint = ? AND prompt_hash = ? AND model = ?",
+                (c.fingerprint, prompt_hash, model),
+            ).fetchone()
+            c.verdict = None
+            c.judged_at = None
+            if row is not None and row["exemplar_hash"] == c.exemplar_hash:
+                c.verdict = edict(json.loads(row["verdict_json"]))
+                c.judged_at = row["judged_at"]
+            yield c
+
+
+# ---- the judge ----------------------------------------------------------
+#
+# One call per cluster: the judge prompt as the system message, the
+# exemplar and the cluster's figures as the user message, a JSON object
+# back. The judge prompt is a file, so rewording it is not a code change;
+# its hash, the exemplar's hash and the model name are what make a stored
+# verdict stale. The model runs on our own boxes: the exemplars are other
+# projects' prompts and do not leave them.
+
+JUDGE_PROMPT = pathlib.Path(__file__).resolve().parent / "judge-prompt.md"
+ASF_WORK = ("yes", "no", "unclear")
+TIERS = ("low", "medium", "high")
+ACTIVITIES = (
+    "security-review",
+    "code-review",
+    "feature-or-bugfix",
+    "model-evaluation",
+    "classification-or-extraction",
+    "writing-or-documentation",
+    "conversation",
+    "other",
+)
+
+
+def judge_prompt(path: pathlib.Path = JUDGE_PROMPT) -> edict:
+    text = path.read_text(encoding="utf-8")
+    return edict(text=text, hash=digest(text))
+
+
+def exemplar_message(c: edict) -> str:
+    """The user message for one cluster: its figures, its head, its messages."""
+    ok = max(1, c.requests - c.failures)
+    models = ", ".join(sorted(c.models))
+    lines = [
+        f"Project: {c.project}",
+        f"Tool: {c.tool}",
+        f"Requests: {c.requests:,} over {c.days} day(s); mean prompt {c.prompt_tokens // ok:,} tokens; "
+        f"mean completion {c.completion_tokens // ok:,} tokens; models used: {models}",
+        "",
+        f"INSTRUCTIONS (first {HEAD_CHARS} characters):",
+        c.exemplar_head or "(none)",
+        "",
+        f"USER MESSAGES (up to {EXEMPLAR_MESSAGES}, each cut to {MESSAGE_CHARS} characters):",
+    ]
+    lines.extend(f"[{i}] {m}" for i, m in enumerate(c.exemplar, 1))
+    return "\n".join(lines)
+
+
+def judge_request(c: edict, prompt: edict, model: str) -> dict:
+    """The chat completion body for one cluster. Reasoning off: the answer is a short JSON object."""
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": prompt.text},
+            {"role": "user", "content": exemplar_message(c)},
+        ],
+        "temperature": 0.0,
+        "max_tokens": 600,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+
+class JudgeError(Exception):
+    """The gateway did not answer, or the answer was not a verdict."""
+
+
+def ask(settings: edict, body: dict, timeout: float = 120.0) -> str:
+    """One chat completion through the gateway, synchronously; the assistant's text, or JudgeError.
+
+    One request in flight is the whole point, so the synchronous httpx
+    client, not the async one the portal's transport uses.
+    """
+    try:
+        r = httpx.post(
+            settings.gateway + "/v1/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {settings.key}"},
+            timeout=timeout,
+        )
+    except httpx.HTTPError as e:
+        raise JudgeError(f"{type(e).__name__}: {e}"[:200]) from None
+    if r.status_code != 200:
+        raise JudgeError(f"HTTP {r.status_code} {r.text[:200]}".replace("\n", " "))
+    try:
+        return r.json()["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise JudgeError(f"no message in the answer: {r.text[:200]}") from None
+
+
+def parse_verdict(text: str) -> edict:
+    """The JSON object in the judge's answer, checked against the three answer sets.
+
+    Lenient about what surrounds the object, since a small model will
+    sometimes add a fence or a sentence despite being told not to; strict
+    about the values, since a verdict outside the sets is not a verdict.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end < start:
+        raise JudgeError(f"no JSON object in the answer: {text[:200]!r}")
+    try:
+        v = json.loads(text[start : end + 1])
+    except ValueError:
+        raise JudgeError(f"the answer is not JSON: {text[:200]!r}") from None
+    for key, allowed in (("asf_work", ASF_WORK), ("tier", TIERS), ("activity", ACTIVITIES)):
+        if v.get(key) not in allowed:
+            raise JudgeError(f"{key} is {v.get(key)!r}, not one of {allowed}")
+    return edict(asf_work=v["asf_work"], tier=v["tier"], activity=v["activity"], reason=str(v.get("reason") or ""))
