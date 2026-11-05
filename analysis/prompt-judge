@@ -126,7 +126,7 @@ def _findings(clusters: list, days: list[dt.date], by_tier: dict, *, compare: bo
         rows.append([c.fingerprint, c.project, c.who, c.tool, f"{c.requests:,}", judges_n, *answers, _models(c)])
         rows[-1].append(_opening(c))
     _table(
-        "Verdicts",
+        "Verdicts: the judges' consensus",
         ["fingerprint", "project", "who", "tool", "requests", "judges", "asf", "tier", "activity", "models", "opening"],
         rows,
         numeric={4, 5},
@@ -137,13 +137,13 @@ def _findings(clusters: list, days: list[dt.date], by_tier: dict, *, compare: bo
     report = [r for r in _core.tier_report(judged, by_tier) if r.above or r.below or r.unranked]
     if report:
         _table(
-            "Tier: what was used against what would do",
+            "Tier: what was used against what the judges say would do",
             [
                 "fingerprint",
                 "project",
                 "who",
                 "requests",
-                "tier",
+                "consensus",
                 "recommended",
                 "used",
                 "heavier",
