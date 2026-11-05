@@ -47,8 +47,11 @@ clusters and reads the span again, and never touches a verdict.
 ## Running on the gateway host
 
 The log directory is root only, and each script's shebang runs it through
-`uv`, which finds the project from the current directory. So from the
-checkout, as root:
+`uv`, which finds the project from the current directory, so run them
+from anywhere inside the checkout. The scripts find `config.yaml` beside
+their own directory, the checkout root, and take its relative paths from
+there, so `./analysis/prompt-judge` and `cd analysis && ./prompt-judge`
+read the same file and the same store. As root:
 
 ```bash
 cd /opt/llmao
@@ -68,8 +71,8 @@ The judge needs `analysis_key` in `config.yaml`, a service key named
 (`qwen3-8b`), so it runs the same from a developer's machine against a
 copy of the store as from the host.
 
-The log directory is `--log-dir`, else `prompt_log_dir` from `config.yaml`
-in the current directory; without either the script stops. A script fails
+The log directory is `--log-dir`, else `prompt_log_dir` from `config.yaml`;
+without either the script stops. A script fails
 harder than the portal on purpose: a startup error there takes a service
 down, here it makes the admin fix their invocation. A script never opens a
 connection to LiteLLM and never writes in the log directory.

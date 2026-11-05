@@ -37,6 +37,8 @@ def test_a_script_finds_the_log_directory_in_config_or_stops(tmp_path):
         _core.log_dir(cfg)
     cfg.write_text("prompt_log_dir: /x1/llmao/prompt-log\n")
     assert _core.log_dir(cfg).as_posix() == "/x1/llmao/prompt-log"
+    cfg.write_text("prompt_log_dir: ./prompt-log\n")
+    assert _core.log_dir(cfg) == tmp_path / "prompt-log"  # relative to the config, not the cwd
     cfg.write_text("other: 1\n")
     with pytest.raises(SystemExit, match="prompt_log_dir is required"):
         _core.log_dir(cfg)

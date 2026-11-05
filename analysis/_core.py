@@ -23,9 +23,12 @@ nothing in llmao/ or bin/ imports from here. The scripts import
 llmao.prompt_log for the records themselves and this module for what they
 need around them.
 
-config.yaml is read here, from the current directory, because a script runs
-at a shell on the gateway host with no portal around it. The portal reads
-its config once in main.py and nothing in llmao/ opens the file.
+config.yaml is read here, from the checkout root beside this directory,
+because a script runs at a shell on the gateway host with no portal around
+it. The portal reads its config once in main.py and nothing in llmao/
+opens the file. Relative paths in it are relative to that root, so
+``./analysis/prompt-judge`` and ``cd analysis && ./prompt-judge`` read the
+same file and the same store.
 
 Three words, kept apart. A FINGERPRINT is a hash key over a record: the
 project, the person, the tool family and the opening of the system prompt.
@@ -55,8 +58,9 @@ if TYPE_CHECKING:
 
 # ---- settings -----------------------------------------------------------
 
-CONFIG = pathlib.Path("config.yaml")
-DEFAULT_ANALYSIS_DIR = pathlib.Path("analysis-data")
+ROOT = pathlib.Path(__file__).resolve().parent.parent  # the checkout, where config.yaml lives
+CONFIG = ROOT / "config.yaml"
+DEFAULT_ANALYSIS_DIR = ROOT / "analysis-data"
 DEFAULT_RETENTION_DAYS = 90
 DEFAULT_MODEL = "qwen3-8b"
 DEFAULT_GATEWAY = "https://llm.apache.org"
@@ -65,14 +69,19 @@ ANALYSIS_KEY_ALIAS = "llmao-analysis"  # the judge's service key; its own reques
 
 def _settings(config: pathlib.Path) -> dict:
     if not config.exists():
-        raise SystemExit(f"{config}: not found; run from the checkout, or give the path on the command line")
+        raise SystemExit(f"{config}: not found; give the path on the command line")
     import yaml
 
     return yaml.safe_load(config.read_text()) or {}
 
 
+def _path(raw: Any, config: pathlib.Path) -> pathlib.Path:
+    """A path from the config, relative ones taken from the config's own directory."""
+    return config.resolve().parent / str(raw)
+
+
 def configured(key: str, config: pathlib.Path = CONFIG) -> pathlib.Path:
-    """A required path from config.yaml in the current directory.
+    """A required path from config.yaml.
 
     A missing file or key stops the script with a message. A script can
     fail harder than the portal: a startup error there takes a service
@@ -81,7 +90,7 @@ def configured(key: str, config: pathlib.Path = CONFIG) -> pathlib.Path:
     raw = _settings(config).get(key)
     if not raw:
         raise SystemExit(f"{config}: {key} is required")
-    return pathlib.Path(str(raw))
+    return _path(raw, config)
 
 
 def log_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
@@ -96,7 +105,7 @@ def log_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
 def analysis_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
     """analysis_dir: where the scripts keep their store; ./analysis-data until p6 renders it."""
     raw = _settings(config).get("analysis_dir")
-    return pathlib.Path(str(raw)) if raw else DEFAULT_ANALYSIS_DIR
+    return _path(raw, config) if raw else DEFAULT_ANALYSIS_DIR
 
 
 def retention_days(config: pathlib.Path = CONFIG) -> int:
