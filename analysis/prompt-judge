@@ -16,32 +16,36 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""A model's verdict on each cluster: Foundation work or not, the tier that would do, the activity.
+"""The judges' verdict on each cluster: Foundation work or not, the tier that would do, the activity.
 
-    sudo ./analysis/prompt-judge                  # dry run: the first request it would send, the count
-    sudo ./analysis/prompt-judge --judge          # send them, one at a time, then list
-    sudo ./analysis/prompt-judge --judge --days 30 --limit 20   # at most 20 calls this run
+    sudo ./analysis/prompt-judge                  # dry run: the first request it would send, the counts
+    sudo ./analysis/prompt-judge --judge          # send them, one at a time, judge after judge, then list
+    sudo ./analysis/prompt-judge --judge --days 30 --limit 20   # at most 20 calls per judge this run
+    sudo ./analysis/prompt-judge --judge --model qwen3-8b       # one judge, instead of the configured list
     sudo ./analysis/prompt-judge --findings       # the listing only
+    sudo ./analysis/prompt-judge --findings --compare   # each judge's answers, where they differ
+    sudo ./analysis/prompt-judge --findings --reasons   # each judge's reason, cluster by cluster
     sudo ./analysis/prompt-judge --findings --json
-    sudo ./analysis/prompt-judge --judge --model qwen3.8-27b-int4      # a second judge, its verdicts kept beside
-    sudo ./analysis/prompt-judge --findings --compare qwen3.8-27b-int4 # the two side by side, where they differ
 
-Reads the clusters prompt-clusters stored for the span. Without --judge
-it is a dry run: it prints the request it would send first and how many
-clusters lack a verdict, and sends nothing. With --judge it sends the
-gateway one request per cluster that has no verdict yet from this judge
-prompt (analysis/judge-prompt.md), this model and this exemplar. Each
-verdict is written as it returns, so a run that stops keeps what it
-judged. One request in flight, through the front door, with the service
-key in config.yaml analysis_key; the model is analysis_model, or --model.
-Clusters from the master key are the operators' smoke tests and are
-never judged.
+Several judges on each cluster is the normal operation: config.yaml
+analysis_models lists them, and --model names one or more instead. Reads
+the clusters prompt-clusters stored for the span. Without --judge it is
+a dry run: it prints the request it would send first and how many
+clusters each judge still has to answer, and sends nothing. With --judge
+it sends the gateway one request per cluster per judge that has no
+verdict yet from this judge prompt (analysis/judge-prompt.md), this
+model and this exemplar. Each verdict is written as it returns, so a run
+that stops keeps what it judged. One request in flight, through the
+front door, with the service key in config.yaml analysis_key. Clusters
+from the master key are the operators' smoke tests and are never judged.
 
-The listing is every cluster of the span with its verdict, then the tier
-report: for each judged cluster, the model the tier recommends against
-the models it used, and how many requests went to a heavier model than
-the judge thinks the work needs (config.yaml analysis_tiers says which
-model serves which tier). A cluster the judge called non-Foundation
+The listing is every cluster of the span with what its judges together
+say (the store's consensus view: Foundation work leans towards "no",
+the tier towards "high", the activity is the majority), a mark where
+they differ, then the tier report: the judged tier against the models
+the cluster used, and how many requests went to a heavier model than
+the judges think the work needs (config.yaml analysis_tiers says which
+model serves which tier). A cluster the judges called non-Foundation
 work, or one at the top of the tier report, is what an admin reads it
 for.
 """
@@ -58,7 +62,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import _core
-from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import fmt
 
@@ -93,30 +96,43 @@ def _said(v) -> str:
     return f"{v.asf_work} {v.tier} {v.activity}" if v else "-"
 
 
-def _findings(clusters: list, days: list[dt.date], model: str, compare: str | None, by_tier: dict) -> None:
+def _findings(clusters: list, days: list[dt.date], by_tier: dict, *, compare: bool, reasons: bool) -> None:
     span = f"{days[0]} to {days[-1]}" if len(days) > 1 else str(days[0])
-    # A master-key cluster is never judged; one judged before that rule
-    # existed is shown as the smoke test it is, its verdict ignored.
     smoke = [c for c in clusters if c.who == _core.MASTER_KEY]
-    for c in smoke:
-        c.verdict = None
-    judged = [c for c in clusters if c.verdict]
-    print(f"{fmt.plural(len(clusters), 'cluster')} over {span}, {len(judged)} with a verdict from {model}\n")
+    judged = [c for c in clusters if c.verdict and c.who != _core.MASTER_KEY]
+    judges = sorted({v.model for c in judged for v in c.verdicts})
+    print(
+        f"{fmt.plural(len(clusters), 'cluster')} over {span}, {len(judged)} with a verdict; "
+        f"judges: {', '.join(judges) or 'none'}\n"
+    )
 
     rows = []
+    split = False
     for c in clusters:
-        v = c.verdict
-        activity = v.activity if v else ("-" if c.exemplar_hash else "(no exemplar)")
+        v = c.verdict if c.who != _core.MASTER_KEY else None
         if c.who == _core.MASTER_KEY:
-            activity = "(smoke) [1]"
-        figures = [c.fingerprint, c.project, c.who, c.tool, f"{c.requests:,}"]
-        rows.append([*figures, v.asf_work if v else "-", v.tier if v else "-", activity, _models(c), _opening(c)])
+            answers = ["-", "-", "(smoke) [1]"]
+        elif v:
+            # A mark where the judges did not all say the same.
+            answers = [
+                v.asf_work + ("*" if v.asf_answers > 1 else ""),
+                v.tier + ("*" if v.tier_answers > 1 else ""),
+                v.activity + ("*" if v.activity_answers > 1 else ""),
+            ]
+            split = split or v.asf_answers > 1 or v.tier_answers > 1 or v.activity_answers > 1
+        else:
+            answers = ["-", "-", "-" if c.exemplar_hash else "(no exemplar)"]
+        judges_n = str(v.judges) if v else ""
+        rows.append([c.fingerprint, c.project, c.who, c.tool, f"{c.requests:,}", judges_n, *answers, _models(c)])
+        rows[-1].append(_opening(c))
     _table(
         "Verdicts",
-        ["fingerprint", "project", "who", "tool", "requests", "asf", "tier", "activity", "models", "opening"],
+        ["fingerprint", "project", "who", "tool", "requests", "judges", "asf", "tier", "activity", "models", "opening"],
         rows,
-        numeric={4},
+        numeric={4, 5},
     )
+    if split:
+        print("* the judges did not all say the same; --compare shows each one's answer.\n")
 
     report = [r for r in _core.tier_report(judged, by_tier) if r.above or r.below or r.unranked]
     if report:
@@ -156,20 +172,27 @@ def _findings(clusters: list, days: list[dt.date], model: str, compare: str | No
             "lighter: below it; unranked: a model the tier map does not place (config.yaml analysis_tiers).\n"
         )
 
-    if compare:
-        differ = [c for c in clusters if (c.verdict or c.other) and _said(c.verdict) != _said(c.other)]
+    if compare and judges:
+        differ = [c for c in judged if len({_said(v) for v in c.verdicts}) > 1]
         _table(
-            f"Where {model} and {compare} differ ({len(differ)} of {len(judged)} judged)",
-            ["fingerprint", "project", "who", "requests", model, compare],
-            [[c.fingerprint, c.project, c.who, f"{c.requests:,}", _said(c.verdict), _said(c.other)] for c in differ],
+            f"Where the judges differ ({len(differ)} of {len(judged)} judged)",
+            ["fingerprint", "project", "who", "requests", *judges],
+            [
+                [c.fingerprint, c.project, c.who, f"{c.requests:,}"]
+                + [_said(next((v for v in c.verdicts if v.model == m), None)) for m in judges]
+                for c in differ
+            ],
             numeric={3},
         )
 
-    for c in judged:
-        if c.verdict.reason:
-            print(f"{c.fingerprint}  {c.verdict.reason}")
+    if reasons:
+        for c in judged:
+            print(c.fingerprint)
+            for v in c.verdicts:
+                print(f"  {v.model}: {v.reason}")
+        print()
     if smoke:
-        print(f"\n[1] {fmt.plural(len(smoke), 'cluster')} from the master key: the operators' smoke tests, not judged.")
+        print(f"[1] {fmt.plural(len(smoke), 'cluster')} from the master key: the operators' smoke tests, not judged.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,11 +202,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
     ap.add_argument("--analysis-dir", type=pathlib.Path, default=None, help="where the store lives")
     ap.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")
-    ap.add_argument("--limit", type=int, default=None, help="at most this many calls this run")
-    ap.add_argument("--model", default=None, help="the judge's model, instead of analysis_model")
-    ap.add_argument(
-        "--compare", metavar="MODEL", default=None, help="also show another model's verdicts, and where they differ"
-    )
+    ap.add_argument("--limit", type=int, default=None, help="at most this many calls per judge this run")
+    ap.add_argument("--model", action="append", default=None, help="a judge, instead of analysis_models; repeatable")
+    ap.add_argument("--compare", action="store_true", help="in the listing, each judge's answers where they differ")
+    ap.add_argument("--reasons", action="store_true", help="in the listing, each judge's reason")
     ap.add_argument("--findings", action="store_true", help="the listing only")
     ap.add_argument("--json", action="store_true", help="the clusters with their verdicts as JSON")
     args = ap.parse_args(argv)
@@ -194,44 +216,39 @@ def main(argv: list[str] | None = None) -> int:
 
     prompt = _core.judge_prompt()
     settings = _core.judge_settings() if args.judge else None
-    model = args.model or (settings.model if settings else _core.DEFAULT_MODEL)
-    if settings:
-        settings.model = model
+    judges = args.model or (settings.models if settings else _core.judge_models())
     by_tier = _core.tiers()
-    mentioned = {model, *(m for ms in by_tier.values() for m in ms)}
-    if args.compare:
-        mentioned.add(args.compare)
-    _core.require_models(mentioned)
+    _core.require_models({*judges, *(m for ms in by_tier.values() for m in ms)})
+    _core.require_private(judges)
     store = _core.Store(args.analysis_dir or _core.analysis_dir())
     try:
         clusters = list(store.clusters_over(days))
         if not args.findings:
-            todo = [c for c in store.stale(clusters, prompt.hash, model) if c.who != _core.MASTER_KEY]
-            if args.limit is not None:
-                todo = todo[: args.limit]
+            todo = {
+                model: [c for c in store.stale(clusters, prompt.hash, model) if c.who != _core.MASTER_KEY][: args.limit]
+                for model in judges
+            }
             if not args.judge:
-                if todo:
-                    print(json.dumps(_core.judge_request(todo[0], prompt, model), indent=1))
-                print(f"\n{fmt.plural(len(todo), 'cluster')} to judge; nothing sent without --judge", file=sys.stderr)
+                first = next((cs[0] for cs in todo.values() if cs), None)
+                if first:
+                    print(json.dumps(_core.judge_request(first, prompt, judges[0]), indent=1))
+                counts = ", ".join(f"{m} {len(cs)}" for m, cs in todo.items())
+                print(f"\nclusters to judge: {counts}; nothing sent without --judge", file=sys.stderr)
                 return 0
-            for i, c in enumerate(todo, 1):
-                try:
-                    verdict = _core.parse_verdict(_core.ask(settings, _core.judge_request(c, prompt, model)))
-                except _core.JudgeError as e:
-                    raise SystemExit(f"{c.fingerprint}: {e}") from None
-                store.write_verdict(c, prompt.hash, model, verdict)
-                said = f"{verdict.asf_work} {verdict.tier} {verdict.activity}"
-                print(f"{i}/{len(todo)} {c.fingerprint} {said}", file=sys.stderr)
-        clusters = list(store.with_verdicts(clusters, prompt.hash, model))
-        if args.compare:
-            others = store.with_verdicts([edict(c) for c in clusters], prompt.hash, args.compare)
-            for c, o in zip(clusters, others, strict=True):
-                c.other = o.verdict
+            for model, cs in todo.items():
+                for i, c in enumerate(cs, 1):
+                    try:
+                        verdict = _core.parse_verdict(_core.ask(settings, _core.judge_request(c, prompt, model)))
+                    except _core.JudgeError as e:
+                        raise SystemExit(f"{model} on {c.fingerprint}: {e}") from None
+                    store.write_verdict(c, prompt.hash, model, verdict)
+                    print(f"{model} {i}/{len(cs)} {c.fingerprint} {_said(verdict)}", file=sys.stderr)
+        clusters = list(store.with_consensus(clusters, prompt.hash))
         if args.json:
             json.dump(clusters, sys.stdout, indent=1)
             sys.stdout.write("\n")
         else:
-            _findings(clusters, days, model, args.compare, by_tier)
+            _findings(clusters, days, by_tier, compare=args.compare, reasons=args.reasons)
     finally:
         store.close()
     return 0

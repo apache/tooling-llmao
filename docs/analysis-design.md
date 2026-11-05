@@ -231,7 +231,25 @@ A rebuild is cheap, about 12 seconds for a day of 4,800 records; it is
 string work and SQLite. Judging is the slow part, about 2.5 seconds per
 cluster through the gateway with one request in flight, so verdicts are
 what the store protects: kept across rebuilds, re-judged only when the
-judge prompt, the exemplar or the model changed.
+judge prompt, the exemplar or the model changed. A change to the tables
+themselves has no migration while this is R&D: the store is deleted and
+rebuilt, and the judges run again. The views are recreated at every
+open.
+
+**What a day costs, in steady state.** The scan touches every record
+every day; the judges answer only for clusters without a verdict from
+this judge prompt, this model and this exemplar. A fingerprint is the
+project, the person, the tool and the opening of the instructions, and
+for a bot or an agent none of those change from Monday to Friday: the
+Spark bot's fifteen prompts are the same fifteen clusters every day with
+larger figures. A new cluster is a new person, project or tool, a
+reworded system prompt, a tool with no system prompt and a different
+first message each session, or a cluster that doubled and had its
+exemplar re-picked. So a day brings a handful of calls, often none, and
+a hundred calls in a day would itself be a finding. The full bill,
+clusters times judges, comes only after a judge prompt change, and at
+2.5 seconds a call 100 clusters and five judges is about twenty minutes
+in the quiet hours.
 
 ### The judge
 
@@ -286,11 +304,27 @@ judged non-Foundation work by all three judges.
 - **The master key is never judged.** Its clusters are the operators'
   smoke tests, which the judge cannot tell from a person's questions
   about the weather; the listing marks them and a footnote says why.
-- **Several judges side by side.** The model is part of a verdict's key,
-  so `--model` judges with a second model and keeps its verdicts beside
-  the first's, and `--compare` lists the two together with the clusters
-  where they differ. That is how the 8b's noise on the tier question is
-  measured against the int4 27b before either is trusted.
+- **Several judges is the normal operation.** `analysis_models` lists
+  them, each gives a verdict on every cluster, and the model is part of
+  a verdict's key, so the verdicts sit side by side. The store's
+  `consensus` view aggregates them: Foundation work leans towards "no",
+  one "no" among the judges is a "no" for an admin to look at; the tier
+  leans towards "high", the highest any judge gave; the activity is the
+  majority. The answers are stored as integers beside the judge's words
+  so the view is a `MIN`, a `MAX` and a count, and the listing shows
+  where the judges differed. On the first day's 23 clusters, four judges
+  agreed on Foundation work 23 of 23, on the activity 23 of 23 among the
+  three larger models, on the tier 16 to 21 of 23 pairwise; the 8b was
+  the one that strayed, and the int4 27b is the default judge.
+- **A judge runs only on our boxes.** A model that a paid provider in
+  `config.yaml` also serves is refused at startup, because the gateway
+  falls back to the provider when our boxes cannot answer and a judge's
+  request carries other projects' prompts. The mechanism that would let
+  a request say so itself is LiteLLM's tag routing, which the pinned
+  version has: tag the paid deployments `paid` when the portal adds them,
+  switch on tag filtering in `litellm.yaml`, and the judge sends `!paid`.
+  That is a change to the proxy and to p6, not yet made; until then the
+  guard is the script's.
 - **The tier report.** For each judged cluster, the judged tier against
   the models it used, with `analysis_tiers` saying which model serves
   which tier: the requests on a heavier model than the work needs are
@@ -312,7 +346,7 @@ Four flat keys in `config.yaml` beside `prompt_log_dir`:
 | `analysis_dir` | where the store lives | `./analysis-data` |
 | `analysis_retention_days` | how long every row of the store is kept | `prompt_log_retention_days`, then 90 |
 | `analysis_gateway` | the gateway the judge calls, through the front door | `https://llm.apache.org` |
-| `analysis_model` | the judge's model | `qwen3-8b` |
+| `analysis_models` | the judges, a list; each gives a verdict on every cluster | `[qwen3.8-27b-int4]` |
 | `analysis_key` | the judge's gateway key | none: the judge stops before its first call |
 | `analysis_tiers` | which models serve which tier, first to recommend, for the tier report | low: qwen3-8b, qwen3.5-9b; medium: qwen3.8-27b-int4; high: qwen3.8-27b, gemma4-26b. A guess to correct |
 
@@ -388,9 +422,20 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
     from the completion length and to pick the higher tier in doubt; a
     recommendation to downgrade comes only with strong evidence, and the
     "lighter" column of the tier report is the one to act on first.
-17. **The same request to several models is model evaluation** and so
-    Foundation work (2026-11-05), measured at scan time and told to the
-    judge as a figure.
+17. **The same request to several models is told to the judge as a
+    figure** (2026-11-05), measured at scan time: a sign of comparing
+    models, which the judge weighs with the content. Not a rule the
+    script applies itself: someone sending "design me an office
+    building" to every model is not doing Foundation work.
+18. **Several judges, and a consensus view** (2026-11-05). The answers
+    are stored as integers beside the words; the view takes the lowest
+    on Foundation work, the highest tier, the majority activity. Three
+    tiers stay, named, because the fleet has three capacity classes and
+    the tiers are the choices an admin can make.
+19. **A judge runs only on our boxes** (2026-11-05): refused at startup
+    when a paid provider also serves the model, until the proxy can
+    honour a request's own "self-hosted only" through tag routing.
+20. **No migrations of the store** while it is R&D: delete and rebuild.
 
 ## Roadmap
 

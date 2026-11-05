@@ -60,41 +60,68 @@ judges on one day agreed on Foundation work 23 of 23 times and on the
 activity 19 to 22 of 23, but on the tier only 8 to 13 of 23 before
 those rules were written: a strong model finds everything easy.
 
-**A verdict** is kept per cluster, judge prompt and model, with the hash
-of the exemplar it was given. Any of the three changing makes it stale:
+**Several judges** is the normal operation: `analysis_models` in
+`config.yaml` lists them, and every cluster gets a verdict from each.
+A verdict is kept per cluster, judge prompt and model, with the hash of
+the exemplar it was given. Any of the three changing makes it stale:
 rewording the questions re-judges every cluster, a re-picked exemplar
-re-judges one, and a different model judges everything afresh while the
-first model's verdicts stay. Each verdict is its own transaction,
+re-judges one, and a model added to the list judges everything afresh
+while the others' verdicts stay. Each verdict is its own transaction,
 written as it returns, so a run that stops at 200 of 1,000 keeps 200
-and resumes at 201.
+and resumes at 201. The answers are stored as integers beside the
+judge's words, so the consensus is plain aggregation.
+
+**The consensus** is a view in the store, `consensus`, over the verdicts
+that still hold (`current_verdicts`, those given the cluster's present
+exemplar): per cluster and judge prompt, how many judges answered, the
+lowest answer on Foundation work (one "no" is a "no", for an admin to
+look at), the highest tier (a colleague's point: underestimating the
+work is the costly mistake), the majority activity, and how many
+distinct answers each question drew. The listing reads the view, and so
+can anyone with the `sqlite3` command.
 
 **Running it.** A dry run by default: the first request it would send
-and the count of clusters lacking a verdict, nothing sent. `--judge`
-sends them, one request in flight through the front door
+and how many clusters each judge still has to answer, nothing sent.
+`--judge` sends them, one request in flight through the front door
 (`analysis_gateway`) with the `llmao-analysis` service key
-(`analysis_key`), to `analysis_model` or `--model`. `--limit` caps the
-calls in one run. Clusters from the master key are the operators' smoke
-tests and are never judged; the listing marks them with a footnote.
+(`analysis_key`), judge after judge. `--model` names one or more judges
+instead of the list; `--limit` caps the calls per judge in one run.
+Clusters from the master key are the operators' smoke tests and are
+never judged; the listing marks them with a footnote.
 
 **The reports**, printed after judging or alone with `--findings`:
 
-- *Verdicts:* every cluster of the span with its three answers, then
-  each verdict's reason.
-- *Tier:* for each judged cluster, the judged tier, the model that tier
-  recommends, the models the cluster used, and how many of its requests
-  went to a heavier model than the work needs (the saving to suggest)
-  or a lighter one (the risk). Heaviest excess first. `analysis_tiers`
-  in `config.yaml` says which model serves which tier.
-- *Compare:* with `--compare <model>`, the two models' verdicts side by
-  side on the clusters where they differ, for weighing one judge
-  against another before trusting either.
+- *Verdicts:* every cluster of the span with the consensus answers and
+  the number of judges; a `*` marks an answer the judges did not all
+  agree on.
+- *Tier:* for each judged cluster, the consensus tier, the model that
+  tier recommends, the models the cluster used, and how many of its
+  requests went to a heavier model than the work needs (the saving to
+  suggest) or a lighter one (the risk). Heaviest excess first.
+  `analysis_tiers` in `config.yaml` says which model serves which tier.
+- *Compare:* with `--compare`, each judge's answers side by side on the
+  clusters where they differ, for weighing the judges against each
+  other.
+- *Reasons:* with `--reasons`, each judge's sentence of reasoning,
+  cluster by cluster.
 
 `--json` prints the clusters with their verdicts instead.
 
-**Startup checks.** Every model a run mentions, the judge's, the one to
-compare with, and all of the tier map, must be defined in `models.yaml`,
-or the script stops and names the unknown ones. A typo would otherwise
-be a quiet listing with no verdicts.
+**Startup checks.** Every model a run mentions, the judges and all of
+the tier map, must be defined in `models.yaml`, or the script stops and
+names the unknown ones. And a judge must run only on our boxes: a model
+that a paid provider in `config.yaml` also serves is refused, since the
+gateway falls back to the provider when our boxes cannot answer, and a
+judge's request carries other projects' prompts.
+
+**What a day costs.** The scan runs every day and touches every record;
+the judges answer only for clusters without a verdict from this judge
+prompt, this model and this exemplar. A fingerprint is the project, the
+person, the tool and the opening of the instructions, and none of those
+change from one day to the next for a bot or an agent, so in steady
+state a day brings a handful of new clusters and the judges a handful
+of calls, often none. The full bill, clusters times judges at about 2.5
+seconds a call, is paid only after the judge prompt changes.
 
 ## The store
 
@@ -113,6 +140,8 @@ exemplar. While this is R&D, a change to any of that leaves an existing
 store stale until the days are scanned again, so after pulling such a
 change run `prompt-clusters --rebuild` over your span. A verdict keyed
 on a fingerprint that no longer exists is dropped at the next prune.
+A change to the tables themselves has no migration: delete the store
+and start again. The views are recreated at every open.
 
 A rebuild is cheap: about 12 seconds for a day of 4,800 records, string
 work and SQLite. Judging is what takes time, about 2.5 seconds per
@@ -143,9 +172,9 @@ sudo ./analysis/prompt-judge --findings
 
 The judge needs `analysis_key` in `config.yaml`, a service key named
 `llmao-analysis` under the `rai` project, and calls `analysis_gateway`
-(the front door, `https://llm.apache.org`) with `analysis_model`
-(`qwen3-8b`), so it runs the same from a developer's machine against a
-copy of the store as from the host.
+(the front door, `https://llm.apache.org`) with each of
+`analysis_models`, so it runs the same from a developer's machine
+against a copy of the store as from the host.
 
 The log directory is `--log-dir`, else `prompt_log_dir` from `config.yaml`;
 without either the script stops. A script fails

@@ -63,7 +63,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent  # the checkout, where con
 CONFIG = ROOT / "config.yaml"
 DEFAULT_ANALYSIS_DIR = ROOT / "analysis-data"
 DEFAULT_RETENTION_DAYS = 90
-DEFAULT_MODEL = "qwen3-8b"
+DEFAULT_MODELS = ["qwen3.8-27b-int4"]  # the judges; one in these runs, several as the normal operation
 DEFAULT_GATEWAY = "https://llm.apache.org"
 ANALYSIS_KEY_ALIAS = "llmao-analysis"  # the judge's service key; its own requests are never clustered
 # Which models serve which tier, lowest first within a tier; the first is the
@@ -136,10 +136,10 @@ def tiers(config: pathlib.Path = CONFIG) -> dict[str, list[str]]:
 def require_models(names: set[str], config: pathlib.Path = CONFIG) -> None:
     """Every model a run mentions must be one models.yaml defines, or the script stops.
 
-    The judge's model, a model to compare with, and every model in the
-    tier map. A typo would otherwise be a quiet "no verdicts" or a tier
-    report that places nothing. The portal, reading the same config,
-    would warn; a script fails.
+    The judges, a model to compare with, and every model in the tier map.
+    A typo would otherwise be a quiet "no verdicts" or a tier report that
+    places nothing. The portal, reading the same config, would warn; a
+    script fails.
     """
     known = {m["model_name"] for m in load_models(models_path_from_cfg(edict(_settings(config))))}
     unknown = sorted(names - known)
@@ -147,15 +147,36 @@ def require_models(names: set[str], config: pathlib.Path = CONFIG) -> None:
         raise SystemExit(f"not in models.yaml: {', '.join(unknown)} (known: {', '.join(sorted(known))})")
 
 
+def require_private(judges: Iterable[str], config: pathlib.Path = CONFIG) -> None:
+    """A judge's prompts are other projects' prompts: a model a paid provider also serves is refused.
+
+    config.yaml providers with an api_base are paid, and the gateway falls
+    back to them when our boxes cannot answer; the judge must never be
+    the request that goes there. Until the proxy can honour a request's
+    own "self-hosted only" (docs/analysis-design.md, the privacy
+    mechanism), the guard is here, at startup.
+    """
+    paid: dict[str, list[str]] = {}
+    for name, entry in (_settings(config).get("providers") or {}).items():
+        if (entry or {}).get("api_base"):
+            for model_name in entry.get("models") or {}:
+                paid.setdefault(str(model_name), []).append(name)
+    offsite = {j: paid[j] for j in judges if j in paid}
+    if offsite:
+        said = "; ".join(f"{j} is also served by {', '.join(p)}" for j, p in offsite.items())
+        raise SystemExit(f"a judge must run only on our boxes: {said}")
+
+
 def judge_settings(config: pathlib.Path = CONFIG) -> edict:
-    """What the judge needs to call the gateway: its URL, the model, the key.
+    """What the judge needs to call the gateway: its URL, the judges, the key.
 
     The front door, ``analysis_gateway``, not the proxy's local address:
     the judge is a client like any other, so it runs the same from a
     developer's machine as from the host, and its requests are logged and
-    counted like anyone's. The model defaults until p6 renders
-    ``analysis_model``. The key has no default: without ``analysis_key``
-    the judge stops before its first call.
+    counted like anyone's. ``analysis_models`` is a list: several judges
+    on each cluster is the normal operation. It defaults until p6 renders
+    it. The key has no default: without ``analysis_key`` the judge stops
+    before its first call.
     """
     s = _settings(config)
     key = s.get("analysis_key")
@@ -163,9 +184,17 @@ def judge_settings(config: pathlib.Path = CONFIG) -> edict:
         raise SystemExit(f"{config}: analysis_key is required (a service key named {ANALYSIS_KEY_ALIAS})")
     return edict(
         gateway=str(s.get("analysis_gateway") or DEFAULT_GATEWAY).rstrip("/"),
-        model=str(s.get("analysis_model") or DEFAULT_MODEL),
+        models=judge_models(config),
         key=str(key),
     )
+
+
+def judge_models(config: pathlib.Path = CONFIG) -> list[str]:
+    """analysis_models: the judges, in the order they run; the coded default until p6 renders it."""
+    raw = _settings(config).get("analysis_models")
+    if raw is not None and not isinstance(raw, list):
+        raise SystemExit(f"{config}: analysis_models should be a list of model names")
+    return [str(m) for m in raw] if raw else list(DEFAULT_MODELS)
 
 
 def span(*, days: int = 7, start: dt.date | None = None, end: dt.date | None = None) -> list[dt.date]:
@@ -438,9 +467,50 @@ CREATE TABLE IF NOT EXISTS verdicts (
     model TEXT NOT NULL,
     exemplar_hash TEXT NOT NULL,
     judged_at TEXT NOT NULL,
+    asf_work INTEGER NOT NULL,
+    tier INTEGER NOT NULL,
+    activity TEXT NOT NULL,
     verdict_json TEXT NOT NULL,
     PRIMARY KEY (fingerprint, prompt_hash, model)
 );
+"""
+
+# The answers as the judge gives them, in words; stored as their index
+# here, so the views aggregate integers: Foundation work ordered so MIN
+# leans towards "no", the tier so MAX leans towards "high".
+ASF_WORK = ("no", "unclear", "yes")
+TIERS = ("low", "medium", "high")
+
+# Rebuilt at every open, so a change here reaches an existing store.
+_VIEWS = """
+DROP VIEW IF EXISTS consensus;
+DROP VIEW IF EXISTS current_verdicts;
+-- The verdicts that still hold: the exemplar they were given is the
+-- cluster's current one.
+CREATE VIEW current_verdicts AS
+SELECT v.fingerprint, v.prompt_hash, v.model, v.judged_at, v.asf_work, v.tier, v.activity,
+       json_extract(v.verdict_json, '$.reason') AS reason
+FROM verdicts v JOIN clusters c USING (fingerprint)
+WHERE v.exemplar_hash = c.exemplar_hash;
+-- What the judges together say about a cluster under one judge prompt.
+-- The tier leans high: the highest any judge gave. Foundation work leans
+-- the other way: one "no" is a "no", for an admin to look at. The activity
+-- is the majority, the alphabetically first among equals.
+CREATE VIEW consensus AS
+WITH activities AS (
+    SELECT fingerprint, prompt_hash, activity,
+           ROW_NUMBER() OVER (PARTITION BY fingerprint, prompt_hash ORDER BY COUNT(*) DESC, activity) AS rank
+    FROM current_verdicts GROUP BY fingerprint, prompt_hash, activity
+)
+SELECT v.fingerprint, v.prompt_hash, COUNT(*) AS judges,
+       MIN(v.asf_work) AS asf_work,
+       MAX(v.tier) AS tier,
+       (SELECT activity FROM activities a
+        WHERE a.fingerprint = v.fingerprint AND a.prompt_hash = v.prompt_hash AND a.rank = 1) AS activity,
+       COUNT(DISTINCT v.asf_work) AS asf_answers,
+       COUNT(DISTINCT v.tier) AS tier_answers,
+       COUNT(DISTINCT v.activity) AS activity_answers
+FROM current_verdicts v GROUP BY v.fingerprint, v.prompt_hash;
 """
 
 
@@ -451,11 +521,11 @@ class Store:
         self.db = sqlite3.connect(self.path)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
+        # No migrations while this is R&D: a store whose tables are out of
+        # date is deleted and rebuilt. The views are recreated at every
+        # open, so a change to them reaches a store without that.
         self.db.executescript(_SCHEMA)
-        # A column added since the store was made. The value is right only
-        # after a rebuild; the README says so.
-        if "paired" not in {r["name"] for r in self.db.execute("PRAGMA table_info(cluster_days)")}:
-            self.db.execute("ALTER TABLE cluster_days ADD COLUMN paired INTEGER NOT NULL DEFAULT 0")
+        self.db.executescript(_VIEWS)
 
     def close(self) -> None:
         self.db.close()
@@ -617,30 +687,60 @@ class Store:
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO verdicts (fingerprint, prompt_hash, model, exemplar_hash, judged_at, "
-                "verdict_json) VALUES (?, ?, ?, ?, ?, ?)",
+                "asf_work, tier, activity, verdict_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     c.fingerprint,
                     prompt_hash,
                     model,
                     c.exemplar_hash,
                     dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+                    ASF_WORK.index(verdict["asf_work"]),
+                    TIERS.index(verdict["tier"]),
+                    verdict["activity"],
                     json.dumps(verdict),
                 ),
             )
 
+    @staticmethod
+    def _named(row: sqlite3.Row | None) -> edict | None:
+        """A verdict row with its integers named again."""
+        if row is None:
+            return None
+        v = edict(row)
+        v.asf_work = ASF_WORK[v.asf_work]
+        v.tier = TIERS[v.tier]
+        return v
+
     def with_verdicts(self, clusters: Iterable[edict], prompt_hash: str, model: str) -> Iterator[edict]:
-        """Each cluster with its current verdict under ``verdict`` (None when there is none or it is stale)."""
+        """Each cluster with one model's current verdict under ``verdict`` (None when there is none or it is stale)."""
         for c in clusters:
             row = self.db.execute(
-                "SELECT exemplar_hash, judged_at, verdict_json FROM verdicts "
+                "SELECT asf_work, tier, activity, reason, judged_at FROM current_verdicts "
                 "WHERE fingerprint = ? AND prompt_hash = ? AND model = ?",
                 (c.fingerprint, prompt_hash, model),
             ).fetchone()
-            c.verdict = None
-            c.judged_at = None
-            if row is not None and row["exemplar_hash"] == c.exemplar_hash:
-                c.verdict = edict(json.loads(row["verdict_json"]))
-                c.judged_at = row["judged_at"]
+            c.verdict = self._named(row)
+            yield c
+
+    def with_consensus(self, clusters: Iterable[edict], prompt_hash: str) -> Iterator[edict]:
+        """Each cluster with what its judges together say under ``verdict``, and every judge's say under ``verdicts``.
+
+        ``verdict`` carries ``judges`` and how many distinct answers each
+        question got, so a listing can show where the judges disagreed.
+        """
+        for c in clusters:
+            row = self.db.execute(
+                "SELECT * FROM consensus WHERE fingerprint = ? AND prompt_hash = ?", (c.fingerprint, prompt_hash)
+            ).fetchone()
+            c.verdict = self._named(row)
+            c.verdicts = [
+                self._named(r)
+                for r in self.db.execute(
+                    "SELECT model, asf_work, tier, activity, reason FROM current_verdicts "
+                    "WHERE fingerprint = ? AND prompt_hash = ? ORDER BY model",
+                    (c.fingerprint, prompt_hash),
+                )
+            ]
             yield c
 
 
@@ -654,8 +754,6 @@ class Store:
 # projects' prompts and do not leave them.
 
 JUDGE_PROMPT = pathlib.Path(__file__).resolve().parent / "judge-prompt.md"
-ASF_WORK = ("yes", "no", "unclear")
-TIERS = ("low", "medium", "high")
 ACTIVITIES = (
     "security-review",
     "code-review",
