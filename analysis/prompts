@@ -18,15 +18,21 @@
 
 """The prompt log's analysis, one entry point: `prompts <command> --help` for each.
 
+Build the store, then read it:
+
     sudo ./analysis/prompts build       # cluster the span's day files into the store
+    sudo ./analysis/prompts judge       # the judges' verdicts on the clusters that lack one (dry run; --judge sends)
+
+    sudo ./analysis/prompts report      # who asks what of which model, no content, from the day files
     sudo ./analysis/prompts clusters    # who is sending what kind of request, over the span
     sudo ./analysis/prompts show <fp>   # one cluster, exemplar in full
-    sudo ./analysis/prompts report      # who asks what of which model, no content, from the day files
-    sudo ./analysis/prompts judge       # the judges' verdict on each cluster, and the reports on them
+    sudo ./analysis/prompts verdicts    # the judges' consensus per cluster, where they split
+    sudo ./analysis/prompts tiers       # what was used against what the judges say would do
 
-The commands share --days, --from and --to for the span of UTC days,
-and read config.yaml beside this directory (docs/analysis-design.md).
-Every command's arguments are defined here; the modules do the work.
+The commands share --days, --from and --to for the span of closed UTC
+days, and read config.yaml beside this directory (docs/analysis-design.md).
+build and judge are the only ones that write. Every command's arguments
+are defined here; the modules do the work.
 """
 
 from __future__ import annotations
@@ -113,20 +119,40 @@ def main(argv: list[str] | None = None) -> int:
 
     p = command(
         "judge",
-        _judge.run,
-        "the judges' verdict on each cluster",
-        "Asks each judge the three questions about every cluster of the span that lacks its verdict, "
-        "then lists the consensus. A dry run unless --judge is given.",
+        _judge.run_judge,
+        "the judges' verdicts on the clusters that lack one",
+        "Writes the store: asks each judge the three questions about every cluster of the span that has no "
+        "verdict from it yet, one request at a time, and ends with a summary and what to run next. "
+        "A dry run unless --judge is given: the first request it would send, and the counts.",
     )
     _span(p)
     _store(p)
     p.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")
     p.add_argument("--limit", type=int, default=None, help="at most this many calls per judge this run")
     p.add_argument("--model", action="append", default=None, help="a judge, instead of analysis_models; repeatable")
-    p.add_argument("--compare", action="store_true", help="in the listing, each judge's answers where they differ")
-    p.add_argument("--reasons", action="store_true", help="in the listing, each judge's reason")
-    p.add_argument("--findings", action="store_true", help="the listing only")
+
+    p = command(
+        "verdicts",
+        _judge.run_verdicts,
+        "the judges' consensus per cluster, where they split",
+        "Lists every cluster of the span with what its judges together say: Foundation work, tier, activity, "
+        "and the number of judges, with a mark where they did not all agree.",
+    )
+    _span(p)
+    _store(p)
+    p.add_argument("--compare", action="store_true", help="each judge's answers, on the clusters where they differ")
+    p.add_argument("--reasons", action="store_true", help="each judge's reason, cluster by cluster")
     p.add_argument("--json", action="store_true", help="the clusters with their verdicts as JSON")
+
+    p = command(
+        "tiers",
+        _judge.run_tiers,
+        "what was used against what the judges say would do",
+        "For each judged cluster, the consensus tier, the model that tier recommends, the models the cluster "
+        "used, and how many requests went to a heavier model than the work needs, or a lighter one.",
+    )
+    _span(p)
+    _store(p)
 
     args = ap.parse_args(argv)
     return args.run(args.parser, args)
