@@ -85,20 +85,41 @@ def when(a_day: dt.date) -> str:
     return f"on {a_day.isoformat()}"
 
 
-def ago(stamp: str) -> str:
-    """'5m ago', '3h ago', '2d ago' from an ISO stamp; '' if unreadable."""
+def _stamp(stamp: str) -> dt.datetime | None:
+    """An ISO stamp as an aware UTC moment; None if unreadable."""
     try:
         at = dt.datetime.fromisoformat(stamp)
     except (TypeError, ValueError):
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=dt.UTC)
+
+
+def ago(stamp: str) -> str:
+    """'5m ago', '3h ago', '2d ago' from an ISO stamp; '' if unreadable.
+
+    Pair it with moment() in a title: the glance here, the exact time under
+    the pointer.
+    """
+    at = _stamp(stamp)
+    if at is None:
         return ""
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=dt.UTC)
     secs = max(0, int((dt.datetime.now(dt.UTC) - at).total_seconds()))
     if secs < 3600:
         return f"{max(1, secs // 60)}m ago"
     if secs < 86400:
         return f"{secs // 3600}h ago"
     return f"{secs // 86400}d ago"
+
+
+def moment(stamp: str) -> str:
+    """'2026-10-08 14:30 UTC' from an ISO stamp; '' if unreadable.
+
+    The server clock is UTC and the label says so, rather than shifting to
+    the reader's zone. A page shows ago() and keeps this in the title; the
+    template names are <event>_ago and <event>_at.
+    """
+    at = _stamp(stamp)
+    return at.astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M UTC") if at else ""
 
 
 def ago_short(ts: float | None) -> str:

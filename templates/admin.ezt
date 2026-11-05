@@ -85,7 +85,7 @@
             <span class="fw-semibold">[requests.requester]</span>
             <span class="badge text-bg-secondary ms-1">[requests.what]</span>
             [if-any requests.project]<span class="text-muted small ms-1">[requests.project]</span>[end]
-            <div class="small text-muted">asked [requests.created_at]</div>
+            <div class="small text-muted">asked <span class="llmao-hover" title="[requests.created_at]">[requests.created_ago]</span></div>
           </div>
           <div class="text-end">
             <div class="fw-semibold font-monospace">[requests.wanted_h]</div>
@@ -171,7 +171,7 @@
         <i class="bi [recent.icon] admin-timeline-icon" aria-hidden="true"></i>
         <div>
           <div>[recent.sentence]</div>
-          <div class="small text-muted">[recent.by] &middot; <span class="llmao-hover" title="[recent.at] UTC">[recent.ago]</span></div>
+          <div class="small text-muted">[recent.by] &middot; <span class="llmao-hover" title="[recent.at]">[recent.ago]</span></div>
         </div>
       </li>
       [end]

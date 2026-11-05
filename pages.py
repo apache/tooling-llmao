@@ -363,10 +363,9 @@ async def basic_info(title: str = "llmao") -> edict:
 
     basic.commit = COMMIT
     basic.repo = REPO_URL
-    # "5m ago" at a glance; the exact moment under the pointer. The server clock is UTC and
-    # the label says so, rather than shifting to an admin's zone.
+    # "5m ago" at a glance; the exact moment under the pointer.
     basic.restarted_ago = fmt.ago(RESTARTED_AT.isoformat())
-    basic.restarted_at = RESTARTED_AT.strftime("%Y-%m-%d %H:%M UTC")
+    basic.restarted_at = fmt.moment(RESTARTED_AT.isoformat())
 
     return basic
 
@@ -397,8 +396,12 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
                 spend=f"${k.spend:.6f}",
                 max_budget=budget_s,
                 used_h=(fmt.tokens(used_by_token[k.token_id]) if k.token_id in used_by_token else "—"),
-                last_used=k.last_used or "—",
-                created_at=k.created_at or "—",
+                # <event>_at is the moment, <event>_ago the glance; the
+                # template shows a dash when there is no stamp.
+                last_used_at=fmt.moment(k.last_used),
+                last_used_ago=fmt.ago(k.last_used),
+                created_at=fmt.moment(k.created_at),
+                created_ago=fmt.ago(k.created_at),
                 blocked=k.blocked,
                 after_path=after_path,
             )
@@ -1575,7 +1578,9 @@ def _open_approval_rows(stored) -> list:
 
 
 def _work(at: str, by: str, kind: str, sentence: str) -> edict:
-    return edict(at=at or "", by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=fmt.ago(at))
+    return edict(
+        at=fmt.moment(at), by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=fmt.ago(at)
+    )
 
 
 async def _recent_work(stored, *, only: str | None = None) -> list:
@@ -1704,7 +1709,8 @@ def _request_rows(reqs) -> list:
                 # The question a requester actually has: how long have I
                 # got to act on this.
                 expires_h=fmt.when(exp.date()) if exp else "",
-                created_at=(r.created_at or "")[:10],
+                created_at=fmt.moment(r.created_at),
+                created_ago=fmt.ago(r.created_at),
             )
         )
     return out

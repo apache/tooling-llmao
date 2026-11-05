@@ -39,10 +39,10 @@
           <td class="font-monospace small">[keys.purpose]</td>
           <td>[keys.project]</td>
           <td class="small font-monospace">[keys.created_by]</td>
-          <td class="small text-muted">[keys.last_used]</td>
+          <td class="small text-muted">[if-any keys.last_used_at]<span class="llmao-hover" title="[keys.last_used_at]">[keys.last_used_ago]</span>[else]&mdash;[end]</td>
           <td class="small font-monospace">[keys.spend]</td>
           <td class="small font-monospace">[keys.max_budget]</td>
-          <td class="small text-muted">[keys.created_at]</td>
+          <td class="small text-muted">[if-any keys.created_at]<span class="llmao-hover" title="[keys.created_at]">[keys.created_ago]</span>[else]&mdash;[end]</td>
           <td class="text-end">
             <button type="button" class="btn btn-outline-danger btn-sm"
                     data-bs-toggle="modal" data-bs-target="#revokeModal"

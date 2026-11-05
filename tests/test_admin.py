@@ -446,7 +446,8 @@ def _pending(**over):
         tier="service",
         is_capacity=ezt.boolean(False),
         means='Lets jdoe create one service key, "hadoop CI". Nothing is created until they do; they have 14 days.',
-        created_at="2026-10-19",
+        created_at="2026-10-19 09:00 UTC",
+        created_ago="3d ago",
     )
     row.update(over)
     return row
