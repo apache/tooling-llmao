@@ -1,0 +1,62 @@
+#!/usr/bin/env -S uv run --script
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+"""The prompt log's analysis, one entry point: `prompts <command> --help` for each.
+
+    sudo ./analysis/prompts report      # who asks what of which model, no content, from the day files
+    sudo ./analysis/prompts clusters    # the records of a span clustered, one exemplar each, into the store
+    sudo ./analysis/prompts judge       # the judges' verdict on each cluster, and the reports on them
+
+The commands share --days, --from and --to for the span of UTC days,
+and read config.yaml beside this directory (docs/analysis-design.md).
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import _clusters
+import _judge
+import _report
+
+COMMANDS = (
+    ("report", _report, "who asks what of which model, no content"),
+    ("clusters", _clusters, "the records of a span clustered, into the store"),
+    ("judge", _judge, "the judges' verdict on each cluster"),
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="command", required=True)
+    for name, module, help_text in COMMANDS:
+        p = sub.add_parser(
+            name, help=help_text, description=module.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        )
+        module.add_arguments(p)
+        p.set_defaults(run=module.run, parser=p)
+    args = ap.parse_args(argv)
+    return args.run(args.parser, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

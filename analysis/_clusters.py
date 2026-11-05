@@ -35,18 +35,18 @@ log directory is --log-dir, else prompt_log_dir in config.yaml.
 
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import json
-import os
 import pathlib
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from typing import TYPE_CHECKING
 
 import _core
 
 from llmao import fmt
+
+if TYPE_CHECKING:
+    import argparse
 
 OPENING_SHOWN = 72
 
@@ -112,8 +112,7 @@ def _show(store: _core.Store, fp: str) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
     ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
     ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
@@ -122,7 +121,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rebuild", action="store_true", help="forget every scanned day and read the span again")
     ap.add_argument("--json", action="store_true", help="the clusters over the span as JSON, exemplars included")
     ap.add_argument("--show", metavar="FINGERPRINT", help="one cluster in full, instead of the listing")
-    args = ap.parse_args(argv)
+
+
+def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     try:
         days = _core.span(days=args.days, start=args.start, end=args.end)
     except ValueError:
@@ -153,7 +154,3 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         store.close()
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

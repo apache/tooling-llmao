@@ -51,18 +51,18 @@ for.
 
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import json
-import os
 import pathlib
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from typing import TYPE_CHECKING
 
 import _core
 
 from llmao import fmt
+
+if TYPE_CHECKING:
+    import argparse
 
 OPENING_SHOWN = 48
 
@@ -194,8 +194,7 @@ def _findings(clusters: list, days: list[dt.date], by_tier: dict, *, compare: bo
         print(f"[1] {fmt.plural(len(smoke), 'cluster')} from the master key: the operators' smoke tests, not judged.")
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
     ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
     ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
@@ -207,7 +206,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reasons", action="store_true", help="in the listing, each judge's reason")
     ap.add_argument("--findings", action="store_true", help="the listing only")
     ap.add_argument("--json", action="store_true", help="the clusters with their verdicts as JSON")
-    args = ap.parse_args(argv)
+
+
+def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     try:
         days = _core.span(days=args.days, start=args.start, end=args.end)
     except ValueError:
@@ -251,7 +252,3 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         store.close()
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

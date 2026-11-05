@@ -34,18 +34,18 @@ the current directory; without either the script stops.
 
 from __future__ import annotations
 
-import argparse
 import csv
 import datetime as dt
-import os
 import pathlib
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from typing import TYPE_CHECKING
 
 import _core
 
 from llmao import fmt, prompt_log
+
+if TYPE_CHECKING:
+    import argparse
 
 
 def _table(title: str, columns: list[str], rows: list[list], *, csv_out: bool) -> None:
@@ -123,21 +123,18 @@ def report(log_dir: pathlib.Path, days: list[dt.date], *, csv_out: bool) -> None
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
     ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
     ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
     ap.add_argument("--csv", action="store_true", help="CSV, one block per report, instead of text")
     ap.add_argument("--log-dir", type=pathlib.Path, default=None, help="the prompt log directory")
-    args = ap.parse_args(argv)
+
+
+def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     try:
         days = _core.span(days=args.days, start=args.start, end=args.end)
     except ValueError:
         ap.error("--from is after --to")
     report(args.log_dir or _core.log_dir(), days, csv_out=args.csv)
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

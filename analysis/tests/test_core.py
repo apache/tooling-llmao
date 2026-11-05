@@ -28,7 +28,7 @@ import _core
 import pytest
 from conftest import ANALYSIS
 
-REPORT = ANALYSIS / "prompt-report"
+PROMPTS = ANALYSIS / "prompts"
 
 
 def test_a_script_finds_the_log_directory_in_config_or_stops(tmp_path):
@@ -80,7 +80,8 @@ def _record(day: str, model: str = "qwen3-8b") -> dict:
 def test_prompt_report_prints_the_reports_as_text_and_as_csv(tmp_path):
     (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_record("2026-11-01")) + "\n")
     (tmp_path / "prompts-2026-11-02.jsonl").write_text(json.dumps(_record("2026-11-02", "gemma4-26b")) + "\n")
-    base = [sys.executable, str(REPORT), "--log-dir", str(tmp_path), "--from", "2026-11-01", "--to", "2026-11-02"]
+    base = [sys.executable, str(PROMPTS), "report", "--log-dir", str(tmp_path), "--from", "2026-11-01"]
+    base += ["--to", "2026-11-02"]
     text = subprocess.run(base, capture_output=True, text=True, check=True).stdout
     assert "2 requests over 2026-11-01 to 2026-11-02, 2 days with records" in text
     assert "By project" in text and "tooling" in text and "Messages per request" in text
