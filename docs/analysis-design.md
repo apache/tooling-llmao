@@ -66,31 +66,37 @@ an admin read and chose to pass on, in their own words.
 
 ```mermaid
 flowchart LR
-    LOG["day files<br/>/x1/llmao/prompt-log"] --> CL["prompt-clusters<br/>fingerprint → cluster → exemplar"]
+    LOG["day files<br/>/x1/llmao/prompt-log"] --> CL["prompts build<br/>fingerprint → cluster → exemplar"]
     CL --> DB[("prompts.db<br/>days, clusters, cluster_days, verdicts")]
-    DB --> J["prompt-judge<br/>one exemplar, three questions"]
-    J -- "self-hosted model,<br/>service key, priority later" --> GW["the gateway"]
+    DB --> J["prompts judge<br/>one exemplar, three questions, each judge"]
+    J -- "self-hosted models,<br/>service key, priority later" --> GW["the gateway"]
     GW --> J
     J --> DB
-    DB --> F["findings<br/>text or JSON, for an admin"]
+    DB --> F["prompts verdicts, tiers<br/>the consensus, for an admin"]
     F -. "an admin writes a note" .-> P["the project page"]
     DV["demand values,<br/>daily activity rows"] --> P
 ```
 
-- **The day files** are the input, read once each: a day is scanned,
-  its clusters and figures are written to the store, and the day is
-  marked as in. A rerun scans only days the store has not seen.
-- **`prompt-clusters`** turns records into clusters and chooses an
-  exemplar per cluster. Pure string work; no model.
+One entry point, `analysis/prompts`, with a command per question. Two
+write the store, `build` and `judge`; the rest read it or the day files:
+`report`, `clusters`, `show`, `verdicts`, `tiers`.
+
+- **The day files** are the input, read once each: `build` reads a day,
+  writes its clusters and figures to the store, and marks the day as
+  in. A rerun reads only days the store has not seen.
+- **`build`** turns records into clusters and chooses an exemplar per
+  cluster. Pure string work; no model.
 - **The store** is one SQLite file in `analysis_dir`. It is the memory
   between runs: which days are in, what each cluster is, its figures per
-  day, its exemplar, and later the judge's verdict on it.
-- **`prompt-judge`** (planned) sends each cluster's exemplar to a
-  self-hosted model with the three questions and keeps the answer. It
-  skips clusters it has already judged, so a run that stops at 200 of
-  1,000 picks up at 201.
-- **Findings** are what an admin reads: clusters with their figures and
-  verdicts, filtered to what needs a decision.
+  day, its exemplar, and the judges' verdicts on it.
+- **`judge`** sends each cluster's exemplar to each configured judge, a
+  self-hosted model, with the three questions and keeps the answers. It
+  skips clusters a judge has already answered, so a run that stops at
+  200 of 1,000 picks up at 201, and ends by saying what it produced and
+  what to run next.
+- **`verdicts` and `tiers`** are what an admin reads: the judges'
+  consensus per cluster, where they split, and the tier each cluster
+  used against the tier the judges say would do.
 - **The portal's part** reads the demand values and LiteLLM, never the
   store: the project page's panels and, later, a note an admin addressed
   to a project.
@@ -99,10 +105,11 @@ flowchart LR
 
 | Component | Where | State |
 |---|---|---|
-| The shared module: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the store | `analysis/_core.py` | built |
-| The reports that need no content: by project, user, model, tool; prompt lengths; shares; failures; messages per request | `analysis/prompt-report` | built; moved out of `bin/llmao-prompt-log` |
-| The clusters: scan, store, list, show one | `analysis/prompt-clusters` | built |
-| The judge: the questions, the call, the verdicts, the findings | `analysis/prompt-judge`, `analysis/judge-prompt.md` | built; a dry run by default, `--judge` sends; no call made until the key exists |
+| The entry point: every command's arguments, and which module runs it | `analysis/prompts` | built; `prompts --help` is the map |
+| The shared module: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the store and its views, the judge's call, the tier report, the table printer | `analysis/_core.py` | built |
+| `report`: the reports that need no content: by project, user, model, tool; prompt lengths; shares; failures; messages per request | `analysis/_report.py` | built; moved out of `bin/llmao-prompt-log` |
+| `build`, `clusters`, `show`: the store built from the day files, listed, one cluster in full | `analysis/_clusters.py` | built |
+| `judge`, `verdicts`, `tiers`: the questions, the call, the verdicts, the consensus, the tier report | `analysis/_judge.py`, `analysis/judge-prompt.md` | built; `judge` is a dry run by default, `--judge` sends |
 | The settings | `config.yaml`: `analysis_dir`, `analysis_retention_days`, `analysis_gateway`, `analysis_model`, `analysis_key` | built, optional with defaults except the key; required once p6 renders them |
 | The judge's key | a service key named `llmao-analysis` under the `rai` project | the user creates it |
 | The project page's panels: tools by model, refusals, latency, prompt lengths, a daily trend, from each project's share of the demand values | `pages.py`, `templates/project.ezt`, `llmao/planning.py` | planned; the data has been in the demand values since fold version 3 |
@@ -392,7 +399,7 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
 2. **The reports moved out of the tool.** `bin/llmao-prompt-log` keeps
    only `rollup`, which the portal's runner spawns, and takes its
    directory on the command line; it never reads `config.yaml`. The
-   reports are `analysis/prompt-report`.
+   reports are `prompts report`.
 3. **`config.yaml` is read by the scripts, not by the library.**
    Everything in `llmao/` uses the config the portal loaded in `main.py`.
 4. **The person, not the key,** in the fingerprint.
@@ -408,10 +415,10 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
 10. **No request priority yet** (issue #72); the judge throttles itself.
 11. **Scripts fail hard.**
 12. **Scripts run through uv:** the shebang is
-    `#!/usr/bin/env -S uv run --script`, so `./analysis/prompt-clusters`
-    runs in the project's environment from the checkout. Pre-commit does
-    not identify that shebang as Python, so the ruff hooks run over the
-    tree and `extend-include` in `pyproject.toml` names the scripts.
+    `#!/usr/bin/env -S uv run --script`, so `./analysis/prompts` runs in
+    the project's environment from the checkout. Pre-commit does not
+    identify that shebang as Python, so the ruff hooks run over the tree
+    and `extend-include` in `pyproject.toml` names the scripts.
 13. **Snapshots, no tracking over time.**
 14. **Evaluating the gateway's models is ASF work,** whatever the
     workload. Non-ASF use means sustained real work in another capacity.
@@ -436,15 +443,23 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
     when a paid provider also serves the model, until the proxy can
     honour a request's own "self-hosted only" through tag routing.
 20. **No migrations of the store** while it is R&D: delete and rebuild.
+21. **One entry point, a command per question** (2026-11-05). Three
+    scripts had grown overlapping listings and a person could not tell
+    which to run. `prompts` declares every command's arguments in one
+    place and the modules do the work; the two commands that write,
+    `build` and `judge`, are named for it, and `judge` ends by saying
+    what to run next. The modules import the core and nothing of each
+    other's.
 
 ## Roadmap
 
 | Step | What | State |
 |---|---|---|
-| A1 | The split: `analysis/` with `_core.py`, `prompt-report`, `tests/`; `bin/llmao-prompt-log` down to `rollup` | done 2026-11-04 (c8c4f46) |
-| A2 | `prompt-clusters`: fingerprint, cluster, exemplar, the store, prune, rebuild, list, show, JSON | done 2026-11-04 (43ed1de); the full day of 2026-11-04 ran in 12 s: 4,847 records, 66 clusters |
-| A3 | The judge: `judge-prompt.md`, `prompt-judge`, the verdicts table, the stale check, one verdict per transaction, the settings | built 2026-11-04; dry run verified against the day's 66 clusters, 64 with an exemplar; the first real run waits on the `llmao-analysis` key |
-| A4 | Findings: the clusters of the span with their verdicts, text or JSON, and the reasons | built with A3 as `prompt-judge --findings`; what counts as a finding worth acting on is refined once verdicts exist |
+| A1 | The split: `analysis/` with `_core.py`, the reports, `tests/`; `bin/llmao-prompt-log` down to `rollup` | done 2026-11-04 (c8c4f46) |
+| A2 | The clusters: fingerprint, cluster, exemplar, the store, prune, rebuild, list, show, JSON | done 2026-11-04 (43ed1de); the full day of 2026-11-04 ran in 12 s: 4,847 records, 66 clusters |
+| A3 | The judge: `judge-prompt.md`, the verdicts table, the stale check, one verdict per transaction, the settings; then several judges and the consensus view | done 2026-11-04 and 05; four judges over the day's clusters, the tier rules rewritten from their disagreement |
+| A4 | The reports from the verdicts: the consensus, where the judges split, the tier report | done 2026-11-05 as `prompts verdicts` and `prompts tiers`; what counts as a finding worth acting on is refined as verdicts accumulate |
+| A4a | One entry point, `prompts`, a command per question, in place of three scripts | done 2026-11-05 |
 | A5 | p6: the four keys rendered, the directory created; then the keys become required | a PR beside A3, not waited on |
 | A6 | The project page's panels from each project's share of the demand values; the sharper form of the "Usage Analysis page" the logging design parked | planned, in `llmao/` |
 | A7 | A note to a project, written by an admin, shown until acknowledged | planned, in `llmao/` |

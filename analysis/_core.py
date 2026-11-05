@@ -27,7 +27,7 @@ config.yaml is read here, from the checkout root beside this directory,
 because a script runs at a shell on the gateway host with no portal around
 it. The portal reads its config once in main.py and nothing in llmao/
 opens the file. Relative paths in it are relative to that root, so
-``./analysis/prompt-judge`` and ``cd analysis && ./prompt-judge`` read the
+``./analysis/prompts`` and ``cd analysis && ./prompts`` read the
 same file and the same store.
 
 Three words, kept apart. A FINGERPRINT is a hash key over a record: the

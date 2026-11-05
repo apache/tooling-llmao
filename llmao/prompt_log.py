@@ -323,7 +323,7 @@ def log_dir(cfg: Any) -> pathlib.Path:
 #
 # For an admin at a shell on the host: the first analyses, chosen because
 # they need no reading of prompt content. The module makes the figures;
-# analysis/prompt-report prints them as text or CSV.
+# analysis/prompts report prints them as text or CSV.
 
 
 def _tally(bucket: dict, name: str, tokens: int) -> None:

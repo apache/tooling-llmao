@@ -17,9 +17,9 @@
 
 """The prompt log's reports, for a person at a shell on the gateway host.
 
-    sudo ./analysis/prompt-report                 # the last 7 closed days
-    sudo ./analysis/prompt-report --days 30
-    sudo ./analysis/prompt-report --from 2026-11-01 --to 2026-11-03 --csv
+    prompts report                 # the last 7 closed days
+    prompts report --days 30
+    prompts report --from 2026-11-01 --to 2026-11-03 --csv
 
 Reads the day files the proxy's hook writes (docs/prompt-logging-design.md)
 and nothing else: never a connection to LiteLLM, never a write in the log

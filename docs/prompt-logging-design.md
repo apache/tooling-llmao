@@ -129,7 +129,7 @@ Nothing here waits for the review.
 | N4 | The reader: one day file, plain or compressed, to `rollup --json <day>`; `rollup_day` in the module, which spawns it; the runner calls it for each day it rolls up and folds the log-only fields and the log side of the reconciliation into the same rows | done 2026-11-03 |
 | N5 | The pre-call strip of `no-log` and the two redaction headers | done with H2 |
 | N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
-| N7 | The reports | done 2026-11-04 (text or `--csv`); moved from the tool to `analysis/prompt-report` the same day, when `analysis/` was made for the content analyses |
+| N7 | The reports | done 2026-11-04 (text or `--csv`); moved from the tool to `analysis/` the same day, when it was made for the content analyses; `prompts report` since 2026-11-05 |
 | N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
 | N9 | Which content analyses, and where they run | continued in `docs/analysis-design.md`, whose roadmap starts at A1 |
 | N10 | Usage Analysis page | superseded by the project page's panels, step A6 of `docs/analysis-design.md` |
@@ -356,11 +356,12 @@ Three places with three names, because they are three concerns:
 - **`analysis/`, the scripts:** everything done with the records for a
   person, from the reports to the content analyses. R&D, outside the
   package, so nothing graduates into the module until it settles.
-  `_core.py` holds what the scripts share, starting with the reader of
-  `config.yaml` (from the current directory, and a missing key stops the
-  script: a script can fail harder than the portal, where the same error
-  would take a service down) and the span of days to read.
-  `prompt-report` holds the reports. The content analyses (N9) join it.
+  One entry point, `prompts`, with a command per question; `_core.py`
+  holds what the commands share, starting with the reader of
+  `config.yaml` (beside the directory, and a missing key stops the
+  command: a script can fail harder than the portal, where the same
+  error would take a service down) and the span of days to read.
+  `prompts report` is the reports; the rest is the content analyses (N9).
 
 The dependency runs one way: the tool, the hook, `capacity.py` (for
 `rollup_day`) and the scripts import the module; the module imports none
@@ -372,8 +373,8 @@ each of the day's 24 hours per model, and the day's request count per
 model for the reconciliation. No cursor: a day is the unit, and the
 runner decides which days are missing.
 
-What **`analysis/prompt-report`** prints, for an admin at a shell on the
-host: the first reports, chosen because they need no reading of prompt
+What **`analysis/prompts report`** prints, for an admin at a shell on
+the host: the first reports, chosen because they need no reading of prompt
 content. Requests and prompt tokens per day by project, by user, by model
 and by user agent; the distribution of prompt length per model; the
 share of requests that carry tools, that stream, that end in `length`;
@@ -382,8 +383,8 @@ Text tables, or CSV when someone wants a spreadsheet.
 
 Analyses of the content itself, which is the reason the content is kept
 (what people ask for, how agents are used, what a project's work looks
-like), are the scripts that follow `prompt-report` in `analysis/`. They
-have a design of their own, `docs/analysis-design.md`, which picks up
+like), are the other commands of `analysis/prompts`. They have a design
+of their own, `docs/analysis-design.md`, which picks up
 where this document ends: the questions asked of the records, who sees
 which answers, the clusters and their store, the judge, and the way an
 answer gets back to a project.
@@ -541,7 +542,7 @@ that already owns the neighbouring role.
 | The callback: settings from `callback_settings`, built once by a module `__getattr__`, the directory check, the loguru sink, payload to record, the pre-call strip | `litellm_hooks.py`; tests in `tests/test_litellm_hooks.py` |
 | Record shape, file name pattern, reading a day file, the rollup of a day | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
 | The tool: `rollup --json` | `bin/llmao-prompt-log`, argparse over the module; the directory always on the command line |
-| The reports, and the content analyses | `analysis/`: `prompt-report`, `prompt-clusters`, `_core.py`, `tests/`; nothing in `llmao/` or `bin/` imports from it. Designed in `docs/analysis-design.md` |
+| The reports, and the content analyses | `analysis/`: `prompts` with a command per question, `_core.py` and the three modules behind it, `tests/`; nothing in `llmao/` or `bin/` imports from it. Designed in `docs/analysis-design.md` |
 | The `demand-rollup` runner, daily | `llmao/capacity.py` beside `CapacityWriter`; registered in `main.py`; calls `prompt_log.rollup_day` for the log side |
 | `rollup_day(day)`: spawns the tool for one day, parses its JSON | `llmao/prompt_log.py` |
 | The single reader of `/spend/logs/v2`, one closed day, page by page | `llmao/proxy/client.py`, beside the daily reader |

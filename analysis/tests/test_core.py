@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""What the analysis scripts share (analysis/_core.py), and prompt-report end to end."""
+"""What the analysis commands share (analysis/_core.py), and `prompts report` end to end."""
 
 from __future__ import annotations
 
