@@ -237,10 +237,26 @@ judge prompt, the exemplar or the model changed.
 
 One call per cluster, carrying the judge prompt and the exemplar: the
 head, the messages, and the cluster's figures as plain numbers
-(requests, median prompt and completion tokens, the model used), because
-the tier question needs the size of the work and the cut messages hide
-it. The answer is fixed in shape: the three questions, one answer each,
-and a sentence of reasoning, as JSON.
+(requests, mean prompt and completion tokens, the models used, and how
+many requests were the same request sent to more than one model),
+because the tier question needs the size of the work and the cut
+messages hide it. The answer is fixed in shape: the three questions, one
+answer each, and a sentence of reasoning, as JSON.
+
+Two figures carry rules, learnt from three judges on one day. They
+agreed on Foundation work 23 of 23 times and on the activity 19 to 22
+of 23, but on the tier only 8 to 13 of 23: gemma4-26b called 19 of 23
+clusters low, the 8b called 14 medium, the int4 27b called five high.
+"Would a smaller model do" is a self-assessment, and a strong model
+finds the work easy. So the judge prompt now decides the tier from the
+completion length first, a few tokens out being a label and low, long
+completions over agent work being high, and in doubt the higher tier,
+since underestimating the work is the costly mistake (a colleague's
+point: lean high). And the paired count, the same request sent to more
+than one model, marks a person comparing models, which is Foundation
+work whatever the requests contain; the judge cannot see that from one
+exemplar, and without it a model-evaluation batch of German emails was
+judged non-Foundation work by all three judges.
 
 - **A self-hosted model only.** The exemplars are other projects'
   prompts, and they do not leave our boxes. The default is `qwen3-8b`, a
@@ -368,6 +384,13 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
 15. **The portal never runs analysis** and never reads the day files or
     the store. Its project and keys pages are fed by the demand values
     and LiteLLM.
+16. **The tier leans high** (2026-11-05). The judge is told to decide it
+    from the completion length and to pick the higher tier in doubt; a
+    recommendation to downgrade comes only with strong evidence, and the
+    "lighter" column of the tier report is the one to act on first.
+17. **The same request to several models is model evaluation** and so
+    Foundation work (2026-11-05), measured at scan time and told to the
+    judge as a figure.
 
 ## Roadmap
 

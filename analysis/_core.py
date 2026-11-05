@@ -429,6 +429,7 @@ CREATE TABLE IF NOT EXISTS cluster_days (
     prompt_p50 INTEGER,
     completion_p50 INTEGER,
     models_json TEXT NOT NULL,
+    paired INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (fingerprint, day)
 );
 CREATE TABLE IF NOT EXISTS verdicts (
@@ -451,6 +452,10 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
+        # A column added since the store was made. The value is right only
+        # after a rebuild; the README says so.
+        if "paired" not in {r["name"] for r in self.db.execute("PRAGMA table_info(cluster_days)")}:
+            self.db.execute("ALTER TABLE cluster_days ADD COLUMN paired INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self.db.close()
@@ -486,6 +491,10 @@ class Store:
     def scan_day(self, log_dir: pathlib.Path, day: dt.date) -> int:
         """Cluster one day's records and write them, one transaction; returns the records clustered."""
         groups: dict[str, edict] = {}
+        # The same messages sent to several models is a person comparing
+        # models, which the judge cannot see from one exemplar: per group,
+        # which models each distinct request went to.
+        sent_to: dict[str, dict[str, set[str]]] = {}
         for r in read_day(log_dir, day):
             fp = fingerprint(r)
             if fp is None:
@@ -493,8 +502,9 @@ class Store:
             g = groups.get(fp.fingerprint)
             if g is None:
                 g = groups[fp.fingerprint] = edict(
-                    fp, requests=0, failures=0, prompt=[], completion=[], models={}, candidates=[]
+                    fp, requests=0, failures=0, prompt=[], completion=[], models={}, candidates=[], paired=0
                 )
+                sent_to[fp.fingerprint] = {}
             g.requests += 1
             if r.get("status") == "failure":
                 g.failures += 1
@@ -505,6 +515,10 @@ class Store:
             c = candidate(r, instructions(r)[1])
             if c is not None:
                 g.candidates.append(c)
+            request = digest(json.dumps(r.get("messages"), sort_keys=True))
+            sent_to[fp.fingerprint].setdefault(request, set()).add(r["model"])
+        for fp, requests in sent_to.items():
+            groups[fp].paired = sum(len(models) for models in requests.values() if len(models) > 1)
         records = sum(g.requests for g in groups.values())
         now = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
         with self.db:
@@ -520,7 +534,7 @@ class Store:
         d = day.isoformat()
         self.db.execute(
             "INSERT OR REPLACE INTO cluster_days (fingerprint, day, requests, failures, prompt_tokens, "
-            "completion_tokens, prompt_p50, completion_p50, models_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "completion_tokens, prompt_p50, completion_p50, models_json, paired) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 g.fingerprint,
                 d,
@@ -531,6 +545,7 @@ class Store:
                 percentile(g.prompt, 0.5),
                 percentile(g.completion, 0.5),
                 json.dumps(g.models, sort_keys=True),
+                g.paired,
             ),
         )
         row = self.cluster(g.fingerprint)
@@ -566,7 +581,7 @@ class Store:
         rows = self.db.execute(
             "SELECT c.*, SUM(d.requests) AS requests, SUM(d.failures) AS failures, COUNT(d.day) AS days, "
             "SUM(d.prompt_tokens) AS prompt_tokens, SUM(d.completion_tokens) AS completion_tokens, "
-            "GROUP_CONCAT(d.models_json, '\n') AS models_rows "
+            "SUM(d.paired) AS paired, GROUP_CONCAT(d.models_json, '\n') AS models_rows "
             "FROM clusters c JOIN cluster_days d USING (fingerprint) WHERE d.day BETWEEN ? AND ? "
             "GROUP BY c.fingerprint ORDER BY requests DESC, c.fingerprint",
             (first, last),
@@ -662,11 +677,16 @@ def exemplar_message(c: edict) -> str:
     """The user message for one cluster: its figures, its head, its messages."""
     ok = max(1, c.requests - c.failures)
     models = ", ".join(sorted(c.models))
+    paired = (
+        f"{c.paired:,} of the requests were the same request sent to more than one model"
+        if c.paired
+        else "no request was sent to more than one model"
+    )
     lines = [
         f"Project: {c.project}",
         f"Tool: {c.tool}",
         f"Requests: {c.requests:,} over {c.days} day(s); mean prompt {c.prompt_tokens // ok:,} tokens; "
-        f"mean completion {c.completion_tokens // ok:,} tokens; models used: {models}",
+        f"mean completion {c.completion_tokens // ok:,} tokens; models used: {models}; {paired}",
         "",
         f"INSTRUCTIONS (first {HEAD_CHARS} characters):",
         c.exemplar_head or "(none)",

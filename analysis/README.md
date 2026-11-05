@@ -49,6 +49,17 @@ the head of its instructions, up to three of its user messages. The
 answer is one JSON object, checked against the three answer sets, with
 a sentence of reasoning.
 
+Two of the figures carry rules the judge is told to follow. The
+completion length decides the tier before the text does: a few tokens
+out is a label and low, long completions over agent work are high, and
+in doubt the higher tier, since underestimating the work is the costly
+mistake. The paired count, how many of the cluster's requests were the
+same request sent to more than one model, marks a person comparing
+models, which is Foundation work whatever the requests contain. Three
+judges on one day agreed on Foundation work 23 of 23 times and on the
+activity 19 to 22 of 23, but on the tier only 8 to 13 of 23 before
+those rules were written: a strong model finds everything easy.
+
 **A verdict** is kept per cluster, judge prompt and model, with the hash
 of the exemplar it was given. Any of the three changing makes it stale:
 rewording the questions re-judges every cluster, a re-picked exemplar
@@ -89,7 +100,8 @@ be a quiet listing with no verdicts.
 
 `analysis_dir/prompts.db`, SQLite, four tables: `days` (which days are
 in), `clusters` (what does not change per day, plus the exemplar),
-`cluster_days` (the figures per cluster per day), and `verdicts` (one
+`cluster_days` (the figures per cluster per day, the paired count among
+them), and `verdicts` (one
 per cluster, judge prompt and model, with the exemplar hash it was given).
 Every row older than `analysis_retention_days` is pruned at each run, a
 pruned cluster's verdicts with it; `--rebuild` forgets the days and
