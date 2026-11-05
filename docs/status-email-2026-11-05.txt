@@ -1,0 +1,113 @@
+Subject: Apache LLMAO — new models, more tools, and learning from use
+
+Hi all,
+
+An update on Apache LLMAO, the Foundation's gateway to AI models at
+https://llm.apache.org, covering the last two weeks. Most of this note
+is for the people using it. A paragraph near the end is for the people
+building it, and a couple of lines for the RAI admins.
+
+New models
+----------
+Two models joined the catalogue, both open weights, both Apache-2.0:
+
+• qwen3.5-9b: a step up from Qwen3 8B in reasoning and code, with the
+  same quick turnaround. A good pick for routine calls that need a bit
+  more thought.
+• qwen3.8-27b-int4: our strongest reasoning model, built to fit smaller
+  cards, so it can be served from more of the machines we rent.
+
+The Models page is the live list and shows which models are serving
+right now. Pick a model id from there.
+
+More tools
+----------
+Qwen Code now has a setup page, alongside Claude Code, Codex, Grok Build
+and Pi, and the Grok Build page has been refreshed. Each page is a few
+lines of configuration: point the tool at llm.apache.org, give it your
+key, name a model. Pages for OpenCode, Gemini CLI and Antigravity are on
+the way. Anything that speaks the OpenAI API works without a page; the
+FAQ has the two settings it needs. All of it is at
+https://llm.apache.org/help.
+
+Smaller things you will notice
+------------------------------
+• My Keys says "last used 3 days ago" rather than printing a raw
+  timestamp, with the exact moment when you hover.
+• If something goes wrong on the site you land on the home page with a
+  message, not an error dump.
+• Every page footer links to the Terms of Use, at /help/terms.
+
+Learning how the gateway is used
+--------------------------------
+Since the start of November the gateway keeps a record of each request
+it serves. We are using it to understand how people actually work with
+the service, so we can improve it: which models and tools people reach
+for, what shape their requests take, where a smaller model would have
+done as well, where a tool is configured in a way that wastes its
+budget, and how much capacity to rent and of what kind. The aim is
+advice back to projects and people on using the gateway well, and a
+service shaped by real use rather than guesses.
+
+What the record holds: the prompt as it arrived, the model asked for
+and the one that served it, the key and its project, the tool that sent
+it, token counts and timing. Responses are not kept. The record lives
+on the gateway host, is read only by the site admins there, and is
+deleted after about ninety days. No page on the site shows a prompt,
+and advice is about the shape of a request, never its content.
+
+The service is for committers and PMC members working on ASF
+codebases, so please keep it to that, and keep credentials and other
+people's personal data out of your prompts. The Terms of Use say all of
+this in full [1].
+
+For the developers
+------------------
+The fleet reconciliation work is most of the way through. The sources
+the portal watches (the rentals, the config fetches, the approvals, the
+LiteLLM deployments, the vLLM probes) each live in a module of their
+own now, joined by one key, and the reconcile step reads the last
+verdict rather than flags on shared objects. Approving a host is the
+intent; the old admin labels are gone. A machine nobody intends is
+shown, never adopted, and an orphan deployment is skew for a human to
+decide, never pruned unattended. RunPod's public port comes from its
+listing, as Vast's does. The design and the box lifecycle are written
+up [2][3], and ARCHITECTURE.md was redone as a map of the pieces, with
+the diagrams redrawn [4]. The prompt log is a LiteLLM hook that hands
+one record per request to loguru, which owns the rest: the day file,
+rotation at UTC midnight, compressing the finished day and deleting
+past retention, all on its own writer thread. We wrote none of that
+file handling ourselves, on purpose: where the community has already
+built the thing, we would rather use it and send fixes upstream than
+build our own [5]. The analysis end (clustering a day's requests, a
+judge run across several of our own models) is R&D in analysis/,
+outside the package, until it settles [6]. And each vLLM server now
+requires its bearer on every path but /health, after /metrics turned
+out to answer anyone who found the port.
+
+For the RAI admins
+------------------
+/admin/capacity is a planning page now: day charts, what was asked
+beside what was served per model, cost per million tokens, and a
+Recommendations box [7]. Its first rule has already earned its keep: it
+found a rental whose KV cache was too small for its traffic (qwen3-8b
+on a pair of 12 GB cards, preempting requests) and said what to rent
+instead. On Models, each machine nobody intends is one attention item,
+Stop tracking deletes an orphan, and an orphan serving a model name
+marks that model Mixed until you act.
+
+Questions, problems and requests: reply here, #llmao-notify on Slack,
+or an issue at https://github.com/apache/tooling-llmao.
+
+Cheers,
+-g
+
+[1] https://llm.apache.org/help/terms
+[2] https://github.com/apache/tooling-llmao/blob/main/docs/fleet-reconcile-design.md
+[3] https://github.com/apache/tooling-llmao/blob/main/docs/box-lifecycle.md
+[4] https://github.com/apache/tooling-llmao/blob/main/docs/ARCHITECTURE.md
+[5] https://github.com/apache/tooling-llmao/blob/main/docs/prompt-logging-design.md
+[6] https://github.com/apache/tooling-llmao/blob/main/docs/analysis-design.md
+[7] https://github.com/apache/tooling-llmao/blob/main/docs/capacity-design.md
+
+ps. drafted with help from Claude Code.
