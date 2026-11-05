@@ -11,8 +11,8 @@ out of the `llmao` package until it settles: nothing in `llmao/` or
 |---|---|---|
 | `prompt-report` | requests and prompt tokens by project, user, model and tool; prompt length per model; the share that stream, carry tools or end at max_tokens; failures by class; messages per request. No prompt content | the day files |
 | `prompt-clusters` | who is sending what kind of request: the records of a span clustered by fingerprint, with figures per cluster and one exemplar each, kept in the store so a day is read once. `--show <fingerprint>` prints a cluster's exemplar in full. No model involved | the day files, the store |
-| `prompt-judge` | a model's verdict per cluster, from `judge-prompt.md`: Foundation work or not, the lowest tier that would do, the activity. A dry run by default: the first request and the count, nothing sent. `--judge` sends them, one in flight through the front door with the `llmao-analysis` key, each verdict written as it returns; a cluster is judged again only when the judge prompt, the exemplar or the model changed. `--findings` is the listing alone | the store, the gateway |
-| `judge-prompt.md` | the judge's fixed questions and answer shape; its hash is part of what makes a verdict stale, so rewording it re-judges every cluster | |
+| `prompt-judge` | the end result: a model's verdict per cluster and the reports an admin acts on. Its own section below | the store, the gateway |
+| `judge-prompt.md` | the judge's fixed questions and answer shape | |
 | `_core.py` | what the scripts share: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the SQLite store | |
 | `tests/` | the scripts' tests, in the suite with `uv run pytest` | |
 
@@ -33,6 +33,57 @@ out of the `llmao` package until it settles: nothing in `llmao/` or
   re-picked only when the cluster has at least doubled since.
 - **Activity:** what the people behind a cluster were doing. The judge's
   answer, never the cluster's name.
+
+## The judge
+
+`prompt-judge` is what the rest is for. It asks a model three questions
+about each cluster, keeps the answers, and prints the reports an admin
+reads: which clusters are not Foundation work, which run on a heavier
+model than the work needs, and what people are doing with the gateway.
+
+**The questions** are `judge-prompt.md`, sent as the system message with
+every call: is this Foundation work (yes, no, unclear); the lowest tier
+that would serve it (low, medium, high); the activity, one of eight
+labels. The exemplar goes as the user message: the cluster's figures,
+the head of its instructions, up to three of its user messages. The
+answer is one JSON object, checked against the three answer sets, with
+a sentence of reasoning.
+
+**A verdict** is kept per cluster, judge prompt and model, with the hash
+of the exemplar it was given. Any of the three changing makes it stale:
+rewording the questions re-judges every cluster, a re-picked exemplar
+re-judges one, and a different model judges everything afresh while the
+first model's verdicts stay. Each verdict is its own transaction,
+written as it returns, so a run that stops at 200 of 1,000 keeps 200
+and resumes at 201.
+
+**Running it.** A dry run by default: the first request it would send
+and the count of clusters lacking a verdict, nothing sent. `--judge`
+sends them, one request in flight through the front door
+(`analysis_gateway`) with the `llmao-analysis` service key
+(`analysis_key`), to `analysis_model` or `--model`. `--limit` caps the
+calls in one run. Clusters from the master key are the operators' smoke
+tests and are never judged; the listing marks them with a footnote.
+
+**The reports**, printed after judging or alone with `--findings`:
+
+- *Verdicts:* every cluster of the span with its three answers, then
+  each verdict's reason.
+- *Tier:* for each judged cluster, the judged tier, the model that tier
+  recommends, the models the cluster used, and how many of its requests
+  went to a heavier model than the work needs (the saving to suggest)
+  or a lighter one (the risk). Heaviest excess first. `analysis_tiers`
+  in `config.yaml` says which model serves which tier.
+- *Compare:* with `--compare <model>`, the two models' verdicts side by
+  side on the clusters where they differ, for weighing one judge
+  against another before trusting either.
+
+`--json` prints the clusters with their verdicts instead.
+
+**Startup checks.** Every model a run mentions, the judge's, the one to
+compare with, and all of the tier map, must be defined in `models.yaml`,
+or the script stops and names the unknown ones. A typo would otherwise
+be a quiet listing with no verdicts.
 
 ## The store
 

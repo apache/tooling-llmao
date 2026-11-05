@@ -143,6 +143,12 @@ analysis_retention_days: 90
 analysis_gateway: https://llm.apache.org
 analysis_model: qwen3-8b
 # analysis_key: sk-...
+# Which models serve which of the judge's tiers, for the tier report: the
+# first in each list is the one to recommend. Optional; this is the default.
+analysis_tiers:
+  low: [qwen3-8b, qwen3.5-9b]
+  medium: [qwen3.8-27b-int4]
+  high: [qwen3.8-27b, gemma4-26b]
 
 # uids that may view any project's activity, and reach /admin and the
 # Deployments on /models (plus asfquart isRoot).

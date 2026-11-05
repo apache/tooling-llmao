@@ -267,6 +267,19 @@ and a sentence of reasoning, as JSON.
 - **A dry run by default.** Without `--judge` the script prints the
   first request it would send and how many clusters lack a verdict, and
   sends nothing. The synchronous httpx client, one request at a time.
+- **The master key is never judged.** Its clusters are the operators'
+  smoke tests, which the judge cannot tell from a person's questions
+  about the weather; the listing marks them and a footnote says why.
+- **Several judges side by side.** The model is part of a verdict's key,
+  so `--model` judges with a second model and keeps its verdicts beside
+  the first's, and `--compare` lists the two together with the clusters
+  where they differ. That is how the 8b's noise on the tier question is
+  measured against the int4 27b before either is trusted.
+- **The tier report.** For each judged cluster, the judged tier against
+  the models it used, with `analysis_tiers` saying which model serves
+  which tier: the requests on a heavier model than the work needs are
+  the saving to recommend, the requests on a lighter one the risk.
+  Heaviest excess first.
 - **Yielding to users:** one request in flight, run in the quiet hours
   after the 01:00 UTC rollup. A request-level priority on our boxes,
   which would let the judge's calls queue behind everyone's, is
@@ -285,6 +298,7 @@ Four flat keys in `config.yaml` beside `prompt_log_dir`:
 | `analysis_gateway` | the gateway the judge calls, through the front door | `https://llm.apache.org` |
 | `analysis_model` | the judge's model | `qwen3-8b` |
 | `analysis_key` | the judge's gateway key | none: the judge stops before its first call |
+| `analysis_tiers` | which models serve which tier, first to recommend, for the tier report | low: qwen3-8b, qwen3.5-9b; medium: qwen3.8-27b-int4; high: qwen3.8-27b, gemma4-26b. A guess to correct |
 
 Optional with these defaults until p6 renders them, in two steps: the
 scripts code the defaults now, with a note to update p6; once p6 renders
@@ -293,9 +307,12 @@ the keys they become required, like `prompt_log_dir` already is.
 ### Failing hard
 
 A script stops with a message on a missing `config.yaml`, a missing
-required key, a day file it cannot read, a judge call that fails. It can
-fail harder than the portal: a startup error there takes a service
-down, here it makes the admin fix their invocation. No script ever
+required key, a day file it cannot read, a judge call that fails, or a
+model name that `models.yaml` does not define, whether the judge's, one
+to compare with, or any in the tier map. It can fail harder than the
+portal: a startup error there takes a service down, here it makes the
+admin fix their invocation. The same check in the portal, when it reads
+settings that name models, would be a warning. No script ever
 opens a connection to LiteLLM except the judge's model calls, and none
 writes in the log directory.
 

@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao.models import load_models, models_path_from_cfg
 from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, read_day, tool_family
 
 if TYPE_CHECKING:
@@ -65,6 +66,13 @@ DEFAULT_RETENTION_DAYS = 90
 DEFAULT_MODEL = "qwen3-8b"
 DEFAULT_GATEWAY = "https://llm.apache.org"
 ANALYSIS_KEY_ALIAS = "llmao-analysis"  # the judge's service key; its own requests are never clustered
+# Which models serve which tier, lowest first within a tier; the first is the
+# one to recommend. A guess to be corrected in config.yaml analysis_tiers.
+DEFAULT_TIERS = {
+    "low": ["qwen3-8b", "qwen3.5-9b"],
+    "medium": ["qwen3.8-27b-int4"],
+    "high": ["qwen3.8-27b", "gemma4-26b"],
+}
 
 
 def _settings(config: pathlib.Path) -> dict:
@@ -117,6 +125,26 @@ def retention_days(config: pathlib.Path = CONFIG) -> int:
     """
     s = _settings(config)
     return int(s.get("analysis_retention_days") or s.get("prompt_log_retention_days") or DEFAULT_RETENTION_DAYS)
+
+
+def tiers(config: pathlib.Path = CONFIG) -> dict[str, list[str]]:
+    """analysis_tiers: which models serve which tier, else the coded guess."""
+    raw = _settings(config).get("analysis_tiers")
+    return {t: [str(m) for m in raw.get(t) or []] for t in TIERS} if raw else DEFAULT_TIERS
+
+
+def require_models(names: set[str], config: pathlib.Path = CONFIG) -> None:
+    """Every model a run mentions must be one models.yaml defines, or the script stops.
+
+    The judge's model, a model to compare with, and every model in the
+    tier map. A typo would otherwise be a quiet "no verdicts" or a tier
+    report that places nothing. The portal, reading the same config,
+    would warn; a script fails.
+    """
+    known = {m["model_name"] for m in load_models(models_path_from_cfg(edict(_settings(config))))}
+    unknown = sorted(names - known)
+    if unknown:
+        raise SystemExit(f"not in models.yaml: {', '.join(unknown)} (known: {', '.join(sorted(known))})")
 
 
 def judge_settings(config: pathlib.Path = CONFIG) -> edict:
@@ -247,6 +275,7 @@ def head(text: str) -> str:
 
 
 MASTER_KEY_HASH = "litellm_proxy_master_key"  # LiteLLM's placeholder: no team, user default_user_id
+MASTER_KEY = "(master key)"  # the operators' own requests: smoke tests, never judged
 
 
 def who(key: dict) -> str:
@@ -256,7 +285,7 @@ def who(key: dict) -> str:
     user, and "default_user_id" in a listing reads as a person.
     """
     if key.get("hash") == MASTER_KEY_HASH:
-        return "(master key)"
+        return MASTER_KEY
     return key.get("user") or key.get("alias") or (key.get("hash") or "?")[:12]
 
 
@@ -707,3 +736,45 @@ def parse_verdict(text: str) -> edict:
         if v.get(key) not in allowed:
             raise JudgeError(f"{key} is {v.get(key)!r}, not one of {allowed}")
     return edict(asf_work=v["asf_work"], tier=v["tier"], activity=v["activity"], reason=str(v.get("reason") or ""))
+
+
+# ---- the tier report ----------------------------------------------------
+#
+# The judge's tier against the models the cluster actually used. A request
+# on a model above the tier is one a cheaper model would have served; one
+# below is a risk the judge thinks the model is not up to.
+
+
+def tier_of(model: str, by_tier: dict[str, list[str]]) -> str | None:
+    """The tier a model serves, or None for a model the map does not know (a paid provider's, say)."""
+    for tier, models in by_tier.items():
+        if model in models:
+            return tier
+    return None
+
+
+def tier_report(clusters: Iterable[edict], by_tier: dict[str, list[str]]) -> list[edict]:
+    """Per judged cluster: the tier, the model to recommend, and the requests above and below the tier.
+
+    Heaviest excess first, so the top of the list is the biggest saving.
+    """
+    rank = {t: i for i, t in enumerate(TIERS)}
+    out = []
+    for c in clusters:
+        if not c.verdict:
+            continue
+        verdict_rank = rank[c.verdict.tier]
+        above = below = unranked = 0
+        for model, n in c.models.items():
+            t = tier_of(model, by_tier)
+            if t is None:
+                unranked += n
+            elif rank[t] > verdict_rank:
+                above += n
+            elif rank[t] < verdict_rank:
+                below += n
+        recommended = (by_tier.get(c.verdict.tier) or ["?"])[0]
+        out.append(
+            edict(cluster=c, tier=c.verdict.tier, recommended=recommended, above=above, below=below, unranked=unranked)
+        )
+    return sorted(out, key=lambda r: (-r.above, -r.below, r.cluster.fingerprint))
