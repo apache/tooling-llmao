@@ -5,6 +5,10 @@ how it is used: who asks, what shape the requests have, which models and
 tools, how that changes over time. It is analysed by a separate process,
 after the fact. Nothing in the request path analyses anything.
 
+This document is about getting the records: what is recorded, how, where
+it is kept, and the figures folded from it into the demand values. What
+is then done with the records, and for whom, is `docs/analysis-design.md`.
+
 ## Decisions
 
 Made 2026-11-01. Each is a choice, recorded so it is not re-derived.
@@ -45,7 +49,10 @@ Made 2026-11-01. Each is a choice, recorded so it is not re-derived.
     config.yaml, not Puppet.
 11. **Parked: a Usage Analysis page** for admins in place of reading the
     script's output. The demand rows are shaped as that page's input now,
-    so it is a second reader later, not a second pipeline.
+    so it is a second reader later, not a second pipeline. Since
+    2026-11-04 this is the project page's panels in
+    `docs/analysis-design.md`, pointed at a project's members rather
+    than at admins.
 12. **loguru writes the files.** The hook hands each record to a loguru
     sink, which owns the day file, the rotation at UTC midnight, the gzip
     of the finished day and the deletion past retention, all in its own
@@ -124,8 +131,8 @@ Nothing here waits for the review.
 | N6 | Terms of Use page and footer link: done 2026-11-01, with the Responsible AI Initiative's terms folded in; the words follow the review. STATUS.md data handling is rewritten at N8, when the log exists; the retention number stays "approximately 90 days" until decided | decision 4, "Access", "The terms page" |
 | N7 | The reports | done 2026-11-04 (text or `--csv`); moved from the tool to `analysis/prompt-report` the same day, when `analysis/` was made for the content analyses |
 | N8 | Switched on: p6 (`init.pp` directory and parameters, `litellm.yaml.epp` callback settings, the proxy unit's `ReadWritePaths`) | all of the above |
-| N9 | Which content analyses, and where they run | open |
-| N10 | Usage Analysis page | parked |
+| N9 | Which content analyses, and where they run | continued in `docs/analysis-design.md`, whose roadmap starts at A1 |
+| N10 | Usage Analysis page | superseded by the project page's panels, step A6 of `docs/analysis-design.md` |
 
 ### Step numbers used elsewhere
 
@@ -375,10 +382,11 @@ Text tables, or CSV when someone wants a spreadsheet.
 
 Analyses of the content itself, which is the reason the content is kept
 (what people ask for, how agents are used, what a project's work looks
-like), are the scripts that follow `prompt-report` in `analysis/`, and
-which ones is N9. A model judging prompts runs on the host too, through
-one of the gateway's own self-hosted models, one request in flight; its
-shape is N9's.
+like), are the scripts that follow `prompt-report` in `analysis/`. They
+have a design of their own, `docs/analysis-design.md`, which picks up
+where this document ends: the questions asked of the records, who sees
+which answers, the clusters and their store, the judge, and the way an
+answer gets back to a project.
 
 ### Two words, kept apart
 
@@ -533,7 +541,7 @@ that already owns the neighbouring role.
 | The callback: settings from `callback_settings`, built once by a module `__getattr__`, the directory check, the loguru sink, payload to record, the pre-call strip | `litellm_hooks.py`; tests in `tests/test_litellm_hooks.py` |
 | Record shape, file name pattern, reading a day file, the rollup of a day | `llmao/prompt_log.py` (new; imports nothing heavy); tests in `tests/test_prompt_log.py` |
 | The tool: `rollup --json` | `bin/llmao-prompt-log`, argparse over the module; the directory always on the command line |
-| The reports, and the content analyses to come | `analysis/`: `prompt-report`, `_core.py` (the `config.yaml` reader, the span of days), `tests/`; nothing in `llmao/` or `bin/` imports from it |
+| The reports, and the content analyses | `analysis/`: `prompt-report`, `prompt-clusters`, `_core.py`, `tests/`; nothing in `llmao/` or `bin/` imports from it. Designed in `docs/analysis-design.md` |
 | The `demand-rollup` runner, daily | `llmao/capacity.py` beside `CapacityWriter`; registered in `main.py`; calls `prompt_log.rollup_day` for the log side |
 | `rollup_day(day)`: spawns the tool for one day, parses its JSON | `llmao/prompt_log.py` |
 | The single reader of `/spend/logs/v2`, one closed day, page by page | `llmao/proxy/client.py`, beside the daily reader |

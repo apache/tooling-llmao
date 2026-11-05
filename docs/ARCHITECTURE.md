@@ -196,6 +196,12 @@ All of these are runners: `app.add_runner` in `main.py`, each one
 `while True` loop with its own interval, listed by name in the portal
 diagram under "Reference".
 
+One thing is not a runner and not the portal's at all: the analysis of
+the prompt log's content. An admin runs the scripts in `analysis/` at a
+shell on the host, in the quiet hours; they read the day files and keep
+their own store, and nothing of theirs reaches the portal except what
+an admin writes down. Design: `docs/analysis-design.md`.
+
 ## Where state lives
 
 | Where | What | Written by | Read by | Kept |
@@ -209,7 +215,8 @@ diagram under "Reference".
 | `llmao:capacity:<hour>:<server>` | a **capacity value**: what one server did in one hour | `capacity-writer` | `/admin/capacity` | `capacity_retention_days`, by `capacity-prune` |
 | `llmao:demand:<hour>:<model>` | a **demand value**: what was asked of one model in one hour, with each project's share | `demand-rollup` | `/admin/capacity` | the same |
 | `llmao:demand-day:<day>` | a **day marker**: fold version, sources, count, log status for a rolled-up day | `demand-rollup` | `demand-rollup` | the same |
-| `/x1/llmao/prompt-log/prompts-<day>.jsonl`, `.gz` after the day | the **prompt log**: one record per request | the `prompt_log` hook, through loguru | `bin/llmao-prompt-log`, the rollup | `prompt_log_retention_days`, by the sink; root only |
+| `/x1/llmao/prompt-log/prompts-<day>.jsonl`, `.gz` after the day | the **prompt log**: one record per request | the `prompt_log` hook, through loguru | `bin/llmao-prompt-log` for the rollup; the `analysis/` scripts | `prompt_log_retention_days`, by the sink; root only |
+| `analysis_dir/prompts.db` | the **analysis store**: which days are in, the clusters of records with one exemplar each, the judge's verdicts | the `analysis/` scripts, run by an admin | the same scripts; never the portal | `analysis_retention_days`, by the scripts; root only |
 | in the portal's memory | `Fleet` (servers, deployments, approvals, rentals, orphans), `HourlyRollup` (the hour being sampled), the team-id cache | the runners | the pages | lost at restart, rebuilt from config and probing |
 | `config.yaml`, `litellm.yaml` | settings, secrets, `fleet.hosts`, providers | Puppet | the portal, the proxy | the node data in p6 |
 | `models.yaml` | model recipes, capability chips, governance fields | committers | the portal | this repository |
@@ -266,7 +273,7 @@ for how a change reaches history.
 | `llmao/token_window.py` | a rolling token allowance as daily buckets | |
 | `llmao/fmt.py` | figures and moments as a person reads them | |
 | `bin/` | the admin tools run at a shell on the host | `bin/README.md` |
-| `analysis/` | the prompt log's reports and content analyses, R&D outside the package; nothing in `llmao/` or `bin/` imports from it | `analysis/README.md` |
+| `analysis/` | the prompt log's reports and content analyses, R&D outside the package; nothing in `llmao/` or `bin/` imports from it | `docs/analysis-design.md`, `analysis/README.md` |
 | `hosting/` | what runs on the boxes: `provision.sh`, the installer, the RunPod image | `hosting/README.md` |
 | `tests/` | the suite, with `MockBackend` and a fake transport; injected only by tests, never a runtime mode | `docs/llmao-harnesses.md` |
 

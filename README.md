@@ -18,6 +18,9 @@ here.
 | [`docs/box-protocol.md`](docs/box-protocol.md) | How a GPU box asks for its configuration: the fleet key, the vLLM bearer, the JSON |
 | [`docs/box-lifecycle.md`](docs/box-lifecycle.md) | The state machine for a vLLM server on our boxes: states, transitions, what each makes llmao do |
 | [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md) | Fleet state kept in step with LiteLLM (working document) |
+| [`docs/capacity-design.md`](docs/capacity-design.md) | Capacity planning: what the boxes did and what was asked of the models, per hour |
+| [`docs/prompt-logging-design.md`](docs/prompt-logging-design.md) | The prompt log: what is recorded, how, and the figures folded from it |
+| [`docs/analysis-design.md`](docs/analysis-design.md) | What is done with the prompt log, and for whom: clusters, the judge, reporting to admins, projects and people |
 | Infra `p6/modules/llmao` | Production deploy |
 
 ```

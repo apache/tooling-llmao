@@ -4,7 +4,8 @@ What is done with the prompt log's records for a person: the reports
 today, the content analyses as they are built. This is R&D, and it stays
 out of the `llmao` package until it settles: nothing in `llmao/` or
 `bin/` imports from here, and the wheel does not carry it. Design:
-`docs/prompt-logging-design.md`, "The post-process" and the N9 rows.
+`docs/analysis-design.md`; how the records come to exist is
+`docs/prompt-logging-design.md`.
 
 | | what | reads |
 |---|---|---|
