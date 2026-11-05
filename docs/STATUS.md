@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-09-13<br>
+**As of:** 2026-11-05<br>
 **Repo:** `apache/tooling-llmao`<br>
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`<br>
 **How to run/use this software:** repo [`README.md`](../README.md)<br>
@@ -12,8 +12,10 @@
 |------|--------|
 | Product concepts (project-centered, budgets, credentials) | **rai-private design** |
 | What the code does *today* (short) | **Done** below — detail is the code |
+| What is open, what is parked, what is waiting on a decision | **Where the work stands** below |
 | **Planned UX** (layouts, workflows, phases) | **UX backlog** below |
 | How to run locally / PATs against proxy | **README** (how-to) |
+| How the pieces connect | [`ARCHITECTURE.md`](ARCHITECTURE.md); the design docs it points at |
 
 ---
 
@@ -28,16 +30,18 @@ Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBacke
 
 **LiteLLM price list:** LiteLLM prices each request to a paid provider from its model cost map, fetched from GitHub at its startup. It reloads every 24 hours because of a schedule set once with `POST /schedule/model_cost_map_reload?hours=24` (master key). The schedule lives in LiteLLM's database, so a rebuilt database loses it; llmao logs an ERROR at startup when it is missing. Spend is priced when a request is made and is never re-priced, so it is LiteLLM's estimate, not the provider's bill.
 
-**GPU fleet:** `fleet.hosts` (IP → listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages and log lines name it by `FleetDeployment.label`, the model then where it runs ("qwen3-8b on Vast 53865410:8001", the listen port, since one host can run several servers; "grok-4 at xAI"), with the rental's own label, status and console link beside it, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/box-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (public IP → rows of model name and listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages and log lines name it by `FleetDeployment.label`, the model then where it runs ("qwen3-8b on Vast 53865410:8001", the listen port, since one host can run several servers; "grok-4 at xAI"), with the rental's own label, status and console link beside it, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/box-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
 
 **Public ports come from the provider's listing.** Vast's instance listing and RunPod's pod listing both carry the container→public mapping; the lifecycle stamps each server's public port from the box its listing places it on. RunPod reassigns the port on every pod recreate, even when the pod lands on the same machine; the next listing read follows it. The optional fourth host-row element that pinned a RunPod port is deprecated: it loads with a warning and only seeds the port until the listing names the box.
 
-**The proxy serves end to end.** A PAT reaches three self-hosted models through `llm.apache.org` with TLS on 443, the LiteLLM port bound to loopback, tool calling and vision on the models that support them, and per-key attribution in the spend log.
+**The proxy serves end to end.** A PAT reaches the self-hosted models through `llm.apache.org` with TLS on 443, the LiteLLM port bound to loopback, tool calling and vision on the models that support them, and per-key attribution in the spend log. The fleet is self-hosted only as of November 2026: nothing is served from a paid provider.
 
 | model | ctx | modality | tools | reasoning default | sustained |
 |---|---|---|---|---|---|
 | `gemma4-26b` | 131,072 | text+vision | yes | **off** | ~128 tok/s |
 | `qwen3.8-27b` | 131,072 | text+vision | yes | on | ~46 tok/s |
+| `qwen3.8-27b-int4` | 131,072 | text+vision | yes | on | not measured |
+| `qwen3.5-9b` | 131,072 | text+vision | yes | on | not measured |
 | `qwen3-8b` | 40,960 | text | yes | on | ~54 tok/s |
 
 Sustained figures are long generations. Short prompts measure round-trip
@@ -45,11 +49,45 @@ overhead and run roughly half these. Single-stream decode is
 memory-bandwidth bound, so the models sit closer together than their sizes
 suggest — the difference between them is concurrency, not per-request speed.
 
-`qwen3-8b-bf16` is `qwen3-8b` from the unquantized weights, for hardware the
-FP8 build cannot load on (the GB10, below). It is a separate `model_name`:
-callers ask for it by that name and it does not pool with the `qwen3-8b`
-boxes. Weights measured at 15.27 GiB. No throughput or price measured yet, so
-its usage prices at zero.
+`qwen3-8b-bf16`, `qwen3-8b` from the unquantized weights for hardware the
+FP8 build cannot load on (the GB10, below), is still defined but retired:
+no deployment, none planned. It stays in `models.yaml` as the record of how
+that card was served.
+
+**Capacity planning.** `/admin/capacity` is a planning page: day charts,
+what was asked of each model beside what its rentals served, cost per
+million tokens, and a Recommendations box whose first rule (a rental whose
+KV cache is too small for its traffic) has already found one. The figures
+are the hourly capacity values the sampler folds from each box's `/metrics`
+and the demand values the daily rollup folds from LiteLLM's spend log and
+the prompt log. Design: `docs/capacity-design.md`.
+
+**The prompt log.** Since 2026-11-04 the proxy records every request it
+serves, one JSON line per request in one file per UTC day on the gateway
+host, written by a LiteLLM hook through loguru, which owns rotation,
+compression and the 90-day retention. The prompt is kept, the response is
+not. Design: `docs/prompt-logging-design.md`; what is kept and who reads
+it is under "Data handling" below and in the Terms of Use.
+
+**The analysis of the log** is R&D in `analysis/`, outside the package:
+one entry point, `prompts`, that clusters a span of days by project,
+person, tool and the opening of the instructions, asks several of our own
+models three questions about each cluster (Foundation work or not, the
+lowest tier that would do, what people are doing), and reports the
+consensus and the clusters running on a heavier model than the work needs.
+Four judges on the first day's 23 clusters agreed on Foundation work every
+time and on the activity nearly so; the tier needed rules. Design:
+`docs/analysis-design.md`.
+
+**Fleet reconciliation** is most of the way through: each source the
+portal watches (rentals, config fetches, approvals, LiteLLM deployments,
+vLLM probes) lives in its own module, joined by one key; an approval is
+intent; a machine nobody intends is shown, never adopted; an orphan
+deployment is skew for a human, never pruned unattended. The Deployment
+step, one class with a transition table absorbing `model_status.py`, is
+what remains; see "Where the work stands". Design:
+`docs/fleet-reconcile-design.md`, a tracking document that is deleted when
+the work is done.
 
 **Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and optionally `kv_bytes_per_token` (KV cache per token of context, so a server's need at `max_model_len` is counted, not just its weights), and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. A box with several GPUs runs every server across all of them (`--tensor-parallel-size`), and the check and the sizing are per card. VRAM sums across co-resident servers, since each loads its own copy; disk counts once per distinct model, since servers of the same model share one copy of the weights. Silent when `nvidia-smi` is absent — an unknown is not a failure. The box then divides the card between its servers: the budget is the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM) less a reserve of 10% or 2 GB per card, whichever is more, and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card. Each server runs with vLLM's startup plan, so the KV cache size measured after CUDA graph capture is kept on the volume and reused, rather than re-estimated on every boot (the estimate can miss the graphs, and a tight card may fail its first boot before the plan exists). A fraction set in `models.yaml` is kept and deducted from the budget first.
 
@@ -62,6 +100,145 @@ Remaining: long vLLM boot, config revision on the box, pending-assignment table,
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
 Edge cases that bite operators (LiteLLM down, pagination, master key drift, prisma path, etc.) are tracked as work items, not product design.
+
+---
+
+## Where the work stands
+
+As of 2026-11-05. Three lists: what is small enough to pick up in an
+hour, what is an afternoon, and the larger threads with the steps each
+still has. Then what is waiting on a decision, and what is parked on
+purpose. Issues on GitHub hold the ideas that want colleagues' eyes
+before any code.
+
+### Small, an hour or less
+
+- **`/admin`'s Work needed tile counts only the skew store.** Stalled,
+  Unhealthy and unknown rentals show only on the `/models` strip; an
+  admin who stays on `/admin` misses them. One line on the tile, "and N
+  fleet items on Models", from the same live state the strip reads.
+- **Disk free on `/admin`.** The host has one 100 GB root disk and the
+  prompt log grows on it. A free-space figure beside the LiteLLM version
+  check. The DataDog monitor half is Infra's.
+- **`hosted_vllm/` check in `validate_models`:** a model with a vLLM
+  recipe must name `hosted_vllm/...` in `litellm_params.model`.
+- **`analysis/prompts` under a closed pipe** (`prompts clusters | head`)
+  ends in a BrokenPipe traceback.
+- **Make the `analysis_*` keys in `config.yaml` required**, as
+  `prompt_log_dir` is, once p6 PR #2924 renders them.
+
+### Medium, an afternoon
+
+- **Check LiteLLM now, per deployment, on `/models`.** LiteLLM's own
+  health check runs every four hours because it sends real completions;
+  after a fix, "LiteLLM down" lingers for hours. A button that runs
+  `GET /health?model_id=<id>` for that one deployment and feeds the
+  result into the same fields the skew check writes. A paid deployment
+  would get a note that it spends tokens.
+- **"At or near their limit" on `/admin`.** Free-tier people at 80% of
+  the rolling allowance and projects at 80% of their weekly cap, from the
+  activity rows the usage pages already read. Quiet when nobody is near.
+- **Issue #68, the scanner.** A source probes `/v1/models` daily with
+  model names as tokens. A refused-at-the-door admin signal, kept apart
+  from refusals of model calls.
+- **The "box" to "rental" sweep.** The settled word for the machine is
+  Rental; "box" survives in doc file names, comments, log lines and the
+  strip text. One sweep, not line by line.
+
+### The larger threads
+
+**Fleet reconciliation, the Deployment step.** Waiting on a decision
+(below) since 2026-10-30.
+
+- Correct the design doc's transition matrix: a walk of its cells
+  against the code found four undeclared mismatches, agreed to be real.
+- `deployment.py` commit 1: the Deployment class and its transition
+  table, absorbing `model_status.py`; `deployment_status(...)` becomes a
+  method, retiring the five-call pair in `fleet.py` and `pages.py`.
+- `docs/box-lifecycle.md` rewritten in the new names.
+- The tracking doc folded into `ARCHITECTURE.md` and deleted.
+- Then re-assess the parked backlog against the new shape.
+
+**The UX rethink** (started 2026-11-02; the capacity display round is
+done).
+
+- The tiles-and-words commit on `/admin/capacity`; whether an idle-rental
+  dollar tile belongs is a question to ask first.
+- Details on `/models` as a tabbed dialog: general; provenance from
+  Apache Sourcelume; an admin tab with provisioning facts and GPU
+  metrics.
+- A rental's detail as a modal, live facts only.
+- Capacity advising on the shape of the next rental for a model ("a 96 GB
+  card with 42 GB of disk") from what its deployments measured.
+- Parked within it: performance numbers, disk and GPU metrics, verdicts.
+
+**Capacity recommendations.** The first rule is live.
+
+- Hours-over-threshold counts in the summaries, for burst awareness
+  (qwen3-8b averaged 1% busy and hit KV 100% in burst hours).
+- The other rules the data supports: Add (busy or queueing in a share of
+  hours), Retire one of several idle rentals, Deploy (asked for, nothing
+  serving), Retire an unasked deployment.
+- Snooze on a recommendation; the minimum rentals per model in config,
+  since redundancy is policy.
+
+**The analysis, the portal's part** (`docs/analysis-design.md` A6 to
+A8; parked 2026-11-05 until the judges have run for a while).
+
+- The project page's panels from each project's share of the demand
+  values: tools by model, refusals, latency, prompt lengths, a daily
+  trend. The data has been in the demand values since fold version 3.
+- A note to a project, written by an admin, dated, shown until a PMC
+  member acknowledges it: the way a finding reaches the people it
+  concerns.
+- A person's own shape on the keys page, from LiteLLM's daily rows.
+- The taxonomy refined with colleagues against real verdicts; tests for
+  `analysis/_core.py` once its functions stop moving.
+
+**Access control** (`docs/access-control-design.md`, a draft).
+
+- Who grants a restricted group: site admins only, or a PMC for its own
+  project.
+- Paid models restricted by default, granted per project with a budget;
+  whether the fallback to a provider stays open to everyone.
+- A model going from Private to Mixed (an orphan, or a provider line
+  added) means prompts may leave our infrastructure; keys minted under
+  the Private promise may want revoking or re-consenting.
+
+### Waiting on a decision
+
+- **The reconcile matrix correction**, two ways: (a) take LiteLLM's
+  "has the deployment" fact out of the Deployment step and make the
+  delete a plan rule, which is the recommendation; or (b) keep it in and
+  rewrite three cells to what the code does, carrying the crossed concern
+  into `deployment.py`.
+- **Who creates automation PATs** (design §5.1.1): RAI, a Chair or VP, or
+  any PMC; the code is provisionally the last.
+- **The Open RAI numbers** under the UX backlog: trial amounts and
+  duration, hard dual budgets or a display split, narrower stewards,
+  capacity fair-share defaults.
+
+### Held on GitHub for colleagues
+
+- **#72, request priority on our boxes.** vLLM's priority scheduling
+  would let the analysis judge queue behind users, but any client could
+  then raise its own priority; it needs the proxy to strip the field from
+  everyone not allowed to set it. Not done.
+- **#73, "self-hosted only" on a request.** LiteLLM's tag filtering:
+  tag the paid deployments when the portal adds them, switch the filter
+  on in `litellm.yaml`, and a request sends `!paid`. Not in our hook,
+  which runs before routing and cannot choose a deployment. Not a
+  development item while nothing is served from a paid provider.
+- **#68, the scanner**, above.
+
+### Parked on purpose
+
+- Withdraw an approval from the UI; a Reboot button once a provider API
+  is verified to reboot a rental; a RunPod console link per pod once a
+  stable per-pod URL is confirmed; explicit `--kv-cache-memory` on a
+  tight card; FLEET_KEY hardening and rotation; the budget and request
+  scaffolding in `seam.py`, which belongs to a colleague's in-progress
+  work and is not to be touched.
 
 ---
 
@@ -247,7 +424,8 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
   stalled box otherwise means guessing.
 - **Check LiteLLM now** per deployment: force LiteLLM's health check from
   the page. It costs tokens, so a per-deployment cooldown (proposed five
-  minutes); paid providers flagged.
+  minutes); paid providers flagged. The shape is settled under "Where the
+  work stands", medium.
 - **Preview as user** toggle for admins, so the user view can be checked
   without a second account.
 - **Drained** state for planned maintenance, so maintenance is not read as
@@ -297,6 +475,13 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
     host restart leaves the box up and the model down. RunPod pods carry
     their launch command in `--docker-args` and recover; the hand-launched
     box does not.
+10. **Active notification when a model goes unserved.** A server was lost
+    unseen for days in late October; Infra has been asked for a monitor.
+    Until then the redundancy rule on `/admin/capacity` is the only
+    signal, and only to someone looking.
+11. **asfquart `Response` pass-through.** `pages.py` carries a
+    `use_template` shim that should go upstream into asfquart and then be
+    dropped here.
 
 ---
 
@@ -307,25 +492,40 @@ database, no application state. Prompt content exists in GPU memory for the
 duration of one request and is overwritten. Deleting a pod leaves nothing
 behind.
 
-What is retained is on the gateway host: token counts, model, latency, and
-a hashed key for attribution. LiteLLM's `messages`, `response` and
-`proxy_server_request` columns can hold full request and completion text
-and are switched off; every row contains `{}`.
+On the gateway host, two things are retained.
 
-That is a current state rather than a principle. Prompt history is useful —
-for debugging, evaluation, possibly retrieval — and we will likely want
-some form of it. When we do it should be a deliberate decision with
-retention limits and an access model, decided openly rather than arrived at
-by default.
+**LiteLLM's spend log**, in Postgres: token counts, model, latency, the
+key's hash, user and project, the tool's user agent. LiteLLM's `messages`,
+`response` and `proxy_server_request` columns can hold full request and
+completion text and are switched off; every row contains `{}`.
+
+**The prompt log**, since 2026-11-04, decided openly with the terms
+written first (`docs/prompt-logging-design.md`, decisions 1 to 4). One
+record per request: the prompt as it arrived, the model asked for and the
+one that served it, the key and its project, the tool, token counts and
+timing, the finish reason. The response is never recorded. The files are
+root-owned under `/x1/llmao/prompt-log`, readable by the site admins over
+`sudo` and by nothing else; no page on the site shows a prompt; no request
+parameter switches the logging off, and the proxy strips the ones that
+would. Retention is 90 days, by the sink that writes the files. The Terms
+of Use (`/help/terms`) say all of this to users.
+
+What the log is for is in `docs/analysis-design.md`: advice back to
+projects and people about the shape of their use, never its content, and
+a service shaped by real use. The analysis runs on the host, by an admin,
+with our own models as judges, and its store carries the same retention.
+Each piece of advice is a snapshot; nothing tracks a person's behaviour
+over time.
 
 Both providers are on secure tiers. A host operator with hardware access
 could in principle observe a request while it is processed; that is true of
 any rented hardware, is contractually prohibited on both platforms, and is
 a live window rather than an archive.
 
-For the pilot the guidance is that anything sent through should be treated
-as visible to llmao admins: public and project-internal material, yes;
-credentials or embargoed work, no. That belongs on the Models page.
+The guidance to users stands: anything sent through is visible to the site
+admins; public and project-internal material, yes; credentials, other
+people's personal data and embargoed work, no. Unpublished security work
+belongs on the models marked Private.
 
 ---
 
