@@ -35,9 +35,7 @@ log directory is --log-dir, else prompt_log_dir in config.yaml.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
-import pathlib
 import sys
 from typing import TYPE_CHECKING
 
@@ -47,6 +45,7 @@ from llmao import fmt
 
 if TYPE_CHECKING:
     import argparse
+    import datetime as dt
 
 OPENING_SHOWN = 72
 
@@ -110,17 +109,6 @@ def _show(store: _core.Store, fp: str) -> int:
     else:
         print("\nno exemplar: no user message of text in any of its records")
     return 0
-
-
-def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
-    ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
-    ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
-    ap.add_argument("--log-dir", type=pathlib.Path, default=None, help="the prompt log directory")
-    ap.add_argument("--analysis-dir", type=pathlib.Path, default=None, help="where the store lives")
-    ap.add_argument("--rebuild", action="store_true", help="forget every scanned day and read the span again")
-    ap.add_argument("--json", action="store_true", help="the clusters over the span as JSON, exemplars included")
-    ap.add_argument("--show", metavar="FINGERPRINT", help="one cluster in full, instead of the listing")
 
 
 def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:

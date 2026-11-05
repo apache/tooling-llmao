@@ -24,12 +24,15 @@
 
 The commands share --days, --from and --to for the span of UTC days,
 and read config.yaml beside this directory (docs/analysis-design.md).
+Every command's arguments are defined here; the modules do the work.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,22 +41,56 @@ import _clusters
 import _judge
 import _report
 
-COMMANDS = (
-    ("report", _report, "who asks what of which model, no content"),
-    ("clusters", _clusters, "the records of a span clustered, into the store"),
-    ("judge", _judge, "the judges' verdict on each cluster"),
-)
+
+def _span(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
+    ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
+    ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
+
+
+def _log_dir(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--log-dir", type=pathlib.Path, default=None, help="the prompt log directory")
+
+
+def _store(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("--analysis-dir", type=pathlib.Path, default=None, help="where the store lives")
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="command", required=True)
-    for name, module, help_text in COMMANDS:
+    sub = ap.add_subparsers(dest="command", required=True, metavar="command")
+
+    def command(name: str, module, help_text: str) -> argparse.ArgumentParser:
         p = sub.add_parser(
             name, help=help_text, description=module.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
         )
-        module.add_arguments(p)
         p.set_defaults(run=module.run, parser=p)
+        return p
+
+    p = command("report", _report, "who asks what of which model, no content")
+    _span(p)
+    p.add_argument("--csv", action="store_true", help="CSV, one block per report, instead of text")
+    _log_dir(p)
+
+    p = command("clusters", _clusters, "the records of a span clustered, into the store")
+    _span(p)
+    _log_dir(p)
+    _store(p)
+    p.add_argument("--rebuild", action="store_true", help="forget every scanned day and read the span again")
+    p.add_argument("--json", action="store_true", help="the clusters over the span as JSON, exemplars included")
+    p.add_argument("--show", metavar="FINGERPRINT", help="one cluster in full, instead of the listing")
+
+    p = command("judge", _judge, "the judges' verdict on each cluster")
+    _span(p)
+    _store(p)
+    p.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")
+    p.add_argument("--limit", type=int, default=None, help="at most this many calls per judge this run")
+    p.add_argument("--model", action="append", default=None, help="a judge, instead of analysis_models; repeatable")
+    p.add_argument("--compare", action="store_true", help="in the listing, each judge's answers where they differ")
+    p.add_argument("--reasons", action="store_true", help="in the listing, each judge's reason")
+    p.add_argument("--findings", action="store_true", help="the listing only")
+    p.add_argument("--json", action="store_true", help="the clusters with their verdicts as JSON")
+
     args = ap.parse_args(argv)
     return args.run(args.parser, args)
 

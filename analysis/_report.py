@@ -35,8 +35,6 @@ the current directory; without either the script stops.
 from __future__ import annotations
 
 import csv
-import datetime as dt
-import pathlib
 import sys
 from typing import TYPE_CHECKING
 
@@ -46,6 +44,8 @@ from llmao import fmt, prompt_log
 
 if TYPE_CHECKING:
     import argparse
+    import datetime as dt
+    import pathlib
 
 
 def _table(title: str, columns: list[str], rows: list[list], *, csv_out: bool) -> None:
@@ -121,14 +121,6 @@ def report(log_dir: pathlib.Path, days: list[dt.date], *, csv_out: bool) -> None
         [[r.model, r.p50, r.p95] for r in rep.conversation],
         csv_out=csv_out,
     )
-
-
-def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
-    ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
-    ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
-    ap.add_argument("--csv", action="store_true", help="CSV, one block per report, instead of text")
-    ap.add_argument("--log-dir", type=pathlib.Path, default=None, help="the prompt log directory")
 
 
 def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:

@@ -51,9 +51,7 @@ for.
 
 from __future__ import annotations
 
-import datetime as dt
 import json
-import pathlib
 import sys
 from typing import TYPE_CHECKING
 
@@ -63,6 +61,7 @@ from llmao import fmt
 
 if TYPE_CHECKING:
     import argparse
+    import datetime as dt
 
 OPENING_SHOWN = 48
 
@@ -192,20 +191,6 @@ def _findings(clusters: list, days: list[dt.date], by_tier: dict, *, compare: bo
         print()
     if smoke:
         print(f"[1] {fmt.plural(len(smoke), 'cluster')} from the master key: the operators' smoke tests, not judged.")
-
-
-def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
-    ap.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
-    ap.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
-    ap.add_argument("--analysis-dir", type=pathlib.Path, default=None, help="where the store lives")
-    ap.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")
-    ap.add_argument("--limit", type=int, default=None, help="at most this many calls per judge this run")
-    ap.add_argument("--model", action="append", default=None, help="a judge, instead of analysis_models; repeatable")
-    ap.add_argument("--compare", action="store_true", help="in the listing, each judge's answers where they differ")
-    ap.add_argument("--reasons", action="store_true", help="in the listing, each judge's reason")
-    ap.add_argument("--findings", action="store_true", help="the listing only")
-    ap.add_argument("--json", action="store_true", help="the clusters with their verdicts as JSON")
 
 
 def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
