@@ -96,7 +96,6 @@ def run_build(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     try:
         if args.rebuild:
             store.rebuild()
-        gone = store.prune(_core.retention_days())
         log_dir = args.log_dir or _core.log_dir()
         scanned = store.scanned_days()
         read = 0
@@ -106,6 +105,10 @@ def run_build(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             n = store.scan_day(log_dir, day)
             read += 1
             print(f"read {day}: {fmt.plural(n, 'record')}")
+        # After the scan, never before: the prune drops the verdicts of
+        # clusters that no longer exist, and between a rebuild and its
+        # scan none exists.
+        gone = store.prune(_core.retention_days())
         if gone:
             print(f"pruned {fmt.plural(gone, 'cluster')} past the retention")
         clusters = store.clusters_over(days)

@@ -100,8 +100,36 @@ def _record(day: str, model: str = "qwen3-8b") -> dict:
         tokens={"prompt": 500, "completion": 20, "total": 520},
         key={"project": "tooling", "user": "someone"},
         user_agent="OpenAI/Python 1.109.1",
-        messages=[{"role": "user", "content": "x"}],
+        messages=[{"role": "user", "content": "what does this function return when the list is empty"}],
     )
+
+
+def test_a_rebuild_keeps_every_verdict(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    import _clusters
+
+    (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_record("2026-11-01")) + "\n")
+    monkeypatch.setattr(_core, "retention_days", lambda: 90)
+    ap = argparse.ArgumentParser()
+    args = argparse.Namespace(
+        days=7, start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 1), log_dir=tmp_path, analysis_dir=tmp_path
+    )
+    args.rebuild = False
+    assert _clusters.run_build(ap, args) == 0
+    store = _core.Store(tmp_path)
+    [c] = store.clusters_over([dt.date(2026, 11, 1)])
+    store.write_verdict(c, "prompt-1", "judge-1", dict(asf_work="yes", tier="low", activity="other", reason="r"))
+    store.close()
+    args.rebuild = True
+    assert _clusters.run_build(ap, args) == 0
+    store = _core.Store(tmp_path)
+    assert [tuple(r) for r in store.db.execute("SELECT fingerprint, model FROM verdicts")] == [
+        (c.fingerprint, "judge-1")
+    ]
+    assert store.db.execute("SELECT count(*) FROM current_verdicts").fetchone()[0] == 1
+    store.close()
+    _ = capsys.readouterr()
 
 
 def test_prompt_report_prints_the_reports_as_text_and_as_csv(tmp_path):
