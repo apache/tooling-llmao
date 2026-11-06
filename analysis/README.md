@@ -47,7 +47,7 @@ the same file and the same store. As root:
 ```bash
 cd /opt/llmao
 sudo ./analysis/prompts build --days 30                 # the days the store lacks, read once
-sudo ./analysis/prompts judge --days 30                 # dry run: the first request, the counts
+sudo ./analysis/prompts judge --days 30                 # dry run: what --judge would do
 sudo ./analysis/prompts judge --days 30 --judge         # send them, judge after judge
 sudo ./analysis/prompts verdicts --days 30 --compare    # the consensus, and where the judges split
 sudo ./analysis/prompts tiers --days 30
@@ -137,9 +137,10 @@ work is the costly mistake), the majority activity, and how many
 distinct answers each question drew. `verdicts` reads the view, and so
 can anyone with the `sqlite3` command.
 
-**`judge`** is a dry run by default: the first request it would send
-and how many clusters each judge still has to answer, nothing sent.
-`--judge` sends them, one request in flight through the front door
+**`judge`** is a dry run by default: the clusters that lack a verdict
+and which judges each lacks, the calls `--judge` would make and about
+how long they take, and where they go; nothing sent. `--request` adds
+the first request as JSON. `--judge` sends them, one request in flight through the front door
 (`analysis_gateway`) with the `llmao-analysis` service key
 (`analysis_key`), judge after judge, and ends with a summary of what
 the run produced and the commands to run next. `--model` names one or

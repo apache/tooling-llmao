@@ -17,7 +17,7 @@
 
 """The judges: their verdict on each cluster, and the reports read from the verdicts.
 
-    prompts judge                       # dry run: the first request it would send, what each judge still lacks
+    prompts judge                       # dry run: the clusters to judge, the calls --judge would make, where they go
     prompts judge --judge               # send them, one at a time, judge after judge
     prompts judge --judge --limit 20    # at most 20 calls per judge this run
     prompts judge --judge --model qwen3-8b   # one judge, instead of the configured list
@@ -80,6 +80,47 @@ def _consensus(args: argparse.Namespace, days: list[dt.date], prompt_hash: str) 
 
 # ---- judge ----------------------------------------------------------------
 
+SECONDS_PER_CALL = 2.5  # measured on the int4 27b; the docs quote it
+
+
+def _dry_run(todo: dict[str, list], judges: list[str], days: list[dt.date], prompt, *, request: bool) -> None:
+    """What --judge would do: the clusters, which judges each lacks, the calls, the time, and where they go."""
+    lacking: dict[str, list[str]] = {}
+    for model, cs in todo.items():
+        for c in cs:
+            lacking.setdefault(c.fingerprint, []).append(model)
+    by_fp = {c.fingerprint: c for cs in todo.values() for c in cs}
+    calls = sum(len(cs) for cs in todo.values())
+    print(f"dry run over {_core.span_text(days)}: {fmt.plural(len(by_fp), 'cluster')} lack a verdict from some judge\n")
+    if not by_fp:
+        print("nothing to do: every cluster has a verdict from every judge")
+        return
+    rows = [
+        [
+            c.fingerprint,
+            c.project,
+            c.who,
+            c.tool,
+            c.requests,
+            "every judge" if len(ms) == len(judges) else ", ".join(ms),
+        ]
+        for fp, ms in lacking.items()
+        for c in (by_fp[fp],)
+    ]
+    _core.table("To judge", ["fingerprint", "project", "who", "tool", "requests", "lacks"], rows)
+    per_judge = ", ".join(f"{len(cs)} to {m}" for m, cs in todo.items() if cs)
+    seconds = calls * SECONDS_PER_CALL
+    about = f"{seconds / 60:.0f} minutes" if seconds >= 90 else f"{seconds:.0f} seconds"
+    print(f"\nwith --judge: {fmt.plural(calls, 'call')}, about {about} at {SECONDS_PER_CALL:g} s a call")
+    print(f"  {per_judge}")
+    print(f"  each through {_core.gateway()} with the {_core.ANALYSIS_KEY_PURPOSE} key")
+    print("a verdict is written as it arrives: a run stopped midway resumes where it stopped")
+    print("--limit N caps the calls per judge; --request prints the first request as it would be sent")
+    if request:
+        first = next(c for cs in todo.values() for c in cs)
+        print(f"\nthe first request, {judges[0]} on {first.fingerprint}:")
+        print(json.dumps(_core.judge_request(first, prompt, judges[0]), indent=1))
+
 
 def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     """Each judge's verdict on every cluster of the span that lacks one; a dry run without --judge."""
@@ -103,13 +144,7 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             for model in judges
         }
         if not args.judge:
-            first = next((cs[0] for cs in todo.values() if cs), None)
-            if first:
-                print(json.dumps(_core.judge_request(first, prompt, judges[0]), indent=1))
-                print()
-            counts = ", ".join(f"{m} {len(cs)}" for m, cs in todo.items())
-            print(f"clusters still to judge over {_core.span_text(days)}: {counts}")
-            print("nothing sent without --judge")
+            _dry_run(todo, judges, days, prompt, request=args.request)
             return 0
         tally: dict[str, collections.Counter] = {m: collections.Counter() for m in judges}
         for model, cs in todo.items():

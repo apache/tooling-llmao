@@ -306,8 +306,10 @@ judged non-Foundation work by all three judges.
   carrying other projects' exemplars; that is the same content under
   the same access, and accepted.
 - **A dry run by default.** Without `--judge` the script prints the
-  first request it would send and how many clusters lack a verdict, and
-  sends nothing. The synchronous httpx client, one request at a time.
+  clusters that lack a verdict and from which judges, the calls
+  `--judge` would make and about how long, and the gateway and key they
+  go to; nothing is sent. The synchronous httpx client, one request at
+  a time.
 - **The master key is never judged.** Its clusters are the operators'
   smoke tests, which the judge cannot tell from a person's questions
   about the weather; the listing marks them and a footnote says why.

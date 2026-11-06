@@ -169,11 +169,12 @@ def judge_settings(config: pathlib.Path = CONFIG) -> edict:
     key = _settings(config).get("analysis_key")
     if not key:
         raise SystemExit(f"{config}: analysis_key is required (a service key whose purpose is {ANALYSIS_KEY_PURPOSE})")
-    return edict(
-        gateway=str(required("analysis_gateway", config)).rstrip("/"),
-        models=judge_models(config),
-        key=str(key),
-    )
+    return edict(gateway=gateway(config), models=judge_models(config), key=str(key))
+
+
+def gateway(config: pathlib.Path = CONFIG) -> str:
+    """analysis_gateway: the front door the judge calls, without a trailing slash."""
+    return str(required("analysis_gateway", config)).rstrip("/")
 
 
 def judge_models(config: pathlib.Path = CONFIG) -> list[str]:

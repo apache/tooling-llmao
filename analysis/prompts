@@ -116,9 +116,11 @@ def main(argv: list[str] | None = None) -> int:
         "the judges' verdicts on the clusters that lack one",
         "Writes the store: asks each judge the three questions about every cluster of the span that has no "
         "verdict from it yet, one request at a time, and ends with a summary and what to run next. "
-        "A dry run unless --judge is given: the first request it would send, and the counts.",
+        "A dry run unless --judge is given: the clusters to judge, which judges each lacks, the calls and "
+        "the time they take, and where they go.",
     )
     p.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")
+    p.add_argument("--request", action="store_true", help="in the dry run, also print the first request as JSON")
     p.add_argument("--limit", type=int, default=None, help="at most this many calls per judge this run")
     p.add_argument("--model", action="append", default=None, help="a judge, instead of analysis_models; repeatable")
 
