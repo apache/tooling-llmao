@@ -138,10 +138,11 @@ prompt_log_retention_days: 90
 # cluster (several is the normal operation: the store's consensus view
 # leans towards "no" on Foundation work and towards the higher tier; a
 # model a paid provider also serves is refused); and the judge's key, a
-# service key named llmao-analysis under the rai project. All but the key
-# are optional with these defaults until p6 renders them; required after
-# that. The key has no default: without it the judge stops before its
-# first call.
+# service key whose purpose is llmao-analysis, under the rai project (the
+# judge's own requests are recognised by that purpose and never
+# clustered). All but the key are optional with these defaults until p6
+# renders them; required after that. The key has no default: without it
+# the judge stops before its first call.
 analysis_dir: ./analysis-data
 analysis_retention_days: 90
 analysis_gateway: https://llm.apache.org

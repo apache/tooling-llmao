@@ -318,7 +318,9 @@ def _event(**payload):
         model_parameters={},
     )
     base.update(payload)
-    return {"litellm_call_id": "call-1", "standard_logging_object": base}
+    # The key's metadata rides in the request's params, where the proxy put it.
+    params = {"metadata": {"user_api_key_metadata": {"purpose": "someone-laptop", "project": "tooling"}}}
+    return {"litellm_call_id": "call-1", "standard_logging_object": base, "litellm_params": params}
 
 
 def _today_file(directory):
@@ -340,7 +342,7 @@ def test_each_event_is_one_record_line_in_the_days_file_owned_by_root_alone(unbu
     lines = [json.loads(line) for line in path.read_text().splitlines()]
     assert [(r["call_id"], r["status"]) for r in lines] == [("call-1", "success"), ("call-2", "failure")]
     assert lines[0]["messages"] == [{"role": "user", "content": "hello from the test"}]
-    assert lines[0]["key"] == {"hash": None, "alias": None, "user": "someone", "project": "tooling"}
+    assert lines[0]["key"] == {"hash": None, "purpose": "someone-laptop", "user": "someone", "project": "tooling"}
     # The response's text is not in the file.
     assert "hi" not in [v for r in lines for v in (r["finish_reason"],)]
     assert '"hi"' not in path.read_text()

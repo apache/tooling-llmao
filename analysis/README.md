@@ -73,7 +73,7 @@ against a copy of the store as from the host.
 ## Words
 
 - **Fingerprint:** the hash key over a record: the project, the person
-  (the key's user, else its alias), the tool family, and the opening of
+  (the key's user, else its purpose), the tool family, and the opening of
   the system prompt, its first sentence or line. Not the key, because a
   person evaluating models holds one key per model and the work is the
   same. Not more of the prompt, because a template carries its variable

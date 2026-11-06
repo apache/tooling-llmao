@@ -68,7 +68,7 @@ DEFAULT_ANALYSIS_DIR = ROOT / "analysis-data"
 DEFAULT_RETENTION_DAYS = 90
 DEFAULT_MODELS = ["qwen3.8-27b-int4"]  # the judges; one in these runs, several as the normal operation
 DEFAULT_GATEWAY = "https://llm.apache.org"
-ANALYSIS_KEY_ALIAS = "llmao-analysis"  # the judge's service key; its own requests are never clustered
+ANALYSIS_KEY_PURPOSE = "llmao-analysis"  # the judge's service key; its own requests are never clustered
 # Which models serve which tier, lowest first within a tier; the first is the
 # one to recommend. A guess to be corrected in config.yaml analysis_tiers.
 DEFAULT_TIERS = {
@@ -184,7 +184,7 @@ def judge_settings(config: pathlib.Path = CONFIG) -> edict:
     s = _settings(config)
     key = s.get("analysis_key")
     if not key:
-        raise SystemExit(f"{config}: analysis_key is required (a service key named {ANALYSIS_KEY_ALIAS})")
+        raise SystemExit(f"{config}: analysis_key is required (a service key whose purpose is {ANALYSIS_KEY_PURPOSE})")
     return edict(
         gateway=str(s.get("analysis_gateway") or DEFAULT_GATEWAY).rstrip("/"),
         models=judge_models(config),
@@ -311,20 +311,22 @@ MASTER_KEY = "(master key)"  # the operators' own requests: smoke tests, never j
 
 
 def who(key: dict) -> str:
-    """The person behind a key, else the key's alias, else the start of its hash: never empty.
+    """The person behind a key, else the key's purpose, else the start of its hash: never empty.
 
-    The master key is named as such: LiteLLM files it under a placeholder
-    user, and "default_user_id" in a listing reads as a person.
+    The purpose is the name typed when the key was made, so a service
+    key reads as "tooling-gofannon" rather than a hash. The master key is
+    named as such: LiteLLM files it under a placeholder user, and
+    "default_user_id" in a listing reads as a person.
     """
     if key.get("hash") == MASTER_KEY_HASH:
         return MASTER_KEY
-    return key.get("user") or key.get("alias") or (key.get("hash") or "?")[:12]
+    return key.get("user") or key.get("purpose") or (key.get("hash") or "?")[:12]
 
 
 def fingerprint(record: dict) -> edict | None:
     """The record's fingerprint with the parts it is made of; None when the record is not demand."""
     key = record.get("key") or {}
-    if not counts_as_demand(record.get("model"), key.get("project")) or key.get("alias") == ANALYSIS_KEY_ALIAS:
+    if not counts_as_demand(record.get("model"), key.get("project")) or key.get("purpose") == ANALYSIS_KEY_PURPOSE:
         return None
     project = key.get("project") or NO_PROJECT
     tool = tool_family(record.get("user_agent"))

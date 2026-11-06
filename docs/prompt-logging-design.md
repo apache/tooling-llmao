@@ -257,7 +257,7 @@ track L; the rest is the new data the log exists for.
 | `stream` | `stream` | no | |
 | `tokens` | `prompt_tokens`, `completion_tokens`, `total_tokens` | yes | |
 | `finish_reason` | the response | no | the one word we keep from the response: it is how truncation and tool use show up in aggregate. **The exception to decision 2; drop it if that reads as a result.** |
-| `key` | `metadata.user_api_key_*` | yes | `hash`, `alias`, `user` (the ASF uid for a personal key, `null` for automation), `project` (the team alias) |
+| `key` | `metadata.user_api_key_*`, and the key's metadata in the request's params | yes | `hash`, `purpose` (the name typed when the key was made; the portal never sets LiteLLM's `key_alias`, which is globally unique), `user` (the ASF uid for a personal key, `null` for automation), `project` (the team alias) |
 | `end_user` | `end_user` | yes | the request's `user` field, when a tool sends one |
 | `user_agent`, `client_headers` | `user_agent`, `metadata.requester_custom_headers` | the user agent | which tool, and any `x-` headers it sent |
 | `params` | `model_parameters` | no | the request minus the prompt: `temperature`, `max_tokens`, `tools` (the definitions an agent put in front of the model), `tool_choice`, `response_format`, `reasoning_effort`, `chat_template_kwargs`, ... |

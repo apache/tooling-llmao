@@ -54,7 +54,6 @@ def _payload(**over):
         api_base="http://203.0.113.10:8001/v1",
         metadata=dict(
             user_api_key_hash="hash-1",
-            user_api_key_alias="someone-laptop",
             user_api_key_user_id="someone",
             user_api_key_team_alias="tooling",
             user_agent="OpenAI/Python 1.109.1",
@@ -72,7 +71,7 @@ def _payload(**over):
 
 
 def test_the_record_keeps_the_prompt_and_the_use_but_not_the_response():
-    rec = prompt_log.record(_payload())
+    rec = prompt_log.record(_payload(), purpose="someone-laptop")
     assert rec["ts"] == "2026-11-01T09:30:02.500Z"
     assert (rec["duration_s"], rec["ttft_s"]) == (2.5, 0.42)
     assert (rec["call_id"], rec["trace_id"], rec["call_type"]) == ("call-1", "trace-1", "acompletion")
@@ -82,7 +81,7 @@ def test_the_record_keeps_the_prompt_and_the_use_but_not_the_response():
     assert rec["stream"] is True
     assert rec["tokens"] == {"prompt": 580, "completion": 30, "total": 610}
     assert rec["finish_reason"] == "stop"
-    assert rec["key"] == {"hash": "hash-1", "alias": "someone-laptop", "user": "someone", "project": "tooling"}
+    assert rec["key"] == {"hash": "hash-1", "purpose": "someone-laptop", "user": "someone", "project": "tooling"}
     assert (rec["end_user"], rec["user_agent"]) == ("t", "OpenAI/Python 1.109.1")
     assert rec["client_headers"] == {"x-tool": "opencode"}
     assert rec["params"] == {"temperature": 0.2, "max_tokens": 200}
@@ -136,8 +135,15 @@ def test_what_the_payload_lacks_is_null_not_an_error():
     rec = prompt_log.record({})
     assert rec["ts"] is None and rec["duration_s"] is None and rec["model"] is None
     assert rec["tokens"] == {"prompt": 0, "completion": 0, "total": 0}
-    assert rec["key"] == {"hash": None, "alias": None, "user": None, "project": None}
+    assert rec["key"] == {"hash": None, "purpose": None, "user": None, "project": None}
     assert rec["client_headers"] is None and rec["params"] == {}
+
+
+def test_the_keys_purpose_is_read_from_the_requests_params_and_a_bare_request_has_none():
+    params = {"metadata": {"user_api_key_metadata": {"purpose": "tooling-gofannon", "project": "tooling"}}}
+    assert prompt_log.key_purpose({"litellm_params": params}) == "tooling-gofannon"
+    assert prompt_log.key_purpose({"litellm_params": {"metadata": {}}}) is None
+    assert prompt_log.key_purpose({}) is None
 
 
 def test_a_day_file_is_named_for_its_utc_day():

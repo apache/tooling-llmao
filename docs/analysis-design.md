@@ -147,8 +147,9 @@ stable across runs and needs no cryptographic strength: a clash would
 merge two clusters and nothing worse.
 
 - **The project**, the key's team alias, or "(no project)".
-- **The person:** the key's user, else its alias, else the start of its
-  hash. Not the key itself, because a person evaluating models holds one
+- **The person:** the key's user, else its purpose (the name typed when
+  the key was made, so a service key reads as "tooling-gofannon"), else
+  the start of its hash. Not the key itself, because a person evaluating models holds one
   key per model and the work is the same: with the key in the hash, the
   Spark review bot's fifteen prompts appeared twice each, once per model.
 - **The tool family:** the user agent's product name, the same cut the

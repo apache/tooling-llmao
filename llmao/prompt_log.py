@@ -97,12 +97,25 @@ def _error(info: Mapping | None) -> dict | None:
     }
 
 
-def record(payload: Mapping) -> dict:
+def key_purpose(kwargs: Mapping) -> str | None:
+    """The key's purpose, the name typed when the key was made, from the callback's kwargs.
+
+    The portal stores it as ``purpose`` in the key's metadata (never as
+    LiteLLM's globally unique ``key_alias``), and the proxy copies the
+    key's metadata into the request's before the call. LiteLLM's standard
+    payload does not carry it, so it is read from the request's params.
+    """
+    metadata = (kwargs.get("litellm_params") or {}).get("metadata") or {}
+    return (metadata.get("user_api_key_metadata") or {}).get("purpose")
+
+
+def record(payload: Mapping, purpose: str | None = None) -> dict:
     """One record from LiteLLM's StandardLoggingPayload, the fields in the design's table.
 
     The prompt is kept (``messages`` as LiteLLM received it, and the
     request's parameters); the response is not, apart from its finish
-    reason. Field names are ours.
+    reason. Field names are ours. ``purpose`` is the key's, from
+    key_purpose(); it is the only field not in the payload.
 
     A record is a plain dict, not an EasyDict, here and when read back:
     ``params`` and ``messages`` are trees the client wrote, with keys we
@@ -130,15 +143,15 @@ def record(payload: Mapping) -> dict:
         api_base=payload.get("api_base"),
         provider=payload.get("custom_llm_provider"),
         stream=streamed,
-        tokens=edict(
+        tokens=dict(
             prompt=payload.get("prompt_tokens") or 0,
             completion=payload.get("completion_tokens") or 0,
             total=payload.get("total_tokens") or 0,
         ),
         finish_reason=_finish_reason(payload.get("response")),
-        key=edict(
+        key=dict(
             hash=meta.get("user_api_key_hash"),
-            alias=meta.get("user_api_key_alias"),
+            purpose=purpose,
             user=meta.get("user_api_key_user_id"),
             project=meta.get("user_api_key_team_alias"),
         ),

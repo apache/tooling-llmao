@@ -360,7 +360,8 @@ class PromptLog(CustomLogger):
                 "prompt log: event without a standard_logging_object, call=%s", kwargs.get("litellm_call_id")
             )
             return
-        self._log.info(json.dumps(_record.record(payload), default=str, ensure_ascii=False))
+        record = _record.record(payload, _record.key_purpose(kwargs))
+        self._log.info(json.dumps(record, default=str, ensure_ascii=False))
 
     async def async_pre_call_hook(self, user_api_key_dict: Any, cache: Any, data: dict, call_type: str) -> dict:
         removed = _strip_opt_outs(data)
