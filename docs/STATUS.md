@@ -124,8 +124,6 @@ before any code.
   recipe must name `hosted_vllm/...` in `litellm_params.model`.
 - **`analysis/prompts` under a closed pipe** (`prompts clusters | head`)
   ends in a BrokenPipe traceback.
-- **Make the `analysis_*` keys in `config.yaml` required**, as
-  `prompt_log_dir` is, once p6 PR #2924 renders them.
 
 ### Medium, an afternoon
 

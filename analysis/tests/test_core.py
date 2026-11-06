@@ -44,6 +44,33 @@ def test_a_script_finds_the_log_directory_in_config_or_stops(tmp_path):
         _core.log_dir(cfg)
 
 
+def test_every_analysis_setting_is_required_and_checked_for_shape(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("prompt_log_dir: ./prompt-log\n")
+    for key, read in [
+        ("analysis_dir", _core.analysis_dir),
+        ("analysis_retention_days", _core.retention_days),
+        ("analysis_tiers", _core.tiers),
+        ("analysis_models", _core.judge_models),
+        ("analysis_key", _core.judge_settings),
+    ]:
+        with pytest.raises(SystemExit, match=f"{key} is required"):
+            _ = read(cfg)
+    cfg.write_text("analysis_models: qwen3-8b\nanalysis_tiers: [qwen3-8b]\n")
+    with pytest.raises(SystemExit, match="analysis_models should be a list"):
+        _ = _core.judge_models(cfg)
+    with pytest.raises(SystemExit, match="analysis_tiers should be a map"):
+        _ = _core.tiers(cfg)
+    cfg.write_text(
+        "analysis_dir: ./analysis-data\nanalysis_retention_days: 30\nanalysis_gateway: https://llm.example.org/\n"
+        "analysis_models: [qwen3-8b]\nanalysis_key: sk-test\nanalysis_tiers: {low: [qwen3-8b], high: [big]}\n"
+    )
+    assert _core.analysis_dir(cfg) == tmp_path / "analysis-data"
+    assert _core.retention_days(cfg) == 30
+    assert _core.tiers(cfg) == {"low": ["qwen3-8b"], "medium": [], "high": ["big"]}
+    assert _core.judge_settings(cfg) == {"gateway": "https://llm.example.org", "models": ["qwen3-8b"], "key": "sk-test"}
+
+
 def test_a_span_is_the_last_closed_days_or_from_to():
     today = dt.datetime.now(dt.UTC).date()
     last = _core.span(days=3)

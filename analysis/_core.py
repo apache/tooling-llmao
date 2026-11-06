@@ -64,18 +64,7 @@ if TYPE_CHECKING:
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent  # the checkout, where config.yaml lives
 CONFIG = ROOT / "config.yaml"
-DEFAULT_ANALYSIS_DIR = ROOT / "analysis-data"
-DEFAULT_RETENTION_DAYS = 90
-DEFAULT_MODELS = ["qwen3.8-27b-int4"]  # the judges; one in these runs, several as the normal operation
-DEFAULT_GATEWAY = "https://llm.apache.org"
 ANALYSIS_KEY_PURPOSE = "llmao-analysis"  # the judge's service key; its own requests are never clustered
-# Which models serve which tier, lowest first within a tier; the first is the
-# one to recommend. A guess to be corrected in config.yaml analysis_tiers.
-DEFAULT_TIERS = {
-    "low": ["qwen3-8b", "qwen3.5-9b"],
-    "medium": ["qwen3.8-27b-int4"],
-    "high": ["qwen3.8-27b", "gemma4-26b"],
-}
 
 
 def _settings(config: pathlib.Path) -> dict:
@@ -91,17 +80,23 @@ def _path(raw: Any, config: pathlib.Path) -> pathlib.Path:
     return config.resolve().parent / str(raw)
 
 
-def configured(key: str, config: pathlib.Path = CONFIG) -> pathlib.Path:
-    """A required path from config.yaml.
+def required(key: str, config: pathlib.Path = CONFIG) -> Any:
+    """A required value from config.yaml; every analysis_* key is one, as prompt_log_dir is.
 
     A missing file or key stops the script with a message. A script can
     fail harder than the portal: a startup error there takes a service
-    down, here it makes the admin fix their invocation.
+    down, here it makes the admin fix their invocation. p6 renders every
+    key, so a missing one is a config.yaml behind the module.
     """
     raw = _settings(config).get(key)
     if not raw:
         raise SystemExit(f"{config}: {key} is required")
-    return _path(raw, config)
+    return raw
+
+
+def configured(key: str, config: pathlib.Path = CONFIG) -> pathlib.Path:
+    """A required path from config.yaml."""
+    return _path(required(key, config), config)
 
 
 def log_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
@@ -109,31 +104,22 @@ def log_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
     return configured("prompt_log_dir", config)
 
 
-# The analysis settings are optional with defaults until p6 renders them
-# into config.yaml; then they become required like prompt_log_dir.
-
-
 def analysis_dir(config: pathlib.Path = CONFIG) -> pathlib.Path:
-    """analysis_dir: where the scripts keep their store; ./analysis-data until p6 renders it."""
-    raw = _settings(config).get("analysis_dir")
-    return _path(raw, config) if raw else DEFAULT_ANALYSIS_DIR
+    """analysis_dir: where the scripts keep their store."""
+    return configured("analysis_dir", config)
 
 
 def retention_days(config: pathlib.Path = CONFIG) -> int:
-    """analysis_retention_days: how long every row of the store is kept.
-
-    One value for all analysis output. Falls back to the prompt log's
-    retention, since the store holds text from the log and should not
-    outlive it, and then to 90 days.
-    """
-    s = _settings(config)
-    return int(s.get("analysis_retention_days") or s.get("prompt_log_retention_days") or DEFAULT_RETENTION_DAYS)
+    """analysis_retention_days: how long every row of the store is kept, one value for all analysis output."""
+    return int(required("analysis_retention_days", config))
 
 
 def tiers(config: pathlib.Path = CONFIG) -> dict[str, list[str]]:
-    """analysis_tiers: which models serve which tier, else the coded guess."""
-    raw = _settings(config).get("analysis_tiers")
-    return {t: [str(m) for m in raw.get(t) or []] for t in TIERS} if raw else DEFAULT_TIERS
+    """analysis_tiers: which models serve which tier, lowest first within a tier; the first is the one to recommend."""
+    raw = required("analysis_tiers", config)
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{config}: analysis_tiers should be a map of tier to a list of model names")
+    return {t: [str(m) for m in raw.get(t) or []] for t in TIERS}
 
 
 def require_models(names: set[str], config: pathlib.Path = CONFIG) -> None:
@@ -177,27 +163,25 @@ def judge_settings(config: pathlib.Path = CONFIG) -> edict:
     the judge is a client like any other, so it runs the same from a
     developer's machine as from the host, and its requests are logged and
     counted like anyone's. ``analysis_models`` is a list: several judges
-    on each cluster is the normal operation. It defaults until p6 renders
-    it. The key has no default: without ``analysis_key`` the judge stops
-    before its first call.
+    on each cluster is the normal operation. Without ``analysis_key`` the
+    judge stops before its first call.
     """
-    s = _settings(config)
-    key = s.get("analysis_key")
+    key = _settings(config).get("analysis_key")
     if not key:
         raise SystemExit(f"{config}: analysis_key is required (a service key whose purpose is {ANALYSIS_KEY_PURPOSE})")
     return edict(
-        gateway=str(s.get("analysis_gateway") or DEFAULT_GATEWAY).rstrip("/"),
+        gateway=str(required("analysis_gateway", config)).rstrip("/"),
         models=judge_models(config),
         key=str(key),
     )
 
 
 def judge_models(config: pathlib.Path = CONFIG) -> list[str]:
-    """analysis_models: the judges, in the order they run; the coded default until p6 renders it."""
-    raw = _settings(config).get("analysis_models")
-    if raw is not None and not isinstance(raw, list):
+    """analysis_models: the judges, in the order they run."""
+    raw = required("analysis_models", config)
+    if not isinstance(raw, list):
         raise SystemExit(f"{config}: analysis_models should be a list of model names")
-    return [str(m) for m in raw] if raw else list(DEFAULT_MODELS)
+    return [str(m) for m in raw]
 
 
 def span(*, days: int = 7, start: dt.date | None = None, end: dt.date | None = None) -> list[dt.date]:

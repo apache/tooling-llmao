@@ -64,8 +64,10 @@ here it makes the admin fix their invocation. Nothing here opens a
 connection to LiteLLM except the judge's model calls, and nothing writes
 in the log directory.
 
-The judge needs `analysis_key` in `config.yaml`, a service key named
-`llmao-analysis` under the `rai` project, and calls `analysis_gateway`
+The judge needs `analysis_key` in `config.yaml`, a service key whose
+purpose is `llmao-analysis`, under the `rai` project (the analysis
+recognises the judge's own requests by that purpose and never clusters
+them), and calls `analysis_gateway`
 (the front door, `https://llm.apache.org`) with each of
 `analysis_models`, so it runs the same from a developer's machine
 against a copy of the store as from the host.

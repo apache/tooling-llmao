@@ -130,26 +130,26 @@ action_retention_days: 90
 prompt_log_dir: ./prompt-log
 prompt_log_retention_days: 90
 
-# The analysis scripts (analysis/README.md): where their store lives; how
-# long every row of it is kept (one value for all analysis output; defaults
-# to the prompt log's retention, since the store holds text from the log);
-# the gateway the judge calls, through the front door like any client; the
+# The analysis scripts (analysis/README.md). All six required, like
+# prompt_log_dir: a script stops on a missing one. Where their store lives;
+# how long every row of it is kept (one value for all analysis output; the
+# prompt log's retention, since the store holds text from the log); the
+# gateway the judge calls, through the front door like any client; the
 # judges, a list of self-hosted models that each give a verdict on every
 # cluster (several is the normal operation: the store's consensus view
 # leans towards "no" on Foundation work and towards the higher tier; a
 # model a paid provider also serves is refused); and the judge's key, a
 # service key whose purpose is llmao-analysis, under the rai project (the
 # judge's own requests are recognised by that purpose and never
-# clustered). All but the key are optional with these defaults until p6
-# renders them; required after that. The key has no default: without it
-# the judge stops before its first call.
+# clustered). Without the key the judge stops before its first call; the
+# other commands do not need it.
 analysis_dir: ./analysis-data
 analysis_retention_days: 90
 analysis_gateway: https://llm.apache.org
 analysis_models: [qwen3.8-27b-int4]
 # analysis_key: sk-...
 # Which models serve which of the judge's tiers, for the tier report: the
-# first in each list is the one to recommend. Optional; this is the default.
+# first in each list is the one to recommend.
 analysis_tiers:
   low: [qwen3-8b, qwen3.5-9b]
   medium: [qwen3.8-27b-int4]

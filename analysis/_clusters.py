@@ -30,8 +30,8 @@ retention, and writes the clusters and their figures: a day is read once.
 clusters and show only read the store. No model is involved in any of
 this; that is `prompts judge`.
 
-The store is analysis_dir in config.yaml (default ./analysis-data); the
-log directory is --log-dir, else prompt_log_dir in config.yaml.
+The store is analysis_dir in config.yaml; the log directory is
+--log-dir, else prompt_log_dir in config.yaml.
 """
 
 from __future__ import annotations

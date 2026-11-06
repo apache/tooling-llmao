@@ -110,8 +110,8 @@ write the store, `build` and `judge`; the rest read it or the day files:
 | `report`: the reports that need no content: by project, user, model, tool; prompt lengths; shares; failures; messages per request | `analysis/_report.py` | built; moved out of `bin/llmao-prompt-log` |
 | `build`, `clusters`, `show`: the store built from the day files, listed, one cluster in full | `analysis/_clusters.py` | built |
 | `judge`, `verdicts`, `tiers`: the questions, the call, the verdicts, the consensus, the tier report | `analysis/_judge.py`, `analysis/judge-prompt.md` | built; `judge` is a dry run by default, `--judge` sends |
-| The settings | `config.yaml`: `analysis_dir`, `analysis_retention_days`, `analysis_gateway`, `analysis_model`, `analysis_key` | built, optional with defaults except the key; required once p6 renders them |
-| The judge's key | a service key named `llmao-analysis` under the `rai` project | the user creates it |
+| The settings | `config.yaml`: `analysis_dir`, `analysis_retention_days`, `analysis_gateway`, `analysis_models`, `analysis_key`, `analysis_tiers` | built; all required, rendered by p6 since 2026-11-06 |
+| The judge's key | a service key whose purpose is `llmao-analysis`, under the `rai` project | created; the analysis recognises the judge's own requests by that purpose |
 | The project page's panels: tools by model, refusals, latency, prompt lengths, a daily trend, from each project's share of the demand values | `pages.py`, `templates/project.ezt`, `llmao/planning.py` | planned; the data has been in the demand values since fold version 3 |
 | A note to a project: written by an admin, dated, shown on the project page until a PMC member acknowledges it | the notices mechanism, a prefix of its own | planned |
 | A person's own shape on the keys page: model mix and tokens per key, from LiteLLM's daily rows | `pages.py`, `templates/keys.ezt` | planned; no fold change needed |
@@ -222,9 +222,8 @@ the verdicts, which cost model calls.
 
 Every row older than `analysis_retention_days` is pruned at each run,
 clusters whose last day fell off included, with their verdicts. One
-value for all analysis output; it defaults to the prompt log's
-retention, since the store holds text from the log and must not outlive
-it.
+value for all analysis output, set to the prompt log's retention, since
+the store holds text from the log and must not outlive it.
 
 The store is derived, and the scan writes what the code of the day
 said. A change to the fingerprint's parts, the person's name or the
@@ -285,10 +284,10 @@ exemplar, and without it a model-evaluation batch of German emails was
 judged non-Foundation work by all three judges.
 
 - **A self-hosted model only.** The exemplars are other projects'
-  prompts, and they do not leave our boxes. The default is `qwen3-8b`, a
-  small and fast categoriser; the int4 27b if it turns out to need more.
-  The model name is part of what makes a verdict stale, so switching
-  re-judges everything once and never mixes two models' answers.
+  prompts, and they do not leave our boxes. The int4 27b is the first
+  judge; `qwen3-8b` was, until it strayed on the tier. The model name is
+  part of what makes a verdict stale, so switching re-judges everything
+  once and never mixes two models' answers.
 - **A verdict is stale** when any of three things changed: the judge
   prompt (its hash is stored with the verdict), the exemplar (likewise),
   or the model. Rewording the questions re-judges every cluster on
@@ -347,20 +346,21 @@ judged non-Foundation work by all three judges.
 
 ### The settings
 
-Four flat keys in `config.yaml` beside `prompt_log_dir`:
+Six flat keys in `config.yaml` beside `prompt_log_dir`, all required,
+as it is: a missing one stops the script. p6 renders them (the key from
+eyaml), with these values in production:
 
-| Key | Meaning | Default while optional |
+| Key | Meaning | In production |
 |---|---|---|
-| `analysis_dir` | where the store lives | `./analysis-data` |
-| `analysis_retention_days` | how long every row of the store is kept | `prompt_log_retention_days`, then 90 |
+| `analysis_dir` | where the store lives | `/x1/llmao/analysis` |
+| `analysis_retention_days` | how long every row of the store is kept | 90, the prompt log's |
 | `analysis_gateway` | the gateway the judge calls, through the front door | `https://llm.apache.org` |
 | `analysis_models` | the judges, a list; each gives a verdict on every cluster | `[qwen3.8-27b-int4]` |
-| `analysis_key` | the judge's gateway key | none: the judge stops before its first call |
+| `analysis_key` | the judge's gateway key; the only key without a default anywhere, so the judge stops before its first call without it | the `llmao-analysis` service key |
 | `analysis_tiers` | which models serve which tier, first to recommend, for the tier report | low: qwen3-8b, qwen3.5-9b; medium: qwen3.8-27b-int4; high: qwen3.8-27b, gemma4-26b. A guess to correct |
 
-Optional with these defaults until p6 renders them, in two steps: the
-scripts code the defaults now, with a note to update p6; once p6 renders
-the keys they become required, like `prompt_log_dir` already is.
+They were optional with coded defaults until p6 rendered them, on
+2026-11-06; the defaults went with that.
 
 ### Failing hard
 
@@ -461,7 +461,7 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
 | A3 | The judge: `judge-prompt.md`, the verdicts table, the stale check, one verdict per transaction, the settings; then several judges and the consensus view | done 2026-11-04 and 05; four judges over the day's clusters, the tier rules rewritten from their disagreement |
 | A4 | The reports from the verdicts: the consensus, where the judges split, the tier report | done 2026-11-05 as `prompts verdicts` and `prompts tiers`; what counts as a finding worth acting on is refined as verdicts accumulate |
 | A4a | One entry point, `prompts`, a command per question, in place of three scripts | done 2026-11-05 |
-| A5 | p6: the four keys rendered, the directory created; then the keys become required | a PR beside A3, not waited on |
+| A5 | p6: the keys rendered, the directory created; then the keys become required | done 2026-11-06 (p6 PR #2924, then the defaults removed) |
 | A6 | The project page's panels from each project's share of the demand values; the sharper form of the "Usage Analysis page" the logging design parked | planned, in `llmao/` |
 | A7 | A note to a project, written by an admin, shown until acknowledged | planned, in `llmao/` |
 | A8 | A person's own shape on the keys page, from LiteLLM's daily rows | planned, in `llmao/` |
