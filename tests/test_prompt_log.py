@@ -91,6 +91,17 @@ def test_the_record_keeps_the_prompt_and_the_use_but_not_the_response():
     assert "391" not in json.dumps(rec)
 
 
+def test_a_tool_schema_with_an_array_parameter_is_written_and_read_back(tmp_path):
+    # {"items": ...} is JSON Schema's array element type; a dict that mirrors
+    # keys as attributes loses its items() method to it and json.dumps fails.
+    tools = [{"type": "function", "function": {"parameters": {"type": "array", "items": {"type": "string"}}}}]
+    rec = prompt_log.record(_payload(model_parameters={"tools": tools}))
+    (tmp_path / prompt_log.day_file_name(DAY)).write_text(json.dumps(rec, default=str) + "\n")
+    [back] = prompt_log.read_day(tmp_path, DAY)
+    assert back["params"]["tools"] == tools
+    assert json.loads(json.dumps(back)) == back
+
+
 def test_a_plain_request_has_no_time_to_first_token():
     rec = prompt_log.record(_payload(stream=False))
     assert rec["stream"] is False and rec["ttft_s"] is None

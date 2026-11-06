@@ -85,26 +85,36 @@ def _finish_reason(response: Any) -> str | None:
         return None
 
 
-def _error(info: Mapping | None) -> edict | None:
+def _error(info: Mapping | None) -> dict | None:
     """The error's class, code and provider; never the message, which can quote the prompt."""
     if not info:
         return None
-    out = edict(code=info.get("error_code"), provider=info.get("llm_provider"), normalized=info.get("normalized_error"))
-    out["class"] = info.get("error_class")  # a keyword "class" cannot be written as one
-    return out
+    return {
+        "class": info.get("error_class"),
+        "code": info.get("error_code"),
+        "provider": info.get("llm_provider"),
+        "normalized": info.get("normalized_error"),
+    }
 
 
-def record(payload: Mapping) -> edict:
+def record(payload: Mapping) -> dict:
     """One record from LiteLLM's StandardLoggingPayload, the fields in the design's table.
 
     The prompt is kept (``messages`` as LiteLLM received it, and the
     request's parameters); the response is not, apart from its finish
     reason. Field names are ours.
+
+    A record is a plain dict, not an EasyDict, here and when read back:
+    ``params`` and ``messages`` are trees the client wrote, with keys we
+    do not choose, and EasyDict mirrors every key as an attribute. A tool
+    schema with an array parameter ({"type": "array", "items": {...}})
+    shadows the dict's items() method, and json.dumps, which calls it,
+    fails with "'EasyDict' object is not callable". Readers use get().
     """
     meta = payload.get("metadata") or {}
     streamed = bool(payload.get("stream"))
     start, end = payload.get("startTime"), payload.get("endTime")
-    return edict(
+    return dict(
         ts=_stamp(end),
         duration_s=_elapsed(start, end),
         # LiteLLM sets completionStartTime on every request; only a stream
@@ -149,12 +159,12 @@ def day_file(log_dir: pathlib.Path, day: dt.date) -> pathlib.Path | None:
     return packed if packed.exists() else None
 
 
-def read_day(log_dir: pathlib.Path, day: dt.date) -> Iterator[edict]:
+def read_day(log_dir: pathlib.Path, day: dt.date) -> Iterator[dict]:
     """Every record of one day, plain or compressed; nothing when there is no file.
 
     A line that is not JSON is skipped rather than stopping the day: a
     write cut short by a restart leaves one, and one bad line must not
-    cost the other hundred thousand.
+    cost the other hundred thousand. Plain dicts, as record() says.
     """
     path = day_file(log_dir, day)
     if path is None:
@@ -163,7 +173,7 @@ def read_day(log_dir: pathlib.Path, day: dt.date) -> Iterator[edict]:
     with opener(path, "rt", encoding="utf-8") as f:
         for line in f:
             try:
-                yield edict(json.loads(line))
+                yield json.loads(line)
             except ValueError:
                 continue
 
@@ -400,7 +410,7 @@ def report(records: Iterable[Mapping]) -> edict:
     )
 
 
-def read_days(log_dir: pathlib.Path, days: Iterable[dt.date]) -> Iterator[edict]:
+def read_days(log_dir: pathlib.Path, days: Iterable[dt.date]) -> Iterator[dict]:
     """Every record of several days, in day order."""
     for day in days:
         yield from read_day(log_dir, day)
