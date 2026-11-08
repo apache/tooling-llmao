@@ -192,12 +192,16 @@ exemplar, and the judge is not asked again for nothing.
    are the first one's.
 
 The exemplar is chosen when the cluster is first seen and stored with a
-hash over the head and the messages. It is re-picked only when the
-cluster's record count has at least doubled since the pick, from the
-records of the days being scanned, which bounds the judge's extra work to
-a handful of calls over a cluster's life and leaves a steady cluster
-alone. A rerun over the same days produces the same hash and no new
-judge call.
+hash over the head and the messages. It is re-picked, from the records
+of the day being scanned, when the cluster's record count has at least
+doubled since the pick, or when the day it was picked from has been
+pruned, so an exemplar is always a record the store still holds. The
+doublings bound the judge's extra work to a handful of calls over a
+cluster's first weeks: the count is the sum of the retained days, so a
+steady cluster doubles at days 1, 2, 4, 8, 16, 32 and 64, and once the
+retention caps the count, never again. The prune then gives each cluster
+a fresh exemplar, and a fresh verdict, once per retention. A rerun over
+the same days produces the same hash and no new judge call.
 
 ### The store
 
@@ -251,8 +255,9 @@ for a bot or an agent none of those change from Monday to Friday: the
 Spark bot's fifteen prompts are the same fifteen clusters every day with
 larger figures. A new cluster is a new person, project or tool, a
 reworded system prompt, a tool with no system prompt and a different
-first message each session, or a cluster that doubled and had its
-exemplar re-picked. So a day brings a handful of calls, often none, and
+first message each session, or a cluster whose exemplar was re-picked,
+on a doubling or because the day it came from was pruned. So a day
+brings a handful of calls, often none, and
 a hundred calls in a day would itself be a finding. The full bill,
 clusters times judges, comes only after a judge prompt change, and at
 2.5 seconds a call 100 clusters and five judges is about twenty minutes
@@ -409,8 +414,10 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
 5. **The opening, not the head,** in the fingerprint; the head in the
    exemplar.
 6. **SQLite, not JSONL,** for the store; `.db` as the suffix.
-7. **The exemplar is frozen on first sight** and re-picked only on a
-   doubling.
+7. **The exemplar is frozen on first sight** and re-picked on a
+   doubling, or when the day it came from leaves the store (added
+   2026-11-08: a steady cluster's count stops growing once the retention
+   caps it, so on doubling alone it would never be re-picked again).
 8. **The judge runs on a self-hosted model,** `qwen3-8b` by default,
    through a service key under `rai`; its calls landing in the prompt log
    is accepted.

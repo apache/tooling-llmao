@@ -88,7 +88,9 @@ def test_a_span_is_the_last_closed_days_or_from_to():
         raise AssertionError("a start after its end must be an error")
 
 
-def _record(day: str, model: str = "qwen3-8b") -> dict:
+def _record(
+    day: str, model: str = "qwen3-8b", text: str = "what does this function return when the list is empty"
+) -> dict:
     return dict(
         ts=f"{day}T09:30:00.000Z",
         model=model,
@@ -100,8 +102,36 @@ def _record(day: str, model: str = "qwen3-8b") -> dict:
         tokens={"prompt": 500, "completion": 20, "total": 520},
         key={"project": "tooling", "user": "someone"},
         user_agent="OpenAI/Python 1.109.1",
-        messages=[{"role": "user", "content": "what does this function return when the list is empty"}],
+        messages=[
+            {"role": "system", "content": "You review the tooling project's Python. Answer briefly."},
+            {"role": "user", "content": text},
+        ],
     )
+
+
+def test_an_exemplar_is_re_picked_when_its_day_is_pruned(tmp_path):
+    def write(day: str, *texts: str) -> None:
+        lines = [json.dumps(_record(day, text=t)) for t in texts]
+        (tmp_path / f"prompts-{day}.jsonl").write_text("\n".join(lines) + "\n")
+
+    # Three records on the first day, one on each of the next two: the
+    # cluster never doubles, so only the prune can move the exemplar.
+    write("2026-11-01", "what does this function return when the list is empty", "a", "b")
+    write("2026-11-02", "why does this test fail only on the second run of the day")
+    write("2026-11-03", "how should the retry loop back off when the gateway is busy")
+    store = _core.Store(tmp_path)
+    for d in (1, 2):
+        _ = store.scan_day(tmp_path, dt.date(2026, 11, d))
+    [c] = store.clusters_over([dt.date(2026, 11, 1), dt.date(2026, 11, 2)])
+    assert (c.exemplar_picked, c.records) == ("2026-11-01", 4)
+    first = c.exemplar_hash
+    # The prune takes the first day, the exemplar's; the next scan re-picks.
+    assert store.prune(1, today=dt.date(2026, 11, 3)) == 0
+    _ = store.scan_day(tmp_path, dt.date(2026, 11, 3))
+    [c] = store.clusters_over([dt.date(2026, 11, 2), dt.date(2026, 11, 3)])
+    assert (c.exemplar_picked, c.records) == ("2026-11-03", 2)
+    assert c.exemplar_hash != first
+    store.close()
 
 
 def test_a_rebuild_keeps_every_verdict(tmp_path, monkeypatch, capsys):

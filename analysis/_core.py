@@ -333,8 +333,11 @@ def fingerprint(record: dict) -> edict | None:
 # record's instructions and up to EXEMPLAR_MESSAGES user messages, chosen
 # from the cluster's records. Every step is deterministic, so the same
 # records give the same exemplar; it is chosen when the cluster is first
-# seen and re-picked only when the cluster has at least doubled since the
-# pick, so a daily run does not change it and a judge's verdict stays good.
+# seen and re-picked when the cluster has at least doubled since the pick,
+# or when the day it was picked from has been pruned, so a daily run does
+# not change it and a judge's verdict stays good, while a steady cluster
+# past the retention, whose count no longer grows, still gets a fresh
+# exemplar once per retention.
 
 EXEMPLAR_MESSAGES = 3
 MESSAGE_CHARS = 1500
@@ -624,7 +627,10 @@ class Store:
             (d, d, g.fingerprint),
         )
         row = self.cluster(g.fingerprint)
-        if row.exemplar_hash and row.records < 2 * row.exemplar_records:
+        # The exemplar stands while the cluster has not doubled since the
+        # pick and the day it was picked from is still in the store.
+        held = row.exemplar_hash and self._holds(g.fingerprint, row.exemplar_picked)
+        if held and row.records < 2 * row.exemplar_records:
             return
         ex = choose_exemplar(g.candidates, g.prompt)
         if ex is None or ex.hash == row.exemplar_hash:
@@ -634,6 +640,11 @@ class Store:
             "exemplar_records = ?, exemplar_picked = ? WHERE fingerprint = ?",
             (ex.call_id, ex.head, json.dumps(ex.messages), ex.hash, row.records, d, g.fingerprint),
         )
+
+    def _holds(self, fp: str, day: str) -> bool:
+        """Whether the store still has the cluster's figures for that day; the prune takes them."""
+        row = self.db.execute("SELECT 1 FROM cluster_days WHERE fingerprint = ? AND day = ?", (fp, day)).fetchone()
+        return row is not None
 
     def clusters_over(self, days: list[dt.date]) -> Iterator[edict]:
         """Every cluster with a day in the span, with its figures over the span, most requests first."""

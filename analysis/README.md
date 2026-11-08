@@ -86,7 +86,8 @@ against a copy of the store as from the host.
   cluster: the first 1,024 characters of one record's instructions and
   up to three of the cluster's last user messages, the ones whose prompt
   length is nearest the cluster's median. Chosen when the cluster is
-  first seen, re-picked only when the cluster has at least doubled since.
+  first seen, re-picked when the cluster has at least doubled since, or
+  when the day it was picked from has left the store.
 - **Activity:** what the people behind a cluster were doing. The judges'
   answer, never the cluster's name.
 
@@ -174,8 +175,14 @@ judge prompt, this model and this exemplar. A fingerprint is the
 project, the person, the tool and the opening of the instructions, and
 none of those change from one day to the next for a bot or an agent, so
 in steady state a day brings a handful of new clusters and the judges a
-handful of calls, often none. The full bill, clusters times judges at
-about 2.5 seconds a call, is paid only after the judge prompt changes.
+handful of calls, often none. A cluster's count is the sum of its
+retained days, so a steady cluster doubles at longer and longer
+intervals and, once the prune caps its count, never again; what keeps
+its exemplar from freezing is the prune itself: when it takes the day
+the exemplar was picked from, the cluster gets a new exemplar the next
+day it is seen, and a new verdict, once per retention. The full bill,
+clusters times judges at about 2.5 seconds a call, is paid only after
+the judge prompt changes.
 
 ## The store
 
