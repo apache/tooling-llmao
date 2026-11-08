@@ -37,25 +37,38 @@ LiteLLM directly, so a rule kept only in llmao's pages stops nothing.
   exists and carries a non-empty `allowed_models`. llmao creates no
   membership rows today, so nothing is enforced there yet; this is the
   mechanism point 3 below rests on.
+- **Within a name, the router picks the deployment,** by health, then
+  `order` (ours first, a provider second), then its load-balancing
+  strategy. The one mechanism that lets a request, a key or a team narrow
+  that choice is tag routing (`enable_tag_filtering`, off today); see
+  "Tags" below. Nothing else about a key or team reaches the router.
 
 ## What follows from that
 
-1. **Restricting one deployment means giving it its own model name.** A
-   deployment to be reached by only some people becomes a model name of
-   its own, granted to them, while the shared name stays open on the rest
-   of the boxes.
+1. **Groups restrict names; tags restrict deployments.** A group is
+   resolved to the set of model names, so a key granted a group gets every
+   deployment of each name, whichever groups those deployments carry. A
+   deployment to be reached by only some people, or avoided by some, is
+   therefore not a groups question. Two mechanisms were looked at:
 
    LiteLLM's team-scoped deployments (`model_info.team_id` with a
    `team_public_model_name`, `Router.team_public_model_names`) do **not**
-   offer a way around this. `Router.should_include_deployment`
-   (`router.py:11618`) matches a team-scoped deployment for its own team
-   *and* every public deployment of that name, because a public deployment
-   has `team_id` unset and the code treats unset as "accessible to all
-   teams". So a team-scoped deployment sharing a public name is added to
-   the public pool for that team rather than substituted for it: the team
-   would be load-balanced across its own deployment and everyone else's.
-   Team-scoped deployments isolate a name only when no public deployment
-   carries it, which is this point's first paragraph by a longer route.
+   do it. `Router.should_include_deployment` (`router.py:11618`) matches a
+   team-scoped deployment for its own team *and* every public deployment
+   of that name, because a public deployment has `team_id` unset and the
+   code treats unset as "accessible to all teams". So a team-scoped
+   deployment sharing a public name is added to the public pool for that
+   team rather than substituted for it: the team would be load-balanced
+   across its own deployment and everyone else's. Team-scoped deployments
+   isolate a name only when no public deployment carries it, which is a
+   second name by a longer route.
+
+   Tag routing does. A deployment carries tags, a request carries tags,
+   and the router keeps only the deployments the request's tags allow.
+   The tags a team or key carries are applied to every request it sends
+   and cannot be taken off by the caller. This is the tool for everything
+   below that is about *which deployment*; a second model name is no
+   longer needed for it. (An earlier draft of this document said it was.)
 
 2. **A restricted model must leave `llmao:self-hosted`.** Otherwise every
    free-tier key reaches it through the group. Restricted models get
@@ -101,6 +114,106 @@ in; a grant names a group, not a model, wherever a set is meant. So "these
 three people and the security team may use the preview models" is one
 group and one grant list, and adding a fourth preview model touches
 neither.
+
+## Tags: choosing among a name's deployments
+
+Groups and tags answer different questions, and both are LiteLLM's, so
+both hold against a client that never sees a llmao page:
+
+| | Access groups | Tags |
+|---|---|---|
+| Live on | a deployment's `model_info.access_groups` | a deployment's `litellm_params.tags` |
+| Decide | whether the key may call the model name at all | which deployments of that name this request may land on |
+| Enforced | at auth, before routing, by name | in the router, after auth, per deployment |
+| Set per | team list, key list, team membership | team metadata, key metadata, and the request itself |
+| On refusal | 401 at the door | a router error: no deployment satisfies the tags |
+| Hide a name from `/v1/models` | yes | no |
+
+**How a request's tags are made** (`litellm_pre_call_utils.py`, 1.105.0):
+the union of the key's `metadata.tags`, the team's `metadata.tags`, and
+what the caller sent in the `x-litellm-tags` header or the body's
+`metadata.tags`. The ones from the key and team are also recorded apart,
+as `inherited_tags`, and that is what makes them policy: a caller can add
+tags but never remove those.
+
+**How the router reads them** (`router_strategy/tag_based_routing.py`),
+once `enable_tag_filtering` is on in `router_settings`:
+
+- `tag`: steer. Only deployments carrying the tag are eligible; with none
+  healthy, the ones tagged `default` if any, else an error.
+- `!tag`: exclude every deployment carrying it.
+- `&tag`: require it.
+- No tags at all: the deployments tagged `default` if any exist for the
+  name, else every healthy one, ordered as now. So switching the filter
+  on with nothing tagged changes nothing.
+
+A `!` or `&` that came from the key or team is kept even when it leaves
+nothing: the request fails rather than routing around it. A caller's own
+constraint may be dropped only on a deployment that sets
+`model_info.allow_fail_open`, which none of ours will. A caller sending a
+steering tag that conflicts with an inherited exclusion gets the error,
+not the deployment.
+
+**What tags are for here.** Each is a choice among deployments of one
+name that nothing else can make:
+
+- **Paid or ours.** Provider deployments carry `paid`. A team that may
+  never spend carries `!paid`: it lands on our boxes, and when they are
+  all down it gets an error instead of a bill. A team that may spend
+  carries nothing and falls back to the provider as now. A key or team
+  allowed to skip the queue carries `paid` and goes to the provider
+  first. See the next section.
+- **A request that asks for Private.** The FAQ says a Mixed model "may
+  take either path, and you cannot choose which". With `!paid` a request
+  can: a security reviewer, or the prompt analysis's judge (issue #73),
+  says so on the request, and a team whose work is always confidential
+  says so once, in its team metadata. "Unpublished security work belongs
+  on Private models" gains "or send `!paid`".
+- **A canary.** A new vLLM build or a new rental under a shared name,
+  tagged `canary` while the established deployments carry `default`:
+  nobody reaches it except a request tagged `canary`, which is what the
+  smoke test and a load run would send. Today a new box takes its share
+  of everyone's traffic from the moment it is registered.
+- **Dedicated capacity.** A box rented for one project, tagged with the
+  project, the team's metadata carrying the same tag: the project's
+  requests go to its box and nobody else's do. With `allow_fail_open` on
+  that box they fall back to the shared pool when it is down; without, they
+  wait. The fast-GPU-for-some case is the same shape with `fast`.
+- **Background work on its own box.** A deployment tagged `batch` for the
+  judge, benchmarks and anything that should queue behind people, which
+  issue #72 wanted from vLLM's priority scheduler. Tags give a separate
+  line rather than a priority within one, which is the safer of the two:
+  nothing a user can set moves them up.
+- **A variant under one name.** A quantised build with a shorter context,
+  or one without tool calling, tagged for what it lacks and excluded by
+  the requests that need it. Plausible, not wanted yet; the catalogue
+  would rather such a build had its own name.
+
+LiteLLM can also match a deployment's `tag_regex` against the request's
+User-Agent, routing by client tool. Noted, not wanted: a tool name is not
+a policy.
+
+**What tags cannot do.** Deny or hide a name: a team under `!paid` still
+sees the name and may call it, which is right, since it is served on our
+boxes. Anything about who may call a model stays with groups and the team
+lists. And tags carry nothing in `/v1/models` or any listing, so what a
+request will get is not discoverable from the client; the /models page
+has to say it.
+
+**A hole in the groups design that tags close.** The free tier is kept
+off paid models by `llmao:self-hosted`, but a group covers a *name*. The
+moment a provider deployment shares a name with ours, which the next
+section plans for, every projectless key reaches the provider as the
+fallback, and nothing in the groups design stops it. Nothing paid is
+deployed today. When it is, `!paid` on the two pretend projects' teams is
+what keeps the promise the group was meant to keep.
+
+**The work.** Tag provider deployments at `/model/new`
+(`proxy/deployments.py`) and backfill the existing rows; write team
+metadata tags from the team manager and add them to the skew check;
+switch `enable_tag_filtering` on in p6's `litellm.yaml` template. The
+request and approval flow of "Granting" below covers the tags a team
+carries as it covers its groups.
 
 ## Three kinds of audience
 
@@ -194,35 +307,48 @@ deployments of one name, our boxes first by `order`, the provider only
 when ours cannot answer. That is right for most people: they wait in line
 with everyone else on our boxes.
 
-Some should be able to use the paid one at will, without waiting. Because
-LiteLLM chooses by model name, that means a second name for the paid
-route, in a group only they are granted, for example:
+Some should be able to use the paid one at will, without waiting, and
+some should never reach it at all. One name does both, with the provider
+deployments tagged `paid`:
 
-- `gemma4-26b`: our boxes, the provider as fallback (as now), open.
-- `gemma4-26b-now` (name to be chosen): the provider only, in a group
-  such as `llmao:priority`, granted to the projects or people allowed to
-  spend for speed.
+| team or key carries | gets |
+|---|---|
+| `!paid` | our boxes only; an error when none can answer |
+| nothing | our boxes, the provider when they cannot answer (as now) |
+| `paid` | the provider first |
 
-Whether the fallback to the provider should stay open to everyone, or
-itself be limited, is part of question 3.
+The pretend projects carry `!paid` from the start, which is the group's
+promise made good (see the hole above). Whether a real project starts at
+"nothing" or at `!paid`, and who moves it, is question 3. A grant of
+`paid` is a grant like any other: requested, approved, written to the
+team's metadata, checked for skew. A second model name per paid route,
+which an earlier draft proposed, is not needed.
 
 ## Open questions
 
-1. ~~**Model or deployment?**~~ Answered: restricting whole model names,
-   with a restricted deployment given its own name. The same public name
-   cannot route differently per project -- see point 1 above for why
-   team-scoped deployments do not do this.
+1. ~~**Model or deployment?**~~ Answered twice: groups for names, tags
+   for deployments. A name routes differently per project through the
+   tags its team carries; team-scoped deployments do not do this (point 1
+   above), and a second name per restricted deployment is withdrawn.
 2. **Who grants?** Site admins only, or may a PMC grant its own project
-   access to a group?
+   access to a group, or `paid` to itself?
 3. **Paid models:** today any real project can call them, and anyone
-   falls back to a provider when our boxes cannot answer. Restricted by
-   default, granted per project with a budget in mind? Should fallback be
-   limited too?
+   falls back to a provider when our boxes cannot answer. Does a real
+   project start at "nothing" (fallback allowed) or at `!paid`, and is
+   `paid` at will granted per project with a budget in mind? LiteLLM
+   also keeps spend per tag (`tag_max_budget_check`), which may be the
+   budget's natural home; not yet looked at.
 4. **Grants to people:** per-member scope covers a person across all
    their keys at once, so "to one key" would need the per-key lists this
    design now avoids. Is per-key granularity wanted by anyone? And should
    a person-level grant of a paid or hidden group use a group-specific
-   team instead, to keep it away from the project's service keys?
-5. **Names for paid-at-will routes,** if that design holds.
+   team instead, to keep it away from the project's service keys? (A tag
+   on a key is per key by nature, so `paid` at will for one person is
+   easier than a group for one person.)
+5. ~~**Names for paid-at-will routes.**~~ Withdrawn: tags, one name.
 6. **Hidden models in usage reports:** someone without access should not
    learn a hidden model's name from a usage page or a project report.
+7. **Tags on the /models page:** a request cannot discover from LiteLLM
+   which deployment it will get, so the page has to say what a team's
+   tags mean for it, and the FAQ's "you cannot choose which" has to
+   change.
