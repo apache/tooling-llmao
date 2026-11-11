@@ -43,15 +43,15 @@
             <h2 class="h6 mb-1">Connect a tool</h2>
             [if-any tool_step_done]
             <p class="text-muted mb-2">
-                Your requests are flowing. Every model's ID, context window, and
-                who can see your prompts is on the Models page.
+                Your requests are flowing. Every model's ID and context window
+                is on the Models page.
             </p>
             [else]
             <p class="text-muted mb-2">
                 Point it at <span class="font-monospace">https://llm.apache.org</span>
                 and use that token as the key. The endpoint follows the OpenAI API.
                 Pick a model ID from the Models page, which lists each model's
-                context window and who can see your prompts.
+                context window.
             </p>
             [end]
             <a class="btn btn-outline-primary btn-sm" href="/help">Help</a>
