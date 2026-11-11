@@ -36,7 +36,7 @@ from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import fmt
 from llmao.capacity import add_counts
-from llmao.prompt_log import PROMPT_BUCKETS, percentile
+from llmao.prompt_log import NO_PROJECT, PROMPT_BUCKETS, percentile
 
 
 def _ranked_counts(totals: dict[str, dict]) -> list[edict]:
@@ -308,7 +308,7 @@ def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[edi
         daily: dict[str, float] = defaultdict(float)
         for r in period:
             by_model[r.model_name] += r.spend_usd
-            by_project[r.project or "(no project)"] += r.spend_usd
+            by_project[r.project or NO_PROJECT] += r.spend_usd
             daily[r.day] += r.spend_usd
         out.append(
             edict(

@@ -146,7 +146,9 @@ Four parts, hashed together with blake2b at 8 bytes, which is fast,
 stable across runs and needs no cryptographic strength: a clash would
 merge two clusters and nothing worse.
 
-- **The project**, the key's team alias, or "(no project)".
+- **The project**, the key's team alias, or `llmao:none`. The prefix
+  marks a label llmao made up, as `llmao:master-key` does for the
+  person below; no ASF id has a colon, and one word splits cleanly.
 - **The person:** the key's user, else its purpose (the name typed when
   the key was made, so a service key reads as "tooling-gofannon"), else
   the start of its hash. Not the key itself, because a person evaluating models holds one

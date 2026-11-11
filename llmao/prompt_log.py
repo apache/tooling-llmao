@@ -213,7 +213,10 @@ def counts_as_demand(model: str | None, project: str | None) -> bool:
 # Prompt length in tokens, bucketed: is anyone using the context we pay KV
 # cache for. The last bucket has no upper bound.
 PROMPT_BUCKETS = ((1_000, "<1k"), (8_000, "1k-8k"), (32_000, "8k-32k"), (128_000, "32k-128k"), (None, ">128k"))
-NO_PROJECT = "(no project)"
+# A label llmao made up, never an id from the data: the "llmao:" prefix says
+# so wherever one is tallied or printed, and a colon cannot appear in an ASF
+# project or user id. One word, so a row of output splits on whitespace.
+NO_PROJECT = "llmao:none"
 
 
 def prompt_bucket(tokens: int) -> str:

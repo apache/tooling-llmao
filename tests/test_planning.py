@@ -25,6 +25,7 @@ from easydict import EasyDict as edict  # noqa: N813
 from llmao.capacity import fold_demand
 from llmao.models import VllmRecipe
 from llmao.planning import Advisor, days_to_read, summarise_capacity, summarise_demand, summarise_spend
+from llmao.prompt_log import NO_PROJECT
 from tests.test_capacity import DAY, _spend
 
 SPEND_TODAY = dt.date(2026, 10, 19)
@@ -56,7 +57,7 @@ def test_a_provider_is_totalled_over_the_period_today_and_the_month():
     # 10 over 19 days, for a 31-day month
     assert xai.projected_month_usd == round(10.0 / 19 * 31, 2)
     assert [(m.name, m.usd) for m in xai.models] == [("grok-4", 3.0), ("grok-4-mini", 1.0)]
-    assert [(p.name, p.usd) for p in xai.projects] == [("tooling", 3.0), ("(no project)", 1.0)]
+    assert [(p.name, p.usd) for p in xai.projects] == [("tooling", 3.0), (NO_PROJECT, 1.0)]
     assert [(d.day, d.usd) for d in xai.daily] == [("2026-10-18", 3.0), ("2026-10-19", 1.0)]
 
 

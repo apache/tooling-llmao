@@ -292,7 +292,7 @@ def head(text: str) -> str:
 
 
 MASTER_KEY_HASH = "litellm_proxy_master_key"  # LiteLLM's placeholder: no team, user default_user_id
-MASTER_KEY = "(master key)"  # the operators' own requests: smoke tests, never judged
+MASTER_KEY = "llmao:master-key"  # the operators' own requests: smoke tests, never judged; prefix as NO_PROJECT
 
 
 def who(key: dict) -> str:
