@@ -102,9 +102,11 @@ def run_build(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         for day in days:
             if day in scanned:
                 continue
+            # The day's name first, so a slow day is seen to be in progress.
+            print(f"reading {day}: ", end="", flush=True)
             n = store.scan_day(log_dir, day)
             read += 1
-            print(f"read {day}: {fmt.plural(n, 'record')}")
+            print(fmt.plural(n, "record"))
         # After the scan, never before: the prune drops the verdicts of
         # clusters that no longer exist, and between a rebuild and its
         # scan none exists.
