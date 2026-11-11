@@ -42,9 +42,9 @@ from cmarkgfm.cmark import Options
 from dunamai import Version
 from easydict import EasyDict as edict  # noqa: N813
 
-from llmao import fmt
+from llmao import auth, fmt
 from llmao.access_requests import APPROVAL_TTL_DAYS
-from llmao.auth import current_identity
+from llmao.auth import current_identity, identity_from_session
 from llmao.fleet import (
     ORPHAN_PASSES,
     add_refusal,
@@ -341,9 +341,13 @@ async def basic_info(title: str = "llmao") -> edict:
         basic.projects_label = ", ".join(projects) if projects else None
         committees = sorted(getattr(client_session, "committees", None) or [])
         basic.committees = committees
-        site_admins = sorted(APP.cfg.site_admins or [])
-        is_site_admin = client_session.uid in site_admins or bool(getattr(client_session, "isRoot", False))
+        # is_site_admin is what the pages go by, and it is off while the
+        # admin operates as a normal user. admin_at_heart is who they are,
+        # for the menu checkbox that turns that on and off.
+        is_site_admin = identity_from_session(client_session, APP.cfg).is_site_admin
         basic.is_site_admin = ezt.boolean(is_site_admin)
+        basic.admin_at_heart = ezt.boolean(auth.is_site_admin(client_session, APP.cfg))
+        basic.as_user = ezt.boolean(auth.acting_as_user(client_session))
         # Other Keys nav + automation mint (provisional: PMC or site admin).
         basic.can_create_automation = ezt.boolean(is_site_admin or bool(committees))
         if is_site_admin:
@@ -358,6 +362,8 @@ async def basic_info(title: str = "llmao") -> edict:
         basic.projects_label = None
         basic.committees = []
         basic.is_site_admin = ezt.boolean(False)
+        basic.admin_at_heart = ezt.boolean(False)
+        basic.as_user = ezt.boolean(False)
         basic.can_create_automation = ezt.boolean(False)
         basic.admin_projects = []
 
@@ -2334,6 +2340,24 @@ async def do_acknowledge():
         await APP.seam.acknowledge(await current_identity(APP.cfg), form.get("key") or "")
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
+    return _see_other(_safe_back())
+
+
+@APP.post("/do-act-as-user")
+@asfquart.auth.require
+async def do_act_as_user():
+    """A site admin turns operating as a normal user on or off.
+
+    The checkbox is in the name menu on every page, so this goes back to
+    the page it was ticked on. An admin page that refuses an admin who just
+    became a normal user bounces them from there, as it would anyone.
+    """
+    form = await quart.request.form
+    client_session = await asfquart.session.read()
+    if client_session is None or not auth.is_site_admin(client_session, APP.cfg):
+        await flash_danger("That is limited to site admins.")
+        return _see_other(_safe_back())
+    auth.act_as_user(client_session, bool(form.get("on")))
     return _see_other(_safe_back())
 
 

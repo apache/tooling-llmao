@@ -63,10 +63,22 @@
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button"
                        data-bs-toggle="dropdown" aria-expanded="false">
-                        [name]
+                        [name][if-any as_user] <span class="badge text-bg-warning">as user</span>[end]
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
                         <li><span class="dropdown-item-text text-muted small">[uid]</span></li>
+                        [if-any admin_at_heart]
+                        <li>
+                            <form method="post" action="/do-act-as-user" class="dropdown-item-text" data-autosubmit>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="on" value="1"
+                                           id="actAsUser"[if-any as_user] checked[end]>
+                                    <label class="form-check-label" for="actAsUser">Operate as a normal user</label>
+                                </div>
+                                <noscript><button type="submit" class="btn btn-sm btn-outline-secondary mt-1">Apply</button></noscript>
+                            </form>
+                        </li>
+                        [end]
                         <li><hr class="dropdown-divider"></li>
                         <li><a class="dropdown-item" href="/auth?logout=/">Sign out</a></li>
                     </ul>

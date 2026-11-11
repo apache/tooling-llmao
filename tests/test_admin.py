@@ -34,6 +34,8 @@ def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, re
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
+        admin_at_heart=ezt.boolean(True),
+        as_user=ezt.boolean(False),
         nav="admin",
         login_back="/admin",
         restarted_at="2026-10-08 14:30 UTC",
@@ -109,6 +111,8 @@ def test_capacity_page_renders_demand_beside_the_boxes():
     data = edict(
         title="Capacity",
         is_site_admin=ezt.boolean(True),
+        admin_at_heart=ezt.boolean(True),
+        as_user=ezt.boolean(False),
         nav="admin",
         login_back="/admin/capacity",
         restarted_at="",

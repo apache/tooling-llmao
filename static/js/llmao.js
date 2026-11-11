@@ -119,6 +119,14 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
+  // A form of one checkbox submits as soon as it is ticked; its button is
+  // only there without JavaScript.
+  document.querySelectorAll("form[data-autosubmit]").forEach(function (form) {
+    form.addEventListener("change", function () {
+      form.submit();
+    });
+  });
+
   // Capacity: one bar per day of the period, drawn by ECharts from the JSON
   // on each element: {days: ["2026-10-19", ...], values: [...], unit: "tokens"}.
   // Every day of the period is on the axis, a day with nothing as zero, so a

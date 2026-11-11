@@ -18,6 +18,13 @@
 """Authentication / identity resolution via asfquart.
 
 ``cfg`` is ``APP.cfg`` (EasyDict). Site admins from ``cfg.site_admins``.
+
+A site admin can choose to operate as a normal user for a while, to see
+the site as everyone else does. The choice is a flag in the browser
+session, and it takes the admin's standing away everywhere: the identity
+handed to the seam is not an admin, so /admin refuses them like anyone
+else, not only the navigation. The flag names the uid that set it, so it
+is ignored for whoever signs in next on the same browser.
 """
 
 from __future__ import annotations
@@ -25,8 +32,12 @@ from __future__ import annotations
 from typing import Any
 
 import asfquart.session as asf_session
+import quart
 
 from .seam import AuthzError, Identity
+
+# quart.session key: the uid of the admin operating as a normal user.
+AS_USER = "llmao_as_user"
 
 
 async def current_identity(cfg: Any) -> Identity:
@@ -42,13 +53,32 @@ async def current_identity(cfg: Any) -> Identity:
 
 
 def identity_from_session(client_session, cfg: Any) -> Identity:
-    site_admins = list(cfg.site_admins or [])
     return Identity(
         uid=client_session.uid,
         projects=list(getattr(client_session, "projects", []) or []),
         committees=list(getattr(client_session, "committees", []) or []),
-        is_site_admin=(client_session.uid in site_admins or bool(getattr(client_session, "isRoot", False))),
+        is_site_admin=is_site_admin(client_session, cfg) and not acting_as_user(client_session),
     )
+
+
+def is_site_admin(client_session, cfg: Any) -> bool:
+    """Whether this person IS a site admin, whatever they chose to operate as."""
+    site_admins = list(cfg.site_admins or [])
+    return client_session.uid in site_admins or bool(getattr(client_session, "isRoot", False))
+
+
+def acting_as_user(client_session) -> bool:
+    """Whether this admin chose to operate as a normal user."""
+    if not quart.has_request_context():
+        return False
+    return quart.session.get(AS_USER) == client_session.uid
+
+
+def act_as_user(client_session, on: bool) -> None:
+    if on:
+        quart.session[AS_USER] = client_session.uid
+    else:
+        quart.session.pop(AS_USER, None)
 
 
 def make_token_handler(cfg: Any):
