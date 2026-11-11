@@ -981,6 +981,25 @@ class UsageManager:
         _LOGGER.info("spend log: %s, %d rows in %d pages", start, len(rows), page)
         return rows
 
+    # Before the gateway existed; the endpoint insists on both bounds.
+    _SPEND_LOG_EPOCH = "2025-01-01"
+
+    async def has_requests(self, user: str) -> bool:
+        """Whether one person's requests have ever reached a model.
+
+        One row of the spend log is the whole answer, so one is all that is
+        asked for: the question is "ever", not "how many".
+        """
+        end = (self._now().date() + _dt.timedelta(days=1)).isoformat()
+        resp = await self._transport.request(
+            "GET",
+            "spend/logs/v2",
+            params={"user_id": user, "start_date": self._SPEND_LOG_EPOCH, "end_date": end, "page": 1, "page_size": 1},
+        )
+        self._transport.raise_http(resp)
+        body = resp.json()
+        return isinstance(body, dict) and bool(body.get("data"))
+
     async def allowance(self, user: str, *, tier: str = TIER_FREE) -> RollingAllowance:
         """A principal's rolling allowance, derived from recorded usage.
 

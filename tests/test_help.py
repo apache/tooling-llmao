@@ -197,18 +197,40 @@ def _generate(name: str, data) -> str:
     return buf.getvalue()
 
 
+def _steps(key=False, tool=False):
+    """The home page's step state, as home_page() hands it to the template."""
+    return dict(key_step_done=ezt.boolean(key), tool_step_done=ezt.boolean(tool))
+
+
 def test_home_page_is_the_steps_to_a_first_request():
-    signed_out = _generate("home.ezt", _frame())
-    assert signed_out.count('<li class="home-step') == 4
+    signed_out = _generate("home.ezt", _frame(**_steps()))
+    assert signed_out.count('<li class="home-step') == 3
     assert "home-step-done" not in signed_out
     assert 'href="/auth?login=/"' in signed_out
     assert 'href="/help"' in signed_out
+    assert "/keys/new" not in signed_out
 
-    signed_in = _generate("home.ezt", _frame(uid="alice", name="Alice", projects_label="infra"))
-    assert signed_in.count("home-step-done") == 1
-    assert "Signed in as" in signed_in
-    for href in ("/keys", "/models", "/help"):
-        assert f'btn-sm" href="{href}"' in signed_in
+    # Signed in, nothing else: the key is the step to take.
+    alice = dict(uid="alice", name="Alice", projects_label="infra")
+    fresh = _generate("home.ezt", _frame(**alice, **_steps()))
+    assert fresh.count("home-step-done") == 1
+    assert "Signed in as" in fresh
+    assert 'btn btn-primary btn-sm" href="/keys/new"' in fresh
+
+    # A key but no request yet.
+    keyed = _generate("home.ezt", _frame(**alice, **_steps(key=True)))
+    assert keyed.count("home-step-done") == 2
+    assert "You have a key" in keyed
+    assert 'btn btn-outline-primary btn-sm" href="/keys"' in keyed
+    assert "/keys/new" not in keyed
+    for href in ("/help", "/models"):
+        assert f'btn-sm" href="{href}"' in keyed
+
+    # Everything done: three checks, nothing left to press.
+    done = _generate("home.ezt", _frame(**alice, **_steps(key=True, tool=True)))
+    assert done.count("home-step-done") == 3
+    assert "requests are flowing" in done
+    assert "btn btn-primary " not in done
 
 
 def test_create_key_form_preselects_a_given_project():

@@ -8,7 +8,7 @@
     <p class="llmao-lede text-muted">
         The ASF's gateway to AI models. Use Foundation-sanctioned models from
         any OpenAI&nbsp;API-compatible tool, with your usage attributed to you.
-        Four steps get you there.
+        Three steps get you there.
     </p>
 
     <ol class="home-steps list-unstyled mt-4">
@@ -24,29 +24,38 @@
             <a class="btn btn-primary btn-sm" href="/auth?login=/">Sign in with ASF</a>
             [end]
         </li>
-        <li class="home-step">
+        <li class="home-step[if-any key_step_done] home-step-done[end]">
             <h2 class="h6 mb-1">Create a key</h2>
+            [if-any key_step_done]
+            <p class="text-muted mb-2">
+                You have a key. Your keys and what each has drawn are on My Keys.
+            </p>
+            <a class="btn btn-outline-primary btn-sm" href="/keys">My Keys</a>
+            [else]
             <p class="text-muted mb-2">
                 A personal access token ties your usage to you and one of your
                 projects. The secret is shown once.
             </p>
-            [if-any uid]<a class="btn btn-primary btn-sm" href="/keys">My Keys</a>[end]
+            [if-any uid]<a class="btn btn-primary btn-sm" href="/keys/new">Create a key</a>[end]
+            [end]
         </li>
-        <li class="home-step">
-            <h2 class="h6 mb-1">Pick a model</h2>
-            <p class="text-muted mb-2">
-                Each model lists its ID, its context window, and who can see
-                your prompts.
-            </p>
-            [if-any uid]<a class="btn btn-outline-primary btn-sm" href="/models">Models</a>[end]
-        </li>
-        <li class="home-step">
+        <li class="home-step[if-any tool_step_done] home-step-done[end]">
             <h2 class="h6 mb-1">Connect a tool</h2>
+            [if-any tool_step_done]
+            <p class="text-muted mb-2">
+                Your requests are flowing. Every model's ID, context window, and
+                who can see your prompts is on the Models page.
+            </p>
+            [else]
             <p class="text-muted mb-2">
                 Point it at <span class="font-monospace">https://llm.apache.org</span>
                 and use that token as the key. The endpoint follows the OpenAI API.
+                Pick a model ID from the Models page, which lists each model's
+                context window and who can see your prompts.
             </p>
+            [end]
             <a class="btn btn-outline-primary btn-sm" href="/help">Help</a>
+            <a class="btn btn-outline-primary btn-sm" href="/models">Models</a>
         </li>
     </ol>
 </div>

@@ -202,6 +202,22 @@ def test_key_usage_groups_by_key_for_one_person():
     assert "tok4" not in got, "another person's key must not appear"
 
 
+def test_has_requests_asks_the_spend_log_for_one_row():
+    """The home page's question is "ever", so one row is the answer and one is asked for."""
+    hits = {"data": [{"request_id": "r1"}], "total_pages": 9}
+
+    def answer(call):
+        return hits if call.params.get("user_id") == "alice" else {"data": [], "total_pages": 0}
+
+    b = _usage(WEEK)
+    b._transport._answer = answer
+    assert _run(b.has_requests("alice")) is True
+    assert _run(b.has_requests("bob")) is False
+    for _, params in _asked(b):
+        assert params["page_size"] == 1 and params["page"] == 1
+        assert params["start_date"] < params["end_date"]
+
+
 def test_cost_basis_distinguishes_capacity_from_money():
     """The whole reason the tag is carried through.
 

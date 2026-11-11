@@ -419,6 +419,24 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
 @use_template(TEMPLATES / "home.ezt")
 @page(title="Home")
 async def home_page(result):
+    """The three steps to a first request, each marked done when the server can see it is.
+
+    Signing in is the session; a key and a request are each one question to
+    LiteLLM. A backend that cannot answer leaves the steps unmarked rather
+    than failing the home page, which is how the page looked for everyone
+    before it asked.
+    """
+    has_keys = has_requests = False
+    if result.uid:
+        ident = await current_identity(APP.cfg)
+        try:
+            has_keys = await APP.seam.has_keys(ident)
+            # No key, no request: the second question is not asked.
+            has_requests = has_keys and await APP.seam.has_requests(ident)
+        except BackendUnavailableError:
+            has_keys = has_requests = False
+    result.key_step_done = ezt.boolean(has_keys)
+    result.tool_step_done = ezt.boolean(has_requests)
     return result
 
 

@@ -529,6 +529,14 @@ class Seam:
     async def list_my_keys(self, identity: Identity) -> list[KeyInfo]:
         return await self._backend.keys.find(user=identity.uid, size=100)
 
+    # The home page's two questions about a person's progress: has a key,
+    # has made a request. Each asks LiteLLM for one record, not the list.
+    async def has_keys(self, identity: Identity) -> bool:
+        return bool(await self._backend.keys.find(user=identity.uid, size=1))
+
+    async def has_requests(self, identity: Identity) -> bool:
+        return await self._backend.metering.has_requests(identity.uid)
+
     async def my_key_usage(self, identity: Identity) -> dict[str, int]:
         """Tokens drawn per key, this week.
 
