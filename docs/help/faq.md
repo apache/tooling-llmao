@@ -51,7 +51,7 @@ A stop on a round token count is the output budget. Raise it. A stop on a round 
 
 ## What does the Models page tell me?
 
-For each model: the id to use, whether it is available now, its context window, its licence, where its weights and training data come from, and who can see your prompts.
+For each model: the id to use, whether it is available now, its context window, its licence, where its weights and training data come from, and its hosting.
 
 ## Who can see my prompts?
 
