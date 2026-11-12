@@ -1461,6 +1461,12 @@ class TierManager:
     def __init__(self, cfg: Any, memory: MemoryStore):
         self._cfg = cfg
         self._memory = memory
+        # Held across the read-change-write in set_limits. One TierManager per
+        # backend and one backend per app, and production is a single
+        # hypercorn process, so this covers every writer there is. It would
+        # not survive a move to several workers -- the store has no
+        # compare-and-set, so that would need one.
+        self._write_lock = asyncio.Lock()
 
     async def _overrides(self) -> dict[str, Any]:
         """{tier: {limit: value}} as an admin has set them. Empty until one has."""
@@ -1556,11 +1562,17 @@ class TierManager:
             if int(val) < 0:
                 raise BackendUnavailableError(f"{name} must not be negative")
 
-        # Every tier shares the one row, so this is read, change, write.
-        tiers = await self._overrides()
-        stamp = _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
-        tiers[tier] = {**(tiers.get(tier) or {}), **changes, "changed_by": by, "changed_at": stamp}
-        await self._memory.put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
+        # Every tier shares the one row, so this is read, change, write --
+        # and the store has no compare-and-set, so two of these interleaving
+        # means the second one's read happens before the first one's write
+        # and silently reverts it. Two admins on /admin at once is all it
+        # takes. The lock spans read to write and nothing else: `limits()`
+        # below is a fresh read either way.
+        async with self._write_lock:
+            tiers = await self._overrides()
+            stamp = _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
+            tiers[tier] = {**(tiers.get(tier) or {}), **changes, "changed_by": by, "changed_at": stamp}
+            await self._memory.put(self._TIERS_KEY, json.dumps(tiers, sort_keys=True))
         _LOGGER.info("tier %s updated by %s: %s", tier, by, sorted(changes))
         return await self.limits(tier)
 
