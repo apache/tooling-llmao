@@ -47,7 +47,9 @@ class FakeTransport:
         call = edict(method=method, path=path, params=params or {}, json=json)
         self.calls.append(call)
         if self.down:
-            raise BackendUnavailableError("could not reach LiteLLM")
+            # Same text the real transport raises, so a test that asserts on
+            # it is testing the message users see.
+            raise BackendUnavailableError("the LiteLLM backend is unreachable")
         answer = self._answer(call) if self._answer else {}
         status, body = answer if isinstance(answer, tuple) else (200, answer)
         return edict(status_code=status, content=b"x", text=str(body), json=lambda: body)

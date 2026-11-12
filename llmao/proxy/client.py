@@ -42,6 +42,7 @@ from asfpy.stopwatch import Stopwatch
 from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import access_requests as _access
+from llmao import fmt
 from llmao.fleet import ACCESS_GROUP_SELF_HOSTED
 from llmao.proxy.deployments import DeploymentManager
 from llmao.proxy.errors import BackendUnavailableError
@@ -295,6 +296,11 @@ class LiteLLMTransport:
                 "Content-Type": "application/json",
             },
             timeout=httpx.Timeout(timeout_s),
+            # httpx already defaults to this. Stated because the header on
+            # every one of these requests is the LiteLLM master key, and a
+            # redirect followed to another host would take it along: not a
+            # default to inherit silently.
+            follow_redirects=False,
         )
 
     async def aclose(self) -> None:
@@ -312,8 +318,22 @@ class LiteLLMTransport:
             raise BackendUnavailableError(
                 f"LiteLLM admin API timed out after {self._cfg.litellm.request_timeout_s}s"
             ) from e
-        except httpx.ConnectError as e:
-            raise BackendUnavailableError(f"could not reach LiteLLM at {self._cfg.litellm.base_url}") from e
+        except httpx.TransportError as e:
+            # Every way the connection itself can fail, not just a refused
+            # connect: a reset mid-read is a ReadError, a half-spoken reply is
+            # a ProtocolError, and both used to leave this method as raw httpx
+            # for pages.py to meet as an unhandled 500. TransportError is the
+            # one parent of all of them, so this cannot fall behind the list.
+            #
+            # The address goes to the log, not to the caller: the message is
+            # flashed into a page, and where the backend lives is not part of
+            # the answer to "that didn't work".
+            _LOGGER.warning(
+                "could not reach LiteLLM at %s: %r",
+                fmt.log_safe(self._cfg.litellm.base_url),
+                e,
+            )
+            raise BackendUnavailableError("the LiteLLM backend is unreachable") from e
 
     def raise_http(self, resp: httpx.Response) -> None:
         """Turn an error status into BackendUnavailableError.
@@ -324,7 +344,13 @@ class LiteLLMTransport:
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise BackendUnavailableError(f"LiteLLM admin error {e.response.status_code}: {e.response.text}") from e
+            # The body is LiteLLM's, and it reaches both a log line and a
+            # flash on an admin page. Sanitised once here so neither has to
+            # trust it: it is the only value on this path that an upstream
+            # error could have put newlines in.
+            body = fmt.log_safe(e.response.text)
+            _LOGGER.warning("LiteLLM admin error %s: %s", e.response.status_code, body)
+            raise BackendUnavailableError(f"LiteLLM admin error {e.response.status_code}: {body}") from e
 
 
 class LiteLLMBackend:

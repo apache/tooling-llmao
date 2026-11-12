@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import datetime as dt
 import time
+from typing import Any
 
 
 def money(amount: float) -> str:
@@ -137,3 +138,34 @@ def ago_short(ts: float | None) -> str:
 def plural(n: int, noun: str) -> str:
     """'1 hour', '10 hours': a count with its noun, so a sentence never says '1 hours'."""
     return f"{n:,} {noun}" if n == 1 else f"{n:,} {noun}s"
+
+
+# A log line is also something a person reads, which is why this lives here
+# beside the rest of the rendering rather than in whichever module needed it
+# first. Two modules need it, and two copies of a sanitiser is how they drift.
+LOG_SAFE_LIMIT = 500
+
+
+def log_safe(value: Any, limit: int = LOG_SAFE_LIMIT) -> str:
+    """One line of someone else's text, safe to put in a log line.
+
+    Anything that reaches a log through %s and came from off the box can
+    forge a line of its own: a newline in the middle of a value makes the
+    rest of it look like the next entry. Escaping the three characters that
+    do that -- CR, LF and NUL -- plus the ESC that would otherwise colour or
+    reposition a terminal tailing the file, leaves the value readable and
+    unable to pretend to be anything else.
+
+    Truncation happens FIRST, so a cut cannot land between a backslash and
+    the letter it escapes and leave a dangling one.
+    """
+    text = str(value)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return (
+        text.replace("\\", "\\\\")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\x00", "\\0")
+        .replace("\x1b", "\\e")
+    )
