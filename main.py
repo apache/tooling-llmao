@@ -37,6 +37,7 @@ import pathlib
 import sys
 
 import yaml
+from hypercorn.middleware import ProxyFixMiddleware
 
 _LOGGER = logging.getLogger(__name__)
 # Year, seconds and the UTC offset. Correlating a portal line with an Apache
@@ -276,6 +277,14 @@ def run_standalone() -> None:
     app.runx(port=port, extra_files=extra_files, **kwargs)
 
 
+# One reverse proxy: the Apache vhost, over loopback. ProxyFixMiddleware
+# reads the entry that many places from the RIGHT of X-Forwarded-For, which
+# is the one Apache appended itself -- so a client that sends its own
+# X-Forwarded-For only adds an entry to the left of it and cannot choose the
+# address we record.
+TRUSTED_HOPS = 1
+
+
 def run_asgi() -> None:
     """Run as an ASGI process (e.g. Hypercorn imports main:llmao_app)."""
 
@@ -283,7 +292,10 @@ def run_asgi() -> None:
     _LOGGER.info(" ** Run-mode: ASGI")
 
     global llmao_app
-    llmao_app = create_app()
+    # Wrapped only here. Standalone serves the Quart app directly and has no
+    # proxy in front of it, so there is nothing to correct and nothing that
+    # should be trusted if a header turned up.
+    llmao_app = ProxyFixMiddleware(create_app(), trusted_hops=TRUSTED_HOPS)
 
 
 if __name__ == "__main__":
