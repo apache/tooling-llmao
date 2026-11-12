@@ -36,8 +36,14 @@ import logging
 import pathlib
 import sys
 
+import yaml
+
 _LOGGER = logging.getLogger(__name__)
-DATE_FORMAT = "%m/%d %H:%M"
+# Year, seconds and the UTC offset. Correlating a portal line with an Apache
+# error log, a journald entry and a box's own log needs all three: minutes
+# alone put eight events in one bucket, and no year makes a January file
+# ambiguous. ISO-8601 order so a sort is chronological.
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S%z"
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
 CERTS_DIR = THIS_DIR / "certs"
@@ -167,11 +173,45 @@ def create_app():
     return app
 
 
+# The levels a config may name. An allow-list rather than getattr on the
+# logging module, which would happily return a function for a typo.
+_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
+
+
+def _log_level(default: int = logging.DEBUG) -> int:
+    """The level named by config.yaml's `log_level`.
+
+    The default is DEBUG because that is what this module did before the
+    setting existed: deploying a config that happens to say nothing should
+    not quieten a running host. Puppet names the level explicitly, and INFO
+    is the right steady state for a gateway that sees every prompt's
+    surroundings -- but that choice belongs in the node yaml, not here.
+
+    Read from the file rather than from app.cfg because logging is set up
+    before asfquart loads the config, and a level that only took effect once
+    the app came up would miss the noisy part.
+
+    A missing or unreadable config is not this function's problem to report:
+    run_standalone checks for the file a few lines on and says so properly,
+    and under Puppet the file is there before the service starts.
+    """
+    try:
+        loaded = yaml.safe_load((THIS_DIR / "config.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return default
+    if not isinstance(loaded, dict):
+        return default
+    name = str(loaded.get("log_level") or "").strip().upper()
+    return getattr(logging, name) if name in _LEVELS else default
+
+
 def _configure_logging():
+
+    level = _log_level()
 
     # NOTE: no-op if Hypercorn has set up the root logger.
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=level,
         style="{",
         format="[{asctime}|{levelname}|{name}] {message}",
         datefmt=DATE_FORMAT,
@@ -189,8 +229,10 @@ def _configure_logging():
     }:
         logging.getLogger(modname).setLevel(logging.INFO)
 
-    # Regardless of the root logger, use DEBUG for this module.
-    _LOGGER.setLevel(logging.DEBUG)
+    # Regardless of the root logger, this module follows the configured level.
+    # It used to be pinned to DEBUG, which meant there was no setting that
+    # could quieten it.
+    _LOGGER.setLevel(level)
 
 
 def run_standalone() -> None:

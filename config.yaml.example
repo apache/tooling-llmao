@@ -121,6 +121,15 @@ capacity_retention_days: 90
 # key). Required. Not an audit trail: pruned daily past this.
 action_retention_days: 90
 
+# How much the portal says. CRITICAL, ERROR, WARNING, INFO or DEBUG; DEBUG
+# when absent or unrecognised, which is what this app did before the setting
+# existed. Read straight from this file before the app starts, because
+# logging is configured first.
+#
+# DEBUG is loud on a gateway and says more about each request than an
+# operator needs day to day, so a settled deployment wants INFO here.
+log_level: DEBUG
+
 # The prompt log (docs/prompt-logging-design.md): where the proxy's hook
 # writes one file of records per UTC day. Required: the demand rollup reads
 # a day's file from here after rolling the day up from LiteLLM. The same
