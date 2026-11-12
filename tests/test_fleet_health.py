@@ -48,6 +48,7 @@ from llmao.provisioning import FETCH_CAP, ConfigFetch, ProvisioningRecord
 from llmao.proxy.deployments import DeploymentManager, LiteLLMDeployment, LiteLLMHealth
 from llmao.reconcile import norm_base
 from llmao.vllm_client import VllmProbe, fetch_served_models, parse_max_model_len
+from tests.fake_http import StreamsViaGet
 from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
 
@@ -573,7 +574,7 @@ def test_the_served_window_is_read_from_the_root():
     calls = []
     root = "http://10.0.0.1:8001"
 
-    class _Client:
+    class _Client(StreamsViaGet):
         async def get(self, url, headers=None):
             calls.append(url)
             if url == f"{root}/v1/models":
@@ -597,7 +598,7 @@ def test_probe_all_scrapes_from_root_not_api_base():
     calls = []
     root = f"http://{s.host}:{s.public_port}"
 
-    class _Client:
+    class _Client(StreamsViaGet):
         async def get(self, url, headers=None):
             calls.append(url)
             if url.endswith("/health"):
@@ -715,7 +716,7 @@ def test_an_unlisted_host_with_no_address_is_still_an_attempt():
     assert s.state == STALLED
 
 
-class _KeyClient:
+class _KeyClient(StreamsViaGet):
     """/health always 200; /v1/models answers `status`, settable between passes."""
 
     def __init__(self, status=401):
@@ -796,3 +797,65 @@ def test_rejected_and_foreign_may_be_removed_but_not_added():
         assert add_refusal(dep) == "vLLM rejects our key"
         _registered(dep)
         assert remove_refusal(dep) is None
+
+
+class _FloodingClient:
+    """A rental that answers /health and then floods the body.
+
+    Not a slow trickle: httpx's timeout is per-read, so it bounds the wait
+    between chunks and never the total. A peer that answers FAST and large
+    stays inside any time budget and is the case a timeout cannot catch.
+    """
+
+    def __init__(self, chunk=b"x" * 65536, chunks=64):
+        self._chunk = chunk
+        self._chunks = chunks
+        self.bytes_offered = 0
+
+    async def get(self, url, headers=None):
+        return _Resp(200, text="OK")
+
+    def stream(self, method, url, headers=None):
+        client = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                class _R:
+                    status_code = 200
+
+                    async def aiter_bytes(self):
+                        for _ in range(client._chunks):
+                            client.bytes_offered += len(client._chunk)
+                            yield client._chunk
+
+                return _R()
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+    async def aclose(self):
+        return None
+
+
+def test_a_flooding_rental_is_cut_off_rather_than_held():
+    """The portal is one process: holding an unbounded body loses the admin UI."""
+    from llmao.vllm_client import READ_CAP_BYTES, fetch_served_models
+
+    client = _FloodingClient()
+    served = asyncio.run(fetch_served_models(client, "http://10.0.0.1:8001", "sk-x"))
+    # Never raises, and the window stays unknown rather than the box being trusted.
+    assert served.max_model_len is None
+    assert client.bytes_offered <= READ_CAP_BYTES + 65536
+
+
+def test_the_metrics_read_is_capped_too():
+    import httpx
+    import pytest
+
+    from llmao.vllm_client import fetch_metrics
+
+    client = _FloodingClient()
+    with pytest.raises(httpx.HTTPError):
+        asyncio.run(fetch_metrics(client, "http://10.0.0.1:8001", "sk-x"))

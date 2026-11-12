@@ -37,6 +37,7 @@ from llmao.model_status import AWAITING, HEALTHY, LOADING, deployment_status
 from llmao.models import VllmRecipe, load_models
 from llmao.provisioning import HOST_HEADER, config_for_host, rental_name
 from llmao.rental import ProviderRentals, Rental
+from tests.fake_http import StreamsViaGet
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "models.yaml"
 EXAMPLE_CFG = Path(__file__).resolve().parent.parent / "config.yaml.example"
@@ -534,7 +535,7 @@ def test_served_window_is_asked_for_with_the_working_key():
         def json(self):
             return self._body
 
-    class _Client:
+    class _Client(StreamsViaGet):
         async def get(self, url, headers=None):
             if url.endswith("/health"):
                 return _Resp(200)

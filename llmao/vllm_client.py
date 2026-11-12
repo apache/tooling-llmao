@@ -33,6 +33,7 @@ sampler hands to the capacity rollup.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -160,6 +161,41 @@ def parse_max_model_len(models_json: Any) -> int | None:
     return None
 
 
+# How much of a rental's reply we are willing to hold. The boxes are rented
+# from strangers and reached over plain HTTP, so the body is whatever the far
+# end -- or anything on the path -- decides to send. httpx.Timeout bounds the
+# wait between reads, never the total, so without this a fast peer can hand us
+# gigabytes inside a three-second budget. The portal is one process: that is
+# the admin UI gone, including the page an operator would use to kill the box.
+#
+# /v1/models is a handful of rows and /metrics a dozen or so series, both well
+# under this.
+READ_CAP_BYTES = 2 * 1024 * 1024
+
+
+class ResponseTooLarge(httpx.HTTPError):
+    """A rental answered with more than READ_CAP_BYTES."""
+
+
+async def _get_capped(
+    client: httpx.AsyncClient, url: str, headers: dict, *, cap: int = READ_CAP_BYTES
+) -> tuple[int, bytes]:
+    """GET url, reading at most `cap` bytes: (status, body).
+
+    Streamed rather than awaited whole, so the cap is enforced as the body
+    arrives rather than after it has all been held. A peer over the cap gets
+    ResponseTooLarge, which is an httpx.HTTPError and so is caught by the
+    handlers already written for a box that will not answer properly.
+    """
+    async with client.stream("GET", url, headers=headers) as resp:
+        body = bytearray()
+        async for chunk in resp.aiter_bytes():
+            body += chunk
+            if len(body) > cap:
+                raise ResponseTooLarge(f"{url} sent more than {cap} bytes")
+        return resp.status_code, bytes(body)
+
+
 async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
     """GET /v1/models with the key we believe this vLLM has: (status, max_model_len, hf_id).
 
@@ -179,10 +215,10 @@ async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     served = edict(status=None, max_model_len=None, hf_id="")
     try:
-        resp = await client.get(f"{base}/v1/models", headers=headers)
-        served.status = resp.status_code
-        if resp.status_code == 200:
-            body = resp.json()
+        status, raw = await _get_capped(client, f"{base}/v1/models", headers)
+        served.status = status
+        if status == 200:
+            body = json.loads(raw)
             served.max_model_len = parse_max_model_len(body)
             rows = body.get("data") if isinstance(body, dict) else None
             served.hf_id = next((str(r["id"]) for r in rows or () if isinstance(r, dict) and r.get("id")), "")
@@ -316,12 +352,14 @@ async def fetch_metrics(client: httpx.AsyncClient, root: str, api_key: str, *, n
 
     Raises httpx.HTTPError when the box does not answer: the sampler says
     what an outage means (logged once per outage, not per reading), and
-    bounds the wait at its call (asyncio.timeout), not here.
+    bounds the wait at its call (asyncio.timeout), not here. The SIZE is
+    bounded here, by READ_CAP_BYTES -- a time budget does not bound bytes.
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    resp = await client.get(f"{root}/metrics", headers=headers)
-    resp.raise_for_status()
-    return parse_metrics(resp.text, now=now)
+    status, raw = await _get_capped(client, f"{root}/metrics", headers)
+    if status >= 400:
+        raise httpx.HTTPStatusError(f"{root}/metrics: {status}", request=None, response=None)
+    return parse_metrics(raw.decode("utf-8", "replace"), now=now)
 
 
 def parse_metrics(text: str, *, now: float | None = None) -> Sample:
