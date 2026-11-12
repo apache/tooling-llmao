@@ -561,15 +561,30 @@ class KeyManager:
         self._transport.raise_http(resp)
         _LOGGER.info("key/update %s %s", token_id[:12], sorted(payload))
 
+    # A page that asks for more than this is LiteLLM's business to refuse;
+    # we stop walking at it so a backend that always answers a full page
+    # cannot hold a request open for ever.
+    _MAX_PAGES = 200
+
     async def find(
         self,
         *,
         user: str | None = None,
         project: str | None = None,
         size: int = 100,
+        limit: int | None = None,
     ) -> list[KeyInfo]:
+        """Every matching key, or the first `limit` of them.
+
+        `size` is the page size, not a cap. This used to send page 1 and
+        return whatever came back, so past `size` keys the rest were
+        invisible -- and `revoke_key` looks a key up through here, so a key
+        beyond the first page could not be revoked and was reported as not
+        existing.
+
+        `limit` is for callers that only need to know whether there is one.
+        """
         params: dict[str, Any] = {
-            "page": 1,
             "size": size,
             "return_full_object": "true",
         }
@@ -580,16 +595,29 @@ class KeyManager:
             if not team_id:
                 return []
             params["team_id"] = team_id
-        resp = await self._transport.request("GET", "key/list", params=params)
-        self._transport.raise_http(resp)
-        body = resp.json()
-        keys = body.get("keys") if isinstance(body, dict) else body
-        if not keys:
-            return []
-        try:
-            return [_normalize_key_obj(k) for k in keys]
-        except ValueError as e:
-            raise BackendUnavailableError(str(e)) from e
+
+        out: list[KeyInfo] = []
+        for page in range(1, self._MAX_PAGES + 1):
+            resp = await self._transport.request("GET", "key/list", params={**params, "page": page})
+            self._transport.raise_http(resp)
+            body = resp.json()
+            keys = body.get("keys") if isinstance(body, dict) else body
+            if not keys:
+                break
+            try:
+                out.extend(_normalize_key_obj(k) for k in keys)
+            except ValueError as e:
+                raise BackendUnavailableError(str(e)) from e
+            if limit is not None and len(out) >= limit:
+                return out[:limit]
+            # A short page is the last page. total_pages is LiteLLM's own
+            # count when it sends one, and is the cheaper signal.
+            total = body.get("total_pages") if isinstance(body, dict) else None
+            if len(keys) < size or (isinstance(total, int) and page >= total):
+                break
+        else:
+            _LOGGER.warning("key/list stopped at %s pages; some keys were not read", self._MAX_PAGES)
+        return out[:limit] if limit is not None else out
 
     async def create(
         self,

@@ -73,3 +73,58 @@ def test_the_tier_asked_for_is_the_tier_recorded():
     sent = _sent(keys)
     assert sent.json.metadata.tier == "project"
     assert sent.json.rpm_limit == 120
+
+
+def _paged(total_keys: int, *, send_total_pages: bool = True):
+    """A LiteLLM that holds `total_keys` keys and answers key/list in pages."""
+    fake = None
+
+    def litellm(call):
+        if call.path != "key/list":
+            return {"key": "sk-secret", "token": "tok1", **(call.json or {})}
+        size = int(call.params["size"])
+        page = int(call.params["page"])
+        start = (page - 1) * size
+        rows = [
+            {"token": f"tok{i}", "key_alias": f"k{i}", "user_id": "jdoe", "metadata": {"project": "tooling"}}
+            for i in range(start, min(start + size, total_keys))
+        ]
+        body = {"keys": rows}
+        if send_total_pages:
+            body["total_pages"] = max(1, -(-total_keys // size))
+        return body
+
+    fake = FakeTransport(litellm)
+    return KeyManager(fake, _Teams(), _Tiers()), fake
+
+
+def test_find_walks_past_the_first_page():
+    """revoke_key looks a key up through find, so a key on page 2 must be found.
+
+    With one page only, a deployment past `size` keys had keys it could not
+    revoke -- reported as not existing, which is worse than failing.
+    """
+    keys, fake = _paged(250)
+    found = asyncio.run(keys.find(size=100))
+    assert [k.token_id for k in found][-1] == "tok249"
+    assert len(found) == 250
+    assert [c.params["page"] for c in fake.calls] == [1, 2, 3]
+
+
+def test_find_stops_on_a_short_page_without_total_pages():
+    keys, fake = _paged(150, send_total_pages=False)
+    assert len(asyncio.run(keys.find(size=100))) == 150
+    assert [c.params["page"] for c in fake.calls] == [1, 2]
+
+
+def test_find_with_a_limit_asks_for_one_page_only():
+    """The 'does this user have any key' probe must stay one cheap call."""
+    keys, fake = _paged(250)
+    assert len(asyncio.run(keys.find(size=1, limit=1))) == 1
+    assert len(fake.calls) == 1
+
+
+def test_find_returns_nothing_when_there_are_no_keys():
+    keys, fake = _paged(0)
+    assert asyncio.run(keys.find()) == []
+    assert len(fake.calls) == 1

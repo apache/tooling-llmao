@@ -538,7 +538,7 @@ class Seam:
     # The home page's two questions about a person's progress: has a key,
     # has made a request. Each asks LiteLLM for one record, not the list.
     async def has_keys(self, identity: Identity) -> bool:
-        return bool(await self._backend.keys.find(user=identity.uid, size=1))
+        return bool(await self._backend.keys.find(user=identity.uid, size=1, limit=1))
 
     async def has_requests(self, identity: Identity) -> bool:
         return await self._backend.metering.has_requests(identity.uid)

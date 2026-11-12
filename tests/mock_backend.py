@@ -99,7 +99,10 @@ class MockBackend:
         user: str | None = None,
         project: str | None = None,
         size: int = 100,
+        limit: int | None = None,
     ) -> list[KeyInfo]:
+        # `size` is a page size on the real manager, so it does not bound
+        # the result here either; only `limit` does.
         out = []
         for k in self._data.get("keys", []):
             if user is not None and k.get("user_id") != user:
@@ -107,7 +110,7 @@ class MockBackend:
             if project is not None and k.get("team_id") != project:
                 continue
             out.append(_normalize_key_obj(k))
-            if len(out) >= size:
+            if limit is not None and len(out) >= limit:
                 break
         return out
 
