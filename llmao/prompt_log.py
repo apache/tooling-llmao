@@ -97,6 +97,29 @@ def _error(info: Mapping | None) -> dict | None:
     }
 
 
+# Header names whose VALUE is a credential. A pattern rather than a list,
+# because the list is the part that goes stale: MCP federation forwards
+# upstream credentials as x-mcp-<alias>-authorization and friends, and those
+# are custom headers by definition, so they are exactly what lands in
+# requester_custom_headers. A name-shaped denylist would have missed every
+# one of them.
+_SECRET_HEADER = re.compile(r"auth|token|secret|credential|cookie|api[-_]?key|bearer|password", re.I)
+
+
+def safe_headers(raw: Any) -> dict | None:
+    """Client headers with the credential-bearing values masked.
+
+    Names are kept: knowing a caller sent an Authorization header is useful
+    and the name is not the secret. Only the value goes.
+    """
+    # dict, not Mapping: Mapping is imported for annotations only here, and
+    # the field arrives JSON-derived from LiteLLM's metadata anyway.
+    if not isinstance(raw, dict):
+        return None
+    masked = {str(k): ("***" if _SECRET_HEADER.search(str(k)) else v) for k, v in raw.items()}
+    return masked or None
+
+
 def key_purpose(kwargs: Mapping) -> str | None:
     """The key's purpose, the name typed when the key was made, from the callback's kwargs.
 
@@ -157,7 +180,7 @@ def record(payload: Mapping, purpose: str | None = None) -> dict:
         ),
         end_user=payload.get("end_user"),
         user_agent=payload.get("user_agent") or meta.get("user_agent"),
-        client_headers=meta.get("requester_custom_headers") or None,
+        client_headers=safe_headers(meta.get("requester_custom_headers")),
         params=payload.get("model_parameters") or {},
         messages=payload.get("messages"),
     )

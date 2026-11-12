@@ -67,9 +67,19 @@ def _ok_extras(result) -> str:
 def api(fn):
     """JSON handlers: jsonify the return value; AuthzError → 403; else log + 500."""
 
+    def no_store(response):
+        """Nothing this decorator returns may be stored by anything in between.
+
+        /vllm/config answers with a box's own vLLM bearer and the fleet's
+        Hugging Face token. One choke point for every @api route, error
+        replies included: an error body names the host it was asked about.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     def err(status, message):
         body = {"error": {"message": message, "type": "llmao_error", "code": status}}
-        return jsonify(body), status
+        return no_store(jsonify(body)), status
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
@@ -92,7 +102,7 @@ def api(fn):
             _LOGGER.debug("%s ok", fn.__name__)
         else:
             _LOGGER.info("%s ok%s", fn.__name__, _ok_extras(result))
-        return jsonify(result)
+        return no_store(jsonify(result))
 
     return wrapper
 

@@ -70,6 +70,40 @@ def _payload(**over):
     return p
 
 
+def test_a_credential_bearing_client_header_is_masked_but_named():
+    """The name is useful and is not the secret; the value is the secret.
+
+    The x-mcp-* case is the one that matters: a forwarded upstream
+    credential is a custom header by definition, so it arrives here.
+    """
+    rec = prompt_log.record(
+        _payload(
+            metadata=dict(
+                user_api_key_hash="hash-1",
+                requester_custom_headers={
+                    "x-tool": "opencode",
+                    "Authorization": "Bearer sk-secret",
+                    "x-mcp-ponymail-authorization": "Bearer pmt-secret",
+                    "X-Api-Key": "secret",
+                },
+            )
+        ),
+        purpose="p",
+    )
+    assert rec["client_headers"] == {
+        "x-tool": "opencode",
+        "Authorization": "***",
+        "x-mcp-ponymail-authorization": "***",
+        "X-Api-Key": "***",
+    }
+    assert "secret" not in json.dumps(rec["client_headers"])
+
+
+def test_client_headers_is_none_when_there_are_none():
+    assert prompt_log.safe_headers(None) is None
+    assert prompt_log.safe_headers({}) is None
+
+
 def test_the_record_keeps_the_prompt_and_the_use_but_not_the_response():
     rec = prompt_log.record(_payload(), purpose="someone-laptop")
     assert rec["ts"] == "2026-11-01T09:30:02.500Z"
