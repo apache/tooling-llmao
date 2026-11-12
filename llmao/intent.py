@@ -232,6 +232,10 @@ def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int 
         port = int(raw[1])
     except (TypeError, ValueError) as e:
         raise ValueError(f"fleet.hosts.{host}[{index}] port must be an int") from e
+    if not 1 <= port <= 65535:
+        # A TCP port, so say so at startup rather than building a url that
+        # cannot be dialed and discovering it one health probe later.
+        raise ValueError(f"fleet.hosts.{host}[{index}] port {port} is not a TCP port")
     name = str(raw[2]).strip() if len(raw) >= 3 and raw[2] is not None else model_name
     public_port = None
     if len(raw) == 4 and raw[3] is not None:
@@ -239,6 +243,8 @@ def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int 
             public_port = int(raw[3])
         except (TypeError, ValueError) as e:
             raise ValueError(f"fleet.hosts.{host}[{index}] public_port must be an int") from e
+        if not 1 <= public_port <= 65535:
+            raise ValueError(f"fleet.hosts.{host}[{index}] public_port {public_port} is not a TCP port")
     if not model_name or not name:
         raise ValueError(f"fleet.hosts.{host}[{index}] needs model and name")
     return model_name, port, name, public_port

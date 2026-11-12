@@ -1355,6 +1355,11 @@ async def project_overview(result, project: str):
     return result
 
 
+# An ASF committee name as LDAP gives it. Used where a project name from a
+# form would otherwise be interpolated into a redirect target.
+_PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
 def _safe_after_path(raw: str | None, default: str = "/keys") -> str:
     """Only allow in-app keys paths as post-revoke/create redirects."""
     if raw in ("/keys", "/keys/other"):
@@ -2126,6 +2131,14 @@ async def do_set_tier():
 async def do_request_capacity():
     form = await quart.request.form
     project = (form.get("project") or "").strip()
+    # The fallback redirect below is built from this, and it is built whether
+    # or not the seam accepted the project -- so it is the one value on this
+    # handler that reaches a Location header without having been checked.
+    # A committee name is lowercase alphanumeric with hyphens; anything else
+    # is not a project, so there is nowhere to send the caller.
+    if project and not _PROJECT_NAME.fullmatch(project):
+        await flash_danger("That is not a project name.")
+        return _see_other("/projects")
     try:
         cap = int((form.get("token_cap") or "0").replace(",", "").strip() or 0)
     except ValueError:

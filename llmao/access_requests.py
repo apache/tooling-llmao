@@ -51,9 +51,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 # Every request's key in the memory store starts with this, and listing them
 # is a prefix query on it.
@@ -66,6 +69,11 @@ STATE_PENDING = "pending"
 STATE_APPROVED = "approved"
 STATE_DENIED = "denied"
 STATE_CONSUMED = "consumed"
+
+# What a stored row is allowed to say it is. Named here so from_dict has
+# something to check against, and so adding a kind or a state is one edit.
+KINDS = (KIND_CAPACITY, KIND_KEY)
+STATES = (STATE_PENDING, STATE_APPROVED, STATE_DENIED, STATE_CONSUMED)
 
 # An approval that nobody acts on is a credential waiting to be forgotten.
 APPROVAL_TTL_DAYS = 14
@@ -127,7 +135,10 @@ class AccessRequest:
         return cls(
             # Random rather than sequential: ids appear in form posts, and a
             # guessable id is one an admin can be tricked into approving.
-            id=secrets.token_urlsafe(9),
+            # 16 bytes rather than 9 -- 72 bits was already past guessing, but
+            # the id is the only thing naming a request in a URL and there is
+            # no reason to be near any line at all.
+            id=secrets.token_urlsafe(16),
             kind=kind,
             requester=requester,
             project=project or None,
@@ -224,6 +235,19 @@ class AccessRequest:
         the whole queue.
         """
         if not isinstance(d, dict) or not d.get("id") or not d.get("kind"):
+            return None
+        kind = str(d["kind"])
+        state = str(d.get("state") or STATE_PENDING)
+        if kind not in KINDS or state not in STATES:
+            # `new()` validates kind on the way in and the state only ever
+            # moves between the constants below, so a row failing this means
+            # the stored record is wrong rather than the caller.
+            #
+            # Logged, not silently dropped: a request that disappears from
+            # the admin queue with no line anywhere is the worse failure, and
+            # it is how adding a sixth state and forgetting this check would
+            # present. Not raising keeps the docstring's promise.
+            _LOGGER.warning("ignoring stored request %s: kind=%r state=%r", d.get("id"), kind, state)
             return None
         return cls(
             id=str(d["id"]),

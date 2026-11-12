@@ -761,7 +761,7 @@ class Seam:
             mine = await self._backend.keys.find(user=identity.uid, size=100)
             match = next((k for k in mine if k.token_id == token_id), None)
         if match is None:
-            raise AuthzError("key not found or not visible")
+            raise AuthzError("key not found or not revocable")
         if match.user == identity.uid:
             await self._backend.keys.delete(token_id)
             _log_revocation(identity, match, "own key")
@@ -780,7 +780,12 @@ class Seam:
                 await self._backend.keys.delete(token_id)
                 _log_revocation(identity, match, f"PMC member of {project}")
                 return match
-        raise AuthzError("not allowed to revoke this key")
+        # Same words as the not-found case above. Two different messages told
+        # the caller which of the two it was, and "it exists but is not yours"
+        # is a fact about someone else's key. "Not revocable" is true of both
+        # and of nothing else, which is the pattern create_approved_key
+        # already follows with "No such approval."
+        raise AuthzError("key not found or not revocable")
 
     @require_admin
     async def project_activity(self, identity: Identity, project: str) -> list[dict]:
