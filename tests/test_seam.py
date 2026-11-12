@@ -390,6 +390,25 @@ def test_an_admin_cannot_change_a_tier_that_does_not_exist():
     asyncio.run(run())
 
 
+def test_a_committer_cannot_decide_a_request():
+    """Reading the queue is admin-only; deciding has to be at least as tight.
+
+    The route behind this one is decorated for authentication only, so a
+    signed-in committer reaching decide_request is the whole exposure: it
+    sets a project's token cap.
+    """
+
+    async def run():
+        seam, _, backend = _seam()
+        backend.requests = AccessRequestManager(MemoryStore(fake_memory()[0]))
+        jdoe = Identity(uid="jdoe", projects=[], committees=[])
+        req = await seam.request_key(jdoe, purpose="ci", tier="service", reason="because")
+        with pytest.raises(AuthzError, match="limited to site admins"):
+            await seam.decide_request(jdoe, req.id, approve=True)
+
+    asyncio.run(run())
+
+
 # ---------------------------------------------------------------------------
 # A key for no project
 #

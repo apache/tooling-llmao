@@ -465,6 +465,12 @@ class Seam:
         PMC to do anything -- there is nothing for them to exercise, and a
         grant that needs a second step is a grant that sits unapplied.
         """
+        if not identity.is_site_admin:
+            # The seam is where this is decided, not the route. Reading the
+            # queue is already admin-only above; deciding what is in it is
+            # the half that changes a project's limits, so it cannot be the
+            # looser of the two.
+            raise AuthzError("Deciding requests is limited to site admins.")
         req = await self._backend.requests.find(request_id)
         if req is None:
             raise AuthzError("No such request.")
@@ -621,6 +627,12 @@ class Seam:
 
         granted = {**req.wanted, **req.granted}
         tier = granted.get("tier") or TIER_SERVICE
+        if tier not in TIERS:
+            # request_key validates this before it is stored, so a bad tier
+            # here means the stored record is wrong, not the form. Minting a
+            # key on the defaults under a name no page lists is the one
+            # outcome worth refusing.
+            raise AuthzError(f"There is no {tier} tier.")
         created = await self._backend.keys.create(
             # A key for no project goes in the pretend project for its tier.
             project=req.project or pretend_project(tier),
