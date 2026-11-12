@@ -174,11 +174,6 @@ def create_app():
     return app
 
 
-# The levels a config may name. An allow-list rather than getattr on the
-# logging module, which would happily return a function for a typo.
-_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
-
-
 def _log_level(default: int = logging.DEBUG) -> int:
     """The level named by config.yaml's `log_level`.
 
@@ -203,7 +198,21 @@ def _log_level(default: int = logging.DEBUG) -> int:
     if not isinstance(loaded, dict):
         return default
     name = str(loaded.get("log_level") or "").strip().upper()
-    return getattr(logging, name) if name in _LEVELS else default
+    if not name:
+        return default
+    # getLevelNamesMapping holds only level names, so a typo gets None rather
+    # than something that is not a level at all. NOTSET is the exception
+    # worth refusing: it is in there as 0, which on the root logger means log
+    # EVERYTHING -- louder than DEBUG, and the opposite of what whoever wrote
+    # it in the node yaml meant.
+    level = logging.getLevelNamesMapping().get(name)
+    if level is None or name == "NOTSET":
+        # Before basicConfig, so this goes out through logging.lastResort to
+        # stderr and into journald. Worth saying: a silent fallback on a typo
+        # is how a host ends up logging at a level nobody chose.
+        _LOGGER.warning("config.yaml: log_level=%r is not a level; using %s", name, logging.getLevelName(default))
+        return default
+    return level
 
 
 def _configure_logging():
