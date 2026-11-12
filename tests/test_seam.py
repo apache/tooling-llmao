@@ -589,3 +589,50 @@ def test_a_site_admin_puts_a_pretend_project_back_and_the_work_is_gone():
         assert store == {}
 
     asyncio.run(run())
+
+
+def test_a_half_applied_capacity_approval_is_reported():
+    """Cap raised, save failed: the queue must not be the only record.
+
+    The request still reads as pending, so the queue invites a second
+    decision on something that has half happened -- and a deny would leave
+    the cap up. The save is what failed, so the record cannot carry this.
+    """
+
+    async def run():
+        seam, _, backend = _seam()
+        backend.requests = AccessRequestManager(MemoryStore(fake_memory()[0]))
+        jdoe = Identity(uid="jdoe", projects=["tooling"], committees=["tooling"])
+        root = Identity(uid="root", projects=[], committees=[], is_site_admin=True)
+        req = await seam.request_capacity(jdoe, "tooling", token_cap=5_000_000, reason="growth")
+
+        applied = []
+
+        async def update_entitlement(project, **kw):
+            applied.append((project, kw))
+
+        backend.teams.update_entitlement = update_entitlement
+
+        noted = []
+
+        async def note(what, **detail):
+            noted.append((what, detail))
+
+        backend.log = edict(note=note)
+
+        async def boom(_req):
+            raise BackendUnavailableError("the LiteLLM backend is unreachable")
+
+        backend.requests.save = boom
+
+        with pytest.raises(BackendUnavailableError):
+            await seam.decide_request(root, req.id, approve=True)
+
+        assert applied == [("tooling", {"token_cap": 5000000})]
+        assert len(noted) == 1
+        what, detail = noted[0]
+        assert "not recorded" in what
+        assert detail["subject"] == f"half-applied-{req.id}"
+        assert detail["token_cap"] == 5000000
+
+    asyncio.run(run())

@@ -728,3 +728,21 @@ def test_a_large_card_keeps_ten_percent():
     """The reserve is a floor: on an 80GB card 10% is already more than 2GB."""
     assert inst.usable_gb(80.0) == pytest.approx(72.0)
     assert inst.usable_gb(12.0) == pytest.approx(10.0)
+
+
+def test_a_plain_http_config_url_is_refused_for_a_real_host():
+    """The fleet key rides in this request's Authorization header.
+
+    docs/box-protocol.md says the endpoint is HTTPS only; http stays allowed
+    for the loopback server the tests and a developer run, which never
+    carries a real key off the machine.
+    """
+    with pytest.raises(SystemExit, match="must be https"):
+        inst.fetch_config("http://llm.example.org/vllm/config", "fleet-secret")
+
+
+def test_loopback_http_is_still_allowed():
+    """Not a happy-path fetch -- just that the scheme check lets it through."""
+    with pytest.raises(SystemExit) as e:
+        inst.fetch_config("http://127.0.0.1:1/vllm/config", "fleet-secret", timeout_s=0.2)
+    assert "must be https" not in str(e.value)

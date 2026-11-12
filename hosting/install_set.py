@@ -82,9 +82,16 @@ def fetch_config(
     host: str | None = None,
     timeout_s: float = 30.0,
 ) -> dict[str, Any]:
-    scheme = urllib.parse.urlparse(url).scheme
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme
     if scheme not in ("http", "https"):
         raise SystemExit(f"config url must be http(s), got {scheme!r}")
+    # The fleet key goes out in this request's Authorization header, and
+    # docs/box-protocol.md says this endpoint is served over HTTPS only. http
+    # is kept for the local server the tests and a developer run, which is
+    # loopback and never carries a real key off the machine.
+    if scheme == "http" and (parsed.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
+        raise SystemExit(f"config url must be https for a non-local host, got {url!r}")
     headers = {"Authorization": f"Bearer {fleet_key}", "Accept": "application/json"}
     if host:
         headers[HOST_HEADER] = host

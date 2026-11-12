@@ -480,9 +480,28 @@ class Seam:
             reason=reason,
             granted=granted,
         )
+        raised = False
         if approve and req.kind == _access.KIND_CAPACITY:
             await self._backend.teams.update_entitlement(req.project, token_cap=int(req.granted.get("token_cap") or 0))
-        return await self._backend.requests.save(req)
+            raised = True
+        try:
+            return await self._backend.requests.save(req)
+        except Exception:
+            # The cap is already up and the request still reads as pending,
+            # so the queue invites a second decision on something that has
+            # half happened -- and a deny would leave the cap raised. The
+            # save is what failed, so the record cannot carry this; the
+            # admin notice can.
+            if raised:
+                await self._backend.log.note(
+                    "a capacity approval was applied but not recorded",
+                    subject=f"half-applied-{req.id}",
+                    project=req.project,
+                    request_id=req.id,
+                    token_cap=int(req.granted.get("token_cap") or 0),
+                    by=identity.uid,
+                )
+            raise
 
     @require_member
     async def project_usage(self, identity: Identity, project: str) -> list[edict]:
