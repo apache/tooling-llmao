@@ -122,7 +122,6 @@ async def vllm_config():
         raise HttpError(*refusal)
     name = rental_name(
         claimed=request.headers.get(HOST_HEADER),
-        forwarded_for=request.headers.get("X-Forwarded-For"),
         remote_addr=request.remote_addr,
     )
     # Every fetch is recorded by name; whether the name is intended is the

@@ -77,27 +77,30 @@ def fetch_refusal(cfg: Any, authorization: str | None) -> tuple[int, str] | None
     return None
 
 
-def rental_name(*, claimed: str | None, forwarded_for: str | None, remote_addr: str | None) -> str:
+def rental_name(*, claimed: str | None, remote_addr: str | None) -> str:
     """The name a config fetch is for.
 
     ``X-LLMAO-Host`` is the rental's name as its provider's provision.sh
     set it (a Vast instance id, a RunPod pod id; an address on a legacy
     machine), compared as given: a name is never normalized. Vast sits
     behind a transparent proxy, so the TCP peer is not the instance, and
-    with the header present nothing else is consulted. Without it the
-    rental is named by its address: the leftmost ``X-Forwarded-For`` (one
-    reverse proxy; Werkzeug ProxyFix is WSGI and cannot wrap Quart's ASGI
-    app), else the peer, normalized as addresses are.
+    with the header present nothing else is consulted.
+
+    Without it the rental is named by its address, and ``remote_addr`` is
+    that address: hypercorn's ProxyFixMiddleware wraps the app and has
+    already replaced the loopback ProxyPass hop with the entry Apache
+    appended to ``X-Forwarded-For``. Reading the header here as well would
+    mean reading the LEFTMOST entry, which is the one a caller can send --
+    so a rental holding the fleet key could name itself by an address it
+    does not have.
     """
     name = (claimed or "").strip()
     if name:
-        _LOGGER.info("%s=%r remote_addr=%r X-Forwarded-For=%r", HOST_HEADER, name, remote_addr, forwarded_for)
+        _LOGGER.info("%s=%r remote_addr=%r", HOST_HEADER, name, remote_addr)
         return name
-    if forwarded_for and forwarded_for.strip():
-        name = normalize_peer_ip(forwarded_for.split(",")[0])
-        _LOGGER.info("X-Forwarded-For=%r remote_addr=%r name=%s", forwarded_for, remote_addr, name)
-        return name
-    return normalize_peer_ip(remote_addr)
+    name = normalize_peer_ip(remote_addr)
+    _LOGGER.info("remote_addr=%r name=%s", remote_addr, name)
+    return name
 
 
 def server_json(intended: IntendedDeployment) -> edict:

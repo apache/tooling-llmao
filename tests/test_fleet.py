@@ -593,19 +593,24 @@ def test_normalize_peer_ip():
     assert normalize_peer_ip("203.0.113.10") == "203.0.113.10"
 
 
-def test_rental_name_xff_leftmost():
-    assert rental_name(claimed=None, remote_addr="10.0.0.1", forwarded_for="203.0.113.10, 10.0.0.1") == "203.0.113.10"
+def test_rental_name_is_the_corrected_peer_not_a_sent_header():
+    """ProxyFixMiddleware has already put the real caller in remote_addr.
+
+    A rental that sends its own X-Forwarded-For must not be able to name
+    itself by it: the leftmost entry is the one a caller controls.
+    """
+    assert rental_name(claimed=None, remote_addr="203.0.113.10") == "203.0.113.10"
 
 
 def test_rental_name_no_xff():
-    assert rental_name(claimed=None, remote_addr="203.0.113.10", forwarded_for=None) == "203.0.113.10"
-    assert rental_name(claimed="", remote_addr="::ffff:203.0.113.10", forwarded_for="") == "203.0.113.10"
+    assert rental_name(claimed=None, remote_addr="203.0.113.10") == "203.0.113.10"
+    assert rental_name(claimed="", remote_addr="::ffff:203.0.113.10") == "203.0.113.10"
 
 
 def test_rental_name_claimed_not_peer():
     """Vast transparent proxy: the TCP peer is not the instance. The header is the name, as given."""
-    assert rental_name(claimed="58020031", forwarded_for=None, remote_addr="10.0.0.9") == "58020031"
-    assert rental_name(claimed=" pod-1 ", forwarded_for="198.51.100.1", remote_addr="10.0.0.9") == "pod-1"
+    assert rental_name(claimed="58020031", remote_addr="10.0.0.9") == "58020031"
+    assert rental_name(claimed=" pod-1 ", remote_addr="10.0.0.9") == "pod-1"
     assert HOST_HEADER == "X-LLMAO-Host"
 
 

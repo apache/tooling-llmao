@@ -41,9 +41,13 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
   `X-LLMAO-Host` is present it is the only key: no fallback to the peer,
   and 404 if it is unknown. Vast instances reach llmao through a transparent
   proxy, so the TCP peer is not the instance and there is no
-  `X-Forwarded-For`. Without the header, the leftmost `X-Forwarded-For`
-  address is used, else the peer. The header is a claim, not a proof; the
-  fleet key is what is checked.
+  `X-Forwarded-For`. Without the header, the peer is used -- which is the
+  real caller, because hypercorn's `ProxyFixMiddleware` has already
+  replaced the loopback `ProxyPass` hop with the address Apache appended
+  to `X-Forwarded-For`. The header is read there and not here: the
+  leftmost entry is the one a caller can send, so reading it would let a
+  rental name itself by an address it does not have. The `X-LLMAO-Host`
+  name is a claim, not a proof; the fleet key is what is checked.
 - **Which name a box sends** is the provider's business, set in that
   provider's `provision.sh` as `LLMAO_HOST`: the instance id on Vast
   (`CONTAINER_ID`), the pod id on RunPod (`RUNPOD_POD_ID`). `install_set.py`
@@ -57,7 +61,7 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
 - **Every fetch is recorded by name** (first and last seen, a count; the
   `ProvisioningRecord` in `llmao/provisioning.py`, capped, oldest
   last-seen first), whether or not the name is intended, and logged with
-  the claimed host, the peer and `X-Forwarded-For`. The record does not
+  the claimed host and the peer. The record does not
   know membership: that is the fleet's join. A name nothing intends gets
   404 and shows on the `/models` attention strip as "fleet key presented
   from a host not in `fleet.hosts`", with Approve.
