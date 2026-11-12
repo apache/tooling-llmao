@@ -41,6 +41,8 @@ from typing import Any
 import httpx
 from easydict import EasyDict as edict  # noqa: N813
 
+from llmao import fmt
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -184,8 +186,18 @@ async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str
             served.max_model_len = parse_max_model_len(body)
             rows = body.get("data") if isinstance(body, dict) else None
             served.hf_id = next((str(r["id"]) for r in rows or () if isinstance(r, dict) and r.get("id")), "")
-    except (httpx.HTTPError, ValueError):
-        pass
+    except httpx.HTTPError as e:
+        # Still never raises -- the contract above holds. But a bare `pass`
+        # meant a box that answered /health and then refused or mangled
+        # /v1/models left no trace anywhere, and the only symptom was a
+        # max_model_len that stayed unknown for no stated reason.
+        #
+        # Only reachable after /health returned 200, so this is an odd state
+        # rather than a down box, and it does not repeat the way a health
+        # failure does.
+        _LOGGER.warning("%s: /v1/models did not answer: %s: %s", base, type(e).__name__, fmt.log_safe(e))
+    except ValueError as e:
+        _LOGGER.warning("%s: /v1/models was not JSON: %s", base, fmt.log_safe(e))
     return served
 
 

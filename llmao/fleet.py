@@ -477,6 +477,18 @@ class VllmServer:
         if found.reached and self.first_reached_at is None:
             self.first_reached_at = now
         if found.key_rejected is not None:
+            if found.key_rejected and not self.key_rejected:
+                # Logged on the flip, not on the probe. The lifecycle re-asks
+                # /v1/models on every pass BECAUSE the key was refused, so a
+                # line down in the probe would repeat every health_interval_s
+                # for as long as the state lasts -- and a refused key lasts
+                # until someone fixes it. Same reason `seen == ORPHAN_PASSES`
+                # gates the skew warning below.
+                _LOGGER.warning(
+                    "%s refused our vLLM key for %s",
+                    fmt.log_safe(self.name),
+                    fmt.log_safe(self.model_name),
+                )
             self.key_rejected = found.key_rejected
         if found.max_model_len is not None:
             self.observed_max_model_len = found.max_model_len
@@ -875,7 +887,11 @@ class Fleet:
                 _LOGGER.warning(
                     "skew: in LiteLLM, not in config %s %s (%s)",
                     row.display,
-                    row.model_name,
+                    # The only value on this line that is not ours: it comes
+                    # back from LiteLLM's /model/info with no character
+                    # filtering on the way in. row.display is host:port off
+                    # urlparse and cannot carry a newline.
+                    fmt.log_safe(row.model_name),
                     "llmao added it" if row.key else "not added by llmao",
                 )
         self.orphans = orphans
