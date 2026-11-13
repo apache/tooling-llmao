@@ -113,6 +113,8 @@ Remaining: long vLLM boot, config revision on the rental, pending-assignment tab
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
+**`/admin` is the admin's inbox** (2026-11-13). Four pages share a row of pills under the heading: Overview, Capacity, Tiers, Service keys. Work needed lists everything that needs a site admin, the skew store's items and the fleet's (a machine nobody intends, a stalled or unhealthy deployment, an orphan in LiteLLM) with their buttons and the Approve modal; `/models` shows no list of them, only each deployment's row with its state and buttons, which a Work needed item links to. The tiles run in the order of the sections. The Gateway tile carries the LiteLLM version against the pin and free space on the disk the prompt log grows on, warm under 15%. A read of LiteLLM that fails leaves a dash on its tile and "Could not read LiteLLM" in its section, never a 0. The DataDog half of disk monitoring is Infra's.
+
 Edge cases that bite operators (LiteLLM down, pagination, master key drift, prisma path, etc.) are tracked as work items, not product design.
 
 ---
@@ -127,9 +129,6 @@ before any code.
 
 ### Small, an hour or less
 
-- **Disk free on `/admin`.** The host has one 100 GB root disk and the
-  prompt log grows on it. A free-space figure beside the LiteLLM version
-  check. The DataDog monitor half is Infra's.
 - **`hosted_vllm/` check in `validate_models`:** a model with a vLLM
   recipe must name `hosted_vllm/...` in `litellm_params.model`.
 - **`analysis/prompts` under a closed pipe** (`prompts clusters | head`)
