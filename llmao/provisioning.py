@@ -19,7 +19,7 @@
 
 A rental provisions itself with one request: ``provision.sh`` runs,
 ``install_set.py`` fetches ``GET /vllm/config`` with the fleet key, and
-the rental installs what it gets (docs/box-protocol.md). This module is
+the rental installs what it gets (docs/rental-protocol.md). This module is
 the whole server side of that request, and the route in ``api.py`` is a
 few lines calling it:
 

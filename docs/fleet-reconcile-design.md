@@ -7,7 +7,7 @@ rulings, the policy discussion, the early-work list and the long decision
 table, is at
 <https://github.com/apache/tooling-llmao/blob/58ae962/docs/fleet-reconcile-design.md>.
 When this step and the one after it land, this file is removed and its
-outcome is folded into `ARCHITECTURE.md` and `box-lifecycle.md`.
+outcome is folded into `ARCHITECTURE.md` and `rental-lifecycle.md`.
 
 ## Where we are
 
@@ -204,7 +204,7 @@ not serving means different things depending on what it was doing:
   hold-over and then Unhealthy. This is a change from today: a Rejected
   box that misses one probe currently reads Healthy, because the
   hold-over is computed from `last_ok` and `fails` without knowing the
-  box was Rejected (quirk 1 in `box-lifecycle.md`). With the previous
+  box was Rejected (quirk 1 in `rental-lifecycle.md`). With the previous
   state in the row it stays Rejected under the threshold and goes
   Unhealthy at it. That is the one behaviour the matrix changes;
   everything else reproduces `self_hosted_lifecycle`, and the fixtures
@@ -265,7 +265,7 @@ Small, each acknowledged and pushed before the next:
 grouping, orphans and duplicates become plan actions, the needs replace
 the `/v1/models` rule in `probe_all`, and the executor runs the plan.
 Durations in place of the pass counts wait on the p6 knob rename. Then
-this file is folded into `ARCHITECTURE.md` and `box-lifecycle.md`, and
+this file is folded into `ARCHITECTURE.md` and `rental-lifecycle.md`, and
 the box-to-rental terminology sweep follows.
 
 ## Import direction

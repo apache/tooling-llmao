@@ -32,7 +32,7 @@ Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBacke
 
 **LiteLLM price list:** LiteLLM prices each request to a paid provider from its model cost map, fetched from GitHub at its startup. It reloads every 24 hours because of a schedule set once with `POST /schedule/model_cost_map_reload?hours=24` (master key). The schedule lives in LiteLLM's database, so a rebuilt database loses it; llmao logs an ERROR at startup when it is missing. Spend is priced when a request is made and is never re-priced, so it is LiteLLM's estimate, not the provider's bill.
 
-**GPU fleet:** `fleet.hosts` (public IP → rows of model name and listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages and log lines name it by `FleetDeployment.label`, the model then where it runs ("qwen3-8b on Vast 53865410:8001", the listen port, since one host can run several servers; "grok-4 at xAI"), with the rental's own label, status and console link beside it, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/box-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (public IP → rows of model name and listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages and log lines name it by `FleetDeployment.label`, the model then where it runs ("qwen3-8b on Vast 53865410:8001", the listen port, since one host can run several servers; "grok-4 at xAI"), with the rental's own label, status and console link beside it, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/rental-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
 
 **Public ports come from the provider's listing.** Vast's instance listing and RunPod's pod listing both carry the container→public mapping; the lifecycle stamps each server's public port from the box its listing places it on. RunPod reassigns the port on every pod recreate, even when the pod lands on the same machine; the next listing read follows it. The optional fourth host-row element that pinned a RunPod port is deprecated: it loads with a warning and only seeds the port until the listing names the box.
 
@@ -167,7 +167,7 @@ before any code.
 - `deployment.py` commit 1: the Deployment class and its transition
   table, absorbing `model_status.py`; `deployment_status(...)` becomes a
   method, retiring the five-call pair in `fleet.py` and `pages.py`.
-- `docs/box-lifecycle.md` rewritten in the new names.
+- `docs/rental-lifecycle.md` rewritten in the new names.
 - The tracking doc folded into `ARCHITECTURE.md` and deleted.
 - Then re-assess the parked backlog against the new shape.
 
@@ -444,7 +444,7 @@ Home = role-aware launchpad (not keys-only)
 
 Left open when the models-dashboard design was retired (its two passes
 shipped; the durable parts are in `docs/ARCHITECTURE.md` and
-`docs/box-lifecycle.md`):
+`docs/rental-lifecycle.md`):
 
 - **Event history** per deployment: record every lifecycle transition with
   a timestamp and show the latest ("Loading since 12:04"). Debugging a

@@ -116,7 +116,7 @@ async def healthz():
 @APP.get("/vllm/config")
 @api
 async def vllm_config():
-    """JSON for the calling rental (docs/box-protocol.md); the pieces are llmao/provisioning.py's."""
+    """JSON for the calling rental (docs/rental-protocol.md); the pieces are llmao/provisioning.py's."""
     refusal = fetch_refusal(APP.cfg, request.headers.get("Authorization"))
     if refusal:
         raise HttpError(*refusal)

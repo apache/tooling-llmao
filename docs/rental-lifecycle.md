@@ -1,4 +1,4 @@
-# The self-hosted box lifecycle
+# The self-hosted rental lifecycle
 
 What llmao believes about one vLLM server on one of our GPU boxes, how
 that belief changes, and what each belief makes llmao do. This is the

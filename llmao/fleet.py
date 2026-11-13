@@ -20,7 +20,7 @@
 GPU boxes fetch GET /vllm/config (llmao/provisioning.py). A server is named
 by the id its provider gives the machine, which is what the box sends as its
 host (legacy and local boxes by their IP), and placed on its Rental by
-address (docs/box-lifecycle.md).
+address (docs/rental-lifecycle.md).
 
 Terminology: **models.yaml** is admin definitions. A **model** is one row
 (`model_name`). A **VllmServer** is one vLLM process. A **FleetDeployment**

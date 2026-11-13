@@ -33,7 +33,7 @@ else is outside.
 - **The GPU boxes**, virtual machines rented from Vast and RunPod,
   each running one or more vLLM servers. They fetch their configuration
   from the portal at boot and are probed and sampled by it afterwards.
-  Protocol: `docs/box-protocol.md`; states: `docs/box-lifecycle.md`;
+  Protocol: `docs/rental-protocol.md`; states: `docs/rental-lifecycle.md`;
   provisioning: `hosting/README.md`.
 - **Paid providers**, xAI and OpenRouter, behind our own boxes in
   LiteLLM's routing order, for models we do not host or as overflow.
@@ -163,7 +163,7 @@ log files and the fleet.
    each server at an address, then probes `/health` and, when the key
    or context window needs asking, `/v1/models`. A server moves through
    Awaiting, Loading, Healthy, and on trouble Unhealthy, Stalled,
-   Rejected or Foreign (`docs/box-lifecycle.md`).
+   Rejected or Foreign (`docs/rental-lifecycle.md`).
 4. When a server is Healthy, `DeploymentManager` adds a deployment to
    LiteLLM with `/model/new`, re-reading `/model/info` to confirm, and
    the proxy starts routing to it. When it is down the deployment is
@@ -264,8 +264,8 @@ for how a change reaches history.
 | `llmao/proxy/client.py` | `LiteLLMBackend`: the one transport to LiteLLM's admin API and its managers for teams, keys, metering, tiers, requests, skew, notices, memory | |
 | `llmao/proxy/deployments.py` | `DeploymentManager`: what LiteLLM has, and the only writes that change it | `docs/fleet-reconcile-design.md` |
 | `llmao/fleet.py`, `llmao/intent.py`, `llmao/reconcile.py` | the live fleet, what we intend to serve, and the pure joins between intent, boxes and LiteLLM | `docs/fleet-reconcile-design.md` |
-| `llmao/provisioning.py`, `llmao/vllm_client.py`, `llmao/vast_client.py`, `llmao/runpod_client.py`, `llmao/rental.py` | the box's config at boot; what we read from a vLLM process; what each provider reports about our rentals | `docs/box-protocol.md` |
-| `llmao/model_status.py` | the lifecycle verdicts and the model roll-up, as pure functions of a snapshot | `docs/box-lifecycle.md` |
+| `llmao/provisioning.py`, `llmao/vllm_client.py`, `llmao/vast_client.py`, `llmao/runpod_client.py`, `llmao/rental.py` | the box's config at boot; what we read from a vLLM process; what each provider reports about our rentals | `docs/rental-protocol.md` |
+| `llmao/model_status.py` | the lifecycle verdicts and the model roll-up, as pure functions of a snapshot | `docs/rental-lifecycle.md` |
 | `llmao/models.py` | `models.yaml` | |
 | `llmao/sampler.py`, `llmao/capacity.py`, `llmao/planning.py` | reading `/metrics`; capacity values, demand values, the rollup and the pruner; what the values say, for the page | `docs/capacity-design.md` |
 | `llmao/prompt_log.py`, `litellm_hooks.py`, `bin/llmao-prompt-log` | the record, the day files and the rollup of a day; the hooks LiteLLM loads; the tool the runner spawns | `docs/prompt-logging-design.md` |

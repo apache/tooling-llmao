@@ -212,7 +212,7 @@ fleet:
   # HMAC secret for each vLLM --api-key. This file and Puppet eyaml only.
   # Never the Vast template. GET /vllm/config returns sk-vllm-… from this
   # salt plus host and listen port. A missing attribute fails fleet build.
-  # Changing it invalidates every box bearer. See docs/box-protocol.md.
+  # Changing it invalidates every box bearer. See docs/rental-protocol.md.
   vllm_api_salt: CHANGE_ME_VLLM_API_SALT
   # Shared bearer for LEGACY_SERVERS only. validate_fleet requires a real
   # value when one of those hosts is configured. Drop it with the last pair.
@@ -229,7 +229,7 @@ fleet:
   health_timeout_s: 3
   # The loading window: a box that fetched its config reads Loading this long
   # before never-up is Stalled; a box never reached reads Awaiting this long
-  # after its first probe before it is Stalled. See docs/box-lifecycle.md.
+  # after its first probe before it is Stalled. See docs/rental-lifecycle.md.
   health_grace_s: 1800
   # Consecutive failed probes before a previously healthy server is marked down.
   health_fail_threshold: 3

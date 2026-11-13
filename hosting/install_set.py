@@ -87,7 +87,7 @@ def fetch_config(
     if scheme not in ("http", "https"):
         raise SystemExit(f"config url must be http(s), got {scheme!r}")
     # The fleet key goes out in this request's Authorization header, and
-    # docs/box-protocol.md says this endpoint is served over HTTPS only. http
+    # docs/rental-protocol.md says this endpoint is served over HTTPS only. http
     # is kept for the local server the tests and a developer run, which is
     # loopback and never carries a real key off the machine.
     if scheme == "http" and (parsed.hostname or "") not in ("localhost", "127.0.0.1", "::1"):

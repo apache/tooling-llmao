@@ -15,8 +15,8 @@ here.
 | **This README** | How to run the software |
 | **[Help](https://llm.apache.org/help)** (`docs/help/`) | How to use the gateway: keys, connecting tools |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
-| [`docs/box-protocol.md`](docs/box-protocol.md) | How a GPU box asks for its configuration: the fleet key, the vLLM bearer, the JSON |
-| [`docs/box-lifecycle.md`](docs/box-lifecycle.md) | The state machine for a vLLM server on our boxes: states, transitions, what each makes llmao do |
+| [`docs/rental-protocol.md`](docs/rental-protocol.md) | How a GPU box asks for its configuration: the fleet key, the vLLM bearer, the JSON |
+| [`docs/rental-lifecycle.md`](docs/rental-lifecycle.md) | The state machine for a vLLM server on our boxes: states, transitions, what each makes llmao do |
 | [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md) | Fleet state kept in step with LiteLLM (working document) |
 | [`docs/capacity-design.md`](docs/capacity-design.md) | Capacity planning: what the boxes did and what was asked of the models, per hour |
 | [`docs/prompt-logging-design.md`](docs/prompt-logging-design.md) | The prompt log: what is recorded, how, and the figures folded from it |
@@ -169,7 +169,7 @@ and port. `GET /vllm/config` still comes from `fleet.hosts` (listen ports)
 plus `models.yaml`. Boxes fetch it with template `FLEET_KEY`.
 
 See [`hosting/README.md`](hosting/README.md),
-[`docs/box-protocol.md`](docs/box-protocol.md) and
+[`docs/rental-protocol.md`](docs/rental-protocol.md) and
 [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md). Operational detail — what is
 running where, and the exact launch commands — is kept out of this repo.
 

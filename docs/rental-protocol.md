@@ -1,4 +1,4 @@
-# How a GPU box asks for its configuration
+# How a GPU rental asks for its configuration
 
 The contract between a GPU box and llmao: the one request a box makes at
 boot, what it must present, and what it gets back. This is how the fleet
@@ -68,7 +68,7 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
 - **The last fetch by an intended name is its loading start.** Each probe
   pass reads the record onto the name's servers: a box that fetched its
   config and is not yet answering is Loading until `fleet.health_grace_s`
-  has passed, then Stalled. The whole state machine is `box-lifecycle.md`.
+  has passed, then Stalled. The whole state machine is `rental-lifecycle.md`.
 
 Boxes fetch `https://llm.apache.org/vllm/config` with default TLS
 verification.
@@ -229,7 +229,7 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
   a previously onboarded address would still not hold the fleet key, and
   admins know the addresses of the boxes they expect. The residual risks
   are a leaked fleet key and a stale `fleet.hosts` row outliving its
-  instance; the unlisted verdict in `box-lifecycle.md` is the answer to
+  instance; the unlisted verdict in `rental-lifecycle.md` is the answer to
   the second.
 - `GET /vllm/config` is served over HTTPS only.
 - vLLM's `/health` takes no key; every other path on our rentals does
@@ -237,7 +237,7 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
   address, not that it is ours; `/v1/models` with the bearer is the check
   that it is. A 401 makes the server Rejected (its deployment is
   deleted, the probe continues); Rejected on `REJECTED_PASSES` passes at an
-  address no listing names is Foreign. See `box-lifecycle.md`.
+  address no listing names is Foreign. See `rental-lifecycle.md`.
 - Hardening that is possible without changing the rest: instance binding,
   short-lived bootstrap tokens, a signed token in place of the static fleet
   key. None is planned until the leaked-map revisit above.

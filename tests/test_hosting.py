@@ -733,7 +733,7 @@ def test_a_large_card_keeps_ten_percent():
 def test_a_plain_http_config_url_is_refused_for_a_real_host():
     """The fleet key rides in this request's Authorization header.
 
-    docs/box-protocol.md says the endpoint is HTTPS only; http stays allowed
+    docs/rental-protocol.md says the endpoint is HTTPS only; http stays allowed
     for the loopback server the tests and a developer run, which never
     carries a real key off the machine.
     """
