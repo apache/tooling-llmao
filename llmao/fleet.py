@@ -120,7 +120,7 @@ RUNPOD_LISTING_INTERVAL_S = 600
 UNLISTED_PASSES = 3
 
 # Consecutive reads of the LiteLLM deployments (skew_interval_s, 180s) on
-# which a deployment no intent claims must persist before the attention strip
+# which a deployment no intent claims must persist before Work needed
 # shows it (the skew clock). Absence has innocent causes -- a provider lookup
 # that failed this pass, a rental mid-recreate, a deployment llmao is about to
 # claim -- so the item waits this many passes. It is never deleted unattended:
@@ -611,7 +611,7 @@ class FleetDeployment:
         """How a page or a log line names the deployment: the model, then where.
 
         Our own: the server's label, "qwen3-8b on Vast 53865410:8001". A
-        provider's: "grok-4 at xAI". One spelling for the attention strip,
+        provider's: "grok-4 at xAI". One spelling for Work needed,
         the Deployments rows, the flashes, the action log and the log lines.
         """
         if self.vllm is not None:
@@ -683,7 +683,7 @@ class Orphan:
     unattended. Its stamp says who: llmao's own add whose intent has gone
     since (an approval lost in a restart, a ``fleet.hosts`` row removed), or,
     unstamped, a hand add in LiteLLM's UI. Stop tracking on /models deletes
-    it. ``passes`` is how many reads running it has been one; the strip
+    it. ``passes`` is how many reads running it has been one; Work needed
     shows it from ORPHAN_PASSES on, so a transient read is not an item.
     Fleet.update_litellm_deployments builds these.
     """
@@ -763,7 +763,7 @@ def discovery_finding(rental: Rental, probes: dict[int, VllmProbe], name_of) -> 
 
 
 def fetch_detail(fetch: ConfigFetch) -> str:
-    """The strip's line for a stranger's config fetches: 'seen 5s · 3 requests'."""
+    """Work needed's line for a stranger's config fetches: 'seen 5s · 3 requests'."""
     return f"seen {fmt.ago_short(fetch.last_at)} · {fetch.count} requests"
 
 
@@ -966,7 +966,7 @@ class Fleet:
     def approve_models(self, host: str, names: list[str], *, now: float | None = None) -> Approval:
         """An admin names the models an unknown rental loads: the host is intended from here on.
 
-        It leaves the strip and gets its servers at once (Awaiting, one per
+        It leaves Work needed and gets its servers at once (Awaiting, one per
         model on VLLM_LISTEN_PORTS in order), so it reads with the other
         deployments; its next config fetch is served. Replaces any
         previous approval. Raises, changing nothing, when the host is already
@@ -1018,7 +1018,7 @@ class Fleet:
     def model_rollup(self, model_name: str, *, now: float | None = None):
         """Available / Degraded / Unavailable, and privacy. validate_fleet already required the intervals.
 
-        An orphan serving the name, once the strip shows it (ORPHAN_PASSES),
+        An orphan serving the name, once Work needed shows it (ORPHAN_PASSES),
         poisons its privacy to MIXED: requests go somewhere nothing intends.
         """
         stamp = now or time.time()
@@ -1149,7 +1149,7 @@ class Fleet:
         A host no list has ever named is unlisted like any other once the
         passes run. A provider with no key configured is not one we rent
         from, so a host rented there would be called unlisted for ever; the
-        cost is a sentence on the attention strip, never a deletion, since
+        cost is a sentence in Work needed, never a deletion, since
         the delete fires on unlisted-and-not-Healthy and a rental that is
         Unhealthy, Stalled, Rejected or Foreign is deleted by the probe gate
         anyway. Guarding against it cost a restart hole: a rental that ended

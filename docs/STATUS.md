@@ -127,10 +127,6 @@ before any code.
 
 ### Small, an hour or less
 
-- **`/admin`'s Work needed tile counts only the skew store.** Stalled,
-  Unhealthy and unknown rentals show only on the `/models` strip; an
-  admin who stays on `/admin` misses them. One line on the tile, "and N
-  fleet items on Models", from the same live state the strip reads.
 - **Disk free on `/admin`.** The host has one 100 GB root disk and the
   prompt log grows on it. A free-space figure beside the LiteLLM version
   check. The DataDog monitor half is Infra's.

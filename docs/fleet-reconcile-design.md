@@ -55,7 +55,7 @@ Out of it come:
 - the **verdict**, four values and the whole public surface: **Starting**
   (leave it alone), **Serving** (route to it), **Down** (take it out of
   LiteLLM, tell an admin), **NotOurs** (ignore it, say so);
-- the **reason**, one sentence for the strip;
+- the **reason**, one sentence for Work needed on `/admin`;
 - the **badges**, the skew list the pages show;
 - the **needs**, what the next probe should fetch;
 - the fine **state**, display only: Awaiting, Loading, Healthy, Unhealthy,

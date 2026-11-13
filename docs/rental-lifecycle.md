@@ -152,7 +152,7 @@ config, or Stalled after the grace if it never answers.
 **Unlisted** is a verdict on the host, not the server, and it changes
 what a state means rather than which state it is:
 
-| Unlisted and... | Reads | Attention strip |
+| Unlisted and... | Reads | Work needed on `/admin` |
 |---|---|---|
 | Healthy | serving through a listing gap | "No Vast or RunPod instance has this address, but it is serving; the listing may be behind." No buttons; the route stays. |
 | Awaiting, Loading | a rental the listing has lost, still inside its window | "the rental may have ended." No sentence. Its deployment, if any, is deleted. |
@@ -170,7 +170,7 @@ listed; only absence is a miss.
 
 **An approval** (`intent.Approval`, kept on `Fleet`) is a person vouching
 for a host that `fleet.hosts` does not name and choosing its models. It is
-intent, like a `fleet.hosts` row: the host leaves the attention strip the
+intent, like a `fleet.hosts` row: the host leaves Work needed the
 moment it is approved, its servers are created (Awaiting, one per model on
 the listen ports in order) and read with the other deployments, and its
 next config fetch is served; the lifecycle's probe pass takes them from
@@ -180,10 +180,10 @@ they are there. An approval never changes a computed state.
 Approvals are process memory, lost on restart, and so is the record of
 the unknown rental that asked. A rental asks for its config once: on a 404 the
 installer exits and the rental sits idle, so after a restart there is
-nothing in the strip to re-approve, and the rental is invisible until its
-provider's rentals name it, when the strip shows it as a rental nobody
-intends. A rental its provider reports that has also asked is one strip
-item, not two. Until a provider names it the way back is by hand:
+nothing in Work needed to re-approve, and the rental is invisible until its
+provider's rentals name it, when Work needed shows it as a rental nobody
+intends. A rental its provider reports that has also asked is one Work
+needed item, not two. Until a provider names it the way back is by hand:
 reboot the rental so it asks again. Membership in
 `fleet.hosts` is the durable gate, so a recycled address gains nothing
 from a stale approval. There are no other admin marks on a host: a rental
@@ -202,7 +202,7 @@ lifecycle emits these six badges and nothing else (`SKEW_PHRASE` in
 | Intended, not in LiteLLM | A deployment config intends, and LiteLLM lacks. Emitted only for Healthy, or for a commercial deployment that is Configured. | `sync_selfhost` adds it, or Add does. |
 | vLLM up, LiteLLM down | The probe passes but LiteLLM's own `/health` reports the endpoint down. The two signals carry their own ages, so a difference reads as two snapshots, not a contradiction. | LiteLLM's next health pass agrees. |
 | vLLM down, LiteLLM up | The reverse. | likewise |
-| In LiteLLM, not in config | An orphan: a LiteLLM deployment whose stamp no intended one has, or with no stamp at all, whatever address it sits at (`Fleet.orphans`, rebuilt on every read). On the strip after `ORPHAN_PASSES` reads, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Stop tracking; an approval of the host, or a config row, that claims it |
+| In LiteLLM, not in config | An orphan: a LiteLLM deployment whose stamp no intended one has, or with no stamp at all, whatever address it sits at (`Fleet.orphans`, rebuilt on every read). In Work needed after `ORPHAN_PASSES` reads, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Stop tracking; an approval of the host, or a config row, that claims it |
 | Duplicated in LiteLLM | LiteLLM holds more than one deployment under this key: it keeps a second copy when asked twice, and every copy takes traffic. | the extra copies are deleted (every copy goes when the deployment is dropped; removing extras from a serving one is the plan's) |
 
 A signal is stale after `health_fail_threshold` missed intervals (about

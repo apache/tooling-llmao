@@ -46,7 +46,7 @@
     </div>
   </div>
 
-  [if-any skew]
+  [if-any skew attention]
   <section id="work" class="mb-4">
     <h2 class="h5 mb-2">Work needed <span class="badge text-bg-warning align-middle">[skew_count]</span></h2>
     <div class="list-group">
@@ -64,8 +64,51 @@
         [end]
       </div>
       [end]
+      [for attention]
+      <div class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div>
+          <div class="fw-semibold">
+            [if-any attention.anchor]
+            <a href="/models#[attention.anchor]">[attention.ident]</a> is [attention.rest]
+            [else]
+            [attention.what]
+            [end]
+          </div>
+          [if-any attention.detail]<div class="small text-muted">[attention.detail]</div>[end]
+          [if-any attention.flag]<div class="small text-muted">[attention.flag]</div>[end]
+        </div>
+        <div class="ms-3 text-nowrap">
+          [for attention.actions]
+          [if-any attention.actions.is_approve]
+          <button type="button" class="btn btn-sm btn-outline-primary ms-1"
+                  data-bs-toggle="modal" data-bs-target="#approveRentalModal"
+                  aria-label="[attention.actions.aria]"
+                  data-host="[attention.actions.host]">Approve</button>
+          [else]
+          [if-any attention.actions.enabled]
+          <form method="post" action="[attention.actions.post]" class="d-inline"[if-any attention.actions.confirm] data-confirm="[attention.actions.confirm]"[end]>
+            <input type="hidden" name="host" value="[attention.actions.host]">
+            [if-any attention.actions.name]
+            <input type="hidden" name="name" value="[attention.actions.name]">
+            [end]
+            [if-any attention.actions.port]
+            <input type="hidden" name="port" value="[attention.actions.port]">
+            [end]
+            <button type="submit" class="btn btn-sm btn-outline-secondary ms-1"[if-any attention.actions.title] title="[attention.actions.title]"[end]
+                    aria-label="[attention.actions.aria]">[attention.actions.label]</button>
+          </form>
+          [else]
+          <button type="button" class="btn btn-sm btn-outline-secondary ms-1"
+                  aria-label="[attention.actions.aria]" disabled>[attention.actions.label]</button>
+          <span class="text-muted small">[attention.actions.reason]</span>
+          [end]
+          [end]
+          [end]
+        </div>
+      </div>
+      [end]
     </div>
-    <p class="small text-muted mt-1 mb-0">Each stays until it is put right.</p>
+    <p class="small text-muted mt-1 mb-0">Each stays until it is put right. A deployment's name opens its row on Models.</p>
   </section>
   [end]
 
@@ -200,5 +243,29 @@
       </div>
     </div>
   </section>
+</div>
+<div class="modal fade" id="approveRentalModal" tabindex="-1" aria-labelledby="approveRentalModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <form class="modal-content" method="post" action="/do-approve-rental">
+      <div class="modal-header">
+        <h2 class="modal-title fs-5" id="approveRentalModalLabel">Approve rental</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">Choose the models this rental loads the next time it asks for its config.</p>
+        <input type="hidden" name="host" id="approve-host" value="">
+        [for approve_choices]
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="model" value="[approve_choices.model_name]" id="approve-[approve_choices.model_name]">
+          <label class="form-check-label" for="approve-[approve_choices.model_name]">[approve_choices.display_name]</label>
+        </div>
+        [end]
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Approve</button>
+      </div>
+    </form>
+  </div>
 </div>
 [include "footer.ezt"]

@@ -65,7 +65,7 @@ X-LLMAO-Host: <the rental's name in fleet.hosts>
   last-seen first), whether or not the name is intended, and logged with
   the claimed host and the peer. The record does not
   know membership: that is the fleet's join. A name nothing intends gets
-  404 and shows on the `/models` attention strip as "fleet key presented
+  404 and shows in Work needed on `/admin` as "fleet key presented
   from a host not in `fleet.hosts`", with Approve.
 - **The last fetch by an intended name is its loading start.** Each probe
   pass reads the record onto the name's servers: a rental that fetched its

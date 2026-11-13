@@ -179,6 +179,10 @@ async def _work_pointer(path: str):
         count = await APP.seam.work_count(ident)
     except (AuthzError, BackendUnavailableError):
         return None
+    if ident.is_site_admin:
+        # /admin's Work needed lists the fleet's items too; the pointer
+        # counts what that list shows.
+        count += len(attention_items(APP.fleet))
     href, label = ("/admin", "Admin") if ident.is_site_admin else ("/keys", "My Keys")
     if not count or path == href:
         return None
@@ -597,7 +601,7 @@ def _dep_anchor(dep) -> str:
 
 
 def _needs_attention(lifecycle: str, skew, *, unlisted: bool = False) -> bool:
-    """The attention strip and the row accent ask the same question."""
+    """Work needed on /admin and the row accent on /models ask the same question."""
     return lifecycle in (STALLED, UNHEALTHY, REJECTED, FOREIGN) or bool(skew) or unlisted
 
 
@@ -698,7 +702,7 @@ def _action(**kwargs):
 
 
 def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> list:
-    """Buttons shared by the attention strip and the deployment rows.
+    """Buttons shared by Work needed on /admin and the deployment rows on /models.
 
     Add and Stop tracking use the existing refusal gates. A disabled action
     carries the reason as visible text. Approve is only for an unknown host.
@@ -763,8 +767,9 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> 
 
 
 def attention_items(fleet) -> list:
-    """The admin strip: only actionable items, in the order they were listed
-    in the design (machines nobody intends, Stalled, Unhealthy, true skew)."""
+    """The fleet's part of Work needed on /admin: only actionable items, in the
+    order they were listed in the design (machines nobody intends, Stalled,
+    Unhealthy, true skew)."""
     items: list[edict] = []
     for machine in fleet.unintended():
         items.append(
@@ -959,8 +964,6 @@ async def models_page(result):
     result.reveal_supply = admin
     catalog = ux_models(APP.models, reveal_supply=admin)
     result.models = model_catalog_rows(APP.fleet, catalog, admin=admin)
-    result.attention = attention_items(APP.fleet) if admin else []
-    result.approve_choices = _approve_choices(APP.models) if admin else []
     return result
 
 
@@ -1530,7 +1533,11 @@ async def admin_index(result):
     except (AuthzError, BackendUnavailableError):
         skew = []
     result.skew = _skew_rows(skew)
-    result.skew_count = len(result.skew) or None
+    # The fleet's items, with their buttons, so this page is the one list of
+    # what needs an admin; the deployment rows on /models keep theirs too.
+    result.attention = attention_items(APP.fleet)
+    result.approve_choices = _approve_choices(APP.models)
+    result.skew_count = (len(result.skew) + len(result.attention)) or None
 
     result.recent = await _recent_work(stored, only=ident.uid if mine else None)
     result.recent_days = RECENT_DAYS

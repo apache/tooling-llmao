@@ -97,7 +97,7 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // An attention item links to its row in Deployments. Flash the row on arrival.
+  // A Work needed item on /admin links to its row in Deployments. Flash the row on arrival.
   function flashDeployment(hash) {
     if (!hash || hash.indexOf("#dep-") !== 0) return;
     var row = document.getElementById(hash.slice(1));
@@ -106,11 +106,6 @@ document.addEventListener("DOMContentLoaded", function () {
     void row.offsetWidth;
     row.classList.add("dep-flash");
   }
-  document.querySelectorAll(".js-dep-link").forEach(function (link) {
-    link.addEventListener("click", function () {
-      flashDeployment(link.getAttribute("href"));
-    });
-  });
   flashDeployment(window.location.hash);
 
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {

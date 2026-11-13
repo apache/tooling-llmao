@@ -213,10 +213,12 @@ def test_attention_items_lists_only_actionable_items():
     assert "vLLM up, LiteLLM down" in unhealthy.detail
     unknown = next(i for i in items if i.kind == "unintended")
     assert "192.0.2.7" in unknown.what
-    # The strip renders in the template.
-    out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)[0]], attention=items)
-    assert "Work needed" in out
-    assert "192.0.2.7" in out
+    # The items are Work needed on /admin; /models shows no list of them.
+    out = _render([pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)[0]], admin=True)
+    assert "Work needed" not in out
+    admin_out = _render_admin(attention=items)
+    assert "Work needed" in admin_out
+    assert "192.0.2.7" in admin_out
 
 
 def test_models_template_renders_the_catalog_row():
@@ -347,27 +349,28 @@ def test_admin_drill_down_renders_deployments_without_label_controls():
     assert "/do-set-admin-label" not in out
 
 
-def test_attention_strip_offers_approve_for_an_unknown_rental_and_nothing_else():
+def test_work_needed_offers_approve_for_an_unknown_rental_and_nothing_else():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.provisioning.note("192.0.2.7", now=time.time() - 100)
     fleet.provisioning.fetches["192.0.2.7"] = ConfigFetch("192.0.2.7", time.time() - 100, time.time() - 5, 3)
-    rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
-    out = _render(rows, attention=pages.attention_items(fleet), admin=True)
+    out = _render_admin(attention=pages.attention_items(fleet))
     assert "Fleet key presented from 192.0.2.7" in out
     assert "seen 5s · 3 requests" in out
     assert 'data-host="192.0.2.7"' in out
     assert 'data-bs-target="#approveRentalModal"' in out
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Approve"]
-    out = _render(
-        rows,
+    out = _render_admin(
         attention=pages.attention_items(fleet),
-        admin=True,
         approve_choices=[edict(model_name="gemma", display_name="Gemma")],
     )
     assert 'action="/do-approve-rental"' in out
     assert 'value="gemma"' in out
     assert ">Gemma<" in out
+    # The modal lives with the button, on /admin, not on /models.
+    assert "approveRentalModal" not in _render(
+        pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True
+    )
 
 
 def _orphan(fleet, passes: int, *, stamp: str = "", id: str = "orphan-1") -> None:
@@ -380,7 +383,7 @@ def _orphan(fleet, passes: int, *, stamp: str = "", id: str = "orphan-1") -> Non
         fleet.update_litellm_deployments(LiteLLMDeployments.from_rows(rows, now=time.time()))
 
 
-def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
+def test_work_needed_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.cfg.fleet.hosts = {}
@@ -392,7 +395,7 @@ def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_trackin
     assert item.what == "gemma on 198.51.100.9:18490 is in LiteLLM, not in config"
     assert item.detail == "not added by llmao; someone added it in LiteLLM"
     assert [a.label for a in item.actions] == ["Stop tracking"]
-    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=[item], admin=True)
+    out = _render_admin(attention=[item])
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="198.51.100.9"' in out
     assert 'name="name" value="gemma"' in out
@@ -403,7 +406,7 @@ def test_attention_strip_shows_an_orphan_once_it_has_persisted_with_stop_trackin
     assert pages._match_orphan(fleet, "gemma", "198.51.100.9", "8001") is None
     # No id to delete by: the button is there, disabled, with the reason as text.
     _orphan(fleet, ORPHAN_PASSES, id="")
-    out = _render([], attention=pages.attention_items(fleet), admin=True)
+    out = _render_admin(attention=pages.attention_items(fleet))
     assert "LiteLLM reported it without an id" in out
     assert "disabled" in out
 
@@ -435,7 +438,7 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Stop tracking"]
 
 
-def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
+def test_work_needed_shows_a_machine_nobody_intends_once_with_approve_by_name():
     """A rental and a stranger's fetch under one name are one machine: one item, one Approve."""
     from llmao.fleet import Discovered
 
@@ -481,7 +484,7 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
     assert items[1].detail == "8001: serving gemma with our key"
     # Approve is by the name the rental sends: the provider's id for the machine.
     assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
-    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
+    out = _render_admin(attention=items)
     assert out.count('data-bs-target="#approveRentalModal"') == 2
     assert 'data-host="1"' in out
     assert 'data-host="pod-1"' in out
@@ -539,8 +542,8 @@ def test_drill_down_renders_add_and_remove_actions():
     assert "vLLM is not serving yet" not in out
     assert "vLLM is still healthy" not in out
 
-    # The attention strip keeps them, disabled, with the reason as text.
-    out = _render(rows, attention=pages.attention_items(fleet), admin=True)
+    # Work needed on /admin keeps them, disabled, with the reason as text.
+    out = _render_admin(attention=pages.attention_items(fleet))
     assert "vLLM is not serving yet" in out
 
 
@@ -578,14 +581,11 @@ def test_two_ports_on_one_host_are_two_deployments():
     assert len({r.anchor for r in rows}) == 3
     assert [bool(r.attention) for r in rows] == [False, True, True]
 
-    out = _render(
-        pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("qwen")], admin=True),
-        attention=items,
-        admin=True,
-    )
-    assert 'href="#dep-10-0-0-9-8003"' in out
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma"), _catalog("qwen")], admin=True), admin=True)
     assert 'id="dep-10-0-0-9-8003"' in out
     assert 'id="dep-10-0-0-9-8001"' in out
+    # The Work needed item on /admin links to that row.
+    assert 'href="/models#dep-10-0-0-9-8003">qwen on 10.0.0.9:8003</a> is unhealthy' in _render_admin(attention=items)
 
     # host + name alone still finds a deployment; the port tells two apart.
     assert len(pages._match_deployments(fleet, "qwen", "10.0.0.9")) == 1
@@ -708,7 +708,14 @@ def test_cards_put_degraded_after_available_and_unavailable_last():
     assert rows[1].degraded
 
 
-def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
+def _render_admin(*, attention, approve_choices=()) -> str:
+    """The /admin page with these fleet items in Work needed."""
+    from tests.test_admin import _render as render_admin
+
+    return render_admin(running="1.0.0", expected="1.0.0", attention=attention, approve_choices=approve_choices)
+
+
+def _render(rows, *, admin=False) -> str:
     data = edict(
         title="Models",
         is_site_admin=ezt.boolean(admin),
@@ -731,8 +738,6 @@ def _render(rows, attention=None, *, admin=False, approve_choices=None) -> str:
         repo="https://github.com/apache/tooling-llmao",
         commit="deadbeef",
         models=rows,
-        attention=attention or [],
-        approve_choices=approve_choices or [],
     )
     t = ezt.Template(str(THIS_DIR / "templates" / "models.ezt"))
     buf = io.StringIO()

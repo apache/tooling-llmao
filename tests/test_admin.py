@@ -30,7 +30,20 @@ from llmao.proxy.client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, requests=(), approvals=(), recent=()):
+def _render(
+    *,
+    running,
+    expected,
+    skew=(),
+    attention=(),
+    approve_choices=(),
+    flashes=(),
+    notices=(),
+    work=None,
+    requests=(),
+    approvals=(),
+    recent=(),
+):
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
@@ -61,7 +74,9 @@ def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, re
         recent_days=14,
         recent_mine=ezt.boolean(False),
         skew=list(skew),
-        skew_count=len(skew) or None,
+        attention=list(attention),
+        approve_choices=list(approve_choices),
+        skew_count=(len(skew) + len(attention)) or None,
         litellm_running=running,
         litellm_expected=expected,
         litellm_matches=ezt.boolean(bool(running) and running == expected),

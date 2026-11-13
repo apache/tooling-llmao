@@ -30,6 +30,7 @@ import asfquart
 import asfquart.session
 
 from llmao import auth
+from tests.test_pages_models import _fleet
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -60,6 +61,8 @@ def _signed_in(monkeypatch, *, uid="someone", root=False):
 
     monkeypatch.setattr(asfquart.session, "read", read)
     monkeypatch.setattr(_app().APP, "seam", _Seam(), raising=False)
+    # Every page's work pointer counts the fleet's items too; an empty fleet has none.
+    monkeypatch.setattr(_app().APP, "fleet", _fleet(), raising=False)
 
 
 async def _toggle(client, on: bool, referer="http://localhost/help"):
