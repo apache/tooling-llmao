@@ -83,14 +83,14 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  var approveModal = document.getElementById("approveBoxModal");
+  var approveModal = document.getElementById("approveRentalModal");
   if (approveModal) {
     approveModal.addEventListener("show.bs.modal", function (event) {
       var btn = event.relatedTarget;
       if (!btn) return;
       var host = btn.getAttribute("data-host") || "";
       document.getElementById("approve-host").value = host;
-      document.getElementById("approveBoxModalLabel").textContent = "Approve " + host;
+      document.getElementById("approveRentalModalLabel").textContent = "Approve " + host;
       approveModal.querySelectorAll("input[name=model]").forEach(function (cb) {
         cb.checked = false;
       });

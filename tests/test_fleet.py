@@ -468,7 +468,7 @@ def test_duplicate_name():
         validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
-def test_legacy_boxes_need_the_shared_key_and_keep_their_ports():
+def test_legacy_rentals_need_the_shared_key_and_keep_their_ports():
     models = load_models(EXAMPLE)
     hosts = {
         "80.188.223.202": [["gemma4-26b", 10100]],
@@ -667,7 +667,7 @@ def test_a_port_follows_the_provider_map():
     assert srv.public_port == 12711
 
 
-def test_a_box_serves_the_name_litellm_asks_for():
+def test_a_rental_serves_the_name_litellm_asks_for():
     """vLLM's default name is the Hugging Face id; LiteLLM asks for ours.
 
     Three boxes served Qwen/Qwen3-8B while LiteLLM asked for qwen3-8b-bf16:
@@ -688,7 +688,7 @@ def test_a_box_serves_the_name_litellm_asks_for():
         assert server["served_model_name"] != server["model"]
 
 
-def test_the_box_is_told_the_kv_cache_its_context_needs():
+def test_the_rental_is_told_the_kv_cache_its_context_needs():
     models = load_models(EXAMPLE)
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8001]]})
     validate_fleet(cfg, models=models)

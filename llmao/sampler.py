@@ -122,7 +122,7 @@ class MetricsSampler:
         # A box's price is shared by the servers on it, so each server's
         # hour carries its share and adding rows up gives the real bill.
         # Every server on the box counts, reachable or not.
-        per_box = Counter(srv.host for srv in self._fleet.servers)
+        per_rental = Counter(srv.host for srv in self._fleet.servers)
         readings = await asyncio.gather(
             *(self._read(client, server, root, srv.api_key) for srv, server, _model, root in targets)
         )
@@ -130,7 +130,7 @@ class MetricsSampler:
             if sample is None:
                 self._rollup.missed(server)
                 continue
-            share = srv.rental_usd_per_hour / per_box[srv.host] if srv.rental_usd_per_hour is not None else None
+            share = srv.rental_usd_per_hour / per_rental[srv.host] if srv.rental_usd_per_hour is not None else None
             self._rollup.record(server, model_name, sample, usd_per_hour=share, rental=srv.rental)
             # The KV cache size, for the /models drill-down and the oversized
             # check. Fixed at engine start, but taken from every reading: a

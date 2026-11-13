@@ -30,7 +30,7 @@
           [for attention.actions]
           [if-any attention.actions.is_approve]
           <button type="button" class="btn btn-sm btn-outline-primary ms-1"
-                  data-bs-toggle="modal" data-bs-target="#approveBoxModal"
+                  data-bs-toggle="modal" data-bs-target="#approveRentalModal"
                   aria-label="[attention.actions.aria]"
                   data-host="[attention.actions.host]">Approve</button>
           [else]
@@ -277,11 +277,11 @@
   </div>
 </div>
 [if-any is_site_admin]
-<div class="modal fade" id="approveBoxModal" tabindex="-1" aria-labelledby="approveBoxModalLabel" aria-hidden="true">
+<div class="modal fade" id="approveRentalModal" tabindex="-1" aria-labelledby="approveRentalModalLabel" aria-hidden="true">
   <div class="modal-dialog">
-    <form class="modal-content" method="post" action="/do-approve-box">
+    <form class="modal-content" method="post" action="/do-approve-rental">
       <div class="modal-header">
-        <h2 class="modal-title fs-5" id="approveBoxModalLabel">Approve box</h2>
+        <h2 class="modal-title fs-5" id="approveRentalModalLabel">Approve box</h2>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">

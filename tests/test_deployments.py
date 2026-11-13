@@ -192,7 +192,7 @@ def test_sync_selfhost_deletes_when_down():
     assert fleet.deployments[0].in_litellm is False
 
 
-def test_sync_selfhost_deletes_a_box_no_provider_lists():
+def test_sync_selfhost_deletes_a_rental_no_provider_lists():
     """Awaiting, never probed, but gone: its deployment points at nothing."""
     s = _server()
     s.state = AWAITING
@@ -208,7 +208,7 @@ def test_sync_selfhost_deletes_a_box_no_provider_lists():
     assert "model/delete" in _paths(be)
 
 
-def test_a_serving_box_no_provider_lists_keeps_its_route():
+def test_a_serving_rental_no_provider_lists_keeps_its_route():
     """The invariant remove_refusal states: a box that answers keeps its route.
 
     e1567cb deleted an unlisted server's route regardless of health, and a
@@ -609,7 +609,7 @@ def test_an_unknown_address_keeps_its_last_litellm_health():
     assert dep.litellm_health_at == 1000.0
 
 
-def test_sync_selfhost_drops_a_box_that_rejects_our_key():
+def test_sync_selfhost_drops_a_rental_that_rejects_our_key():
     """The first 401 deletes: every request through the deployment would fail."""
     from llmao.model_status import REJECTED
 

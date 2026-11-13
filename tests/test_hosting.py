@@ -530,7 +530,7 @@ def _config_server(seen: dict, payload: dict | None = None):
     return httpd
 
 
-def _box_env(monkeypatch, tmp_path, httpd):
+def _rental_env(monkeypatch, tmp_path, httpd):
     monkeypatch.setenv("FLEET_KEY", "fleet-secret")
     monkeypatch.setenv("ASFQUART_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
     monkeypatch.setenv("LLMAO_HOST", "198.51.100.8")
@@ -545,7 +545,7 @@ def _box_env(monkeypatch, tmp_path, httpd):
 def test_main_claims_llmao_host_and_reloads_supervisord(monkeypatch, tmp_path):
     seen = {}
     httpd = _config_server(seen)
-    reloads = _box_env(monkeypatch, tmp_path, httpd)
+    reloads = _rental_env(monkeypatch, tmp_path, httpd)
     try:
         assert inst.main([]) == 0
     finally:
@@ -558,7 +558,7 @@ def test_main_claims_llmao_host_and_reloads_supervisord(monkeypatch, tmp_path):
 
 def test_main_carries_the_payloads_hf_token_into_the_units(monkeypatch, tmp_path):
     httpd = _config_server({}, payload={**SAMPLE, "hf_token": "hf_read"})
-    _box_env(monkeypatch, tmp_path, httpd)
+    _rental_env(monkeypatch, tmp_path, httpd)
     try:
         assert inst.main([]) == 0
     finally:
@@ -570,7 +570,7 @@ def test_main_carries_the_payloads_hf_token_into_the_units(monkeypatch, tmp_path
 def test_main_no_reload_writes_units_and_leaves_supervisord_alone(monkeypatch, tmp_path):
     """Where supervisord is not running yet, it reads the units when it starts."""
     httpd = _config_server({})
-    reloads = _box_env(monkeypatch, tmp_path, httpd)
+    reloads = _rental_env(monkeypatch, tmp_path, httpd)
     try:
         assert inst.main(["--no-reload"]) == 0
     finally:
@@ -581,7 +581,7 @@ def test_main_no_reload_writes_units_and_leaves_supervisord_alone(monkeypatch, t
 
 def test_main_requires_llmao_host(monkeypatch, tmp_path):
     httpd = _config_server({})
-    _box_env(monkeypatch, tmp_path, httpd)
+    _rental_env(monkeypatch, tmp_path, httpd)
     monkeypatch.delenv("LLMAO_HOST")
     try:
         with pytest.raises(SystemExit, match="LLMAO_HOST"):
@@ -593,7 +593,7 @@ def test_main_requires_llmao_host(monkeypatch, tmp_path):
 def _reprovision(monkeypatch, tmp_path, *, fits=True):
     """A box whose last install left two units, one of them no longer in the set."""
     httpd = _config_server({})
-    reloads = _box_env(monkeypatch, tmp_path, httpd)
+    reloads = _rental_env(monkeypatch, tmp_path, httpd)
     conf = tmp_path / "conf.d"
     conf.mkdir()
     for name in ("vllm-model-a", "vllm-dropped"):
@@ -629,7 +629,7 @@ def test_reprovision_stops_our_servers_before_measuring_the_card(monkeypatch, tm
     assert reloads == [True]
 
 
-def test_a_refused_reprovision_leaves_the_box_serving(monkeypatch, tmp_path):
+def test_a_refused_reprovision_leaves_the_rental_serving(monkeypatch, tmp_path):
     httpd, reloads, events, conf = _reprovision(monkeypatch, tmp_path, fits=False)
     try:
         assert inst.main([]) == 1

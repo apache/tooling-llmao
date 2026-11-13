@@ -109,7 +109,7 @@ def test_config_for_host_renders_every_row():
     assert "hf_token" not in payload
 
 
-def test_config_for_host_hands_out_the_hf_token_once_for_the_box():
+def test_config_for_host_hands_out_the_hf_token_once_for_the_rental():
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003], ["gemma4-26b", 8001]]})
     cfg.fleet.hf_token = " hf_read "
     payload = config_for_host("10.0.0.1", models=list(_by_name().values()), cfg=cfg)

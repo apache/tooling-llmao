@@ -313,17 +313,17 @@ def test_admin_rows_of_an_approved_host_say_so():
         assert r.flag == ""
 
 
-def test_apply_box_approval_reports_the_models_and_refuses_a_bad_form():
+def test_apply_rental_approval_reports_the_models_and_refuses_a_bad_form():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.cfg.fleet.hosts = {}
     fleet.cfg.fleet.vllm_api_salt = "test-vllm-salt"
     fleet.models = {m.model_name: m for m in load_models(EXAMPLE)}
-    ok, msg = pages.apply_box_approval(fleet, "", ["gemma4-26b"])
+    ok, msg = pages.apply_rental_approval(fleet, "", ["gemma4-26b"])
     assert not ok and "No host" in msg
-    ok, msg = pages.apply_box_approval(fleet, "192.0.2.7", [])
+    ok, msg = pages.apply_rental_approval(fleet, "192.0.2.7", [])
     assert not ok and "at least one" in msg
-    ok, msg = pages.apply_box_approval(fleet, "192.0.2.7", ["gemma4-26b"])
+    ok, msg = pages.apply_rental_approval(fleet, "192.0.2.7", ["gemma4-26b"])
     assert ok and msg == "Approved 192.0.2.7 to load gemma4-26b."
     assert [s.host for s in fleet.servers] == ["10.0.0.1", "192.0.2.7"]
 
@@ -347,7 +347,7 @@ def test_admin_drill_down_renders_deployments_without_label_controls():
     assert "/do-set-admin-label" not in out
 
 
-def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
+def test_attention_strip_offers_approve_for_an_unknown_rental_and_nothing_else():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.provisioning.note("192.0.2.7", now=time.time() - 100)
@@ -357,7 +357,7 @@ def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
     assert "Fleet key presented from 192.0.2.7" in out
     assert "seen 5s · 3 requests" in out
     assert 'data-host="192.0.2.7"' in out
-    assert 'data-bs-target="#approveBoxModal"' in out
+    assert 'data-bs-target="#approveRentalModal"' in out
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Approve"]
     out = _render(
         rows,
@@ -365,7 +365,7 @@ def test_attention_strip_offers_approve_for_an_unknown_box_and_nothing_else():
         admin=True,
         approve_choices=[edict(model_name="gemma", display_name="Gemma")],
     )
-    assert 'action="/do-approve-box"' in out
+    assert 'action="/do-approve-rental"' in out
     assert 'value="gemma"' in out
     assert ">Gemma<" in out
 
@@ -482,7 +482,7 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
     # Approve is by the name the box sends: the provider's id for the machine.
     assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
-    assert out.count('data-bs-target="#approveBoxModal"') == 2
+    assert out.count('data-bs-target="#approveRentalModal"') == 2
     assert 'data-host="1"' in out
     assert 'data-host="pod-1"' in out
 
@@ -829,7 +829,7 @@ def test_an_unlisted_host_says_why_and_is_work_needed():
     assert "has not requested its config" not in out
 
 
-def test_a_gone_box_has_no_buttons():
+def test_a_gone_rental_has_no_buttons():
     """Nothing to reboot or add; llmao drops its LiteLLM deployment by itself."""
     pages = _app()
     gone = _server("gemma", host="10.0.0.9")
@@ -879,7 +879,7 @@ def test_an_unlisted_host_never_reached_gets_the_sentence_once_the_grace_is_out(
     assert item.detail == reason + " If so, remove it from fleet.hosts."
 
 
-def test_a_box_that_rejects_our_key_is_work_needed_with_the_fix_named():
+def test_a_rental_that_rejects_our_key_is_work_needed_with_the_fix_named():
     from llmao.model_status import FOREIGN, REJECTED
 
     pages = _app()

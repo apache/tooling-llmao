@@ -138,7 +138,7 @@ def _updated(teams):
     return [(c.json.team_id, c.json.models) for c in teams._transport.calls if c.path == "team/update"]
 
 
-def test_a_pretend_project_is_made_restricted_to_our_own_boxes():
+def test_a_pretend_project_is_made_restricted_to_our_own_rentals():
     teams = _litellm_with(["airflow"])
     _run(teams.ensure_pretend_projects())
     sent = [c.json for c in teams._transport.calls if c.path == "team/new"]

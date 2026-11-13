@@ -73,7 +73,7 @@ def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, re
     return buf.getvalue()
 
 
-def test_capacity_page_renders_demand_beside_the_boxes():
+def test_capacity_page_renders_demand_beside_the_rentals():
     """The template with one model's demand, from rows shaped like LiteLLM's, must render.
 
     A template error would otherwise show up as a 500 on /admin/capacity.

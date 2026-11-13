@@ -103,7 +103,7 @@ def test_a_model_need_not_say_where_it_is_served():
     assert VllmRecipe.from_model(ours).hf_model
 
 
-def test_a_recipe_needs_the_template_for_our_boxes():
+def test_a_recipe_needs_the_template_for_our_rentals():
     row = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
     row.pop("litellm_params")
     with pytest.raises(ValueError, match=re.escape("litellm_params.model is required")):

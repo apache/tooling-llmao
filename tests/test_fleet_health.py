@@ -499,7 +499,7 @@ def test_down_stays_down_while_failing():
     assert s.fails == 4
 
 
-def test_never_healthy_box_goes_starting_then_down():
+def test_never_healthy_rental_goes_starting_then_down():
     """The provisioning failure case: wrong port, or vLLM crash-looping.
 
     Stays STARTING for the whole grace window so a genuinely slow start is
@@ -684,7 +684,7 @@ def test_the_first_reached_probe_is_a_loading_start():
     assert (s.state, s.first_reached_at) == (STALLED, 10.0)
 
 
-def test_a_box_healthy_once_in_this_process_has_the_hold_over():
+def test_a_rental_healthy_once_in_this_process_has_the_hold_over():
     """After a restart the first Healthy probe is a loading start, so a blip is held over the threshold."""
     s = _server()
     _record(s, True, now=10.0, grace_s=1800, fail_threshold=3, reached=True, in_litellm=True)

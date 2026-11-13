@@ -248,7 +248,7 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
     assert commercial.counted is False
     assert commercial.skew == (SKEW_INTENDED_NOT_IN_LITELLM,)
 
-    healthy_box = deployment_status(_self(), CFG, NOW)
+    healthy_rental = deployment_status(_self(), CFG, NOW)
     up_commercial = deployment_status(
         DeploymentSnapshot(
             model_name=MODEL,
@@ -261,7 +261,7 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
         CFG,
         NOW,
     )
-    summary = model_status(MODEL, [healthy_box, up_commercial])
+    summary = model_status(MODEL, [healthy_rental, up_commercial])
     assert summary.privacy == MIXED
     # The external row is configured even while LiteLLM does not have it.
     down_commercial = deployment_status(
@@ -269,7 +269,7 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
         CFG,
         NOW,
     )
-    assert model_status(MODEL, [healthy_box, down_commercial]).privacy == MIXED
+    assert model_status(MODEL, [healthy_rental, down_commercial]).privacy == MIXED
     assert model_status(MODEL, [up_commercial]).privacy == EXTERNAL
     assert summary.rollup == AVAILABLE
     # Minimum across healthy deployments. The commercial window is the smaller one.

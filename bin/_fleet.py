@@ -196,7 +196,7 @@ def model_names(cfg: dict) -> set[str]:
 
 
 @dataclass
-class Box:
+class Rental:
     model: str
     label: str
     host: str
@@ -255,7 +255,7 @@ def _parse_host_row(raw) -> tuple[str, int, str, int | None] | None:
     return model, port, name, public
 
 
-def boxes_from_config(cfg: dict) -> list[Box]:
+def rentals_from_config(cfg: dict) -> list[Rental]:
     hosts = (cfg.get("fleet") or {}).get("hosts") or {}
     out = []
     for host, rows in hosts.items():
@@ -265,7 +265,7 @@ def boxes_from_config(cfg: dict) -> list[Box]:
                 continue
             model, listen, label, public = parsed
             out.append(
-                Box(
+                Rental(
                     model=model,
                     label=label,
                     host=str(host).strip(),
@@ -306,7 +306,7 @@ def litellm_routes(cfg: dict | None = None, master_key: str | None = None) -> li
     return out
 
 
-def _boxes_from_env() -> list[Box]:
+def _rentals_from_env() -> list[Rental]:
     """LLMAO_DIRECT="model=host:public[:listen],..." (or LLMAO_WATCH_BOXES).
 
     The optional third field is the box's CONTAINER listen port. It is only
@@ -314,7 +314,7 @@ def _boxes_from_env() -> list[Box]:
     listen port -- and a public address alone cannot tell you the listen port,
     which is why the auth column reads "no keys" off-box without it.
     """
-    out: list[Box] = []
+    out: list[Rental] = []
     seen: set[tuple[str, int]] = set()
     used: list[str] = []
     # BOTH variables, merged. Taking only the first one that parsed meant a
@@ -340,7 +340,7 @@ def _boxes_from_env() -> list[Box]:
             seen.add(key)
             contributed = True
             out.append(
-                Box(
+                Rental(
                     model=name.strip(),
                     label=name.strip(),
                     host=parts[0],
@@ -354,13 +354,13 @@ def _boxes_from_env() -> list[Box]:
     return out
 
 
-# Which environment variables the last _boxes_from_env() call actually used,
+# Which environment variables the last _rentals_from_env() call actually used,
 # so the caller can name them rather than leaving the user guessing which of
 # the two is in play.
 _ENV_SOURCE: list[str] = []
 
 
-def _match_by_derived_key(api_base: str, candidates: list[Box], salt: str | None) -> Box | None:
+def _match_by_derived_key(api_base: str, candidates: list[Rental], salt: str | None) -> Rental | None:
     """Which candidate row is serving at `api_base`, proven by its own key.
 
     Returns None when there is no salt to derive with, or when no candidate's
@@ -382,13 +382,13 @@ def _match_by_derived_key(api_base: str, candidates: list[Box], salt: str | None
     return None
 
 
-def fleet() -> tuple[list[Box], dict]:
+def fleet() -> tuple[list[Rental], dict]:
     """All known boxes, joined, plus what could not be determined.
 
     meta: {"config": bool, "litellm": int routes, "models": set, "source": str}
     """
     cfg = load_config() or {}
-    boxes = boxes_from_config(cfg)
+    boxes = rentals_from_config(cfg)
     routes = litellm_routes(cfg)
 
     for r in routes:
@@ -425,7 +425,7 @@ def fleet() -> tuple[list[Box], dict]:
                 hit.public_port = port_i
         else:
             boxes.append(
-                Box(
+                Rental(
                     model=r["model"],
                     label="(orphan)",
                     host=host,
@@ -437,7 +437,7 @@ def fleet() -> tuple[list[Box], dict]:
 
     source = "config.yaml + LiteLLM"
     if not boxes:
-        boxes = _boxes_from_env()
+        boxes = _rentals_from_env()
         source = " + ".join(_ENV_SOURCE) if _ENV_SOURCE else "LLMAO_WATCH_BOXES / LLMAO_DIRECT (neither set)"
     elif not cfg:
         source = "LiteLLM only"
@@ -475,7 +475,7 @@ def _get(url: str, key: str | None, timeout: float) -> tuple[int, bytes | None]:
         return 0, None
 
 
-def probe_auth(box: Box, salt: str | None, shared: str | None, timeout: float = 5.0) -> tuple[str, str | None]:
+def probe_auth(box: Rental, salt: str | None, shared: str | None, timeout: float = 5.0) -> tuple[str, str | None]:
     """(verdict, working key): derived, shared, OPEN, no keys, a code, unreachable.
 
     "no keys" means neither credential was available, so nothing was tested.

@@ -76,7 +76,7 @@ def test_norm_base_tolerates_what_is_not_a_url():
     assert norm_base("192.0.2.10:8001/v1") == "192.0.2.10:8001"
 
 
-def test_box_key_is_the_listen_port():
+def test_rental_key_is_the_listen_port():
     """A Vast remap changes the public port and nothing else; the key does not move."""
     key = deployment_key("gemma4-26b", host="192.0.2.10", listen_port=8001)
     assert key == DeploymentKey("http://192.0.2.10:8001", "gemma4-26b")
@@ -85,7 +85,7 @@ def test_box_key_is_the_listen_port():
     assert deployment_key("gemma4-26b", host="::ffff:192.0.2.10", listen_port="8001") == key
 
 
-def test_box_key_matches_a_stamped_or_registered_base():
+def test_rental_key_matches_a_stamped_or_registered_base():
     """What LiteLLM holds, in any of its forms, normalises to the same bytes."""
     key = deployment_key("qwen3-8b", host="192.0.2.10", listen_port=8003)
     for form in ("http://192.0.2.10:8003/v1", "http://192.0.2.10:8003/", "HTTP://192.0.2.10:8003"):
@@ -123,7 +123,7 @@ def test_same_name_from_two_providers_are_two_keys():
     )
 
 
-def test_display_is_host_and_listen_port_for_a_box():
+def test_display_is_host_and_listen_port_for_a_rental():
     """What pages and logs print. Never the public port, never a URL to paste."""
     assert deployment_key("gemma4-26b", host="192.0.2.10", listen_port=8001).display == "192.0.2.10:8001"
     assert deployment_key("gemma4-26b", host="2001:db8::1", listen_port=8001).display == "[2001:db8::1]:8001"

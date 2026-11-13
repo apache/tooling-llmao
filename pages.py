@@ -1225,8 +1225,8 @@ async def _stop_tracking_orphan(ident, orphan):
     return _see_other("/models")
 
 
-def apply_box_approval(fleet, host: str, names: list[str]) -> tuple[bool, str]:
-    """Remember the models for an unknown box. The testable core of /do-approve-box."""
+def apply_rental_approval(fleet, host: str, names: list[str]) -> tuple[bool, str]:
+    """Remember the models for an unknown box. The testable core of /do-approve-rental."""
     host = (host or "").strip()
     if not host:
         return False, "No host to approve."
@@ -1237,18 +1237,18 @@ def apply_box_approval(fleet, host: str, names: list[str]) -> tuple[bool, str]:
     return True, f"Approved {host} to load {', '.join(approval.models)}."
 
 
-@APP.post("/do-approve-box")
+@APP.post("/do-approve-rental")
 @asfquart.auth.require
-async def do_approve_box():
+async def do_approve_rental():
     """Site admin picks the models an unknown box loads on its next config fetch."""
     ident = await current_identity(APP.cfg)
     if not ident.is_site_admin:
         await flash_danger("Only site admins can approve a fleet box.")
         return _see_other("/models")
     form = await quart.request.form
-    ok, message = apply_box_approval(APP.fleet, form.get("host"), form.getlist("model"))
+    ok, message = apply_rental_approval(APP.fleet, form.get("host"), form.getlist("model"))
     if ok:
-        await _done(ident, "approve_box", (form.get("host") or "").strip(), message)
+        await _done(ident, "approve_rental", (form.get("host") or "").strip(), message)
     else:
         await flash_danger(message)
     return _see_other("/models")
@@ -1558,7 +1558,8 @@ _WORK_ICONS = {
     "tier": "bi-sliders",
     "add_deployment": "bi-plus-circle",
     "remove_deployment": "bi-dash-circle",
-    "approve_box": "bi-hdd-network",
+    "approve_rental": "bi-hdd-network",
+    "approve_box": "bi-hdd-network",  # rows written before the rename, until retention prunes them
     "admin_label": "bi-flag",  # logged before admin labels were removed; old rows still render
     "restrict_project": "bi-shield-lock",
     "revoke_key": "bi-slash-circle",

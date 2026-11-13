@@ -117,7 +117,7 @@ def test_each_server_is_named_by_host_and_listen_port():
     assert sampler.targets() == [(reachable, "203.0.113.10:8001", "qwen3-8b", "http://203.0.113.10:22018")]
 
 
-def test_a_pass_feeds_the_rollup_and_notes_a_box_that_did_not_answer():
+def test_a_pass_feeds_the_rollup_and_notes_a_rental_that_did_not_answer():
     fleet = Fleet(None, [_server("203.0.113.10"), _server("198.51.100.8")])
     rollup = HourlyRollup(15)
     sampler = MetricsSampler(fleet, rollup, interval_s=15)
