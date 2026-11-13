@@ -15,13 +15,13 @@
 #
 # Consumers:
 #   /models UX          display fields (litellm_params stripped)
-#   GET /vllm/config    vLLM recipe for the box
-#   POST /model/new     litellm_params + instance api_base (our boxes only)
+#   GET /vllm/config    vLLM recipe for the rental
+#   POST /model/new     litellm_params + instance api_base (our rentals only)
 #
-# This file says what a model is, and how to run it on our boxes if we can
+# This file says what a model is, and how to run it on our rentals if we can
 # (model_info.vllm). It does not say where the model is served: that belongs
 # to each deployment, so one model can be served several ways at once.
-#   fleet.hosts                 our boxes; api_base is added per instance
+#   fleet.hosts                 our rentals; api_base is added per instance
 #   config.yaml providers       accounts we pay (xAI, OpenRouter), each listing
 #                               the models it serves, with its own key
 # A model with neither has no deployments. litellm_params.api_base,
@@ -30,7 +30,7 @@
 #
 # On --max-num-batched-tokens, which every self-hosted entry sets:
 # vLLM defaults it to 2048, and that default admitted only 2-3 concurrent
-# requests on every box here while 90% of the KV cache sat idle -- requests
+# requests on every rental here while 90% of the KV cache sat idle -- requests
 # spent 4.3x longer queued than being processed. It is NOT a property of the
 # model: it scales with the card's headroom, and a value that is right on a
 # 96GB card will OOM a 24GB one and kill the engine outright.
@@ -46,20 +46,20 @@ models:
     # instance at registration.
     litellm_params:
       model: hosted_vllm/gemma4-26b
-    # Measured throughput, for sizing boxes:
+    # Measured throughput, for sizing rentals:
     #   A100 80GB @ $1.19/hr; 8,591 tok/s prefill, 512 tok/s aggregate decode
     model_info:
       vllm:
         model: google/gemma-4-26B-A4B-it
         source:
           kind: hf                # hf | url | registry | local
-        # Declared requirements, so a box can reject before pulling ~50GB.
-        # Host capacity is DISCOVERED on the box (nvidia-smi), never declared
+        # Declared requirements, so a rental can reject before pulling ~50GB.
+        # Host capacity is DISCOVERED on the rental (nvidia-smi), never declared
         # here -- a hand-typed VRAM figure is wrong the first time a provider
         # supplies a different card than was ordered.
         #
         # Weights only. KV cache comes out of whatever is left, which is why
-        # a box with exactly vram_gb free still will not serve usefully.
+        # a rental with exactly vram_gb free still will not serve usefully.
         vram_gb: 49      # BF16, measured at load
         disk_gb: 55
         # Explicit, not inherited. A --max-model-len above the measured KV
@@ -118,14 +118,14 @@ models:
       # overrides -- verified: a caller sending xhigh still gets xhigh, and
       # a caller sending high is shielded instead of broken.
       reasoning_effort: medium
-    # Measured throughput, for sizing boxes:
+    # Measured throughput, for sizing rentals:
     #   RTX PRO 6000 @ $2.09/hr; 11,200 tok/s prefill, 920 tok/s aggregate decode
     model_info:
       vllm:
         model: Qwen/Qwen3.8-27B-FP8
         source:
           kind: hf
-        # Weights only -- KV cache comes out of what is left, so a box with
+        # Weights only -- KV cache comes out of what is left, so a rental with
         # exactly this free will pass the fit check and still not serve
         # usefully.
         #
@@ -133,7 +133,7 @@ models:
         # params (1.07 GiB/B at FP8). Rounded up so the check fails closed.
         # Cannot be read from nvidia-smi: vLLM allocates its utilisation
         # fraction of the card regardless of model size, because KV expands
-        # to fill it. The box sets that fraction: this figure, plus a share
+        # to fill it. The rental sets that fraction: this figure, plus a share
         # of what the card has left once every co-resident server's weights
         # are reserved (install_set.py, apportion).
         vram_gb: 30
@@ -151,7 +151,7 @@ models:
           - fp8
           - --enable-prefix-caching
           - --enable-chunked-prefill
-          # 16384 against the 2048 default. On a 96GB card this took the box
+          # 16384 against the 2048 default. On a 96GB card this took the rental
           # from 2 concurrent requests to 38. See the note at the top of this
           # file: the value scales with headroom, not with the model.
           - --max-num-batched-tokens
@@ -207,7 +207,7 @@ models:
   # Hopper and Blackwell as the FP8 build's DeepGEMM path is.
   #
   # A separate model_name, so callers ask for it by this name and it does not
-  # pool with the FP8 boxes.
+  # pool with the FP8 rentals.
   - model_name: qwen3.8-27b-int4
     litellm_params:
       model: hosted_vllm/qwen3.8-27b-int4
@@ -234,7 +234,7 @@ models:
           - fp8
           - --enable-prefix-caching
           - --enable-chunked-prefill
-          # 4096, as on the 24GB qwen3-8b box, not the 16384 the 96GB box
+          # 4096, as on the 24GB qwen3-8b rental, not the 16384 the 96GB rental
           # runs. This build exists for smaller cards; see the note at the
           # top of this file before raising it.
           - --max-num-batched-tokens
@@ -285,7 +285,7 @@ models:
       # still gets reasoning. Verified.
       chat_template_kwargs:
         enable_thinking: false
-    # Measured throughput, for sizing boxes:
+    # Measured throughput, for sizing rentals:
     #   RTX 4090 @ $0.74/hr; 8,851 tok/s prefill, 324 tok/s aggregate decode
     model_info:
       vllm:
@@ -313,7 +313,7 @@ models:
           - fp8
           - --enable-prefix-caching
           - --enable-chunked-prefill
-          # 4096, NOT the 16384 the larger boxes use. On a 24GB card, 16384
+          # 4096, NOT the 16384 the larger rentals use. On a 24GB card, 16384
           # OOM'd during an FP8 matmul at 4 concurrent 16k prompts and took
           # EngineCore down with it -- vLLM does not degrade, it dies, and
           # nothing brings it back.
@@ -358,7 +358,7 @@ models:
   # more. BF16 never reaches that code.
   #
   # A separate model_name, so callers ask for it by this name and it does not
-  # pool with the qwen3-8b boxes.
+  # pool with the qwen3-8b rentals.
   - model_name: qwen3-8b-bf16
     litellm_params:
       model: hosted_vllm/qwen3-8b-bf16
@@ -388,7 +388,7 @@ models:
           - fp8
           - --enable-prefix-caching
           - --enable-chunked-prefill
-          # Carried over from qwen3-8b, not tuned for this box.
+          # Carried over from qwen3-8b, not tuned for this rental.
           - --max-num-batched-tokens
           - "4096"
           - --reasoning-parser
@@ -443,7 +443,7 @@ models:
           - fp8
           - --enable-prefix-caching
           - --enable-chunked-prefill
-          # Carried over from qwen3-8b, not tuned for this model or a box.
+          # Carried over from qwen3-8b, not tuned for this model or a rental.
           - --max-num-batched-tokens
           - "4096"
           # Qwen's own card for this model: qwen3 and qwen3_coder, the same

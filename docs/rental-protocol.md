@@ -1,28 +1,28 @@
 # How a GPU rental asks for its configuration
 
-The contract between a GPU box and llmao: the one request a box makes at
+The contract between a GPU rental and llmao: the one request a rental makes at
 boot, what it must present, and what it gets back. This is how the fleet
-works today, not a proposal. Box boot on each provider is
+works today, not a proposal. Rental boot on each provider is
 [`../hosting/README.md`](../hosting/README.md); how the running fleet is
 kept in step with LiteLLM is
 [`fleet-reconcile-design.md`](fleet-reconcile-design.md).
 
 ```mermaid
 flowchart LR
-    BOX["GPU box<br/>(Vast or RunPod)"]
+    RENTAL["GPU rental<br/>(Vast or RunPod)"]
     LLMAO["llmao<br/>fleet.hosts + models.yaml"]
     LITELLM["LiteLLM proxy"]
-    BOX -- "GET /vllm/config<br/>Bearer fleet key<br/>X-LLMAO-Host" --> LLMAO
-    LLMAO -- "{host, servers[]}" --> BOX
-    LLMAO -- "probe /health, /v1/models<br/>sample /metrics" --> BOX
+    RENTAL -- "GET /vllm/config<br/>Bearer fleet key<br/>X-LLMAO-Host" --> LLMAO
+    LLMAO -- "{host, servers[]}" --> RENTAL
+    LLMAO -- "probe /health, /v1/models<br/>sample /metrics" --> RENTAL
     LLMAO -- "/model/new when Healthy<br/>/model/delete when down" --> LITELLM
-    LITELLM -- "completions, per-box bearer<br/>public port of :8001 :8002 :8003" --> BOX
+    LITELLM -- "completions, per-rental bearer<br/>public port of :8001 :8002 :8003" --> RENTAL
 ```
 
 llmao is the source of truth for which models exist, how each is served
-(`models.yaml`), which box serves what on which port (`fleet.hosts`), and
-the bearer LiteLLM presents to each vLLM. The box learns all of it from one
-JSON response. There is no long-lived process manager on the box: the
+(`models.yaml`), which rental serves what on which port (`fleet.hosts`), and
+the bearer LiteLLM presents to each vLLM. The rental learns all of it from one
+JSON response. There is no long-lived process manager on the rental: the
 installer writes Supervisor units and exits.
 
 ## The request
@@ -30,11 +30,11 @@ installer writes Supervisor units and exits.
 ```
 GET /vllm/config
 Authorization: Bearer <fleet.key>
-X-LLMAO-Host: <the box's name in fleet.hosts>
+X-LLMAO-Host: <the rental's name in fleet.hosts>
 ```
 
 - **The fleet key** is the gate. `config.yaml` `fleet.key` is one shared
-  secret, baked into every box template and checked present at startup
+  secret, baked into every rental template and checked present at startup
   (`validate_fleet`, like the salt). Missing from the request: 403.
   Wrong, by a constant-time compare: 403.
 - **The host** is the `fleet.hosts` key the answer is built for. When
@@ -48,14 +48,14 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
   leftmost entry is the one a caller can send, so reading it would let a
   rental name itself by an address it does not have. The `X-LLMAO-Host`
   name is a claim, not a proof; the fleet key is what is checked.
-- **Which name a box sends** is the provider's business, set in that
+- **Which name a rental sends** is the provider's business, set in that
   provider's `provision.sh` as `LLMAO_HOST`: the instance id on Vast
   (`CONTAINER_ID`), the pod id on RunPod (`RUNPOD_POD_ID`). `install_set.py`
   knows no provider's names. llmao only matches the name against the keys
   of `fleet.hosts`, and never dials it: a server's address is unknown
   until the provider's listing places it on a machine with an address,
-  since the listing carries both the address and the name a box on that
-  machine sends. A row keyed by an address, as the legacy boxes and those
+  since the listing carries both the address and the name a rental on that
+  machine sends. A row keyed by an address, as the legacy rentals and those
   provisioned before names were ids are, is its own address and still
   places by it. (The RunPod image has not yet run on a real pod.)
 - **Every fetch is recorded by name** (first and last seen, a count; the
@@ -66,11 +66,11 @@ X-LLMAO-Host: <the box's name in fleet.hosts>
   404 and shows on the `/models` attention strip as "fleet key presented
   from a host not in `fleet.hosts`", with Approve.
 - **The last fetch by an intended name is its loading start.** Each probe
-  pass reads the record onto the name's servers: a box that fetched its
+  pass reads the record onto the name's servers: a rental that fetched its
   config and is not yet answering is Loading until `fleet.health_grace_s`
   has passed, then Stalled. The whole state machine is `rental-lifecycle.md`.
 
-Boxes fetch `https://llm.apache.org/vllm/config` with default TLS
+Rentals fetch `https://llm.apache.org/vllm/config` with default TLS
 verification.
 
 ## The response
@@ -95,7 +95,7 @@ verification.
 }
 ```
 
-One entry per vLLM process on the box, joined from the host's `fleet.hosts`
+One entry per vLLM process on the rental, joined from the host's `fleet.hosts`
 rows and the `models.yaml` recipe each names.
 
 - `name`: the process name, the row's third element when it has one, else
@@ -103,7 +103,7 @@ rows and the `models.yaml` recipe each names.
 - `model`: the HF weights id (`model_info.vllm.model` in `models.yaml`).
   `served_model_name` is the name vLLM advertises on `/v1/models`.
 - `port`: the **listen** port, what `vllm serve --port` binds. Never the
-  public port a provider maps it to; the box does not need to know that.
+  public port a provider maps it to; the rental does not need to know that.
 - `api_key`: the bearer this vLLM must require, derived as below. LiteLLM
   presents the same value, and so does llmao's sampler on `/metrics`:
   vLLM's own check covers only `/v1`, so the installer adds `RequireKey`
@@ -112,58 +112,58 @@ rows and the `models.yaml` recipe each names.
   the installer splits.
 - `gpu_memory_utilization`, `max_model_len`, `vram_gb`, `disk_gb`,
   `kv_bytes_per_token`: present only when the recipe sets them.
-  `gpu_memory_utilization` is normally absent; the box divides the card's
+  `gpu_memory_utilization` is normally absent; the rental divides the card's
   memory between its servers from `vram_gb`. `vram_gb` and `disk_gb` are
-  what the box checks before pulling weights.
+  what the rental checks before pulling weights.
 
 Beside `servers`, the payload may carry `hf_token`: the Hugging Face token
-from `fleet.hf_token`, one for the box rather than per server. The installer
+from `fleet.hf_token`, one for the rental rather than per server. The installer
 sets it as `HF_TOKEN` in every program's environment. Absent when llmao has
 none, and an installer that predates the field ignores it.
 
 ## Hosts and ports
 
-A `fleet.hosts` entry is the box's name (above) mapped to rows of
+A `fleet.hosts` entry is the rental's name (above) mapped to rows of
 `[model_name, port]` or `[model_name, port, name]`. The port is the
 container listen port, one of 8001, 8002 or 8003 (`VLLM_LISTEN_PORTS`;
-a box gets at most three), plus the handful of older pairs in
+a rental gets at most three), plus the handful of older pairs in
 `LEGACY_SERVERS`. The optional name lets two processes share one
 `models.yaml` row.
 
 A provider publishes each listen port on some other public port. llmao
 learns that mapping from the provider's listing (Vast's instance ports,
-RunPod's `portMappings`) and uses it for everything that dials the box:
+RunPod's `portMappings`) and uses it for everything that dials the rental:
 the LiteLLM deployment's `api_base`, the health probe, the `/v1/models`
 read and the metrics sampler. A fourth element on a host row, a public
 port written by hand, is deprecated: it loads with a warning and only
-seeds the port until the listing names the box. Without a Vast key
+seeds the port until the listing names the rental. Without a Vast key
 configured the fleet is taken to be local and public equals listen; a
 RunPod-only configuration reads as local too, which is a wart to fix when
 one exists.
 
 llmao owns placement. `models.yaml` says how to serve a model, not where.
-Moving a model between boxes is a config change and a restart of llmao;
-the box templates are identical and never change.
+Moving a model between rentals is a config change and a restart of llmao;
+the rental templates are identical and never change.
 
 ### Three config lifetimes
 
 | lifetime | what | to change it |
 |---|---|---|
-| **baked** | `FLEET_KEY`, `ASFQUART_URL` in the box template | re-provision |
-| **boot** | the assignment: model, port, launch args, `max_model_len` | the box must re-fetch and restart vLLM |
+| **baked** | `FLEET_KEY`, `ASFQUART_URL` in the rental template | re-provision |
+| **boot** | the assignment: model, port, launch args, `max_model_len` | the rental must re-fetch and restart vLLM |
 | **live** | deployments, keys, budgets in LiteLLM | immediate |
 
-Changing `max_model_len` in `models.yaml` does nothing on a box until that
-box restarts vLLM, and nothing compares what llmao intends against what a
-box is running. A config revision reported back by the box was designed
+Changing `max_model_len` in `models.yaml` does nothing on a rental until that
+rental restarts vLLM, and nothing compares what llmao intends against what a
+rental is running. A config revision reported back by the rental was designed
 for that and is not built.
 
 ## The fleet key and the vLLM bearer
 
 Two secrets, with different jobs.
 
-**The fleet key** (`fleet.key`) is the one long-lived secret on a box. One
-value for every box and every provider: that is what keeps the templates
+**The fleet key** (`fleet.key`) is the one long-lived secret on a rental. One
+value for every rental and every provider: that is what keeps the templates
 identical and placement a control-plane matter. It gates `GET
 /vllm/config` and nothing else. It does not mint a vLLM bearer.
 
@@ -174,23 +174,23 @@ HMAC-SHA256(fleet.vllm_api_salt, "llmao.vllm.api_key\n" + host + "\n" + listen_p
 → "sk-vllm-" + urlsafe-base64, no padding
 ```
 
-`llmao/intent.py` is the derivation, run once when the box's
+`llmao/intent.py` is the derivation, run once when the rental's
 `IntendedDeployment` is minted; `bin/llmao-vllm-api-key` computes one by
-hand. The box needs it before `vllm serve` and LiteLLM
-needs the same value at `/model/new` after the box is Healthy, so it has to
+hand. The rental needs it before `vllm serve` and LiteLLM
+needs the same value at `/model/new` after the rental is Healthy, so it has to
 be computable on both sides from the host and listen port alone. llmao
 keeps no key table and never reads the bearer back from LiteLLM, which
 stores it encrypted. The salt lives only in llmao's `config.yaml` (Puppet
-eyaml), never in a box template, and is not rotated in place: a new salt
-means a new bearer on every box, a vLLM restart, and a new `/model/new`
+eyaml), never in a rental template, and is not rotated in place: a new salt
+means a new bearer on every rental, a vLLM restart, and a new `/model/new`
 each. Instance env injection was tried on Vast and does not work, which is
-why the JSON is how a box learns `--api-key`. The pairs in
+why the JSON is how a rental learns `--api-key`. The pairs in
 `LEGACY_SERVERS` predate the salt and still run the shared
 `fleet.selfhost_api_key`; `intent.vllm_api_key` picks the right one at
 mint time, so the payload, the probe and LiteLLM all carry the same key.
 
 **Who can mint.** The salt never leaves llmao, so a third party cannot
-compute a bearer, including a box that copied `FLEET_KEY`. Host and listen
+compute a bearer, including a rental that copied `FLEET_KEY`. Host and listen
 port are still required inputs.
 
 **Leaked host and port map.** A list of fleet hosts and listen ports can
@@ -208,7 +208,7 @@ Both providers run the same installer, `hosting/install_set.py`, fetched
 from this repository at boot. Vast runs it from a stock vLLM container via
 `PROVISIONING_SCRIPT`; RunPod runs it from our own image, whose entrypoint
 is its `provision.sh`. The installer sets `LLMAO_HOST`, fetches the JSON,
-checks `vram_gb` and `disk_gb` against the box, divides the card's memory
+checks `vram_gb` and `disk_gb` against the rental, divides the card's memory
 between the servers, writes one Supervisor program per server, and hands
 over to supervisord, which runs `vllm serve` with the listen port, the
 bearer and the arguments from the JSON. Restarts are Supervisor's. The
@@ -217,17 +217,17 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
 
 ## Security
 
-- The fleet key is the only long-lived secret a box holds before it fetches
+- The fleet key is the only long-lived secret a rental holds before it fetches
   its config; the Hugging Face token, when configured, arrives with it, in
-  files only root reads. The vLLM bearer is derived from a salt the box
+  files only root reads. The vLLM bearer is derived from a salt the rental
   never sees.
-- Membership is the durable gate. A box's standing to fetch its config
+- Membership is the durable gate. A rental's standing to fetch its config
   comes from `fleet.hosts` (in `config.yaml`, survives a restart) or from
   an admin's in-memory approval of a host that presented the fleet key.
   The *Approved* label itself never controls anything, so a recycled
   address cannot gain access from a lost or stale label. A new tenant on
   a previously onboarded address would still not hold the fleet key, and
-  admins know the addresses of the boxes they expect. The residual risks
+  admins know the addresses of the rentals they expect. The residual risks
   are a leaked fleet key and a stale `fleet.hosts` row outliving its
   instance; the unlisted verdict in `rental-lifecycle.md` is the answer to
   the second.

@@ -9,7 +9,7 @@ doc, linked where it comes up; this document is the map between them.
 
 ## The pieces
 
-Two processes are ours, both on one Puppet-managed box, and everything
+Two processes are ours, both on one Puppet-managed host, and everything
 else is outside.
 
 - **The portal**, this repository, an [asfquart](https://github.com/apache/infrastructure-asfquart)
@@ -30,12 +30,12 @@ else is outside.
 - **The prompt log**, one file per UTC day on `/x1`, written by the hook
   inside the proxy and read only by tools at a shell on the host.
   Design: `docs/prompt-logging-design.md`.
-- **The GPU boxes**, virtual machines rented from Vast and RunPod,
+- **The GPU rentals**, virtual machines rented from Vast and RunPod,
   each running one or more vLLM servers. They fetch their configuration
   from the portal at boot and are probed and sampled by it afterwards.
   Protocol: `docs/rental-protocol.md`; states: `docs/rental-lifecycle.md`;
   provisioning: `hosting/README.md`.
-- **Paid providers**, xAI and OpenRouter, behind our own boxes in
+- **Paid providers**, xAI and OpenRouter, behind our own rentals in
   LiteLLM's routing order, for models we do not host or as overflow.
 - **Puppet**, in `apache/infrastructure-p6`, renders the three config
   files from one set of node data: `config.yaml` for the portal,
@@ -48,7 +48,7 @@ flowchart TB
     BROWSER[browser]
     TOOL[client tool<br/>with a PAT]
   end
-  subgraph ourbox [our box, Puppet-managed]
+  subgraph ourbox [our rental, Puppet-managed]
     direction TB
     LLMAO[llmao, the portal<br/>asfquart + runners]
     subgraph proxy [LiteLLM proxy]
@@ -58,7 +58,7 @@ flowchart TB
     end
     PG[(Postgres)]
   end
-  subgraph fleet [GPU boxes we rent]
+  subgraph fleet [GPU rentals]
     VLLM[vLLM servers<br/>/health /v1/models /metrics]
   end
   subgraph outside [outside services]
@@ -72,7 +72,7 @@ flowchart TB
   TOOL -->|OpenAI API + PAT| ROUTER
   ROUTER --> HOOKS
   ROUTER <--> PG
-  ROUTER -->|hosted_vllm, per-box key| VLLM
+  ROUTER -->|hosted_vllm, per-rental key| VLLM
   ROUTER -->|provider key| PAID
   LLMAO -->|admin API, master key:<br/>teams, keys, model/*, spend| ROUTER
   LLMAO <-->|/v1/memory| MEMORY
@@ -127,9 +127,9 @@ log files and the fleet.
 1. A tool sends an OpenAI-style request to the proxy with the PAT. The
    proxy resolves the key to its team, applies the budget, the rate
    limits and the per-key tier, and picks a deployment for the model:
-   our boxes first, a paid provider only behind them.
-2. The request goes to a vLLM server on a box as plain HTTP on the
-   provider's public port, authenticated by that box's own bearer. The
+   our rentals first, a paid provider only behind them.
+2. The request goes to a vLLM server on a rental as plain HTTP on the
+   provider's public port, authenticated by that rental's own bearer. The
    reply streams back through the proxy to the tool. The portal is not
    on this path.
 3. As the reply completes, LiteLLM writes a spend row to Postgres and
@@ -147,15 +147,15 @@ log files and the fleet.
    day's file to add what only the log knows, and stores the result.
    `/admin/capacity` reads those values as "What was asked".
 
-### A box
+### A rental
 
 1. An admin rents a machine on Vast or RunPod with our `provision.sh`
-   as its entrypoint. The box boots, installs vLLM, and asks the portal
+   as its entrypoint. The rental boots, installs vLLM, and asks the portal
    `GET /vllm/config` with the fleet key, naming itself by the
    provider's instance id in `X-LLMAO-Host`. That name is the server's
    identity: the key it is looked up by in `fleet.hosts`, what its
    bearer is derived from, what an approval is granted to.
-2. The portal answers with the servers the box should run, each a
+2. The portal answers with the servers the rental should run, each a
    model recipe from `models.yaml`, a container listen port, and the
    derived key. The public port the provider maps it to is never sent;
    the portal learns it from the provider's listing.
@@ -263,8 +263,8 @@ for how a change reaches history.
 | `llmao/auth.py`, `llmao/seam.py` | identity from the session; authorization per project; the project-scoped team and key operations | `docs/access-control-design.md` |
 | `llmao/proxy/client.py` | `LiteLLMBackend`: the one transport to LiteLLM's admin API and its managers for teams, keys, metering, tiers, requests, skew, notices, memory | |
 | `llmao/proxy/deployments.py` | `DeploymentManager`: what LiteLLM has, and the only writes that change it | `docs/fleet-reconcile-design.md` |
-| `llmao/fleet.py`, `llmao/intent.py`, `llmao/reconcile.py` | the live fleet, what we intend to serve, and the pure joins between intent, boxes and LiteLLM | `docs/fleet-reconcile-design.md` |
-| `llmao/provisioning.py`, `llmao/vllm_client.py`, `llmao/vast_client.py`, `llmao/runpod_client.py`, `llmao/rental.py` | the box's config at boot; what we read from a vLLM process; what each provider reports about our rentals | `docs/rental-protocol.md` |
+| `llmao/fleet.py`, `llmao/intent.py`, `llmao/reconcile.py` | the live fleet, what we intend to serve, and the pure joins between intent, rentals and LiteLLM | `docs/fleet-reconcile-design.md` |
+| `llmao/provisioning.py`, `llmao/vllm_client.py`, `llmao/vast_client.py`, `llmao/runpod_client.py`, `llmao/rental.py` | the rental's config at boot; what we read from a vLLM process; what each provider reports about our rentals | `docs/rental-protocol.md` |
 | `llmao/model_status.py` | the lifecycle verdicts and the model roll-up, as pure functions of a snapshot | `docs/rental-lifecycle.md` |
 | `llmao/models.py` | `models.yaml` | |
 | `llmao/sampler.py`, `llmao/capacity.py`, `llmao/planning.py` | reading `/metrics`; capacity values, demand values, the rollup and the pruner; what the values say, for the page | `docs/capacity-design.md` |
@@ -274,7 +274,7 @@ for how a change reaches history.
 | `llmao/fmt.py` | figures and moments as a person reads them | |
 | `bin/` | the admin tools run at a shell on the host | `bin/README.md` |
 | `analysis/` | the prompt log's reports and content analyses, R&D outside the package; nothing in `llmao/` or `bin/` imports from it | `docs/analysis-design.md`, `analysis/README.md` |
-| `hosting/` | what runs on the boxes: `provision.sh`, the installer, the RunPod image | `hosting/README.md` |
+| `hosting/` | what runs on the rentals: `provision.sh`, the installer, the RunPod image | `hosting/README.md` |
 | `tests/` | the suite, with `MockBackend` and a fake transport; injected only by tests, never a runtime mode | `docs/llmao-harnesses.md` |
 
 ## Vocabulary
@@ -283,8 +283,8 @@ The words the pages and the fleet code share.
 
 - A **model** is what a user names by the `model` parameter
   (`qwen3-8b`). A **deployment** is one place it is served: a vLLM
-  server on a box we rent, or a provider's endpoint. One model may have
-  several deployments at once; LiteLLM's `order` puts our boxes first.
+  server on a rental, or a provider's endpoint. One model may have
+  several deployments at once; LiteLLM's `order` puts our rentals first.
 - **Self-hosted** means we control the virtual machine, not that we own
   the hardware (the ASF owns none). A model carries a vLLM recipe if we
   can run it ourselves and says nothing about where it is served; that
@@ -296,8 +296,8 @@ The words the pages and the fleet code share.
   a Private badge is never shown for a model that could route
   externally, and the wording must not overclaim: a GPU host's operator
   can in principle observe a rented machine's memory.
-- A **rental** is a machine as its provider reports it; a **server** is
-  one vLLM process on it; a **box** is the machine as we talk to it. A
+- A **rental** is a machine as its provider reports it and as we talk
+  to it; a **server** is one vLLM process on it. A
   server's **name** is the provider's id, its **address** is where it is
   dialed, known only once the listing places it.
 - **Usage** is LiteLLM's aggregate, what budgets run on. **Demand** is
@@ -327,8 +327,8 @@ The words the pages and the fleet code share.
   what should run; servers and LiteLLM deployments are derived. A
   deployment config intends but LiteLLM lacks is a visible skew, not a
   mystery, and nothing deletes an orphan unattended.
-- **The proxy-to-box hop is plain HTTP** on the provider's public port,
-  authenticated by the per-box bearer. It is not TLS.
+- **The proxy-to-rental hop is plain HTTP** on the provider's public port,
+  authenticated by the per-rental bearer. It is not TLS.
 - **A service that cannot do what its config says does not start.**
   A missing required setting, or a prompt-log directory that is not
   there, is a startup error, never a quiet default.
@@ -372,7 +372,7 @@ flowchart LR
     MGRS[teams keys metering tiers<br/>requests skew log deployments]
     MEM[MemoryStore]
   end
-  BOXES[vLLM servers]
+  RENTALS[vLLM servers]
   LITELLM[LiteLLM admin API]
   VAST[Vast API]
   RP[RunPod API]
@@ -381,9 +381,9 @@ flowchart LR
   AUTH --> JSON
   PAGES --> MGRS
   PAGES --> FLEET
-  JSON -->|config for a box| FLEET
+  JSON -->|config for a rental| FLEET
   LIFE -->|listing| VAST
-  LIFE -->|probe /health, /v1/models| BOXES
+  LIFE -->|probe /health, /v1/models| RENTALS
   LIFE --> FLEET
   LIFE -->|after_probe: sync_selfhost| MGRS
   RUNPOD --> RP
@@ -391,7 +391,7 @@ flowchart LR
   SKEW -->|/model/info, /health| MGRS
   SKEW --> FLEET
   EDITS --> MGRS
-  SAMPLER -->|/metrics| BOXES
+  SAMPLER -->|/metrics| RENTALS
   SAMPLER --> ROLLUP
   WRITER --> ROLLUP
   WRITER --> MEM

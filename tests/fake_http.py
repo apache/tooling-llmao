@@ -17,7 +17,7 @@
 """Gives an httpx double `stream`, written in terms of its own `get`.
 
 vllm_client reads /v1/models and /metrics with ``client.stream`` so it can
-stop at a byte cap rather than hold whatever a rented box decides to send.
+stop at a byte cap rather than hold whatever a rental decides to send.
 The doubles in these tests answer ``get``, which is the shape that reads
 well in a test, so this bridges the two rather than making every double
 implement streaming:

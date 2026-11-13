@@ -156,13 +156,13 @@ def test_recent_work_merges_every_record_newest_first(monkeypatch):
         created_by="admin2",
     )
     action = edict(
-        at=_stamp(2), by="admin2", what="restrict_project", sentence="Restricted free-tier to our own boxes."
+        at=_stamp(2), by="admin2", what="restrict_project", sentence="Restricted free-tier to our own rentals."
     )
     tier = {"free_tier": edict(by="admin1", at=_stamp(4))}
     work = _recent(monkeypatch, [approved], keys=[service], tiers=tier, actions=[action])
     assert [w.sentence for w in work] == [
         'johndoe used their approval and created one service key, "hadoop CI".',
-        "Restricted free-tier to our own boxes.",
+        "Restricted free-tier to our own rentals.",
         'Created tooling\'s service key "nightly".',
         "Changed the free tier's limits.",
         'Approved johndoe to create one service key, "hadoop CI".',

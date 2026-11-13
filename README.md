@@ -15,10 +15,10 @@ here.
 | **This README** | How to run the software |
 | **[Help](https://llm.apache.org/help)** (`docs/help/`) | How to use the gateway: keys, connecting tools |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Repo structure |
-| [`docs/rental-protocol.md`](docs/rental-protocol.md) | How a GPU box asks for its configuration: the fleet key, the vLLM bearer, the JSON |
-| [`docs/rental-lifecycle.md`](docs/rental-lifecycle.md) | The state machine for a vLLM server on our boxes: states, transitions, what each makes llmao do |
+| [`docs/rental-protocol.md`](docs/rental-protocol.md) | How a GPU rental asks for its configuration: the fleet key, the vLLM bearer, the JSON |
+| [`docs/rental-lifecycle.md`](docs/rental-lifecycle.md) | The state machine for a vLLM server on our rentals: states, transitions, what each makes llmao do |
 | [`docs/fleet-reconcile-design.md`](docs/fleet-reconcile-design.md) | Fleet state kept in step with LiteLLM (working document) |
-| [`docs/capacity-design.md`](docs/capacity-design.md) | Capacity planning: what the boxes did and what was asked of the models, per hour |
+| [`docs/capacity-design.md`](docs/capacity-design.md) | Capacity planning: what the rentals did and what was asked of the models, per hour |
 | [`docs/prompt-logging-design.md`](docs/prompt-logging-design.md) | The prompt log: what is recorded, how, and the figures folded from it |
 | [`docs/analysis-design.md`](docs/analysis-design.md) | What is done with the prompt log, and for whom: clusters, the judge, reporting to admins, projects and people |
 | Infra `p6/modules/llmao` | Production deploy |
@@ -162,11 +162,11 @@ non-interactively; inference PATs are LiteLLM virtual keys.
 
 ### Self-hosted models via vLLM
 
-Self-host models run as **vLLM** processes on GPU boxes (Vast and
+Self-host models run as **vLLM** processes on GPU rentals (Vast and
 RunPod today). LiteLLM stays in front for PATs and project budgets, and is
 also where fleet state lives: a **deployment** `api_base` is the public host
 and port. `GET /vllm/config` still comes from `fleet.hosts` (listen ports)
-plus `models.yaml`. Boxes fetch it with template `FLEET_KEY`.
+plus `models.yaml`. Rentals fetch it with template `FLEET_KEY`.
 
 See [`hosting/README.md`](hosting/README.md),
 [`docs/rental-protocol.md`](docs/rental-protocol.md) and
@@ -177,7 +177,7 @@ running where, and the exact launch commands — is kept out of this repo.
 the vLLM recipe. A LiteLLM **deployment** is one instance of a row (one
 `api_base`) in the proxy database (`store_model_in_db`), created when a
 server is serving and removed when it goes down. Cache and logs live under
-`$DATA_DIRECTORY` on the box (typically `/workspace`), not in the config JSON.
+`$DATA_DIRECTORY` on the rental (typically `/workspace`), not in the config JSON.
 
 **Public ports come from the provider's listing.** Vast's instance listing
 and RunPod's pod listing both carry the container-to-public port mapping, so
@@ -186,7 +186,7 @@ public port the listing maps it to. RunPod reassigns the port on every pod
 recreate, even when the pod lands on the same machine; the next listing read
 follows it. A fourth element on a host row, which used to pin a RunPod port,
 is deprecated: it loads with a warning and only seeds the port until the
-listing names the box.
+listing names the rental.
 
 ---
 
@@ -212,9 +212,9 @@ export VLLM_API_KEY=$(bin/llmao-vllm-api-key --host <ip> --port <listen>)
 ```
 
 `llmao-smoke` exits non-zero on failure, so it works in CI. Run it after any
-change to a model, a box, or the gateway.
+change to a model, a rental, or the gateway.
 
-`llmao-saturate` needs to reach the boxes directly, so it runs on the gateway
+`llmao-saturate` needs to reach the rentals directly, so it runs on the gateway
 host. **Do not run the two together** — smoke queueing behind a saturation
 ramp produces numbers that look like a regression and are not.
 
@@ -237,7 +237,7 @@ litellm.yaml.example     → litellm.yaml (do not include models.yaml; store_mod
 models.yaml              admin definitions (committed; no secrets)
 certs/                   mkcert PEMs + README
 llmao/                   seam, auth, models, fleet, proxy/ (LiteLLM client)
-hosting/install_set.py   GPU-box installer, shared by every provider
+hosting/install_set.py   GPU-rental installer, shared by every provider
 hosting/vast/            provision.sh (Vast on-create)
 hosting/runpod/          Dockerfile + provision.sh (RunPod entrypoint)
 tests/                   offline seam, fleet, hosting installer

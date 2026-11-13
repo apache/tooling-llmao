@@ -92,7 +92,7 @@ def test_the_mint_still_refuses_a_bad_host_or_port():
 def test_host_row_still_reads_the_deprecated_fourth_element():
     """[model, port, name, public_port] loads: a stale row warns, it does not stop llmao.
 
-    The fourth element pinned a RunPod box's public port while RunPod's
+    The fourth element pinned a RunPod rental's public port while RunPod's
     mapping was not read. Both listings carry the port now; the element is
     read so the loader can warn and seed, and it goes away in config.
     """
@@ -120,11 +120,11 @@ def _by_name():
 
 
 def test_a_host_row_is_one_intended_deployment_with_its_recipe_and_bearer():
-    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003, "box-a"]]})
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003, "rental-a"]]})
     (one,) = host_intents(cfg, _by_name(), "::ffff:10.0.0.1")
     assert one.origin == HOSTS
     assert one.self_hosted
-    assert (one.host, one.listen_port, one.name, one.model_name) == ("10.0.0.1", 8003, "box-a", "qwen3-8b")
+    assert (one.host, one.listen_port, one.name, one.model_name) == ("10.0.0.1", 8003, "rental-a", "qwen3-8b")
     assert one.key.url == "http://10.0.0.1:8003"
     assert one.key.model_name == "qwen3-8b"
     assert one.api_key == derive_vllm_api_key("test-vllm-salt", "10.0.0.1", 8003)

@@ -88,7 +88,7 @@ def test_unknown_host():
 
 
 def test_a_runpod_host_is_keyed_by_pod_id():
-    """A RunPod box names itself by pod id, so fleet.hosts holds one as a key."""
+    """A RunPod rental names itself by pod id, so fleet.hosts holds one as a key."""
     cfg = _cfg({"podid0example": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
@@ -255,7 +255,7 @@ def test_a_rental_nobody_intends_is_discovered_not_added():
         return httpx.Response(200)
 
     found = _discover(fleet, serving, vast=[_rental()])
-    # Keyed by the name the box sends, the instance id; the address is only dialed.
+    # Keyed by the name the rental sends, the instance id; the address is only dialed.
     assert list(found) == ["1"]
     assert fleet.finding(found["1"]) == "8001: serving qwen3-8b with our key"
     assert found["1"].rental.host == "198.51.100.8"
@@ -286,7 +286,7 @@ def test_a_rental_nobody_intends_is_discovered_not_added():
 
 
 def test_a_machine_seen_by_both_sources_is_one_unintended_record():
-    """Discovery and the box protocol each know a name; the join is one record with both, asks first."""
+    """Discovery and the rental protocol each know a name; the join is one record with both, asks first."""
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     fleet = _approvable(cfg, load_models(EXAMPLE))
 
@@ -492,9 +492,9 @@ def test_legacy_rentals_need_the_shared_key_and_keep_their_ports():
 
 
 def test_the_bearer_is_minted_once_with_the_intent():
-    """One rule for the bearer a box runs with, applied when the intent is minted.
+    """One rule for the bearer a rental runs with, applied when the intent is minted.
 
-    Shared for LEGACY_SERVERS, derived from the salt for every other box.
+    Shared for LEGACY_SERVERS, derived from the salt for every other rental.
     The server carries it, so the probe asks /v1/models with it and the
     executor registers it (deployment_body reads dep.vllm.api_key); neither
     derives anything.
@@ -512,9 +512,9 @@ def test_the_bearer_is_minted_once_with_the_intent():
 
 
 def test_served_window_is_asked_for_with_the_working_key():
-    """The /v1/models read on the edge into Healthy sends what the box accepts.
+    """The /v1/models read on the edge into Healthy sends what the rental accepts.
 
-    It used to send the derived key to every box, so a legacy box answered
+    It used to send the derived key to every rental, so a legacy rental answered
     401 on every pass and its context window stayed unknown for good.
     """
     cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
@@ -640,7 +640,7 @@ def test_the_payload_requires_the_salt():
 def test_a_fourth_element_warns_seeds_the_port_and_yields_to_the_listing(caplog):
     """A stale pinned row is a warning at load, not a refusal, and the listing wins over it.
 
-    The seed keeps a RunPod box dialable from startup until its listing is
+    The seed keeps a RunPod rental dialable from startup until its listing is
     first read; after that the listing's port is the port, as for Vast.
     """
     cfg = _cfg({"1.2.3.4": [["qwen3-8b", 8003, None, 15601]]})
@@ -670,7 +670,7 @@ def test_a_port_follows_the_provider_map():
 def test_a_rental_serves_the_name_litellm_asks_for():
     """vLLM's default name is the Hugging Face id; LiteLLM asks for ours.
 
-    Three boxes served Qwen/Qwen3-8B while LiteLLM asked for qwen3-8b-bf16:
+    Three rentals served Qwen/Qwen3-8B while LiteLLM asked for qwen3-8b-bf16:
     /health passed and every request was a 404.
     """
     models = load_models(EXAMPLE)

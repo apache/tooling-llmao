@@ -120,7 +120,7 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
 #
 # Totals of the hourly rows, per model, for /admin/capacity.
 #
-# Cost counts each row as one hour of rental: the box is billed for the whole
+# Cost counts each row as one hour of rental: the rental is billed for the whole
 # hour whether or not llmao sampled all of it. Tokens, busy and waiting are
 # what was sampled; busy and waiting are weighted by how much of each hour
 # was. An hour with no row at all (llmao down throughout) is missing from

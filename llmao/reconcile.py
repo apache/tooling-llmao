@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 
 
 def normalize_peer_ip(addr: str | None) -> str:
-    """A host as the box protocol keys it: trimmed, IPv4-mapped IPv6 unwrapped."""
+    """A host as the rental protocol keys it: trimmed, IPv4-mapped IPv6 unwrapped."""
     ip = (addr or "").strip()
     if ip.startswith("::ffff:"):
         ip = ip[7:]
@@ -74,7 +74,7 @@ def norm_base(url: object) -> str:
 class DeploymentKey(NamedTuple):
     """What every source calls one deployment: a canonical base URL and our model name.
 
-    One shape for our boxes and for the providers we buy from. A box's URL is
+    One shape for our rentals and for the providers we buy from. A rental's URL is
     built from its LISTEN port, not the public port a provider maps it to, so a
     port remap keeps the identity. The model name is our public ``model_name``,
     not the provider's model string, so two of our names on one provider model
@@ -92,11 +92,11 @@ class DeploymentKey(NamedTuple):
 
     @property
     def display(self) -> str:
-        """How a page or a log line names the deployment: host:port for a box, the base for a provider.
+        """How a page or a log line names the deployment: host:port for a rental, the base for a provider.
 
         Never a dialable URL. The public port is a fact about reaching the
-        box, not about which deployment it is, and a URL on a page gets cut
-        and pasted. A box's key is its listen URL, so this is host and listen
+        rental, not about which deployment it is, and a URL on a page gets cut
+        and pasted. A rental's key is its listen URL, so this is host and listen
         port. A provider's key is its base, which is already the name to use.
         """
         parsed = urlparse(self.url)
@@ -114,7 +114,7 @@ def deployment_key(
 ) -> DeploymentKey:
     """The one function that builds a key.
 
-    A box: ``host`` and ``listen_port``. A provider: ``api_base``, the base
+    A rental: ``host`` and ``listen_port``. A provider: ``api_base``, the base
     from config.yaml. Either way the URL goes through ``norm_base``, so the
     stored key, the comparison, and the stamp in LiteLLM's ``model_info`` are
     the same bytes.
@@ -131,7 +131,7 @@ def deployment_key(
         return DeploymentKey(url, name)
     peer = normalize_peer_ip(host)
     if not peer or listen_port is None:
-        raise ValueError("deployment_key: host and listen_port are required for a box")
+        raise ValueError("deployment_key: host and listen_port are required for a rental")
     if ":" in peer:
         peer = f"[{peer}]"
     return DeploymentKey(norm_base(f"http://{peer}:{int(listen_port)}"), name)

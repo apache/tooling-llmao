@@ -48,9 +48,9 @@ from llmao.reconcile import DeploymentKey, deployment_key, norm_base
 _LOGGER = logging.getLogger(__name__)
 
 # LiteLLM's routing order: among a model name's healthy deployments it uses
-# only those with the lowest order. Our boxes come first; a provider we pay
+# only those with the lowest order. Our rentals come first; a provider we pay
 # serves only once none of them can -- llmao has removed them, or LiteLLM has
-# put them in cooldown. A busy box still takes the request: busy is not down.
+# put them in cooldown. A busy rental still takes the request: busy is not down.
 # Every deployment carries one, because LiteLLM drops a deployment with no
 # order as soon as any other deployment of the name has one.
 ORDER_SELF_HOSTED = 1
@@ -180,7 +180,7 @@ class LiteLLMHealthReport:
     def verdict(self, base: str, litellm_model: str | None = None) -> LiteLLMHealth | None:
         """What the read said about one base, or one (base, model); None when it said nothing.
 
-        Our boxes match on the base alone: one box serves one model. A
+        Our rentals match on the base alone: one rental serves one model. A
         provider's base is shared by every model on the account, so a
         provider deployment matches on both.
         """
@@ -224,7 +224,7 @@ class DeploymentManager:
     def deployment_body(self, dep) -> dict:
         """POST /model/new payload for one deployment.
 
-        Our boxes: models.yaml litellm_params as the template, plus this
+        Our rentals: models.yaml litellm_params as the template, plus this
         server's api_base and the key its intent was minted with. A provider:
         all of it from config.yaml providers, since models.yaml says nothing
         about who serves a model.
@@ -262,13 +262,13 @@ class DeploymentManager:
             # What LiteLLM reads to decide which teams may use this
             # deployment. The pretend projects are limited to the
             # self-hosted group, so a key with no project can reach our own
-            # boxes and nothing that costs money.
+            # rentals and nothing that costs money.
             info["access_groups"] = sorted(dep.access_groups)
 
         # No price. LiteLLM has no cost-map entry for our own models, so a
         # self-hosted request is recorded at $0.00, and that is kept on
         # purpose: a price here would count against team budgets, and
-        # self-hosted use must never block. What a box really costs is its
+        # self-hosted use must never block. What a rental really costs is its
         # rental, which the capacity report sets against the tokens it served.
 
         return {
@@ -381,16 +381,16 @@ class DeploymentManager:
     async def sync_selfhost(self) -> None:
         """After vLLM probes: register serving backends, drop down ones.
 
-        Down is Unhealthy or Stalled. A box no provider lists any more counts
+        Down is Unhealthy or Stalled. A rental no provider lists any more counts
         too -- the deployment points at nothing -- but ONLY while it is not
         serving, which is the gate remove_refusal states and the Fleet Remove
-        button has always honoured: a box that answers keeps its route.
+        button has always honoured: a rental that answers keeps its route.
 
         e1567cb dropped that condition, and a RunPod pod absent from the pod
         list while it provisioned then had its route deleted and re-added on
-        alternating passes for as long as the gap lasted. The box was serving
+        alternating passes for as long as the gap lasted. The rental was serving
         throughout. Hysteresis on `unlisted` is the other half of that fix;
-        this is the half that says a serving box is never dropped, whatever
+        this is the half that says a serving rental is never dropped, whatever
         a provider's listing claims.
         """
         for dep in self.fleet.deployments:

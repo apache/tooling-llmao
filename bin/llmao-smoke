@@ -14,7 +14,7 @@ to notice when that stops being true.
     #   read -r LLMAO_KEY < ~/.llmao-key && export LLMAO_KEY
     llmao-smoke --direct             # bypass LiteLLM; needs VLLM_API_KEY
 
-Run this after any change to a model, a box, or the gateway. It is the
+Run this after any change to a model, a rental, or the gateway. It is the
 "is it still working" test, not a benchmark -- one request at a time, small
 budgets, under a minute for the whole fleet.
 
@@ -38,7 +38,7 @@ WHAT THE OUTPUT MEANS
 
   tool calling: none
       Either the tool-call parser is wrong for the model, or the model chose
-      not to call. Check which on the box:
+      not to call. Check which on the rental:
         curl -sS http://HOST:PORT/metrics | grep tool_call_parser_invocations
       outcome="no_tool_call" climbing means the parser ran and declined.
 
@@ -172,7 +172,7 @@ def context_window(chat_url: str, key: str) -> int:
 
     Through the gateway LiteLLM does not report max_model_len, so this
     returns 0 there and the caller falls back to a safe default. Direct to a
-    box it gives the real figure.
+    rental it gives the real figure.
     """
     url = chat_url.replace("/chat/completions", "/models")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
@@ -409,7 +409,7 @@ def master_key_from_config(path: pathlib.Path) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="append")
-    ap.add_argument("--direct", action="store_true", help="hit the boxes directly; isolates gateway problems")
+    ap.add_argument("--direct", action="store_true", help="hit the rentals directly; isolates gateway problems")
     ap.add_argument("--config", type=pathlib.Path, default=CONFIG, help="config.yaml for litellm.master_key")
     args = ap.parse_args()
 

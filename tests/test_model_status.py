@@ -147,7 +147,7 @@ def test_grace_expired_without_success_is_stalled():
 
 
 def test_no_config_served_is_awaiting():
-    # No GET /vllm/config since we started: the box has not contacted us.
+    # No GET /vllm/config since we started: the rental has not contacted us.
     view = deployment_status(_self(config_served_at=None, probe_ok=None, last_ok=None, in_litellm=False), CFG, NOW)
     assert view.lifecycle == AWAITING
     assert view.counted is False
@@ -168,7 +168,7 @@ def test_restart_recovery_was_serving_now_down():
 
 
 def test_awaiting_needs_no_probe():
-    # Same as awaiting, but the first probe already failed and the box is not
+    # Same as awaiting, but the first probe already failed and the rental is not
     # in LiteLLM: still Awaiting contact, the failure is expected.
     view = deployment_status(
         _self(config_served_at=None, probe_ok=False, fails=1, last_ok=None, in_litellm=False),
@@ -197,7 +197,7 @@ def test_config_served_within_grace_is_loading():
 
 
 def test_healthy_probe_wins_without_config_served():
-    # The box answers a health probe (e.g. it was booted out-of-band). Healthy
+    # The rental answers a health probe (e.g. it was booted out-of-band). Healthy
     # comes from the probe alone; the missing fetch does not hold it back.
     view = deployment_status(_self(config_served_at=None, in_litellm=False, litellm_healthy=None), CFG, NOW)
     assert view.lifecycle == HEALTHY
@@ -316,7 +316,7 @@ def test_not_reached_with_no_loading_start_runs_out_of_grace():
     assert view(first_probed_at=None).lifecycle == AWAITING
     assert view(first_probed_at=NOW - CFG.health_grace_s + 1).lifecycle == AWAITING
     assert view(first_probed_at=NOW - CFG.health_grace_s).lifecycle == STALLED
-    # A 503 reaches: the box is there, so it is not on this clock. That probe
+    # A 503 reaches: the rental is there, so it is not on this clock. That probe
     # is a loading start, and the grace runs from it instead.
     reached = dict(first_probed_at=NOW - CFG.health_grace_s, reached=True)
     assert view(first_reached_at=NOW - 1, **reached).lifecycle == LOADING
@@ -338,7 +338,7 @@ def test_a_reached_probe_starts_loading_without_a_config_fetch():
     assert view(first_reached_at=NOW - CFG.health_grace_s).lifecycle == STALLED
     assert view(first_reached_at=NOW - 10, config_served_at=NOW - CFG.health_grace_s).lifecycle == STALLED
     assert view(first_reached_at=NOW - CFG.health_grace_s, config_served_at=NOW - 10).lifecycle == STALLED
-    # In LiteLLM too: a box that answers is loading, not down; Stalled deletes it later.
+    # In LiteLLM too: a rental that answers is loading, not down; Stalled deletes it later.
     assert view(first_reached_at=NOW - 10, in_litellm=True).lifecycle == LOADING
 
 

@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# The RunPod box: stock vLLM, plus supervisord and the boot script.
+# The RunPod rental: stock vLLM, plus supervisord and the boot script.
 #
 # Deliberately thin. The installer is NOT here: provision.sh fetches it on
 # first boot, so a change to it needs no new image. Nor are weights; they
@@ -41,7 +41,7 @@ RUN pip install --no-cache-dir --no-deps --require-hashes --target /vendor -r /t
 FROM vllm/vllm-openai:v0.25.1@sha256:e4f88a835143cd22aee2397a26ec6bb80b3a4a6fe0c882bcbc63822904766089
 
 # supervisord restarts a vLLM server that dies without disturbing the others
-# on the box. bin/ holds `supervisord` and `supervisorctl` commands that run
+# on the rental. bin/ holds `supervisord` and `supervisorctl` commands that run
 # the vendored copy, so both work as they would from a package.
 COPY --link --from=vendor /vendor /opt/llmao/vendor
 COPY --link --chmod=0755 bin/ /usr/local/bin/

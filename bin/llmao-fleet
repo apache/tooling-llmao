@@ -16,16 +16,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Every box, whether the gateway knows about it or not.
+"""Every rental, whether the gateway knows about it or not.
 
 One table, three sources joined: what config.yaml intends, what LiteLLM
-routes to, and what the box itself reports. The disagreements are the point
+routes to, and what the rental itself reports. The disagreements are the point
 -- each one is a failure mode that none of the three views shows on its own.
 
     sudo ./llmao-fleet              # on the gateway host; reads config.yaml
-    ./llmao-fleet --no-auth         # skip the per-box key probe (faster)
+    ./llmao-fleet --no-auth         # skip the per-rental key probe (faster)
     ./llmao-fleet --json            # same data, for scripting
-    LLMAO_DIRECT="qwen3-8b=1.2.3.4:18490" ./llmao-fleet    # off-box, reduced
+    LLMAO_DIRECT="qwen3-8b=1.2.3.4:18490" ./llmao-fleet    # off the gateway, reduced
 
 Run it as root on the gateway: config.yaml is 0440 and carries the LiteLLM
 master key, the fleet salt and the shared key, so as root there is nothing
@@ -34,27 +34,27 @@ to export and nothing lands in shell history.
 COLUMNS
 
   src     C = in config.yaml's fleet.hosts, L = LiteLLM has a route
-  rt      how many LiteLLM routes point at this box. >1 is route duplication.
-  vllm    is the box answering /metrics (unauthenticated, so this is true
+  rt      how many LiteLLM routes point at this rental. >1 is route duplication.
+  vllm    is the rental answering /metrics (unauthenticated, so this is true
           even when every key is wrong)
   ctx     served --max-model-len
   kv      KV cache occupancy right now
-  auth    which bearer the box accepts: derived (per-box HMAC), shared
+  auth    which bearer the rental accepts: derived (per-rental HMAC), shared
           (fleet-wide selfhost_api_key), OPEN (no key at all -- a finding),
           401 (neither), or unreachable
   run/wt  requests running / waiting right now
 
 WHY auth IS HERE
 
-/healthz needs no credential. So a box with the wrong --api-key answers
+/healthz needs no credential. So a rental with the wrong --api-key answers
 healthy to llmao and 401 to LiteLLM, forever: LiteLLM cools the deployment
 down, llmao reads that as the backend being down and deletes the route, the
 next probe finds /healthz answering and re-adds it with the same wrong key.
 That is the loop that produced twenty-two routes for three models. This
 column is the only place the mismatch is visible before it starts.
 
-A box showing `shared` is one that was launched with the fleet-wide key as a
-container argument. It works, and it will break the next time the box is
+A rental showing `shared` is one that was launched with the fleet-wide key as a
+container argument. It works, and it will break the next time the rental is
 recreated from config, because llmao registers the derived key.
 """
 
@@ -86,15 +86,15 @@ OK, WARN, BAD = "ok", "!", "X"
 GATEWAY = "https://llm.apache.org/v1"
 
 
-def why_untestable(box, metrics, auth) -> str | None:
-    """Why this box cannot be sent a request. None means it can be.
+def why_untestable(rental, metrics, auth) -> str | None:
+    """Why this rental cannot be sent a request. None means it can be.
 
-    Every box in fleet.hosts gets an answer here, including the ones the UI
+    Every rental in fleet.hosts gets an answer here, including the ones the UI
     calls stalled or awaiting -- "not alive" is a reason, not grounds for
     leaving it out of the run.
     """
-    if box.addr is None:
-        return "no public port: nothing has mapped its listen port, so it is unreachable from outside the box"
+    if rental.addr is None:
+        return "no public port: nothing has mapped its listen port, so it is unreachable from outside the rental"
     if metrics is None:
         return "/metrics does not answer: the tunnel is down or vLLM is not listening"
     if auth in ("401", "403"):
@@ -121,17 +121,17 @@ def main() -> int:
     ap.add_argument(
         "--test",
         action="store_true",
-        help="also send one 8-token completion to every box directly, and one per model through the gateway",
+        help="also send one 8-token completion to every rental directly, and one per model through the gateway",
     )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--timeout", type=float, default=5.0)
-    ap.add_argument("--test-timeout", type=float, default=120.0, help="--test only; a cold box can be slow")
+    ap.add_argument("--test-timeout", type=float, default=120.0, help="--test only; a cold rental can be slow")
     args = ap.parse_args()
 
-    boxes, meta = fleet()
-    if not boxes:
+    rentals, meta = fleet()
+    if not rentals:
         print(
-            "no boxes found.\n"
+            "no rentals found.\n"
             "  on the gateway host: sudo ./llmao-fleet  (reads config.yaml)\n"
             '  elsewhere:           export LLMAO_DIRECT="model=host:port,..."',
             file=sys.stderr,
@@ -140,14 +140,14 @@ def main() -> int:
 
     rows = []
     keys: dict[tuple, str | None] = {}
-    for b in boxes:
+    for b in rentals:
         m = scrape(b.addr, args.timeout) if b.addr else None
         auth, key = (None, None)
         if not args.no_auth:
             auth, key = probe_auth(b, meta.get("salt"), meta.get("shared"), args.timeout)
         # /v1/models is authenticated, so this needs the key the probe found.
         # With --no-auth there is no key and ctx stays blank; that is the
-        # trade for not touching the boxes with credentials.
+        # trade for not touching the rentals with credentials.
         served, ctx = served_model(b.addr, key, args.timeout) if b.addr else (None, None)
         rows.append((b, m, served, ctx, auth))
         keys[b.key()] = key
@@ -182,12 +182,12 @@ def main() -> int:
 
     print(
         f"source: {meta['source']}   "
-        f"{len(boxes)} box(es), {meta['routes']} route(s), "
+        f"{len(rentals)} rental(es), {meta['routes']} route(s), "
         f"{len(meta['models']) or '?'} model(s) in models.yaml\n"
     )
 
     hdr = (
-        f"{'model':14} {'label':14} {'box':22} {'serves-as':20} {'src':>4} {'rt':>3} "
+        f"{'model':14} {'label':14} {'rental':22} {'serves-as':20} {'src':>4} {'rt':>3} "
         f"{'vllm':>5} {'ctx':>8} {'kv':>5} {'auth':>11} {'run':>4} {'wt':>3} "
         f"{'in':>6} {'out':>6}"
     )
@@ -220,7 +220,7 @@ def main() -> int:
     # ----------------------------------------------------------- real traffic
     test_fails: list[str] = []
     if args.test:
-        print("\nDIRECT -- one 8-token completion per box, bypassing LiteLLM")
+        print("\nDIRECT -- one 8-token completion per rental, bypassing LiteLLM")
         for b, m, served, _c, auth in rows:
             label = f"{b.model}/{b.label} {b.addr or f'{b.host}:{b.listen_port}'}"
             reason = why_untestable(b, m, auth)
@@ -270,7 +270,7 @@ def main() -> int:
         live = sum(1 for b, _, _ in group if b.in_config)
         if total > live and live:
             problems.append(
-                f"{WARN} {model}: {total} routes for {live} configured box(es). "
+                f"{WARN} {model}: {total} routes for {live} configured rental(es). "
                 f"LiteLLM balances across all of them, so a bad one fails "
                 f"intermittently rather than outright."
             )
@@ -304,7 +304,7 @@ def main() -> int:
             )
         if auth == "OPEN":
             problems.append(f"{BAD} {b.addr} accepts requests with NO bearer at all.")
-        # "no keys" is not a verdict about the box -- see the note below.
+        # "no keys" is not a verdict about the rental -- see the note below.
         if auth not in (None, "derived", "shared", "no port", "unreachable", "no keys") and m is not None:
             # Name what was actually tried. "both keys" would be a lie when
             # only one of the two credentials was available.
@@ -322,15 +322,15 @@ def main() -> int:
     print()
     if any(a == "no keys" for _b, _m, _s, _c, a in rows):
         print(
-            "auth: not tested, so the column says nothing about these boxes. The\n"
-            "  only request sent was unauthenticated, and a correctly keyed box\n"
+            "auth: not tested, so the column says nothing about these rentals. The\n"
+            "  only request sent was unauthenticated, and a correctly keyed rental\n"
             "  answers that with the same 401 as a mis-keyed one.\n"
             "\n"
             "  sudo ./llmao-fleet on the gateway host tests both keys properly.\n"
             "  From here:\n"
             "    export VLLM_API_KEY=...     tests the shared key\n"
             "    export LLMAO_VLLM_SALT=...  tests the derived keys, but only for\n"
-            "                                boxes whose CONTAINER listen port is\n"
+            "                                rentals whose CONTAINER listen port is\n"
             "                                known -- the HMAC covers host and\n"
             "                                listen port, and a public address\n"
             "                                cannot imply it. Add it as a third\n"

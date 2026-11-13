@@ -145,9 +145,9 @@ def config_for_host(
     by_name = {str(model.model_name): model for model in models}
     servers = [server_json(i) for i in host_intents(cfg, by_name, host, approved=approved)]
     payload = edict(host=host, servers=servers)
-    # One account credential for the whole box, not a per-server fact: the
+    # One account credential for the whole rental, not a per-server fact: the
     # installer puts it in every program's environment. Absent when unset,
-    # so an older installer and a box without one behave as before.
+    # so an older installer and a rental without one behave as before.
     token = str(cfg.fleet.get("hf_token") or "").strip()
     if token:
         payload.hf_token = token

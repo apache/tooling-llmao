@@ -140,7 +140,7 @@ def test_down_after_grace():
 
 def test_serving_needs_consecutive_fails():
     s = _server()
-    s.config_served_at = 0.0  # box has already fetched its config
+    s.config_served_at = 0.0  # rental has already fetched its config
     _record(s, True, now=1.0, grace_s=1800, fail_threshold=3)
     _record(s, False, now=2.0, grace_s=1800, fail_threshold=3)
     _record(s, False, now=3.0, grace_s=1800, fail_threshold=3)
@@ -425,7 +425,7 @@ def test_grace_boundary_is_exclusive():
     before vLLM listens. The comparison is `(now - config_served_at) < grace_s`,
     so 1799 is still Loading and 1800 is Stalled. Pinned because moving to <= would
     shave a second off a window that was chosen deliberately, and the failure
-    would look like a flaky box rather than an off-by-one.
+    would look like a flaky rental rather than an off-by-one.
     """
     s = _server()
     s.config_served_at = 0.0
@@ -458,14 +458,14 @@ def test_recovers_from_down_on_a_single_probe():
 
 
 def test_flapping_settles_rather_than_oscillating_per_probe():
-    """A box that alternates ok/fail stays SERVING.
+    """A rental that alternates ok/fail stays SERVING.
 
-    Each success resets fails to 0, so an alternating box never accumulates
+    Each success resets fails to 0, so an alternating rental never accumulates
     the three consecutive failures needed to go down. It reports SERVING
     throughout.
 
     That is the intended behaviour of a consecutive-fail threshold, but it
-    means a box failing half its probes looks entirely healthy -- worth
+    means a rental failing half its probes looks entirely healthy -- worth
     knowing before trusting this signal to gate route registration.
     """
     s = _server()
@@ -485,7 +485,7 @@ def test_down_stays_down_while_failing():
     """Once DOWN, further failures do not reset the grace window.
 
     The grace branch is only reached when state is not SERVING, and by then
-    now - config_served_at is far past grace_s -- so a long-dead box cannot
+    now - config_served_at is far past grace_s -- so a long-dead rental cannot
     slip back into Loading and look like it is merely booting.
     """
     s = _server()
@@ -529,7 +529,7 @@ def test_parse_max_model_len():
 def test_oversized_flags_the_hang_condition():
     """A served window above the measured cache makes vLLM hang, not error.
 
-    The A100 measures ~856k tokens of KV cache, so 131072 is safe. A box whose
+    The A100 measures ~856k tokens of KV cache, so 131072 is safe. A rental whose
     cache came out smaller -- a co-resident model, a different card than
     ordered -- would serve the same config and stall on a long request.
     """
@@ -845,7 +845,7 @@ def test_a_flooding_rental_is_cut_off_rather_than_held():
 
     client = _FloodingClient()
     served = asyncio.run(fetch_served_models(client, "http://10.0.0.1:8001", "sk-x"))
-    # Never raises, and the window stays unknown rather than the box being trusted.
+    # Never raises, and the window stays unknown rather than the rental being trusted.
     assert served.max_model_len is None
     assert client.bytes_offered <= READ_CAP_BYTES + 65536
 

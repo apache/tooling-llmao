@@ -5,8 +5,8 @@ Status: thinking, not decided. Nothing here is built.
 The question: some projects, or some people, should reach particular models
 or deployments, and others should not. Some models should be invisible
 except to the people allowed them; others visible to all but usable only
-on request. And where a model is served both from our boxes and from a
-provider we pay, who gets which matters: our boxes mean waiting in line
+on request. And where a model is served both from our rentals and from a
+provider we pay, who gets which matters: our rentals mean waiting in line
 with everyone else, the provider means no wait, at a price.
 
 ## How access works today
@@ -105,7 +105,7 @@ teams and keys:
 
 | Group | Holds | Granted to |
 |---|---|---|
-| `llmao:self-hosted` | every open model on our boxes | everyone, free tier included |
+| `llmao:self-hosted` | every open model on our rentals | everyone, free tier included |
 | `llmao:paid` | open models served by a provider we pay | real projects (or only some: see question 3) |
 | `llmao:<name>` | a set defined for a purpose, e.g. a research preview, or paid models at will | the projects and people named for it |
 
@@ -158,7 +158,7 @@ not the deployment.
 name that nothing else can make:
 
 - **Paid or ours.** Provider deployments carry `paid`. A team that may
-  never spend carries `!paid`: it lands on our boxes, and when they are
+  never spend carries `!paid`: it lands on our rentals, and when they are
   all down it gets an error instead of a bill. A team that may spend
   carries nothing and falls back to the provider as now. A key or team
   allowed to skip the queue carries `paid` and goes to the provider
@@ -172,14 +172,14 @@ name that nothing else can make:
 - **A canary.** A new vLLM build or a new rental under a shared name,
   tagged `canary` while the established deployments carry `default`:
   nobody reaches it except a request tagged `canary`, which is what the
-  smoke test and a load run would send. Today a new box takes its share
+  smoke test and a load run would send. Today a new rental takes its share
   of everyone's traffic from the moment it is registered.
-- **Dedicated capacity.** A box rented for one project, tagged with the
+- **Dedicated capacity.** A rental dedicated to one project, tagged with the
   project, the team's metadata carrying the same tag: the project's
-  requests go to its box and nobody else's do. With `allow_fail_open` on
-  that box they fall back to the shared pool when it is down; without, they
+  requests go to its rental and nobody else's do. With `allow_fail_open` on
+  that rental they fall back to the shared pool when it is down; without, they
   wait. The fast-GPU-for-some case is the same shape with `fast`.
-- **Background work on its own box.** A deployment tagged `batch` for the
+- **Background work on its own rental.** A deployment tagged `batch` for the
   judge, benchmarks and anything that should queue behind people, which
   issue #72 wanted from vLLM's priority scheduler. Tags give a separate
   line rather than a priority within one, which is the safer of the two:
@@ -195,7 +195,7 @@ a policy.
 
 **What tags cannot do.** Deny or hide a name: a team under `!paid` still
 sees the name and may call it, which is right, since it is served on our
-boxes. Anything about who may call a model stays with groups and the team
+rentals. Anything about who may call a model stays with groups and the team
 lists. And tags carry nothing in `/v1/models` or any listing, so what a
 request will get is not discoverable from the client; the /models page
 has to say it.
@@ -301,11 +301,11 @@ project's own team.
 
 ## Self-hosted or paid: which deployment someone gets
 
-The same model can be served from our boxes and bought from a provider
-(gemma4-26b on our boxes and through OpenRouter). Today both are
-deployments of one name, our boxes first by `order`, the provider only
+The same model can be served from our rentals and bought from a provider
+(gemma4-26b on our rentals and through OpenRouter). Today both are
+deployments of one name, our rentals first by `order`, the provider only
 when ours cannot answer. That is right for most people: they wait in line
-with everyone else on our boxes.
+with everyone else on our rentals.
 
 Some should be able to use the paid one at will, without waiting, and
 some should never reach it at all. One name does both, with the provider
@@ -313,8 +313,8 @@ deployments tagged `paid`:
 
 | team or key carries | gets |
 |---|---|
-| `!paid` | our boxes only; an error when none can answer |
-| nothing | our boxes, the provider when they cannot answer (as now) |
+| `!paid` | our rentals only; an error when none can answer |
+| nothing | our rentals, the provider when they cannot answer (as now) |
 | `paid` | the provider first |
 
 The pretend projects carry `!paid` from the start, which is the group's
@@ -333,7 +333,7 @@ which an earlier draft proposed, is not needed.
 2. **Who grants?** Site admins only, or may a PMC grant its own project
    access to a group, or `paid` to itself?
 3. **Paid models:** today any real project can call them, and anyone
-   falls back to a provider when our boxes cannot answer. Does a real
+   falls back to a provider when our rentals cannot answer. Does a real
    project start at "nothing" (fallback allowed) or at `!paid`, and is
    `paid` at will granted per project with a budget in mind? LiteLLM
    also keeps spend per tag (`tag_max_budget_check`), which may be the

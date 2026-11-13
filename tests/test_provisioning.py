@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""provisioning.py: the payload a box installs, rendered from its IntendedDeployments."""
+"""provisioning.py: the payload a rental installs, rendered from its IntendedDeployments."""
 
 import asyncio
 import pathlib
@@ -83,9 +83,9 @@ def test_server_json_is_the_listen_port_and_only_the_declared_requirements():
         litellm_params=edict(model="hosted_vllm/m"),
         model_info=edict(vllm=edict(model="org/m", args=["--x"], gpu_memory_utilization=0.5)),
     )
-    body = server_json(vllm_intent(cfg, "10.0.0.1", 8001, "box-m", model, origin=HOSTS, public_port=41234))
+    body = server_json(vllm_intent(cfg, "10.0.0.1", 8001, "rental-m", model, origin=HOSTS, public_port=41234))
     assert body == edict(
-        name="box-m",
+        name="rental-m",
         model="org/m",
         served_model_name="m",
         host="10.0.0.1",
@@ -99,10 +99,10 @@ def test_server_json_is_the_listen_port_and_only_the_declared_requirements():
 
 
 def test_config_for_host_renders_every_row():
-    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003, "box-q"], ["gemma4-26b", 8001]]})
+    cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003, "rental-q"], ["gemma4-26b", 8001]]})
     payload = config_for_host("10.0.0.1", models=list(_by_name().values()), cfg=cfg)
     assert payload.host == "10.0.0.1"
-    assert [(s.name, s.port) for s in payload.servers] == [("box-q", 8003), ("gemma4-26b", 8001)]
+    assert [(s.name, s.port) for s in payload.servers] == [("rental-q", 8003), ("gemma4-26b", 8001)]
     assert payload.servers[0].model == "Qwen/Qwen3-8B-FP8"
     assert EXAMPLE.is_file()
     # The example config sets no token, so the payload carries none.

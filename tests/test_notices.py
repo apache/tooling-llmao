@@ -185,7 +185,7 @@ def test_a_pretend_project_that_has_been_widened_becomes_work_needed():
     _run(backend.check_outside_edits())
     assert list(store) == [f"llmao:skew:project:{PROJECT_FREE_TIER}"]
     (row,) = _run(backend.skew.open())
-    assert row.what == "The free tier project allows any model. Its keys should reach only our own boxes."
+    assert row.what == "The free tier project allows any model. Its keys should reach only our own rentals."
 
 
 def test_it_says_what_the_project_was_opened_to():

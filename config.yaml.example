@@ -57,12 +57,12 @@ entitlements:
   # Applies to every key unless a tier below overrides it.
   default:
     # Requests and tokens per minute. tpm is the one that bites on a
-    # self-hosted box -- a single 40k-token audit call is most of a minute's
+    # self-hosted rental -- a single 40k-token audit call is most of a minute's
     # budget at 60k.
     rpm_limit: 60
     tpm_limit: 60000
     # Concurrent in-flight requests. The binding constraint at peak: the
-    # weakest box in the fleet admits about four before queueing, so a single
+    # weakest rental in the fleet admits about four before queueing, so a single
     # key holding eight is already more than its share.
     max_parallel_requests: 4
 
@@ -106,18 +106,18 @@ entitlements:
 
 # Capacity planning (docs/capacity-design.md). Both required.
 #
-# Seconds between readings of every self-hosted box's /metrics. Never off:
+# Seconds between readings of every self-hosted rental's /metrics. Never off:
 # queue depth exists only while it is happening -- the spend log records
 # what RAN, not what WAITED -- so an unsampled stretch is lost for good.
-# One HTTP GET per box per interval. (Formerly contention_interval_s, still
+# One HTTP GET per rental per interval. (Formerly contention_interval_s, still
 # read with a warning.)
 sample_interval_s: 15
 # Days of hourly rows kept in LiteLLM's memory store. 90 days at twenty
-# boxes is about 43,000 rows.
+# rentals is about 43,000 rows.
 capacity_retention_days: 90
 
 # Days of admin actions kept for /admin's Recent work (restricting a project,
-# approving or flagging a box, adding or dropping a deployment, revoking a
+# approving or flagging a rental, adding or dropping a deployment, revoking a
 # key). Required. Not an audit trail: pruned daily past this.
 action_retention_days: 90
 
@@ -173,12 +173,12 @@ site_admins: []
 # Not included by litellm.yaml. Relative to app root.
 models_path: models.yaml
 
-# Accounts we pay. vast and runpod are GPU hosts: they rent the boxes, and
+# Accounts we pay. vast and runpod are GPU hosts: they rent the machines, and
 # take only api_key (llmao reads their APIs for port mappings and prices).
 # Any other name is a model provider. Each line under its `models` is one
 # deployment: a model_name from models.yaml, and the provider's model as
 # LiteLLM names it. The same model can be listed under several providers, and
-# can run on our own boxes (fleet.hosts) as well. Our boxes always come first:
+# can run on our own rentals (fleet.hosts) as well. Our rentals always come first:
 # LiteLLM sends a request to a provider only when none of ours can take it.
 #
 # The keys live here and nowhere else. A developer with no hosting account can
@@ -200,35 +200,35 @@ models_path: models.yaml
 #       grok-4: openrouter/x-ai/grok-4
 #       gemma4-26b: openrouter/google/gemma-4-26b-a4b-it
 
-# Shared secret GPU boxes present as Authorization: Bearer when fetching
+# Shared secret GPU rentals present as Authorization: Bearer when fetching
 # GET /vllm/config. Bake FLEET_KEY into the Vast template (not instance env).
 # Required; a missing or CHANGE_ME value fails the fleet build at startup.
-# A box names itself with X-LLMAO-Host (what its provider's provision.sh
+# A rental names itself with X-LLMAO-Host (what its provider's provision.sh
 # sets), else the leftmost X-Forwarded-For, else the peer; that name must be
-# a fleet.hosts key. The provider listings place a server on its box by
+# a fleet.hosts key. The provider listings place a server on its rental by
 # address, then by the instance or pod it was on before.
 fleet:
   key: CHANGE_ME_FLEET_KEY
   # HMAC secret for each vLLM --api-key. This file and Puppet eyaml only.
   # Never the Vast template. GET /vllm/config returns sk-vllm-… from this
   # salt plus host and listen port. A missing attribute fails fleet build.
-  # Changing it invalidates every box bearer. See docs/rental-protocol.md.
+  # Changing it invalidates every rental bearer. See docs/rental-protocol.md.
   vllm_api_salt: CHANGE_ME_VLLM_API_SALT
   # Shared bearer for LEGACY_SERVERS only. validate_fleet requires a real
   # value when one of those hosts is configured. Drop it with the last pair.
   selfhost_api_key: CHANGE_ME_SELFHOST_API_KEY
-  # Optional. A Hugging Face read-only token, handed to every box in
+  # Optional. A Hugging Face read-only token, handed to every rental in
   # GET /vllm/config and put in each vLLM's environment as HF_TOKEN. Lifts
   # the rate limit on unauthenticated downloads and opens gated weights; it
   # does not make the pull itself faster. This file and Puppet eyaml only.
   # hf_token: hf_...
   # Seconds between vLLM GET /health probes, on the public port (/health takes
-  # no key; /v1/models with the box's key is asked when it passes).
+  # no key; /v1/models with the rental's key is asked when it passes).
   health_interval_s: 45
   # Per-probe HTTP timeout for vLLM /health.
   health_timeout_s: 3
-  # The loading window: a box that fetched its config reads Loading this long
-  # before never-up is Stalled; a box never reached reads Awaiting this long
+  # The loading window: a rental that fetched its config reads Loading this long
+  # before never-up is Stalled; a rental never reached reads Awaiting this long
   # after its first probe before it is Stalled. See docs/rental-lifecycle.md.
   health_grace_s: 1800
   # Consecutive failed probes before a previously healthy server is marked down.
@@ -237,14 +237,14 @@ fleet:
   skew_interval_s: 180
   # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
   litellm_health_interval_s: 14400
-  # Host row port is the container listen port (vLLM --port / box JSON).
+  # Host row port is the container listen port (vLLM --port / rental JSON).
   # Without providers.vast, the public port equals the listen port (local).
   # fleet.hosts is loaded once at process start. Standalone (runx) watches
   # config.yaml and reloads. Production: Puppet restart after a change.
   # Production: set providers.vast.api_key and providers.runpod.api_key
-  # (gitignored config.yaml). The lifecycle reads each box's public ports
+  # (gitignored config.yaml). The lifecycle reads each rental's public ports
   # from its provider's listing (Vast HostPorts, RunPod portMappings); never
-  # send those to the box. fleet.vast.api_key still works, with a
+  # send those to the rental. fleet.vast.api_key still works, with a
   # deprecation warning at startup. A fourth element on a row, a public
   # port by hand, is deprecated: it warns and only seeds the port.
   hosts:

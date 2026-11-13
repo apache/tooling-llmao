@@ -58,7 +58,7 @@ echo "$*" > "$STUB_DIR/supervisord.args"
 
 
 @pytest.fixture
-def box(tmp_path):
+def rental(tmp_path):
     if shutil.which("bash") is None:
         pytest.skip("no bash")
     stubs = tmp_path / "stubs"
@@ -90,8 +90,8 @@ def _calls(stubs):
     return int((stubs / "curl.calls").read_text()) if (stubs / "curl.calls").exists() else 0
 
 
-def test_first_boot_provisions_and_execs_supervisord(box):
-    boot, stubs, workspace, tmp_path = box
+def test_first_boot_provisions_and_execs_supervisord(rental):
+    boot, stubs, workspace, tmp_path = rental
     result = boot()
     assert result.returncode == 0, result.stderr
     state = workspace / ".llmao"
@@ -105,8 +105,8 @@ def test_first_boot_provisions_and_execs_supervisord(box):
     assert f"file={tmp_path / 'run'}/supervisor.sock" in text
 
 
-def test_provisioned_boot_fetches_nothing(box):
-    boot, stubs, workspace, _ = box
+def test_provisioned_boot_fetches_nothing(rental):
+    boot, stubs, workspace, _ = rental
     assert boot().returncode == 0
     assert _calls(stubs) == 1
     result = boot()
@@ -117,8 +117,8 @@ def test_provisioned_boot_fetches_nothing(box):
     assert (workspace / ".llmao" / "conf.d" / "vllm-model-a.conf").exists()
 
 
-def test_retries_until_the_fetch_succeeds(box):
-    boot, stubs, workspace, _ = box
+def test_retries_until_the_fetch_succeeds(rental):
+    boot, stubs, workspace, _ = rental
     result = boot(STUB_CURL_FAILS="2")
     assert result.returncode == 0, result.stderr
     assert _calls(stubs) == 3
@@ -126,8 +126,8 @@ def test_retries_until_the_fetch_succeeds(box):
     assert (workspace / ".llmao" / "provisioned").exists()
 
 
-def test_a_failing_installer_is_retried_and_leaves_no_marker_until_it_works(box):
-    boot, stubs, workspace, _ = box
+def test_a_failing_installer_is_retried_and_leaves_no_marker_until_it_works(rental):
+    boot, stubs, workspace, _ = rental
     good = (stubs / "installer.py").read_text()
     # Fails on its first run, as /vllm/config does before the fleet.hosts row exists.
     (stubs / "installer.py").write_text(
@@ -143,8 +143,8 @@ def test_a_failing_installer_is_retried_and_leaves_no_marker_until_it_works(box)
     assert (workspace / ".llmao" / "provisioned").exists()
 
 
-def test_no_pod_id_refuses_to_start(box):
-    boot, stubs, workspace, _ = box
+def test_no_pod_id_refuses_to_start(rental):
+    boot, stubs, workspace, _ = rental
     result = boot(RUNPOD_POD_ID="")
     assert result.returncode != 0
     assert "RUNPOD_POD_ID" in result.stderr

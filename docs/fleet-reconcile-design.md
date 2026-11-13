@@ -17,7 +17,7 @@ reader that produces it, and nothing below `fleet.py` imports `fleet.py`:
 | Source | Snapshot | Module |
 |---|---|---|
 | config.yaml rows, approvals, provider lines | `IntendedDeployment` | `intent.py` |
-| the box's `GET /vllm/config` | `ConfigFetch` | `provisioning.py` |
+| the rental's `GET /vllm/config` | `ConfigFetch` | `provisioning.py` |
 | the providers' rentals | `Rental`, `ProviderRentals` | `rental.py` |
 | the probe of one address | `VllmProbe` | `vllm_client.py` |
 | LiteLLM's deployments | `LiteLLMDeployment`, `LiteLLMDeployments` | `proxy/deployments.py` |
@@ -59,7 +59,7 @@ Out of it come:
 - the **badges**, the skew list the pages show;
 - the **needs**, what the next probe should fetch;
 - the fine **state**, display only: Awaiting, Loading, Healthy, Unhealthy,
-  Stalled, Rejected, Foreign for a box; Configured, Healthy, Unhealthy for
+  Stalled, Rejected, Foreign for a rental; Configured, Healthy, Unhealthy for
   a provider line.
 
 Adding a fine state changes `Deployment` and nothing else.
@@ -109,7 +109,7 @@ pieces, and only the first is a table:
    `api_base` when present and it differs from the dialable URL; delete
    the extra copies under one key. The policy table marks each kind auto
    or human. "Unlisted and not Healthy" stops being a delete gate: once
-   `last_ok` is set a box that is not Healthy is Unhealthy, and the Down
+   `last_ok` is set a rental that is not Healthy is Unhealthy, and the Down
    verdict already deletes that. The plan is the next step's work
    (`reconcile.py`); this step builds what it reads.
 
@@ -121,7 +121,7 @@ only a log line.
 ### The transition matrix
 
 Rows are where the deployment was. Columns are what this pass's probe
-said about the box, and there are only four things it can say:
+said about the rental, and there are only four things it can say:
 
 - **serving**: `/health` answered 200 and `/v1/models` accepted our key,
   or was not asked and the last verdict stands as accepted;
@@ -152,14 +152,14 @@ start existed yet, the never-reached kind, and the grace runs from the
 fetch. A later fetch does not move the start: the start is the earlier
 of the two.
 
-**The two left columns are the same from everywhere.** A box that
+**The two left columns are the same from everywhere.** A rental that
 answers 200 and takes our key is Healthy, whatever it was a pass ago: a
-box found already up after a restart, one that just finished loading,
+rental found already up after a restart, one that just finished loading,
 one that was down and came back, one whose key an admin just fixed. A
-box that answers 200 and refuses our key is Rejected from everywhere but
+rental that answers 200 and refuses our key is Rejected from everywhere but
 the two refusal states, and it is deleted from LiteLLM on that first
 401, because every request through the deployment would fail. Rejected
-has no clock: it ends when the key is accepted, when the box stops
+has no clock: it ends when the key is accepted, when the rental stops
 answering, or by becoming Foreign. That needs the refusal to have run
 `REJECTED_PASSES` passes *and* the host to be unlisted, because Foreign
 means something else is serving at an address that was ours, and a host
@@ -168,18 +168,18 @@ debounce against vLLM restarting before its key is in place, about two
 minutes; the time an admin needs to fix the key comes from Rejected
 having no clock, not from the count.
 
-**All the history is in the two right columns**, because a box that is
+**All the history is in the two right columns**, because a rental that is
 not serving means different things depending on what it was doing:
 
 - From *Awaiting*, nothing has been heard yet, and this is the only row
   that has to cope with a process restart, since after one every
-  deployment begins here whatever its box is doing. A 503 is the box
+  deployment begins here whatever its rental is doing. A 503 is the rental
   coming up: the loading start is set, and the grace runs from it.
   Silence is three different things. If LiteLLM has the deployment, the
-  box was serving before we restarted and is down now: Unhealthy, and a
+  rental was serving before we restarted and is down now: Unhealthy, and a
   delete, not patience. If nothing has ever answered and `grace` has
   passed since the first attempt, it is a rental that died: Stalled,
-  which is what lets the unlisted sentence show. Otherwise it is a box
+  which is what lets the unlisted sentence show. Otherwise it is a rental
   still pulling its image, and it must not read Stalled five minutes
   after an admin created it.
 - From *Loading*, there is a clock and nothing else: `grace` from the
@@ -190,21 +190,21 @@ not serving means different things depending on what it was doing:
   again, so its 503s have to count as a start or it would read Awaiting
   for ever.
 - From *Healthy*, the hold-over: one failed probe does not take a
-  serving box out of LiteLLM, `threshold` consecutive failures do. This
-  is the row that makes a listing gap harmless, since the box keeps
+  serving rental out of LiteLLM, `threshold` consecutive failures do. This
+  is the row that makes a listing gap harmless, since the rental keeps
   answering and the listings have nothing to do with it.
 - *Unhealthy* and *Stalled* are the two kinds of down and differ only in
   how they were reached: Unhealthy was serving once, Stalled never was.
   Unhealthy leaves only on a 200. Stalled leaves on a 200, and also the
-  first time the box is heard from when no loading start existed yet: a
+  first time the rental is heard from when no loading start existed yet: a
   reached probe, or a config fetch. The grace runs from that moment, so
   the row reads Loading. A 503 after the window already ran does not
-  restart it. The box had its grace.
+  restart it. The rental had its grace.
 - *Rejected* and *Foreign* under silence behave as Healthy does, with the
   hold-over and then Unhealthy. This is a change from today: a Rejected
-  box that misses one probe currently reads Healthy, because the
+  rental that misses one probe currently reads Healthy, because the
   hold-over is computed from `last_ok` and `fails` without knowing the
-  box was Rejected (quirk 1 in `rental-lifecycle.md`). With the previous
+  rental was Rejected (quirk 1 in `rental-lifecycle.md`). With the previous
   state in the row it stays Rejected under the threshold and goes
   Unhealthy at it. That is the one behaviour the matrix changes;
   everything else reproduces `self_hosted_lifecycle`, and the fixtures
@@ -221,7 +221,7 @@ and last accepted"), `rejected_passes`, and the observed window.
 `in_litellm` is not history and not a probe argument: the Deployment
 holds its own LiteLLM rows and reads them in the Awaiting row. The one
 thing that clears history is a new rental at the same key, which is a
-new box to be checked afresh.
+new rental to be checked afresh.
 
 **A provider line** has no probe. Its machine is three states and one
 source: Configured until LiteLLM's `/health` has spoken, then Healthy or
@@ -232,7 +232,7 @@ Unhealthy as it says, back to Configured when that read is stale.
 The probe runner, each pass, for each Deployment with an address: fetch
 `/health`, hand the probe over, then ask the Deployment what it needs
 now, fetch that, hand it over. "Once, on the edge" falls out: after a
-box restarts the Deployment steps back through Starting, its window and
+rental restarts the Deployment steps back through Starting, its window and
 cache size are unknown again, and it asks. The runner reads the
 Deployment's answer, not its own notion of a transition, and holds no
 state.
@@ -245,7 +245,7 @@ Small, each acknowledged and pushed before the next:
    matrix above as code, one test per cell in `tests/test_deployment.py`,
    plus the walked fixtures (the dead rental, the reassigned address, the
    listing gap, the restarts). Used by nothing yet.
-2. **The box's history moves onto the deployment.** `FleetDeployment`
+2. **The rental's history moves onto the deployment.** `FleetDeployment`
    holds a `History`; `record_probe` becomes `FleetDeployment.observe`,
    which reads the deployment's own LiteLLM rows, so `in_litellm` leaves
    the probe pass. `VllmServer.state` and the counters become reads of
@@ -265,8 +265,7 @@ Small, each acknowledged and pushed before the next:
 grouping, orphans and duplicates become plan actions, the needs replace
 the `/v1/models` rule in `probe_all`, and the executor runs the plan.
 Durations in place of the pass counts wait on the p6 knob rename. Then
-this file is folded into `ARCHITECTURE.md` and `rental-lifecycle.md`, and
-the box-to-rental terminology sweep follows.
+this file is folded into `ARCHITECTURE.md` and `rental-lifecycle.md`.
 
 ## Import direction
 

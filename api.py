@@ -70,7 +70,7 @@ def api(fn):
     def no_store(response):
         """Nothing this decorator returns may be stored by anything in between.
 
-        /vllm/config answers with a box's own vLLM bearer and the fleet's
+        /vllm/config answers with a rental's own vLLM bearer and the fleet's
         Hugging Face token. One choke point for every @api route, error
         replies included: an error body names the host it was asked about.
         """

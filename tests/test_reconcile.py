@@ -50,7 +50,7 @@ def test_norm_base_leaves_other_paths_alone():
 def test_norm_base_host_case_and_mapped_ipv6():
     """Scheme and host are case-insensitive on the wire, so they are one key here.
 
-    A peer that arrived as IPv4-mapped IPv6 is the same box as its IPv4 form.
+    A peer that arrived as IPv4-mapped IPv6 is the same rental as its IPv4 form.
     """
     assert norm_base("HTTPS://OpenRouter.ai/api/v1") == "https://openrouter.ai/api"
     assert norm_base("http://[::ffff:192.0.2.10]:8001/v1") == "http://192.0.2.10:8001"
@@ -93,7 +93,7 @@ def test_rental_key_matches_a_stamped_or_registered_base():
 
 
 def test_legacy_pair_is_an_ordinary_key():
-    """A legacy box on an odd listen port is keyed like any other: nothing remembers it is legacy."""
+    """A legacy rental on an odd listen port is keyed like any other: nothing remembers it is legacy."""
     key = deployment_key("gemma4-26b", host="192.0.2.20", listen_port=10100)
     assert key.url == "http://192.0.2.20:10100"
 

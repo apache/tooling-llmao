@@ -45,7 +45,7 @@ will hit and a check that builds the image on a small stand-in base.
 - **Start command: empty.** The image's entrypoint is `provision.sh`; anything
   here arrives as its arguments, which it ignores with a warning.
 - **Volume** mounted at `/workspace`, large enough for the HF cache.
-- **Expose** every listen port the box's `fleet.hosts` rows use (RunPod
+- **Expose** every listen port the rental's `fleet.hosts` rows use (RunPod
   allows at most 10 HTTP ports); see Ports below.
 - **Environment:**
 
@@ -148,7 +148,7 @@ Until one of those is wired, keep the fourth slot.
   upstream Dockerfile shows. The image builds and RunPod pulls it (the ghcr
   package is public), but no pod has provisioned from it yet.
 - That `X-LLMAO-Host` reaches `/vllm/config` intact from a pod. llmao looks
-  the box up by that header alone; a proxy that stripped it would break the
+  the rental up by that header alone; a proxy that stripped it would break the
   lookup.
 - RunPod's handling of a container whose start command is empty when the
   image sets its own `ENTRYPOINT`.

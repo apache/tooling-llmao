@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""FleetDeployment: our boxes (fleet.hosts) and providers (config.yaml providers)."""
+"""FleetDeployment: our rentals (fleet.hosts) and providers (config.yaml providers)."""
 
 import re
 
@@ -70,7 +70,7 @@ def _accounts():
 
 
 def test_where_a_model_is_served_comes_from_its_deployments():
-    """grok-4 from two providers; gemma4 from our box and from one of them."""
+    """grok-4 from two providers; gemma4 from our rental and from one of them."""
     cfg, models = _with_providers(_accounts())
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)

@@ -16,9 +16,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Per-second view of what every box in the fleet is actually doing.
+"""Per-second view of what every rental in the fleet is actually doing.
 
-Rates and timings, not cumulative totals. llmao-usage answers "has this box
+Rates and timings, not cumulative totals. llmao-usage answers "has this rental
 ever served anything"; this answers "what is it doing right now, and how fast".
 
     ./llmao-watch                                  # 1s, auto-discovered
@@ -27,10 +27,10 @@ ever served anything"; this answers "what is it doing right now, and how fast".
     ./llmao-watch --csv run.csv                    # also log every sample
     ./llmao-watch --once                           # one sample, for scripts
 
-No credentials. /metrics is unauthenticated on these boxes -- which is also
+No credentials. /metrics is unauthenticated on these rentals -- which is also
 why llmao's health check cannot tell a working route from a broken one.
 
-WHERE THE BOXES COME FROM
+WHERE THE RENTALS COME FROM
 
 No address is committed here. RunPod reassigns the public port on every pod
 recreate, so anything written down is stale within days. Three sources, in
@@ -41,7 +41,7 @@ order of preference:
      actually routes to. Loopback-only, so this works on the gateway host
      with MK exported (or as root, reading /opt/llmao/litellm.env).
      EVERY row is kept, duplicates included -- if a model has three routes
-     this shows three boxes, which is exactly what you want to see when
+     this shows three rentals, which is exactly what you want to see when
      routes are proliferating.
   3. LLMAO_DIRECT_<MODEL>=host:port, same convention as llmao-smoke.
 
@@ -71,7 +71,7 @@ HOW TO READ IT
   out/s near zero with run > 0      generating thinking tokens. Normal for a
                                     reasoning model, invisible without this.
   ttft rising, in/s flat            prefill queueing behind other prefills.
-  all dashes                        box unreachable. On this fleet that is
+  all dashes                        rental unreachable. On this fleet that is
                                     usually the tunnel, not the GPU -- the
                                     public port changes on every recreate.
 
@@ -112,11 +112,11 @@ except ImportError:  # pragma: no cover - a deployment accident, not a code path
 LABEL_W = 14
 
 
-def _label(box) -> str:
+def _label(rental) -> str:
     """Short row label. The fleet.hosts name when there is one."""
-    name = box.label or box.model
-    m = (box.model or "").lower()
-    if name == box.model:
+    name = rental.label or rental.model
+    m = (rental.model or "").lower()
+    if name == rental.model:
         if m.startswith("gemma"):
             name = "GEM"
         elif m.startswith("qwen3.8"):
@@ -129,11 +129,11 @@ def _label(box) -> str:
 def _unique_labels(rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Make every row label distinct, escalating only where it has to.
 
-    Four boxes of one model all shortened to "8B" made the label column
+    Four rentals of one model all shortened to "8B" made the label column
     useless -- the rows were only distinguishable by the address printed at
     the far right, which is the wrong place to look when watching numbers
-    move. The host's last octet separates boxes on different machines; two
-    boxes on ONE machine need the port too, which this fleet has had.
+    move. The host's last octet separates rentals on different machines; two
+    rentals on ONE machine need the port too, which this fleet has had.
     """
 
     def levels(label: str, addr: str) -> list[str]:
@@ -182,24 +182,24 @@ def _parse_spec(spec: str) -> list[tuple[str, str]]:
 
 
 def discover(spec: str | None, include_down: bool) -> tuple[list[tuple[str, str]], str]:
-    """Every box worth a row, from the same join llmao-fleet uses.
+    """Every rental worth a row, from the same join llmao-fleet uses.
 
     Returns (rows, source). The source is named in the header because a short
-    box list is otherwise indistinguishable from a short fleet -- an
+    rental list is otherwise indistinguishable from a short fleet -- an
     environment variable set in an earlier shell is the usual cause.
 
     --boxes still wins, for watching something that is in no config at all.
     """
     if spec:
         return _unique_labels(_parse_spec(spec)), "--boxes"
-    boxes, meta = fleet()
+    rentals, meta = fleet()
     rows = []
-    for b in boxes:
+    for b in rentals:
         if b.addr:
             rows.append((_label(b), b.addr))
         elif include_down:
             # No public port: nothing to scrape, but a row of dashes is how
-            # you see that a box has never fetched its config.
+            # you see that a rental has never fetched its config.
             rows.append((_label(b), f"{b.host}:{b.listen_port}"))
     return _unique_labels(rows), meta["source"]
 
@@ -207,7 +207,7 @@ def discover(spec: str | None, include_down: bool) -> tuple[list[tuple[str, str]
 # -------------------------------------------------------------------- display
 
 HDR = (
-    f"{'box':>{LABEL_W}} {'run':>4} {'wait':>5} {'in/s':>8} {'out/s':>7} "
+    f"{'rental':>{LABEL_W}} {'run':>4} {'wait':>5} {'in/s':>8} {'out/s':>7} "
     f"{'ttft':>6} {'tpot':>6} {'e2e':>7} {'kv':>5} {'hit':>5} "
     f"{'fin':>4} {'pre':>4}"
 )
@@ -217,7 +217,7 @@ def _rate(cur: dict, prev: dict | None, key: str, dt: float) -> float | None:
     if prev is None or dt <= 0 or key not in cur or key not in prev:
         return None
     d = cur[key] - prev[key]
-    if d < 0:  # counter reset: the box restarted
+    if d < 0:  # counter reset: the rental restarted
         return None
     return d / dt
 
@@ -292,18 +292,18 @@ def main() -> int:
     ap.add_argument("-n", "--interval", type=float, default=1.0)
     ap.add_argument("--boxes", help='"label=host:port,..." (overrides discovery)')
     ap.add_argument(
-        "--timeout", type=float, default=0.0, help="per-box HTTP timeout; default is interval*0.8, min 0.5s"
+        "--timeout", type=float, default=0.0, help="per-rental HTTP timeout; default is interval*0.8, min 0.5s"
     )
     ap.add_argument("--csv", help="append every sample to this file")
     ap.add_argument("--once", action="store_true", help="two samples, print one row set, exit")
-    ap.add_argument("--include-down", action="store_true", help="also show boxes with no public port (rows of dashes)")
+    ap.add_argument("--include-down", action="store_true", help="also show rentals with no public port (dashes)")
     ap.add_argument("--no-clear", action="store_true", help="scroll instead of repainting; use when piping to a file")
     args = ap.parse_args()
 
-    boxes, source = discover(args.boxes, args.include_down)
-    if not boxes:
+    rentals, source = discover(args.rentals, args.include_down)
+    if not rentals:
         print(
-            "llmao-watch: no boxes.\n"
+            "llmao-watch: no rentals.\n"
             "  on the gateway host: sudo ./llmao-watch  (reads config.yaml)\n"
             '  elsewhere:           export LLMAO_DIRECT="model=host:port,..."',
             file=sys.stderr,
@@ -311,33 +311,33 @@ def main() -> int:
         return 2
 
     timeout = args.timeout or max(0.5, args.interval * 0.8)
-    prev: dict[str, dict | None] = {lbl: None for lbl, _ in boxes}
+    prev: dict[str, dict | None] = {lbl: None for lbl, _ in rentals}
     prev_t = None
     csv = None
     if args.csv:
         new = not os.path.exists(args.csv)
         csv = open(args.csv, "a", buffering=1)
         if new:
-            csv.write("ts,box,addr,run,wait,in_per_s,out_per_s,ttft_s,tpot_s,e2e_s,kv\n")
+            csv.write("ts,rental,addr,run,wait,in_per_s,out_per_s,ttft_s,tpot_s,e2e_s,kv\n")
 
-    width = max((len(a) for _, a in boxes), default=0)
+    width = max((len(a) for _, a in rentals), default=0)
     first = True
     try:
         while True:
             t0 = time.time()
-            cur = {lbl: scrape(addr, timeout) for lbl, addr in boxes}
+            cur = {lbl: scrape(addr, timeout) for lbl, addr in rentals}
             now = time.time()
             dt = (now - prev_t) if prev_t else 0.0
 
             lines = [
                 f"{time.strftime('%H:%M:%S')}   every {args.interval:g}s   "
-                f"{sum(1 for v in cur.values() if v is not None)}/{len(boxes)} reachable"
+                f"{sum(1 for v in cur.values() if v is not None)}/{len(rentals)} reachable"
                 f"   via {source}",
                 "",
                 HDR,
             ]
             tot_in = tot_out = 0.0
-            for lbl, addr in boxes:
+            for lbl, addr in rentals:
                 row, vals = render(lbl, cur[lbl], prev[lbl], dt)
                 lines.append(f"{row}   {addr:<{width}}")
                 tot_in += vals.get("in") or 0.0

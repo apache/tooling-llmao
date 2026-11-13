@@ -286,7 +286,7 @@ def test_check_fit_passes_when_it_fits(monkeypatch):
 def test_check_fit_reports_vram_shortfall(monkeypatch):
     """The case this exists for: a 49GB model on a 24GB card.
 
-    Without the check, the box pulls ~50GB of weights and then fails at engine
+    Without the check, the rental pulls ~50GB of weights and then fails at engine
     init with a message that does not mention memory.
     """
     monkeypatch.setattr(inst, "free_vram_gb", lambda: 24.0)
@@ -352,9 +352,9 @@ def test_check_fit_reports_disk_shortfall(monkeypatch):
 
 
 def test_check_fit_credits_the_weights_already_cached(monkeypatch, tmp_path):
-    """A re-provision of a full box is not refused for the room to pull what it holds.
+    """A re-provision of a full rental is not refused for the room to pull what it holds.
 
-    The box that found this needed 48GB by the recipes with 37GB of those
+    The rental that found this needed 48GB by the recipes with 37GB of those
     very weights on disk and 44GB free, and kept its old units.
     """
     monkeypatch.setattr(inst, "free_vram_gb", lambda: None)
@@ -484,7 +484,7 @@ def test_unified_memory_falls_back_to_meminfo(monkeypatch, tmp_path):
 
 
 def test_no_nvidia_smi_is_still_unknown(monkeypatch, tmp_path):
-    """System RAM is not GPU memory on a box with no GPU tooling at all."""
+    """System RAM is not GPU memory on a rental with no GPU tooling at all."""
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal:       125444852 kB\n")
     monkeypatch.setattr(inst, "MEMINFO", meminfo)
@@ -511,7 +511,7 @@ def test_apportion_budgets_from_free_memory_as_a_fraction_of_total():
 
 
 def _config_server(seen: dict, payload: dict | None = None):
-    """A /vllm/config that records the host the box claimed to be."""
+    """A /vllm/config that records the host the rental claimed to be."""
     body = json.dumps(payload or SAMPLE).encode()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -591,7 +591,7 @@ def test_main_requires_llmao_host(monkeypatch, tmp_path):
 
 
 def _reprovision(monkeypatch, tmp_path, *, fits=True):
-    """A box whose last install left two units, one of them no longer in the set."""
+    """A rental whose last install left two units, one of them no longer in the set."""
     httpd = _config_server({})
     reloads = _rental_env(monkeypatch, tmp_path, httpd)
     conf = tmp_path / "conf.d"

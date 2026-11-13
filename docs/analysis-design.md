@@ -43,7 +43,7 @@ package, and nothing graduates into the package until it settles.
    - **A person** sees their own keys and the shape of their own use.
 4. **The people whose prompts these are come first.** Content stays on
    the host, root only, and leaves it only as a finding an admin wrote in
-   words. A model that reads prompts runs on our own boxes, never at a
+   words. A model that reads prompts runs on our own rentals, never at a
    paid provider, since one project's exemplars must not travel to a
    third party in another project's name. The analysis yields to users:
    one request in flight, in the quiet hours.
@@ -291,7 +291,7 @@ exemplar, and without it a model-evaluation batch of German emails was
 judged non-Foundation work by all three judges.
 
 - **A self-hosted model only.** The exemplars are other projects'
-  prompts, and they do not leave our boxes. The int4 27b is the first
+  prompts, and they do not leave our rentals. The int4 27b is the first
   judge; `qwen3-8b` was, until it strayed on the tier. The model name is
   part of what makes a verdict stale, so switching re-judges everything
   once and never mixes two models' answers.
@@ -332,9 +332,9 @@ judged non-Foundation work by all three judges.
   agreed on Foundation work 23 of 23, on the activity 23 of 23 among the
   three larger models, on the tier 16 to 21 of 23 pairwise; the 8b was
   the one that strayed, and the int4 27b is the default judge.
-- **A judge runs only on our boxes.** A model that a paid provider in
+- **A judge runs only on our rentals.** A model that a paid provider in
   `config.yaml` also serves is refused at startup, because the gateway
-  falls back to the provider when our boxes cannot answer and a judge's
+  falls back to the provider when our rentals cannot answer and a judge's
   request carries other projects' prompts. The mechanism that would let
   a request say so itself is LiteLLM's tag routing, which the pinned
   version has: tag the paid deployments `paid` when the portal adds them,
@@ -347,7 +347,7 @@ judged non-Foundation work by all three judges.
   the saving to recommend, the requests on a lighter one the risk.
   Heaviest excess first.
 - **Yielding to users:** one request in flight, run in the quiet hours
-  after the 01:00 UTC rollup. A request-level priority on our boxes,
+  after the 01:00 UTC rollup. A request-level priority on our rentals,
   which would let the judge's calls queue behind everyone's, is
   possible with vLLM's priority scheduling but is not safe until the
   proxy strips the field from everyone who is not allowed to set it;
@@ -451,7 +451,7 @@ Made 2026-11-04. Each is a choice, recorded so it is not re-derived.
     on Foundation work, the highest tier, the majority activity. Three
     tiers stay, named, because the fleet has three capacity classes and
     the tiers are the choices an admin can make.
-19. **A judge runs only on our boxes** (2026-11-05): refused at startup
+19. **A judge runs only on our rentals** (2026-11-05): refused at startup
     when a paid provider also serves the model, until the proxy can
     honour a request's own "self-hosted only" through tag routing.
 20. **No migrations of the store** while it is R&D: delete and rebuild.

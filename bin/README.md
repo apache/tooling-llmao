@@ -6,9 +6,9 @@ Five scripts. Different questions, different times to reach for them.
 |---|---|---|
 | `llmao-fleet` | **start here.** What exists, what routes, what works | ~5s |
 | `llmao-watch` | alongside anything else, to see what the fleet is doing | until Ctrl-C |
-| `llmao-smoke` | after any change to a model, box or the gateway | ~1 min/model |
+| `llmao-smoke` | after any change to a model, rental or the gateway | ~1 min/model |
 | `llmao-saturate` | when deciding whether a card is the right size | 5–30 min |
-| `llmao-usage` | has this box ever served anything at all | instant |
+| `llmao-usage` | has this rental ever served anything at all | instant |
 | `check-no-log.py` | after a LiteLLM upgrade: can a request still not opt out of the prompt log | ~10s |
 | `llmao-prompt-log` | one day of the prompt log rolled up for the portal: `rollup --json <day> --log-dir <dir>`, what the demand-rollup runner spawns. Runs through uv. The reports for a person are `analysis/prompts report` | seconds per day of records |
 
@@ -23,28 +23,28 @@ On the gateway host, run them with `sudo` and there is nothing to export:
 
 ```bash
 sudo ./llmao-fleet              # the whole picture, no traffic sent
-sudo ./llmao-fleet --test       # also send one real completion per box and per model
-sudo ./llmao-fleet --no-auth    # skip the per-box key probe
+sudo ./llmao-fleet --test       # also send one real completion per rental and per model
+sudo ./llmao-fleet --no-auth    # skip the per-rental key probe
 sudo ./llmao-fleet --json
 ```
 
 `--test` is the "is everything actually working" run. It sends one 8-token
-completion to **every box in `fleet.hosts`**, not just the healthy ones, then
-one per model through the gateway. Boxes that cannot be sent a request are
+completion to **every rental in `fleet.hosts`**, not just the healthy ones, then
+one per model through the gateway. Rentals that cannot be sent a request are
 listed with the reason rather than dropped, because "stalled" is a finding and
 an omission looks like a pass:
 
 ```
-DIRECT -- one 8-token completion per box, bypassing LiteLLM
+DIRECT -- one 8-token completion per rental, bypassing LiteLLM
   PASS  qwen3.8-27b/qwen3.8-27b 103.196.86.105:15602  1.2s  ok
   PASS  gemma4-26b/gemma4-26b 80.188.223.202:12711  0.9s  empty content, finish=length
   FAIL  qwen3-8b/qwen3-8b-b 142.189.180.247:51310  120.0s  TimeoutError: timed out
   skip  qwen3-8b/qwen3-8b-c 99.29.94.155:8002
           no public port: nothing has mapped its listen port, so it is
-          unreachable from outside the box
+          unreachable from outside the rental
 ```
 
-This is the only check that proves a box can serve. `/metrics` answers on a box
+This is the only check that proves a rental can serve. `/metrics` answers on a rental
 with no model loaded and `/v1/models` answers on one whose scheduler is wedged
 — the `FAIL` above passes both. `empty content, finish=length` is a reasoning
 model spending the whole budget thinking: a pass for reachability, a finding
@@ -58,14 +58,14 @@ Joins three views of the fleet and reports where they disagree:
 
 | | what it knows |
 |---|---|
-| `config.yaml` `fleet.hosts` | what llmao **intends** — including boxes with no public port and boxes that have never fetched their config |
+| `config.yaml` `fleet.hosts` | what llmao **intends** — including rentals with no public port and rentals that have never fetched their config |
 | LiteLLM `/model/info` | what the proxy **routes to** — including stale routes and duplicates |
-| the box's `/metrics` | what is actually **running**, with no credential needed |
+| the rental's `/metrics` | what is actually **running**, with no credential needed |
 
 Each disagreement is a failure mode none of the three shows alone:
 
 ```
-model          label          box                       src  rt  vllm      ctx    kv        auth  run  wt
+model          label          rental                       src  rt  vllm      ctx    kv        auth  run  wt
 gemma4-26b     gemma4-26b     80.188.223.202:12711       CL   1    up   131072   40%      shared    2   0
 qwen3-8b       (orphan)       175.155.64.248:19231       -L   1  down        ·     · unreachable    ·   ·
 qwen3-8b       qwen3-8b-a     213.173.110.78:18490       CL   2    up        ·   60%         401    4   1
@@ -74,19 +74,19 @@ qwen3-8b-c     qwen3-8b       99.29.94.155:8001*         C-   0  down        · 
 ```
 
 `src` is `C` for in `fleet.hosts`, `L` for LiteLLM has a route. `rt` is how
-many routes point at this box; more than one is route duplication.
+many routes point at this rental; more than one is route duplication.
 
 **The `auth` column is the point of the script.** `/health` needs no
-credential, so a box with the wrong `--api-key` used to answer healthy to
+credential, so a rental with the wrong `--api-key` used to answer healthy to
 llmao and 401 to LiteLLM, forever: LiteLLM cooled the deployment down, llmao
 read that as the backend being down and deleted the route, the next probe
 found `/health` answering and re-added it with the same wrong key. That loop
 produced twenty-two routes for three models. llmao now asks `/v1/models`
-with the key it registers, and a 401 makes the box Rejected: deployment
+with the key it registers, and a 401 makes the rental Rejected: deployment
 deleted, never re-added until the key is accepted. This column still shows
-which key a box runs with, which the Rejected state alone does not say.
+which key a rental runs with, which the Rejected state alone does not say.
 
-- `derived` — the per-box HMAC key, what llmao registers. Correct.
+- `derived` — the per-rental HMAC key, what llmao registers. Correct.
 - `shared` — launched with the fleet-wide `selfhost_api_key` as a container
   argument. Works now, breaks on the next recreate.
 - `401` — running and rejecting both. The churn loop, in progress.
@@ -138,9 +138,9 @@ proves nothing regardless of how many you send.
 ## llmao-watch
 
 ```bash
-sudo ./llmao-watch                       # 1s, every box llmao-fleet knows
+sudo ./llmao-watch                       # 1s, every rental llmao-fleet knows
 sudo ./llmao-watch -n 5
-sudo ./llmao-watch --include-down        # also boxes with no public port
+sudo ./llmao-watch --include-down        # also rentals with no public port
 ./llmao-watch --boxes "27B=1.2.3.4:15602,GEM=5.6.7.8:12711"
 sudo ./llmao-watch --csv run.csv         # also log every sample
 sudo ./llmao-watch --once                # two samples, one row set, exit
@@ -164,8 +164,8 @@ Two things it shows that nothing else does:
 
 - **`out/s` near zero with `run > 0`** is a reasoning model generating
   thinking tokens. Cumulative counters can't distinguish that from a stall.
-- **boxes the gateway is not using.** Rows come from `fleet.hosts`, not from
-  LiteLLM, so a box that is serving happily with no route — or carrying a
+- **rentals the gateway is not using.** Rows come from `fleet.hosts`, not from
+  LiteLLM, so a rental that is serving happily with no route — or carrying a
   duplicate route — gets its own row either way. A model split across several
   rows while only one of them moves is the issue-#29 failure mode, live.
 
@@ -185,10 +185,10 @@ No script contains a host or port. `_fleet.py` finds them at runtime, in this
 order:
 
 1. **`config.yaml` `fleet.hosts`** — the intended fleet, and the only source
-   that includes boxes LiteLLM has never heard of. Needs `sudo` on the
+   that includes rentals LiteLLM has never heard of. Needs `sudo` on the
    gateway host; it also supplies the master key, so nothing else to export.
 2. **LiteLLM `/model/info`** — what the proxy actually routes to.
-3. **`LLMAO_DIRECT`**, off-box, with literal model names:
+3. **`LLMAO_DIRECT`**, off the gateway, with literal model names:
 
 ```bash
 export LLMAO_DIRECT="gemma4-26b=1.2.3.4:12711,qwen3.8-27b=5.6.7.8:15602"
@@ -197,11 +197,11 @@ export LLMAO_DIRECT="gemma4-26b=1.2.3.4:12711,qwen3.8-27b=5.6.7.8:15602"
 Check what it resolved:
 
 ```bash
-sudo python3 _fleet.py          # every box, joined
+sudo python3 _fleet.py          # every rental, joined
 sudo python3 _discover.py       # one address per model, what smoke/saturate use
 ```
 
-`llmao-smoke` and `llmao-saturate` want exactly one box per model, since they
+`llmao-smoke` and `llmao-saturate` want exactly one rental per model, since they
 send one request at a time; when a model has several, the routed one wins.
 `llmao-fleet` and `llmao-watch` show them all.
 
@@ -225,7 +225,7 @@ even when the pod lands on the same machine — one host went
 would be stale within days, and these addresses are not something to publish
 in a public repo regardless.
 
-`llmao-saturate` also reads each model's context window from the box at
-runtime rather than a table, for the same reason: it changes whenever a box
+`llmao-saturate` also reads each model's context window from the rental at
+runtime rather than a table, for the same reason: it changes whenever a rental
 is relaunched with a different `--max-model-len`, and a stale value would
 silently send prompts that cannot fit.

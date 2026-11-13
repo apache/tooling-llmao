@@ -55,8 +55,8 @@ class VllmProbe:
     (a 503 while the model loads counts). ``ok``: ``/health`` gave a 200,
     which is vLLM's own word that it is serving and not "all is well", since
     ``/health`` takes no key. ``served_status``: what ``/v1/models`` answered
-    with the key we believe the box runs with, when it was asked: a 401 is
-    the box refusing that key, a 200 carries the served context window and
+    with the key we believe the rental runs with, when it was asked: a 401 is
+    the rental refusing that key, a 200 carries the served context window and
     the weights it loaded. None when it was not asked, or nothing usable
     came back.
     """
@@ -161,12 +161,12 @@ def parse_max_model_len(models_json: Any) -> int | None:
     return None
 
 
-# How much of a rental's reply we are willing to hold. The boxes are rented
+# How much of a rental's reply we are willing to hold. The rentals come
 # from strangers and reached over plain HTTP, so the body is whatever the far
 # end -- or anything on the path -- decides to send. httpx.Timeout bounds the
 # wait between reads, never the total, so without this a fast peer can hand us
 # gigabytes inside a three-second budget. The portal is one process: that is
-# the admin UI gone, including the page an operator would use to kill the box.
+# the admin UI gone, including the page an operator would use to kill the rental.
 #
 # /v1/models is a handful of rows and /metrics a dozen or so series, both well
 # under this.
@@ -185,7 +185,7 @@ async def _get_capped(
     Streamed rather than awaited whole, so the cap is enforced as the body
     arrives rather than after it has all been held. A peer over the cap gets
     ResponseTooLarge, which is an httpx.HTTPError and so is caught by the
-    handlers already written for a box that will not answer properly.
+    handlers already written for a rental that will not answer properly.
     """
     async with client.stream("GET", url, headers=headers) as resp:
         body = bytearray()
@@ -200,7 +200,7 @@ async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str
     """GET /v1/models with the key we believe this vLLM has: (status, max_model_len, hf_id).
 
     ``status`` is the HTTP status, or None when nothing usable came back. A
-    401 is the box refusing the key (Rejected); a 200 carries the served
+    401 is the rental refusing the key (Rejected); a 200 carries the served
     context window, ``max_model_len``, which is None when the body has none,
     and ``hf_id``, the first served model's id ("" when the body names none).
 
@@ -224,12 +224,12 @@ async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str
             served.hf_id = next((str(r["id"]) for r in rows or () if isinstance(r, dict) and r.get("id")), "")
     except httpx.HTTPError as e:
         # Still never raises -- the contract above holds. But a bare `pass`
-        # meant a box that answered /health and then refused or mangled
+        # meant a rental that answered /health and then refused or mangled
         # /v1/models left no trace anywhere, and the only symptom was a
         # max_model_len that stayed unknown for no stated reason.
         #
         # Only reachable after /health returned 200, so this is an odd state
-        # rather than a down box, and it does not repeat the way a health
+        # rather than a down rental, and it does not repeat the way a health
         # failure does.
         _LOGGER.warning("%s: /v1/models did not answer: %s: %s", base, type(e).__name__, fmt.log_safe(e))
     except ValueError as e:
@@ -350,7 +350,7 @@ async def fetch_metrics(client: httpx.AsyncClient, root: str, api_key: str, *, n
     path but /health. A vLLM without it ignores the header, so sending it
     is right for both.
 
-    Raises httpx.HTTPError when the box does not answer: the sampler says
+    Raises httpx.HTTPError when the rental does not answer: the sampler says
     what an outage means (logged once per outage, not per reading), and
     bounds the wait at its call (asyncio.timeout), not here. The SIZE is
     bounded here, by READ_CAP_BYTES -- a time budget does not bound bytes.
@@ -366,7 +366,7 @@ def parse_metrics(text: str, *, now: float | None = None) -> Sample:
     """What the rollup needs, from vLLM's Prometheus exposition text.
 
     Hand-parsed rather than with a client library: a dozen metrics in one
-    format. Anything unreadable is skipped, so a box answering with HTML or
+    format. Anything unreadable is skipped, so a rental answering with HTML or
     nothing gives an empty reading rather than an error.
     """
     out = Sample(ts=now if now is not None else time.time(), kv_cache_tokens=parse_kv_cache_tokens(text))

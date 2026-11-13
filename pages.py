@@ -654,7 +654,7 @@ def _deployment_reason(dep) -> str:
     if srv is None:
         return ""
     if srv.unlisted:
-        # Said first: whatever else is true, this is why. While the box still
+        # Said first: whatever else is true, this is why. While the rental still
         # answers, the listing is what is in doubt, not the rental.
         if srv.state == HEALTHY:
             return "No Vast or RunPod instance has this address, but it is serving; the listing may be behind."
@@ -665,7 +665,7 @@ def _deployment_reason(dep) -> str:
             )
         return "No Vast or RunPod instance has this address; the rental may have ended."
     if srv.state == REJECTED:
-        return "vLLM is up but rejects our key, so it was dropped from LiteLLM. Check the api key on the box."
+        return "vLLM is up but rejects our key, so it was dropped from LiteLLM. Check the api key on the rental."
     if srv.state == AWAITING:
         if srv.probe_display:
             return srv.probe_display
@@ -755,7 +755,7 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> 
             )
         )
     if dep.vllm is not None and dep.vllm.unlisted:
-        # The box is gone: there is nothing to reboot, add or stop tracking.
+        # The rental is gone: there is nothing to reboot, add or stop tracking.
         # sync_selfhost drops its LiteLLM deployment by itself; the one thing
         # left is taking it out of fleet.hosts, which is config.
         return []
@@ -792,8 +792,8 @@ def attention_items(fleet) -> list:
         reason = _deployment_reason(dep)
         if unlisted and view.lifecycle in (STALLED, UNHEALTHY, FOREIGN):
             # What to do about it: nothing in llmao clears a host that is gone.
-            # Only once the box is also down, or answering as someone else's.
-            # A listing gap with the box still serving, loading, not yet
+            # Only once the rental is also down, or answering as someone else's.
+            # A listing gap with the rental still serving, loading, not yet
             # tried, or refusing our key for a few passes is not that.
             reason += " If so, remove it from fleet.hosts."
         if phrases:
@@ -879,7 +879,7 @@ def _orphan_actions(fleet, orphan) -> list:
             name=row.model_name,
             port=str(row.port),
             aria=f"Stop tracking {ident}",
-            confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The box keeps running.",
+            confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The rental keeps running.",
             post="/do-remove-deployment",
             enabled=ezt.boolean(reason == ""),
             reason=reason,
@@ -965,7 +965,7 @@ async def models_page(result):
 
 
 def _approve_choices(models: list) -> list:
-    """Self-hosted models an unknown box can be told to load, from the models loaded at startup."""
+    """Self-hosted models an unknown rental can be told to load, from the models loaded at startup."""
     choices = []
     for model in models:
         info = model.model_info
@@ -997,7 +997,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             awaiting = srv.state == AWAITING
             pending = False
             state = srv.state
-            # Awaiting contact: the box has not fetched its config yet, so
+            # Awaiting contact: the rental has not fetched its config yet, so
             # there is nothing to load. Loading has a detail: vLLM is either
             # up with a 503 while the model loads, or not listening at all.
             detail = _deployment_reason(dep)
@@ -1226,7 +1226,7 @@ async def _stop_tracking_orphan(ident, orphan):
 
 
 def apply_rental_approval(fleet, host: str, names: list[str]) -> tuple[bool, str]:
-    """Remember the models for an unknown box. The testable core of /do-approve-rental."""
+    """Remember the models for an unknown rental. The testable core of /do-approve-rental."""
     host = (host or "").strip()
     if not host:
         return False, "No host to approve."
@@ -1240,10 +1240,10 @@ def apply_rental_approval(fleet, host: str, names: list[str]) -> tuple[bool, str
 @APP.post("/do-approve-rental")
 @asfquart.auth.require
 async def do_approve_rental():
-    """Site admin picks the models an unknown box loads on its next config fetch."""
+    """Site admin picks the models an unknown rental loads on its next config fetch."""
     ident = await current_identity(APP.cfg)
     if not ident.is_site_admin:
-        await flash_danger("Only site admins can approve a fleet box.")
+        await flash_danger("Only site admins can approve a fleet rental.")
         return _see_other("/models")
     form = await quart.request.form
     ok, message = apply_rental_approval(APP.fleet, form.get("host"), form.getlist("model"))
@@ -2347,13 +2347,13 @@ async def do_create_other_key():
 @APP.post("/do-restrict-project")
 @asfquart.auth.require
 async def do_restrict_project():
-    """A site admin puts a pretend project back to our own boxes only."""
+    """A site admin puts a pretend project back to our own rentals only."""
     form = await quart.request.form
     project = (form.get("subject") or "").strip()
     try:
         ident = await current_identity(APP.cfg)
         await APP.seam.restrict_pretend_project(ident, project)
-        await _done(ident, "restrict_project", project, f"Restricted {project} to our own boxes.")
+        await _done(ident, "restrict_project", project, f"Restricted {project} to our own rentals.")
     except (AuthzError, BackendUnavailableError) as e:
         await flash_danger(str(e))
     return _see_other("/admin")

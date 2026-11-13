@@ -15,9 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Read every serving box's vLLM /metrics, and hand each reading on.
+"""Read every serving rental's vLLM /metrics, and hand each reading on.
 
-The one reader of /metrics on our boxes. Every sample_interval_s it fetches
+The one reader of /metrics on our rentals. Every sample_interval_s it fetches
 all of them at once, parses what capacity planning needs, and gives each
 reading to the hourly rollup (llmao/capacity.py), which knows nothing of
 HTTP. Nothing here is stored or logged per reading.
@@ -25,7 +25,7 @@ HTTP. Nothing here is stored or logged per reading.
 Queue depth is only visible while it is happening -- the spend log records
 what ran, not what waited -- so it has to be sampled or it is gone. The
 rollup's waiting fraction is what shows whether requests actually queue,
-and so whether a model needs another box.
+and so whether a model needs another rental.
 """
 
 from __future__ import annotations
@@ -70,9 +70,9 @@ def sample_interval(cfg: Any) -> int:
 
 
 class MetricsSampler:
-    """Runner: reads every serving box on an interval and feeds the rollup.
+    """Runner: reads every serving rental on an interval and feeds the rollup.
 
-    A box that does not answer is logged once per outage, not every
+    A rental that does not answer is logged once per outage, not every
     interval: worth knowing, and not worth a line every fifteen seconds for
     an hour.
     """
@@ -100,7 +100,7 @@ class MetricsSampler:
         return out
 
     async def _read(self, client: httpx.AsyncClient, server: str, root: str, api_key: str) -> Sample | None:
-        # The wait is bounded here, where the reading is asked for: a box
+        # The wait is bounded here, where the reading is asked for: a rental
         # that takes longer than the sampler allows is one that did not answer.
         try:
             async with asyncio.timeout(self._timeout):
@@ -116,12 +116,12 @@ class MetricsSampler:
         return sample
 
     async def sample_once(self, client: httpx.AsyncClient) -> None:
-        """One reading of every box, all at once: twenty boxes in turn could
+        """One reading of every rental, all at once: twenty rentals in turn could
         outlast the interval."""
         targets = self.targets()
-        # A box's price is shared by the servers on it, so each server's
+        # A rental's price is shared by the servers on it, so each server's
         # hour carries its share and adding rows up gives the real bill.
-        # Every server on the box counts, reachable or not.
+        # Every server on the rental counts, reachable or not.
         per_rental = Counter(srv.host for srv in self._fleet.servers)
         readings = await asyncio.gather(
             *(self._read(client, server, root, srv.api_key) for srv, server, _model, root in targets)
@@ -146,5 +146,5 @@ class MetricsSampler:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    _LOGGER.exception("sampler: reading the boxes failed")
+                    _LOGGER.exception("sampler: reading the rentals failed")
                 await asyncio.sleep(self._interval)

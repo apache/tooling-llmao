@@ -30,7 +30,7 @@ The lifecycle splits into two kinds of thing:
   Loading window from the Awaiting pre-state.
 - **Intent** -- ``fleet.hosts`` and the in-memory approvals (``Fleet.approvals``,
   ``intent.Approval``) say what should run. An approval creates servers; it
-  never changes a computed state. Retirement is the manual removal of a box
+  never changes a computed state. Retirement is the manual removal of a rental
   (drop it from ``fleet.hosts`` and delete its LiteLLM route), not a state.
 
 ``health_fail_threshold`` is both the number of failed probes that turn a
@@ -52,7 +52,7 @@ HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
 STALLED = "stalled"
 # vLLM answers /health but refuses the key we believe it has on /v1/models.
-# Our box with the wrong key, or the salt changed: a person fixes it, and
+# Our rental with the wrong key, or the salt changed: a person fixes it, and
 # nothing but a 200 (or /health going away) ends it. The deployment is
 # deleted on the first 401, since every request through it would fail.
 REJECTED = "rejected"
@@ -72,8 +72,8 @@ CONFIGURED = "configured"
 REJECTED_PASSES = 3
 
 # User-facing roll-up. Only Healthy, Unhealthy and Rejected count, and only
-# when the signal that drives them is fresh. Rejected is our box, down for
-# traffic; Foreign is not our box, and is left out.
+# when the signal that drives them is fresh. Rejected is our rental, down for
+# traffic; Foreign is not our rental, and is left out.
 AVAILABLE = "available"
 DEGRADED = "degraded"
 UNAVAILABLE = "unavailable"
@@ -116,7 +116,7 @@ class DeploymentSnapshot:
     ``reached`` is any answer from vLLM's HTTP server (a 503 counts);
     ``probe_ok`` is a 200 from /health, which takes no key, so it is vLLM's
     own word that it is serving; ``key_rejected`` is /v1/models' verdict on
-    our key. A Rejected box has ``probe_ok`` True.
+    our key. A Rejected rental has ``probe_ok`` True.
     """
 
     model_name: str
@@ -133,7 +133,7 @@ class DeploymentSnapshot:
     # How many deployments LiteLLM holds under this key. More than one is
     # duplicates: LiteLLM keeps a second copy when asked twice.
     litellm_copies: int = 0
-    # When we last handed this box its config. None until a GET /vllm/config
+    # When we last handed this rental its config. None until a GET /vllm/config
     # succeeded for it since we started. One of the two loading starts.
     config_served_at: float | None = None
     # Did the last health probe reach vLLM's HTTP server (an answer, e.g. a
@@ -142,7 +142,7 @@ class DeploymentSnapshot:
     # between Awaiting and Stalled once the grace has run out.
     reached: bool | None = None
     # When a probe first reached vLLM's HTTP server in this process. The
-    # other loading start: a box answering 503 is loading whether or not it
+    # other loading start: a rental answering 503 is loading whether or not it
     # fetched its config from this process (an approved host that fetched
     # before a restart never fetches again). None until a probe reaches.
     first_reached_at: float | None = None
@@ -152,7 +152,7 @@ class DeploymentSnapshot:
     first_probed_at: float | None = None
     # The last /v1/models answer with the working key: True is a 401, False
     # is a 200, None is not asked yet or no usable answer. Read only when the
-    # probe passes; a box that does not answer /health has no key to judge.
+    # probe passes; a rental that does not answer /health has no key to judge.
     key_rejected: bool | None = None
     # Consecutive probe passes the key has been refused. Reset by a 200, and
     # by a failed probe, which interrupts the run.
@@ -203,8 +203,8 @@ def loading_start(snap: DeploymentSnapshot) -> float | None:
     """When the loading window began, or None when it has not.
 
     The config fetch or the first probe that reached vLLM, whichever is
-    earlier. Either alone is a start: a box that fetched its config is
-    loading before vLLM listens, and a box answering 503 is loading whether
+    earlier. Either alone is a start: a rental that fetched its config is
+    loading before vLLM listens, and a rental answering 503 is loading whether
     or not this process served its config.
     """
     starts = [t for t in (snap.config_served_at, snap.first_reached_at) if t is not None]
@@ -234,7 +234,7 @@ def self_hosted_lifecycle(
     keep Healthy (hold-over-the-threshold).
 
     The not-reached clock runs from the first attempt, not from unlisted's
-    listing count: a new RunPod box is unlisted within minutes but fetches
+    listing count: a new RunPod rental is unlisted within minutes but fetches
     its config only after its image pull, and must not read Stalled five
     minutes after the admin created it. A probe that reaches (a 503) is not
     on this clock: it is a loading start, and the grace runs from it.
@@ -283,7 +283,7 @@ def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None =
     vllm_signal = _signal(snap.probe_ok, vllm_stale) if snap.self_hosted else SIGNAL_UNKNOWN
     litellm_signal = _signal(snap.litellm_healthy, litellm_stale)
 
-    # The signal that decides "is this replica really up" is vLLM for a box
+    # The signal that decides "is this replica really up" is vLLM for a rental
     # and LiteLLM for a commercial endpoint. A stale one drops out of the
     # roll-up instead of reading as down.
     driving_unknown = vllm_signal == SIGNAL_UNKNOWN if snap.self_hosted else litellm_signal == SIGNAL_UNKNOWN
@@ -325,7 +325,7 @@ def _privacy(rows: list[DeploymentStatus], *, orphaned: bool) -> str:
         return MIXED
     if not rows:
         # A provider's model always has its deployment. One with none is
-        # waiting for a box of ours.
+        # waiting for a rental of ours.
         return PRIVATE
     hosted = any(v.self_hosted for v in rows)
     external = any(not v.self_hosted for v in rows)

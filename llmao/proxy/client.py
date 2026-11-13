@@ -500,7 +500,7 @@ class LiteLLMBackend:
                         f"The {PRETEND_PROJECTS[project]} project has no team."
                         if allows is None
                         else f"The {PRETEND_PROJECTS[project]} project allows "
-                        f"{', '.join(allows) or 'any model'}. Its keys should reach only our own boxes."
+                        f"{', '.join(allows) or 'any model'}. Its keys should reach only our own rentals."
                     )
                 }
                 for project, allows in wrong.items()
@@ -807,9 +807,9 @@ class UsageManager:
         summary: three pages want three groupings of the same query, and
         three queries would be three chances to disagree.
 
-        `cost_basis` is carried through so a caller can tell our own boxes
+        `cost_basis` is carried through so a caller can tell our own rentals
         from an amount payable. It comes from the fleet: a model served from
-        our own boxes is derived_capacity, and LiteLLM records it at $0.00;
+        our own rentals is derived_capacity, and LiteLLM records it at $0.00;
         anything else has no tag and its cost is real.
         """
         rows = await self._spend_rows()
@@ -823,7 +823,7 @@ class UsageManager:
         One row per (day, provider, model, project) over the last `days`
         days, for every provider deployment in config.yaml providers. It is
         LiteLLM's price at the time of each request (its cost map, reloaded
-        daily), not the provider's bill. Our own boxes are not here: LiteLLM
+        daily), not the provider's bill. Our own rentals are not here: LiteLLM
         records them at $0.00, and their cost is their rental.
         """
         bought = {
@@ -1067,7 +1067,7 @@ class UsageManager:
 
         And there is nothing to migrate when this is replaced. The design
         this is standing in for -- defer a free-tier call when projects need
-        the box -- needs no allowance at all, so a stored one would be a
+        the rental -- needs no allowance at all, so a stored one would be a
         table to drop and a UI to unwind. Derived, it just stops being
         called.
 
@@ -1262,7 +1262,7 @@ class TeamManager:
                 ", ".join(sorted(patched)),
             )
 
-    # What a pretend project's keys may use: our own boxes, and nothing
+    # What a pretend project's keys may use: our own rentals, and nothing
     # else. Commercial access needs an owner who can be asked about the
     # bill, and a PMC is that owner; a key with no project has none.
     #
@@ -1312,7 +1312,7 @@ class TeamManager:
         return wrong
 
     async def restrict_pretend_project(self, project: str) -> None:
-        """Limit a pretend project to our own boxes, making its team if it has none."""
+        """Limit a pretend project to our own rentals, making its team if it has none."""
         if project not in PRETEND_PROJECTS:
             raise ValueError(f"{project} is not a pretend project")
         team_id = await self.team_id(project)

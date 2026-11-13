@@ -409,7 +409,7 @@ def test_something_to_see_is_shown_on_the_page_and_can_be_acknowledged():
 def test_what_stays_is_kept_apart_from_what_goes():
     """A flash is gone on the next page; an entry stays until acknowledged.
 
-    Shown as the same kind of box, one would vanish and the other would not,
+    Shown as the same kind of rental, one would vanish and the other would not,
     and nobody could tell why.
     """
     pin = pinned_litellm_version()
@@ -499,12 +499,12 @@ def test_recent_work_reads_as_sentences_with_who_and_when():
     row = edict(
         at="2026-10-19T14:02:11",
         by="admin1",
-        sentence="Restricted free-tier to our own boxes.",
+        sentence="Restricted free-tier to our own rentals.",
         icon="bi-shield-lock",
         ago="5m ago",
     )
     out = _render(running=pin, expected=pin, recent=[row])
-    assert "Restricted free-tier to our own boxes." in out
+    assert "Restricted free-tier to our own rentals." in out
     assert "admin1 &middot;" in out
     assert "5m ago" in out
     assert "Nothing in the last 14 days." in _render(running=pin, expected=pin)

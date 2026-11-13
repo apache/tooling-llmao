@@ -15,7 +15,7 @@ is the same with a `C.` prefix); the installer sends that as `X-LLMAO-Host`.
 That value must match a `fleet.hosts` key. There is no `?host=` query. llmao
 dials the instance at the address Vast's listing reports, never at its name,
 so a row keyed by the instance id needs no address anywhere. A row keyed by
-the public IP, as boxes provisioned before this were, still works: the
+the public IP, as rentals provisioned before this were, still works: the
 listing places it by address.
 
 ## Instance
@@ -24,7 +24,7 @@ listing places it by address.
 - Map **container** ports used by the set (example inventory: 8001, 8003).
   Those are `fleet.hosts` listen ports and what `GET /vllm/config` returns.
   Vast remaps them to public HostPorts; llmao does not send the public
-  port to the box. With `providers.vast.api_key` in config.yaml,
+  port to the rental. With `providers.vast.api_key` in config.yaml,
   `fleet-lifecycle` fills `public_port` from one show-instances GET each
   tick.
 - Disk: large enough for HF cache under `$DATA_DIRECTORY/hf-cache`
@@ -47,20 +47,20 @@ Set template env `PROVISIONING_SCRIPT` to the raw GitHub URL of
 `/provisioning.sh` and runs it as a **shell** script; see
 [`../README.md`](../README.md) (boot). `provision.sh` then curls
 `install_set.py` from `main`; pin that second URL to a commit SHA when this
-is no longer a moving target (a broken `main` would brick every new box).
+is no longer a moving target (a broken `main` would brick every new rental).
 
-## Several servers on one box
+## Several servers on one rental
 
 List each as a row under the host in `fleet.hosts`. The installer divides
 the card's memory between them and prints each server's fraction; see
 [`../README.md`](../README.md) (sizing) for the rule and its limits. Two
 servers of the same model need the disk for one copy of the weights.
 
-To change the set on a running box, re-provision it; see below.
+To change the set on a running rental, re-provision it; see below.
 
-## Re-provisioning a box
+## Re-provisioning a rental
 
-Needed whenever what the box was told has changed: its rows in
+Needed whenever what the rental was told has changed: its rows in
 `fleet.hosts`, a model's recipe in `models.yaml`, or what llmao puts in
 `/vllm/config` (for example `served_model_name`).
 
@@ -74,7 +74,7 @@ rm -r /.provision*
 ```
 
 then reboot the instance from the Vast console. On boot it finds no marker
-and provisions again: it fetches the installer and this box's config, and
+and provisions again: it fetches the installer and this rental's config, and
 writes new Supervisor units.
 
 **When the set changes to a different model**, also remove the weights
@@ -89,7 +89,7 @@ shards content-addressed under `hub/blobs/`, shared by every model, and
 the per-model directory holds only symlinks to them, so removing it frees
 nothing. A model that stays is pulled again. The installer credits the
 weights a model already has when it checks the disk, but it does not
-remove the weights of a model the box no longer serves, and on an 80GB
+remove the weights of a model the rental no longer serves, and on an 80GB
 disk two models' worth of leftovers is a refused install. A refused install restarts the old units and says why in the
 provisioning log: `install_set: will not fit -- disk: ...`.
 

@@ -261,7 +261,7 @@ def test_setting_an_allowance_on_a_key_is_not_an_adjustment():
 
     A projectless service key has nothing to draw on, so an admin sets its
     allowance at approval -- the requester has no business naming it. Making
-    that need a justification would train everyone to type "ok" in the box,
+    that need a justification would train everyone to type "ok" in the rental,
     which costs the reason field its meaning on decisions that do need one.
     """
     r = _key()

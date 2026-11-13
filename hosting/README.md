@@ -1,14 +1,14 @@
-# GPU-box hosting
+# GPU-rental hosting
 
 Artifacts that run **on** a GPU instance (Vast.ai and RunPod). They are
 not part of the asfquart process.
 
-**The contract (what a box asks for and gets):**
+**The contract (what a rental asks for and gets):**
 [`docs/rental-protocol.md`](../docs/rental-protocol.md).
 
 **Control plane (all providers):** asfquart serves `GET /vllm/config`
 as JSON from `config.yaml` `fleet.hosts` plus `models.yaml`. Bearer fleet
-key (template). Boxes send `X-LLMAO-Host: $LLMAO_HOST` (the TCP
+key (template). Rentals send `X-LLMAO-Host: $LLMAO_HOST` (the TCP
 peer is often a transparent proxy).
 
 Provider-specific: how that JSON becomes running vLLM. Both providers
@@ -26,7 +26,7 @@ write Supervisor units; there is no long-lived Python launcher.
 | `runpod/README.md` | RunPod runbook |
 | `runpod/podman.md` | Checking the RunPod image locally with Podman, before pushing |
 
-## Box environment
+## Rental environment
 
 Required:
 
@@ -34,7 +34,7 @@ Required:
 - `ASFQUART_URL` — origin only, `https://llm.apache.org`
 - `DATA_DIRECTORY` — volume workspace (typically `/workspace`). HF cache
   and logs are `$DATA_DIRECTORY/hf-cache` and `.../logs`, not in the config JSON.
-- `LLMAO_HOST` — the box's name in `fleet.hosts`, sent as `X-LLMAO-Host`.
+- `LLMAO_HOST` — the rental's name in `fleet.hosts`, sent as `X-LLMAO-Host`.
   Each provider's `provision.sh` sets it from that provider's own variable,
   so `install_set.py` knows no provider's names. Vast: the instance id,
   `CONTAINER_ID`. RunPod: the pod id, `RUNPOD_POD_ID`. Both are the
@@ -52,7 +52,7 @@ RunPod: image entrypoint provision.sh → curl install_set.py → GET JSON → u
 
 Both curl `install_set.py` from `refs/heads/main`. Pin that URL to a
 **commit SHA** before treating instance-create as production-safe: a broken
-`main` would stop every new box from provisioning. The RunPod image itself
+`main` would stop every new rental from provisioning. The RunPod image itself
 is pinned by its digest in the template.
 
 ### Vast `PROVISIONING_SCRIPT` vs `install_set.py`
@@ -85,7 +85,7 @@ weights pull. vLLM's own allocator runs later (engine init) and does not
 replace this. NVIDIA: `nvidia-smi`. AMD: `rocm-smi` when we have a ROCm
 image. Silent if the probe is missing.
 
-VRAM is summed over every server on the box, because each loads its own
+VRAM is summed over every server on the rental, because each loads its own
 copy of the weights. Disk is counted once per distinct model: two servers
 of the same model share one copy under the HF cache.
 
@@ -101,7 +101,7 @@ divides it.
 ## Several GPUs
 
 vLLM uses only the first GPU unless told otherwise. The installer counts the
-box's GPUs and runs every server across all of them
+rental's GPUs and runs every server across all of them
 (`--tensor-parallel-size`), so each card holds an equal share of each
 server's weights and KV cache. The fit check and the sizing below are then
 per card, against the card with least free memory. A unified-memory machine
@@ -109,12 +109,12 @@ per card, against the card with least free memory. A unified-memory machine
 
 The model must divide evenly across the cards (its attention heads by the GPU
 count); vLLM says so at startup if it does not. Cards talk over PCIe unless
-the box has NVLink, which costs some speed.
+the rental has NVLink, which costs some speed.
 
 The disk check credits what each model already has under the HF cache,
-counted through the model's snapshots, so a re-provision of a box that
+counted through the model's snapshots, so a re-provision of a rental that
 holds its weights is not refused for the room to pull them again. It knows
-nothing about weights a box no longer needs: **when a box's set changes to
+nothing about weights a rental no longer needs: **when a rental's set changes to
 a different model, delete `$DATA_DIRECTORY/hf-cache` before
 re-provisioning**, or the old weights keep the disk the new model needs
 and the fit check refuses. The whole cache, not the old model's directory:
@@ -136,7 +136,7 @@ several GPUs) and a second server cannot start. `install_set.py` divides the mem
   card was not (two RTX 3060s splitting qwen3-8b ran out at startup with
   1.2 GB left each). The 2 GB is a judgement, not a measurement.
 - Within its budget vLLM sizes the KV cache from an estimate of the CUDA
-  graphs, and the estimate can miss them entirely (the same box: 1.7 GB of
+  graphs, and the estimate can miss them entirely (the same rental: 1.7 GB of
   graphs, estimated at none, out of memory after capture). So each server
   runs with vLLM's **startup plan** (`VLLM_ENABLE_STARTUP_PLAN=1`): once the
   graphs are captured, vLLM records the KV cache size that fits its budget
@@ -167,12 +167,12 @@ is unknown and nothing is sized.
 
 What this does not handle:
 
-- **Sizing happens once, at install.** Adding a server to a box means
+- **Sizing happens once, at install.** Adding a server to a rental means
   re-running the install so the existing servers restart with smaller shares.
-- **Re-running on a live box.** With the servers still up there is little
+- **Re-running on a live rental.** With the servers still up there is little
   free memory, so the fit check may refuse and no fraction is set.
   Re-provision instead, which starts from a restart: Vast in
-  [`vast/README.md`](vast/README.md#re-provisioning-a-box), RunPod in
+  [`vast/README.md`](vast/README.md#re-provisioning-a-rental), RunPod in
   [`runpod/README.md`](runpod/README.md#changing-a-pods-set).
 - **Servers that load at the same time.** vLLM charges each one for the
   drop in free memory while it loads, which includes the other's weights.
@@ -185,5 +185,5 @@ What this does not handle:
 Qwen's FP8 checkpoints are block-quantized, which vLLM runs through
 DeepGEMM, and DeepGEMM handles only SM90 and SM100 cards. Elsewhere (the
 GB10 is 12.1) the engine dies during load with `Unknown SF transformation`.
-Give such a box a model whose weights are not block-quantized FP8;
+Give such a rental a model whose weights are not block-quantized FP8;
 `qwen3-8b-bf16` exists for this. Nothing checks this before the pull.

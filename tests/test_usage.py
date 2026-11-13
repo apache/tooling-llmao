@@ -98,7 +98,7 @@ def _usage(days, *, now=NOON, page_size=1000, window=7):
             "metadata": {"has_more": first + p.page_size < len(hits)},
         }
 
-    # gemma runs on our own box; claude-opus-5 is bought in
+    # gemma runs on our own rental; claude-opus-5 is bought in
     fleet = Fleet(
         None,
         [],
@@ -235,7 +235,7 @@ def test_cost_basis_distinguishes_capacity_from_money():
 
 
 def test_a_model_served_both_ways_is_not_called_an_estimate():
-    """The same name can be on our boxes and bought in.
+    """The same name can be on our rentals and bought in.
 
     Usage is recorded per name, so the two cannot be told apart, and some of
     those dollars are a bill. Calling the lot an estimate would hide it.
@@ -496,7 +496,7 @@ def test_provider_spend_tells_one_provider_from_another_by_their_model_string():
             models={
                 "xai/grok-4": {"k1": _entry(100, project="tooling", spend=1.5)},
                 "openrouter/x-ai/grok-4": {"k2": _entry(50, project="mahout", spend=0.25)},
-                # our own box: not a provider we pay
+                # our own rental: not a provider we pay
                 "hosted_vllm/gemma4-26b": {"k3": _entry(900, project="tooling")},
             },
         ),

@@ -17,7 +17,7 @@
 
 """Load admin model definitions (models.yaml).
 
-UX, vLLM recipes, and the template for registering our own boxes with
+UX, vLLM recipes, and the template for registering our own rentals with
 LiteLLM (POST /model/new). Not where a model is served: that is each
 deployment's (fleet.hosts, config.yaml providers). LiteLLM does not include
 this file. Fail-fast if missing.
@@ -64,13 +64,13 @@ def load_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[di
 
 @dataclass(frozen=True)
 class VllmRecipe:
-    """How to run a model on one of our boxes: the parsed ``model_info.vllm`` block.
+    """How to run a model on one of our rentals: the parsed ``model_info.vllm`` block.
 
     ``hf_model`` is the Hugging Face weights id, ``served_name`` what vLLM
     must answer to (see served_model_name). The declared requirements
     (``vram_gb``, ``disk_gb``, ``kv_bytes_per_token`` with
-    ``max_model_len``) let a box refuse before pulling tens of GB of
-    weights. They are NOT host capacity, which the box reads from
+    ``max_model_len``) let a rental refuse before pulling tens of GB of
+    weights. They are NOT host capacity, which the rental reads from
     nvidia-smi: a hand-typed figure is wrong the first time a provider
     supplies a different card than was ordered. None: not declared.
     """
@@ -83,7 +83,7 @@ class VllmRecipe:
     vram_gb: float | None = None
     disk_gb: float | None = None
     # KV cache per token of context, from the model's architecture. With
-    # max_model_len it is memory the box needs before serving anything.
+    # max_model_len it is memory the rental needs before serving anything.
     kv_bytes_per_token: int | None = None
 
     @classmethod
@@ -120,7 +120,7 @@ def served_model_name(model: Any) -> str:
     """The name vLLM must answer to: litellm_params.model after its provider prefix.
 
     LiteLLM strips "hosted_vllm/" and sends the rest as the request's model,
-    so a box serving under any other name -- vLLM's default is the Hugging
+    so a rental serving under any other name -- vLLM's default is the Hugging
     Face id -- answers every request with 404. Taken from the one field
     LiteLLM reads, so the two cannot drift apart.
     """
@@ -128,7 +128,7 @@ def served_model_name(model: Any) -> str:
 
 
 # Keys models.yaml no longer reads. Where a model is served, and with what
-# credentials, belongs to a deployment: fleet.hosts for our boxes, config.yaml
+# credentials, belongs to a deployment: fleet.hosts for our rentals, config.yaml
 # providers for anyone we pay. (section, key, where it went)
 DEPRECATED_KEYS = (
     ("litellm_params", "api_base", "a provider's endpoint is config.yaml providers.<name>.api_base"),
@@ -149,7 +149,7 @@ def warn_deprecated(models: list) -> None:
 def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -> None:
     """Fail-fast on what a model must carry.
 
-    A model says what it is, and how to run it on our boxes if we can. It
+    A model says what it is, and how to run it on our rentals if we can. It
     does not say where it is served: that is each deployment's, from
     fleet.hosts or config.yaml providers. A model with neither simply has
     no deployments.
@@ -170,9 +170,9 @@ def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -
             continue
         if not hasattr(recipe, "get") or not recipe.get("model"):
             raise ValueError(f"{name}: model_info.vllm.model is required")
-        # The template for registering one of our boxes: hosted_vllm/<name>.
+        # The template for registering one of our rentals: hosted_vllm/<name>.
         if not (model.get("litellm_params") or {}).get("model"):
-            raise ValueError(f"{name}: litellm_params.model is required to serve it from our boxes")
+            raise ValueError(f"{name}: litellm_params.model is required to serve it from our rentals")
 
 
 def public_models(models: list) -> list[dict[str, Any]]:

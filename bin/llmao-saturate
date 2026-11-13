@@ -7,7 +7,7 @@
     llmao-saturate --model qwen3-8b --prompt-tokens 16000
     llmao-saturate --model qwen3-8b --levels 8,16,32,64
 
-Hits the boxes directly. LiteLLM in the path adds its own limits and
+Hits the rentals directly. LiteLLM in the path adds its own limits and
 confuses the question.
 
 PROMPT SIZE IS DERIVED, NOT FIXED
@@ -49,7 +49,7 @@ HOW TO READ IT
   many running                   prefill throughput. A FASTER card would
                                  help, a larger one would not.
                                 Raise --max-num-batched-tokens. The default
-                                2048 held every box here to 2-3 concurrent
+                                2048 held every rental here to 2-3 concurrent
                                 while 90% of memory sat idle; 16384 took the
                                 27B from 2 to 38.
 
@@ -66,7 +66,7 @@ HOW TO READ IT
   p95 >> p50                    queueing: a tail is waiting.
   both rising together          genuine saturation.
 
-Reads scheduler state from the box's /metrics endpoint, which reports live
+Reads scheduler state from the rental's /metrics endpoint, which reports live
 values. An earlier version parsed the container log and got stale numbers --
 a level that finished in 2s reported the PREVIOUS level's peak, which is how
 a 4k run and a 32k run both came back at exactly 7.0%.
@@ -91,11 +91,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _discover import direct_endpoints
 
 
-# The window comes from the box itself at runtime, not from a table here:
-# it changes whenever a box is relaunched with a different --max-model-len,
+# The window comes from the rental itself at runtime, not from a table here:
+# it changes whenever a rental is relaunched with a different --max-model-len,
 # and a stale value would silently send prompts that cannot fit.
 def served_config(hostport: str, key: str) -> dict:
-    """What the box is actually running, from its own /metrics.
+    """What the rental is actually running, from its own /metrics.
 
     The verdict is only useful if it knows the current settings. Telling
     someone to raise a value that is already raised sends them chasing a
@@ -280,7 +280,7 @@ def ramp(
             else:
                 # Only recommend raising the batch budget if it has not been
                 # raised. vLLM does not publish max_num_batched_tokens, so
-                # infer from whether the box is behaving like the 2048
+                # infer from whether the rental is behaving like the 2048
                 # default: that caps concurrency at 2-3 regardless of load.
                 looks_default = peak_run <= 3
                 if looks_default:

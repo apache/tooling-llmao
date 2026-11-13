@@ -20,19 +20,19 @@
 Shared by llmao-fleet and llmao-watch. Three sources, and the gaps between
 them are the interesting part:
 
-  config.yaml fleet.hosts   what llmao INTENDS to exist. Includes boxes with
-                            no public port and boxes that have never fetched
+  config.yaml fleet.hosts   what llmao INTENDS to exist. Includes rentals with
+                            no public port and rentals that have never fetched
                             their config -- neither appears in LiteLLM.
   LiteLLM /model/info       what the proxy ROUTES to. Includes stale routes
-                            for boxes that are gone, and duplicates.
-  the box's own /metrics     what is actually RUNNING. Unauthenticated, so it
-                            works regardless of which key the box wants.
+                            for rentals that are gone, and duplicates.
+  the rental's own /metrics     what is actually RUNNING. Unauthenticated, so it
+                            works regardless of which key the rental wants.
 
-A box present in one and absent from another is a finding, not a detail:
+A rental present in one and absent from another is a finding, not a detail:
 
   in config, no route        not serving traffic; nothing in the gateway UI
                              explains why
-  route, not in config       orphan -- the box is gone and LiteLLM still
+  route, not in config       orphan -- the rental is gone and LiteLLM still
                              balances onto it (issue #29)
   model not in models.yaml   validate_fleet would raise on next startup; the
                              p6 [qwen3-8b-a, 8001, qwen3-8b] rows are this
@@ -42,8 +42,8 @@ A box present in one and absent from another is a finding, not a detail:
 
 Reads /opt/llmao/config.yaml when it can (root on the gateway host), which
 also supplies the LiteLLM master key, so there is nothing to export there.
-Off-box it falls back to LLMAO_DIRECT / LLMAO_WATCH_BOXES and reports the
-reduced view honestly rather than pretending the fleet is four boxes.
+Off the gateway it falls back to LLMAO_DIRECT / LLMAO_WATCH_BOXES and reports the
+reduced view honestly rather than pretending the fleet is four rentals.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def derive_vllm_api_key(salt: str, host: str, listen_port: int) -> str:
     Reimplemented rather than imported: these scripts run from bin/ on a
     managed host with the system python, outside llmao's venv. Must stay
     byte-identical to llmao/intent.py -- a drift here reports a working
-    box as mis-keyed.
+    rental as mis-keyed.
     """
     key = (salt or "").strip()
     if not key or key.startswith("CHANGE_ME"):
@@ -161,7 +161,7 @@ def _scalar(val: str):
 
 
 def load_config(path: str = CONFIG) -> dict | None:
-    """config.yaml as a dict, or None if unreadable (not root, or off-box)."""
+    """config.yaml as a dict, or None if unreadable (not root, or off the gateway)."""
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
@@ -192,7 +192,7 @@ def model_names(cfg: dict) -> set[str]:
         return set()
 
 
-# ------------------------------------------------------------------------- boxes
+# ------------------------------------------------------------------------- rentals
 
 
 @dataclass
@@ -309,17 +309,17 @@ def litellm_routes(cfg: dict | None = None, master_key: str | None = None) -> li
 def _rentals_from_env() -> list[Rental]:
     """LLMAO_DIRECT="model=host:public[:listen],..." (or LLMAO_WATCH_BOXES).
 
-    The optional third field is the box's CONTAINER listen port. It is only
-    needed to derive that box's api_key, because the HMAC covers host and
+    The optional third field is the rental's CONTAINER listen port. It is only
+    needed to derive that rental's api_key, because the HMAC covers host and
     listen port -- and a public address alone cannot tell you the listen port,
-    which is why the auth column reads "no keys" off-box without it.
+    which is why the auth column reads "no keys" off the gateway without it.
     """
     out: list[Rental] = []
     seen: set[tuple[str, int]] = set()
     used: list[str] = []
     # BOTH variables, merged. Taking only the first one that parsed meant a
     # stale LLMAO_DIRECT silently shadowed a freshly exported
-    # LLMAO_WATCH_BOXES, and the only symptom was a short box list.
+    # LLMAO_WATCH_BOXES, and the only symptom was a short rental list.
     for var in ("LLMAO_WATCH_BOXES", "LLMAO_DIRECT"):
         raw = os.environ.get(var) or ""
         if not raw.strip():
@@ -335,7 +335,7 @@ def _rentals_from_env() -> list[Rental]:
                 continue
             listen = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
             key = (parts[0], int(parts[1]))
-            if key in seen:  # the same box named in both variables
+            if key in seen:  # the same rental named in both variables
                 continue
             seen.add(key)
             contributed = True
@@ -383,19 +383,19 @@ def _match_by_derived_key(api_base: str, candidates: list[Rental], salt: str | N
 
 
 def fleet() -> tuple[list[Rental], dict]:
-    """All known boxes, joined, plus what could not be determined.
+    """All known rentals, joined, plus what could not be determined.
 
     meta: {"config": bool, "litellm": int routes, "models": set, "source": str}
     """
     cfg = load_config() or {}
-    boxes = rentals_from_config(cfg)
+    rentals = rentals_from_config(cfg)
     routes = litellm_routes(cfg)
 
     for r in routes:
         host, _, port = r["api_base"].rpartition(":")
         port_i = int(port) if port.isdigit() else None
         hit = None
-        for b in boxes:
+        for b in rentals:
             if b.host != host:
                 continue
             # Config carries the container listen port and, when pinned, the
@@ -404,10 +404,10 @@ def fleet() -> tuple[list[Rental], dict]:
                 hit = b
                 break
         if hit is None:
-            # Match on model alone before calling it an orphan: a Vast box's
+            # Match on model alone before calling it an orphan: a Vast rental's
             # public port is discovered at runtime and not pinned in config,
-            # so the port will not line up even when the box is legitimate.
-            candidates = [b for b in boxes if b.host == host and b.model == r["model"] and not b.public_port]
+            # so the port will not line up even when the rental is legitimate.
+            candidates = [b for b in rentals if b.host == host and b.model == r["model"] and not b.public_port]
             if len(candidates) == 1:
                 hit = candidates[0]
             elif len(candidates) > 1:
@@ -424,7 +424,7 @@ def fleet() -> tuple[list[Rental], dict]:
             if hit.public_port is None and port_i:
                 hit.public_port = port_i
         else:
-            boxes.append(
+            rentals.append(
                 Rental(
                     model=r["model"],
                     label="(orphan)",
@@ -436,28 +436,28 @@ def fleet() -> tuple[list[Rental], dict]:
             )
 
     source = "config.yaml + LiteLLM"
-    if not boxes:
-        boxes = _rentals_from_env()
+    if not rentals:
+        rentals = _rentals_from_env()
         source = " + ".join(_ENV_SOURCE) if _ENV_SOURCE else "LLMAO_WATCH_BOXES / LLMAO_DIRECT (neither set)"
     elif not cfg:
         source = "LiteLLM only"
     elif not routes:
         source = "config.yaml only"
 
-    boxes.sort(key=lambda b: (b.model, b.host, b.listen_port or 0))
+    rentals.sort(key=lambda b: (b.model, b.host, b.listen_port or 0))
     meta = {
         "config": bool(cfg),
         "routes": len(routes),
         "models": model_names(cfg),
-        # Off-box there is no config.yaml, so the two credentials the auth
+        # Off the gateway there is no config.yaml, so the two credentials the auth
         # probe needs can come from the environment instead. Without either,
         # the probe has nothing to test with and must say so rather than
-        # reporting every box as rejecting a key that was never sent.
+        # reporting every rental as rejecting a key that was never sent.
         "salt": (cfg.get("fleet") or {}).get("vllm_api_salt") or os.environ.get("LLMAO_VLLM_SALT"),
         "shared": (cfg.get("fleet") or {}).get("selfhost_api_key") or os.environ.get("VLLM_API_KEY"),
         "source": source,
     }
-    return boxes, meta
+    return rentals, meta
 
 
 # --------------------------------------------------------------------- probing
@@ -475,27 +475,27 @@ def _get(url: str, key: str | None, timeout: float) -> tuple[int, bytes | None]:
         return 0, None
 
 
-def probe_auth(box: Rental, salt: str | None, shared: str | None, timeout: float = 5.0) -> tuple[str, str | None]:
+def probe_auth(rental: Rental, salt: str | None, shared: str | None, timeout: float = 5.0) -> tuple[str, str | None]:
     """(verdict, working key): derived, shared, OPEN, no keys, a code, unreachable.
 
     "no keys" means neither credential was available, so nothing was tested.
-    Off-box that is the normal answer: export LLMAO_VLLM_SALT (for the derived
+    Off the gateway that is the normal answer: export LLMAO_VLLM_SALT (for the derived
     keys) or VLLM_API_KEY (for the shared one) to get a real verdict.
 
     This is the one question /health cannot answer, and the reason llmao's
     view of health and LiteLLM's view of usability can disagree forever.
 
-    The key comes back so the caller can then ask the box something that does
+    The key comes back so the caller can then ask the rental something that does
     need a bearer -- its served model and context window. Callers must not
     print it.
     """
-    if not box.addr:
+    if not rental.addr:
         return "no port", None
-    url = f"http://{box.addr}/v1/models"
+    url = f"http://{rental.addr}/v1/models"
 
-    if salt and box.listen_port:
+    if salt and rental.listen_port:
         try:
-            derived = derive_vllm_api_key(salt, box.host, box.listen_port)
+            derived = derive_vllm_api_key(salt, rental.host, rental.listen_port)
         except ValueError:
             derived = None
         if derived and _get(url, derived, timeout)[0] == 200:
@@ -509,16 +509,16 @@ def probe_auth(box: Rental, salt: str | None, shared: str | None, timeout: float
         return "unreachable", None
 
     # Nothing to derive from and no shared key, so the only request sent was
-    # unauthenticated and its 401 is the expected answer, not a finding. A box
+    # unauthenticated and its 401 is the expected answer, not a finding. A rental
     # with a perfectly correct key looks identical from here.
-    tried_derived = bool(salt) and bool(box.listen_port)
+    tried_derived = bool(salt) and bool(rental.listen_port)
     if not tried_derived and not shared:
         return "no keys", None
     return str(code), None
 
 
 # vLLM metric name -> our key. Names moved between engine generations, so
-# several can map to one key; whichever the box exports wins.
+# several can map to one key; whichever the rental exports wins.
 GAUGES = {
     "num_requests_running": "run",
     "num_requests_waiting": "wait",
@@ -546,9 +546,9 @@ _LINE = re.compile(r"^([A-Za-z_:][A-Za-z0-9_:]*)(\{[^}]*\})?\s+(\S+)$")
 
 
 def scrape(addr: str, timeout: float = 4.0) -> dict | None:
-    """One box's /metrics, summed across label sets. None if unreachable.
+    """One rental's /metrics, summed across label sets. None if unreachable.
 
-    No credentials: /metrics is unauthenticated on these boxes.
+    No credentials: /metrics is unauthenticated on these rentals.
     """
     try:
         with urllib.request.urlopen(f"http://{addr}/metrics", timeout=timeout) as r:
@@ -589,13 +589,13 @@ def scrape(addr: str, timeout: float = 4.0) -> dict | None:
 def completion(target: str, model: str, key: str | None, timeout: float = 60.0) -> tuple[bool, str, float]:
     """Send one tiny completion. (ok, detail, seconds).
 
-    `target` is a box as host:port, or a full base URL for the gateway --
+    `target` is a rental as host:port, or a full base URL for the gateway --
     https://llm.apache.org/v1 -- so the same function covers both paths and
     the two results are comparable.
 
-    The only check that proves a box can actually serve: /metrics answers on a
-    box with no model loaded, and /v1/models answers on one whose scheduler is
-    wedged. Deliberately 8 tokens, so a stalled box fails on time rather than
+    The only check that proves a rental can actually serve: /metrics answers on a
+    rental with no model loaded, and /v1/models answers on one whose scheduler is
+    wedged. Deliberately 8 tokens, so a stalled rental fails on time rather than
     on budget.
     """
     if target.startswith(("http://", "https://")):
@@ -643,9 +643,9 @@ def completion(target: str, model: str, key: str | None, timeout: float = 60.0) 
 def served_model(addr: str, key: str | None = None, timeout: float = 4.0) -> tuple[str | None, int | None]:
     """(model id, max_model_len) from /v1/models.
 
-    Needs the bearer the box accepts -- unlike /metrics, this endpoint is
+    Needs the bearer the rental accepts -- unlike /metrics, this endpoint is
     authenticated, so without the key it comes back empty on a perfectly
-    healthy box.
+    healthy rental.
     """
     code, body = _get(f"http://{addr}/v1/models", key, timeout)
     if code != 200 or not body:
@@ -659,7 +659,7 @@ def served_model(addr: str, key: str | None = None, timeout: float = 4.0) -> tup
 
 if __name__ == "__main__":
     bx, meta = fleet()
-    print(f"source: {meta['source']}   boxes: {len(bx)}   routes: {meta['routes']}")
+    print(f"source: {meta['source']}   rentals: {len(bx)}   routes: {meta['routes']}")
     for b in bx:
         print(
             f"  {b.src} {b.model:14} {b.label:14} {b.host}:"

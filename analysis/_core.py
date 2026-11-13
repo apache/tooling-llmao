@@ -140,7 +140,7 @@ def require_private(judges: Iterable[str], config: pathlib.Path = CONFIG) -> Non
     """A judge's prompts are other projects' prompts: a model a paid provider also serves is refused.
 
     config.yaml providers with an api_base are paid, and the gateway falls
-    back to them when our boxes cannot answer; the judge must never be
+    back to them when our rentals cannot answer; the judge must never be
     the request that goes there. Until the proxy can honour a request's
     own "self-hosted only" (docs/analysis-design.md, the privacy
     mechanism), the guard is here, at startup.
@@ -153,7 +153,7 @@ def require_private(judges: Iterable[str], config: pathlib.Path = CONFIG) -> Non
     offsite = {j: paid[j] for j in judges if j in paid}
     if offsite:
         said = "; ".join(f"{j} is also served by {', '.join(p)}" for j, p in offsite.items())
-        raise SystemExit(f"a judge must run only on our boxes: {said}")
+        raise SystemExit(f"a judge must run only on our rentals: {said}")
 
 
 def judge_settings(config: pathlib.Path = CONFIG) -> edict:
@@ -751,7 +751,7 @@ class Store:
 # exemplar and the cluster's figures as the user message, a JSON object
 # back. The judge prompt is a file, so rewording it is not a code change;
 # its hash, the exemplar's hash and the model name are what make a stored
-# verdict stale. The model runs on our own boxes: the exemplars are other
+# verdict stale. The model runs on our own rentals: the exemplars are other
 # projects' prompts and do not leave them.
 
 JUDGE_PROMPT = pathlib.Path(__file__).resolve().parent / "judge-prompt.md"

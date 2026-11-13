@@ -16,9 +16,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Put every box under load at once, whatever the gateway thinks of them.
+"""Put every rental under load at once, whatever the gateway thinks of them.
 
-    sudo ./llmao-load                      # all boxes, 4 concurrent, 120s
+    sudo ./llmao-load                      # all rentals, 4 concurrent, 120s
     sudo ./llmao-load --concurrency 8 --seconds 300
     sudo ./llmao-load --box 142.189.180.247:51310
     sudo ./llmao-load --gateway            # through LiteLLM instead, needs LLMAO_KEY
@@ -27,21 +27,21 @@ Watch it from another pane with llmao-watch.
 
 WHY NOT llmao-saturate
 
-Saturate answers "where does ONE box start queueing" and resolves one
+Saturate answers "where does ONE rental start queueing" and resolves one
 endpoint per model, with one VLLM_API_KEY for all of them. This fleet breaks
-both assumptions: there are two qwen3-8b boxes, and they do not share a key
+both assumptions: there are two qwen3-8b rentals, and they do not share a key
 -- some were hand-launched with the shared key and some derive their own. So
 saturate can reach one of the two, with the wrong credential half the time.
 
-This asks each box, per box: which key do you accept, and what model name do
+This asks each rental, per rental: which key do you accept, and what model name do
 you answer to. Then it loads all of them together. That makes it the only
-way to drive a box that the gateway cannot reach at all -- a box serving
+way to drive a rental that the gateway cannot reach at all -- a rental serving
 under the wrong name 404s through LiteLLM and works perfectly direct, which
 is exactly the state worth being able to see under load.
 
 PROMPT SIZE
 
-Default is one third of each box's own window, because KV cache is consumed
+Default is one third of each rental's own window, because KV cache is consumed
 by context and not by request count: eight 60-token prompts occupy 0.03% of
 a 1.7M-token cache, so a load test built from small prompts proves nothing.
 The filler is randomised per request -- identical prompts would be served
@@ -146,29 +146,29 @@ def worker(t: Target, deadline: float, prompt_tokens: int, max_tokens: int, time
 
 
 def resolve(args) -> list[Target]:
-    boxes, meta = fleet()
+    rentals, meta = fleet()
     targets: list[Target] = []
 
     if args.gateway:
         key = os.environ.get("LLMAO_KEY")
         if not key:
             sys.exit("llmao-load --gateway needs LLMAO_KEY (a PAT from My Keys)")
-        for model in sorted({b.model for b in boxes if b.in_config}):
+        for model in sorted({b.model for b in rentals if b.in_config}):
             targets.append(Target(f"gw:{model}", GATEWAY, key, model, 40960))
         return targets
 
-    for b in boxes:
+    for b in rentals:
         if not b.addr:
             print(f"  skip {b.model}/{b.label} {b.host}:{b.listen_port} -- no public port")
             continue
-        if args.box and b.addr not in args.box:
+        if args.rental and b.addr not in args.rental:
             continue
         auth, key = probe_auth(b, meta.get("salt"), meta.get("shared"), 5.0)
         if auth not in ("derived", "shared", "OPEN"):
             print(f"  skip {b.model}/{b.label} {b.addr} -- auth {auth}")
             continue
-        # The name the BOX answers to, which is not always the name LiteLLM
-        # routes by. A box serving under its HF id 404s on the alias.
+        # The name the RENTAL answers to, which is not always the name LiteLLM
+        # routes by. A rental serving under its HF id 404s on the alias.
         served, window = served_model(b.addr, key, 5.0)
         if not served:
             print(f"  skip {b.model}/{b.label} {b.addr} -- cannot read /v1/models")
@@ -176,7 +176,7 @@ def resolve(args) -> list[Target]:
         label = f"{b.label}@{b.host.split('.')[-1]}"
         targets.append(Target(label, f"http://{b.addr}/v1/chat/completions", key, served, window or 40960))
 
-    # Two boxes on one machine share the last octet, which this fleet has
+    # Two rentals on one machine share the last octet, which this fleet has
     # had: without the port the summary prints two identical rows.
     seen: dict[str, int] = {}
     for t in targets:
@@ -189,13 +189,13 @@ def resolve(args) -> list[Target]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("-c", "--concurrency", type=int, default=4, help="per box")
+    ap.add_argument("-c", "--concurrency", type=int, default=4, help="per rental")
     ap.add_argument("-s", "--seconds", type=float, default=120.0)
-    ap.add_argument("--prompt-tokens", type=int, default=0, help="0 = one third of each box's window")
+    ap.add_argument("--prompt-tokens", type=int, default=0, help="0 = one third of each rental's window")
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--timeout", type=float, default=600.0)
-    ap.add_argument("--box", action="append", help="host:port, repeatable; default is every box")
-    ap.add_argument("--gateway", action="store_true", help="load through llm.apache.org instead of the boxes")
+    ap.add_argument("--box", action="append", help="host:port, repeatable; default is every rental")
+    ap.add_argument("--gateway", action="store_true", help="load through llm.apache.org instead of the rentals")
     args = ap.parse_args()
 
     print("resolving targets")

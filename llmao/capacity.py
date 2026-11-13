@@ -17,13 +17,13 @@
 
 """What each self-hosted server did, hour by hour, for capacity planning.
 
-Whether to add a box or return one is a question about weeks: how busy each
+Whether to add a rental or return one is a question about weeks: how busy each
 server was, how often requests queued, how full its KV cache got, and how
 many tokens it served. See docs/capacity-design.md for the whole design.
 
 Four parts, each knowing one thing:
 
-  sampler (llmao/sampler.py)  reads every serving box's /metrics and hands
+  sampler (llmao/sampler.py)  reads every serving rental's /metrics and hands
                               each reading to the rollup
   HourlyRollup                turns readings into one row per server per
                               clock hour; no I/O, so all the arithmetic is
@@ -129,8 +129,8 @@ class Hour:
     kv_peak: float = 0.0
     counters: dict[str, float] = field(default_factory=dict)
     buckets: dict[float, float] = field(default_factory=dict)
-    # This server's share of its box's rental, dollars per hour. None when
-    # no provider prices the box.
+    # This server's share of its rental's price, dollars per hour. None when
+    # no provider prices the rental.
     usd_per_hour: float | None = None
     # The machine, as its provider names it (Rental.ident, "Vast 53865410")
     # and labels it ("RTX 3060 x2"). Empty when no provider has placed the
@@ -179,7 +179,7 @@ class Hour:
             server=self.server,
             model_name=self.model_name,
             # How much of the hour was sampled: short after an llmao
-            # restart, or while the box did not answer.
+            # restart, or while the rental did not answer.
             covered_s=int(min(self.readings * interval_s, HOUR_S)),
             busy_frac=round(self.busy / n, 3),
             waiting_frac=round(self.queueing / n, 3),
@@ -217,7 +217,7 @@ class HourlyRollup:
         rental: Rental | None = None,
     ) -> None:
         """Add one reading to its server's hour. `usd_per_hour` is the server's
-        share of its box's rental, when the box's provider prices it; `rental`
+        share of its rental's price, when the rental's provider prices it; `rental`
         is the machine the provider places the server on, when one does."""
         hour = hour_of(sample.ts)
         current = self._hours.get(server)
@@ -234,7 +234,7 @@ class HourlyRollup:
         self._before[server] = sample
 
     def missed(self, server: str) -> None:
-        """The box did not answer. Its counters will have moved by the time it
+        """The rental did not answer. Its counters will have moved by the time it
         does, and that growth cannot be placed in any one hour, so the next
         reading starts afresh."""
         self._before.pop(server, None)

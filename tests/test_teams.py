@@ -127,7 +127,7 @@ def test_pretend_projects_already_there_are_left_alone():
 # ---------------------------------------------------------------------------
 # What a pretend project's keys may use
 #
-# Our own boxes and nothing else: a key with no project has no PMC to be
+# Our own rentals and nothing else: a key with no project has no PMC to be
 # asked about a bill. LiteLLM enforces it, from the team's list of models.
 # ---------------------------------------------------------------------------
 

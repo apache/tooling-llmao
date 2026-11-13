@@ -21,7 +21,7 @@ Not an audit trail: it is kept for action_retention_days and then pruned,
 and it holds only what no other record keeps. Request decisions live on the
 request, a service key's creator on the key, a tier's last change beside
 its limits. What is here is everything else an admin can do: restrict a
-project, approve a box, flag one, add or stop tracking a deployment, revoke
+project, approve a rental, flag one, add or stop tracking a deployment, revoke
 a key.
 
 One row per action in LiteLLM's memory store, keyed by when:

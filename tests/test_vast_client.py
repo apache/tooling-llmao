@@ -213,7 +213,7 @@ def test_refresh_uses_dotted_api_key():
             return _Resp()
 
     asyncio.run(fleet.read_vast_rentals(_Client()))
-    # The refresh reads; the lifecycle's placement stamps the port from the box.
+    # The refresh reads; the lifecycle's placement stamps the port from the rental.
     assert fleet.servers[0].public_port is None
     fleet.place_servers()
     assert fleet.servers[0].public_port == 41234

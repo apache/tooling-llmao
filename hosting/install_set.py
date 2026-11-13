@@ -15,12 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Box-start: fetch set JSON, write Supervisor units, exit.
+"""Rental-start: fetch set JSON, write Supervisor units, exit.
 
 Not a process manager. supervisord owns vllm serve. Shared by every
 provider; each provider's provision.sh sets the environment and runs this.
 
-Sends X-LLMAO-Host from LLMAO_HOST, the box's public IP as its provider
+Sends X-LLMAO-Host from LLMAO_HOST, the rental's public IP as its provider
 reports it, so lookup works when the TCP peer is a transparent proxy (no
 X-Forwarded-For). The provider's own variable is mapped to LLMAO_HOST by
 its provision.sh, so this file knows no provider's names.
@@ -48,7 +48,7 @@ from typing import Any
 CONFIG_PATH = "/vllm/config"
 CONF_DIR = Path(os.environ.get("SUPERVISOR_CONF_DIR", "/etc/supervisor/conf.d"))
 VLLM_BIN = os.environ.get("VLLM_BIN", "/usr/local/bin/vllm")
-# The share of the free GPU memory the servers on a box divide between them.
+# The share of the free GPU memory the servers on a rental divide between them.
 # vLLM's own default for one server, applied to what is free.
 GPU_USABLE_FRACTION = 0.9
 # But never less than this left over, per card. vLLM's flag budgets its own
@@ -217,7 +217,7 @@ def _gpus_gb(field: str, meminfo_key: str) -> list[float] | None:
 
 
 def gpu_count() -> int:
-    """GPUs on this box; 1 when they cannot be counted."""
+    """GPUs on this rental; 1 when they cannot be counted."""
     return len(_gpus_gb("memory.total", "MemTotal") or [None])
 
 
@@ -264,7 +264,7 @@ def free_disk_gb(path: str) -> float | None:
 
 
 def hf_home(data_dir: str | Path) -> Path:
-    """Where the servers on this box keep their weights: HF_HOME in every unit."""
+    """Where the servers on this rental keep their weights: HF_HOME in every unit."""
     return Path(data_dir) / "hf-cache"
 
 
@@ -278,8 +278,8 @@ def cached_weights_gb(model: str, data_dir: str | Path) -> float:
     only the small files left per model. Walking blobs found 0.2GB of an
     18GB model. Each target counts once, however many snapshots name it.
 
-    A re-provision of a box that already holds its weights must not be
-    refused for lacking the room to pull them again: that box asked for
+    A re-provision of a rental that already holds its weights must not be
+    refused for lacking the room to pull them again: that rental asked for
     48GB free with 37GB of the same weights already there, and kept its
     old units.
     """
@@ -308,7 +308,7 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
     Checked before writing units because the alternative is a fifteen-minute
     weights pull followed by an engine-init failure whose message does not
     mention memory. Requirements come from models.yaml; capacity is read from
-    the box.
+    the rental.
 
     Per card: every server spans every GPU, so each card holds 1/cards of
     each server's weights and KV cache. Against the share the servers will
@@ -354,7 +354,7 @@ def check_fit(specs: list[dict[str, Any]], *, data_dir: str) -> list[str]:
 def apportion(
     specs: list[dict[str, Any]], total_gb: float | None, free_gb: float | None = None, *, cards: int = 1
 ) -> list[dict[str, Any]]:
-    """Divide the card between the servers on this box.
+    """Divide the card between the servers on this rental.
 
     vLLM takes its --gpu-memory-utilization fraction of the whole card
     whatever the model's size, because KV cache expands to fill it. Left at
@@ -478,7 +478,7 @@ def build_argv(spec: dict[str, Any]) -> list[str]:
     # passes. Absent only from a control plane older than the field.
     if spec.get("served_model_name"):
         cmd.extend(["--served-model-name", spec["served_model_name"]])
-    # Split across every GPU on the box; vLLM otherwise uses only the first.
+    # Split across every GPU on the rental; vLLM otherwise uses only the first.
     if (spec.get("tensor_parallel_size") or 1) > 1:
         cmd.extend(["--tensor-parallel-size", str(spec["tensor_parallel_size"])])
     if spec.get("gpu_memory_utilization") is not None:
@@ -599,7 +599,7 @@ def supervisorctl_update() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Fetch this box's set and write a Supervisor unit per server.")
+    parser = argparse.ArgumentParser(description="Fetch this rental's set and write a Supervisor unit per server.")
     parser.add_argument(
         "--no-reload",
         action="store_true",
@@ -621,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # A re-provision finds the last install's servers running: on a reboot
     # supervisord starts them alongside this. They hold the GPU memory the fit
-    # check is about to read, so a box of two servers refused its own set and
+    # check is about to read, so a rental of two servers refused its own set and
     # kept serving the old units. Stop them first -- ours only, by name.
     # `supervisorctl stop all` would stop the provider's own services too,
     # the terminal included. With --no-reload supervisord is not running.
@@ -634,7 +634,7 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         for line in problems:
             print(f"install_set: will not fit -- {line}", file=sys.stderr)
-        # Leave the box serving what it served, not serving nothing.
+        # Leave the rental serving what it served, not serving nothing.
         if live:
             supervisorctl("start", *old)
         return 1
@@ -658,7 +658,7 @@ def main(argv: list[str] | None = None) -> int:
     supervisorctl_update()
     # `update` restarts only the programs whose unit changed. A server whose
     # recipe did not change was stopped above all the same, and stayed
-    # stopped: a box re-provisioned for one model's new flag came back with
+    # stopped: a rental re-provisioned for one model's new flag came back with
     # the other model down. Start each one; one already up is an error to
     # supervisorctl and not to us.
     for spec in specs:

@@ -50,7 +50,7 @@ fi
 
 export DATA_DIRECTORY="${DATA_DIRECTORY:-/workspace}"
 # The installer is shared between providers and knows none of their names.
-# A RunPod box is named by its pod id, not an IP: a pod whose ports are HTTP
+# A RunPod rental is named by its pod id, not an IP: a pod whose ports are HTTP
 # only has no public IP at all, and pods can share one. fleet.hosts keys a
 # RunPod row by the same id.
 export LLMAO_HOST="$RUNPOD_POD_ID"

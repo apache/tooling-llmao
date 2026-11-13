@@ -49,7 +49,7 @@ def test_an_action_is_kept_under_its_time():
             by="admin1",
             what="restrict_project",
             subject="free-tier",
-            sentence="Restricted free-tier to our own boxes.",
+            sentence="Restricted free-tier to our own rentals.",
             at=_at(DAY, 14, 2),
         )
     )
@@ -60,7 +60,7 @@ def test_an_action_is_kept_under_its_time():
         "by": "admin1",
         "what": "restrict_project",
         "subject": "free-tier",
-        "sentence": "Restricted free-tier to our own boxes.",
+        "sentence": "Restricted free-tier to our own rentals.",
     }
 
 

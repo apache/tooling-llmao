@@ -377,7 +377,7 @@ class Seam:
         return await self._backend.skew.open()
 
     async def restrict_pretend_project(self, identity: Identity, project: str) -> None:
-        """Put a pretend project back to our own boxes only. Site admins.
+        """Put a pretend project back to our own rentals only. Site admins.
 
         The button on its "Work needed" row. The row is cleared here rather
         than left for the next check to find gone.

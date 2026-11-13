@@ -45,7 +45,7 @@ class Rental:
 
     ``id`` is the provider's id for it (a Vast instance id, a RunPod pod
     id). ``host`` is its public address, "" while it initializes or once
-    it has stopped. ``name`` is what a box on it sends as its host when it
+    it has stopped. ``name`` is what a rental on it sends as its host when it
     fetches its config (``X-LLMAO-Host``, set by that provider's
     provision.sh): the provider's id for the machine, a Vast instance id
     or a RunPod pod id. A ``fleet.hosts`` key, an approval and the bearer
@@ -106,8 +106,8 @@ def match_rental(host: str, last: Rental | None, *sets: ProviderRentals | None) 
     """The Rental a server is on, from the given provider sets, or None.
 
     ``host`` is the server's name, its ``fleet.hosts`` key. By the name the
-    box sends first (the provider's id); then by address, for a row keyed
-    by the address of a box provisioned before names were ids; failing both,
+    rental sends first (the provider's id); then by address, for a row keyed
+    by the address of a rental provisioned before names were ids; failing both,
     the machine ``last`` names, by provider and id, in whatever state and
     at whatever address it has now. An unread set (``None``) contributes
     nothing.

@@ -32,9 +32,9 @@ Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBacke
 
 **LiteLLM price list:** LiteLLM prices each request to a paid provider from its model cost map, fetched from GitHub at its startup. It reloads every 24 hours because of a schedule set once with `POST /schedule/model_cost_map_reload?hours=24` (master key). The schedule lives in LiteLLM's database, so a rebuilt database loses it; llmao logs an ERROR at startup when it is missing. Spend is priced when a request is made and is never re-priced, so it is LiteLLM's estimate, not the provider's bill.
 
-**GPU fleet:** `fleet.hosts` (public IP → rows of model name and listen port); box JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages and log lines name it by `FleetDeployment.label`, the model then where it runs ("qwen3-8b on Vast 53865410:8001", the listen port, since one host can run several servers; "grok-4 at xAI"), with the rental's own label, status and console link beside it, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a box from the list; it does not stop the box. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/rental-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our boxes. LiteLLM `/health` cached on the deployment by the skew runner.
+**GPU fleet:** `fleet.hosts` (public IP → rows of model name and listen port); rental JSON listen only; `VllmServer` + `FleetDeployment`. `/models` is signed-in (host:port admin). A deployment's identity is its listen URL plus model name (`DeploymentKey`), stamped into the LiteLLM row as `model_info.llmao_key`; pages and log lines name it by `FleetDeployment.label`, the model then where it runs ("qwen3-8b on Vast 53865410:8001", the listen port, since one host can run several servers; "grok-4 at xAI"), with the rental's own label, status and console link beside it, and the public port only where it differs. Deployments are one list grouped by model, each row with a primary action and a menu for the rest. "Stop tracking" drops a rental from the list; it does not stop the rental. The green badge is Healthy **and** LiteLLM has that `api_base`. Self-host: `/model/new` when Healthy, `/model/delete` on Unhealthy, Stalled, Rejected or Foreign when a deployment exists, and on an unlisted host that is not Healthy (`models.yaml` template; the states are in `docs/rental-lifecycle.md`). `config.yaml` `providers` holds every account we pay: the GPU hosts `vast` and `runpod` (only `api_key`; `fleet.vast.api_key` still works, with a deprecation warning) and model providers. Provider: `/model/new` at llmao startup, skipped when already registered; `order` puts it behind our rentals. LiteLLM `/health` cached on the deployment by the skew runner.
 
-**Public ports come from the provider's listing.** Vast's instance listing and RunPod's pod listing both carry the container→public mapping; the lifecycle stamps each server's public port from the box its listing places it on. RunPod reassigns the port on every pod recreate, even when the pod lands on the same machine; the next listing read follows it. The optional fourth host-row element that pinned a RunPod port is deprecated: it loads with a warning and only seeds the port until the listing names the box.
+**Public ports come from the provider's listing.** Vast's instance listing and RunPod's pod listing both carry the container→public mapping; the lifecycle stamps each server's public port from the rental its listing places it on. RunPod reassigns the port on every pod recreate, even when the pod lands on the same machine; the next listing read follows it. The optional fourth host-row element that pinned a RunPod port is deprecated: it loads with a warning and only seeds the port until the listing names the rental.
 
 **The proxy serves end to end.** A PAT reaches the self-hosted models through `llm.apache.org` with TLS on 443, the LiteLLM port bound to loopback, tool calling and vision on the models that support them, and per-key attribution in the spend log. The fleet is self-hosted only as of November 2026: nothing is served from a paid provider.
 
@@ -60,7 +60,7 @@ that card was served.
 what was asked of each model beside what its rentals served, cost per
 million tokens, and a Recommendations box whose first rule (a rental whose
 KV cache is too small for its traffic) has already found one. The figures
-are the hourly capacity values the sampler folds from each box's `/metrics`
+are the hourly capacity values the sampler folds from each rental's `/metrics`
 and the demand values the daily rollup folds from LiteLLM's spend log and
 the prompt log. Design: `docs/capacity-design.md`.
 
@@ -101,15 +101,15 @@ what remains; see "Where the work stands". Design:
 `docs/fleet-reconcile-design.md`, a tracking document that is deleted when
 the work is done.
 
-**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and optionally `kv_bytes_per_token` (KV cache per token of context, so a server's need at `max_model_len` is counted, not just its weights), and a box checks them against `nvidia-smi` and `statvfs` before pulling weights. A box with several GPUs runs every server across all of them (`--tensor-parallel-size`), and the check and the sizing are per card. VRAM sums across co-resident servers, since each loads its own copy; disk counts once per distinct model, since servers of the same model share one copy of the weights. Silent when `nvidia-smi` is absent — an unknown is not a failure. The box then divides the card between its servers: the budget is the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM) less a reserve of 10% or 2 GB per card, whichever is more, and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card. Each server runs with vLLM's startup plan, so the KV cache size measured after CUDA graph capture is kept on the volume and reused, rather than re-estimated on every boot (the estimate can miss the graphs, and a tight card may fail its first boot before the plan exists). A fraction set in `models.yaml` is kept and deducted from the budget first.
+**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and optionally `kv_bytes_per_token` (KV cache per token of context, so a server's need at `max_model_len` is counted, not just its weights), and a rental checks them against `nvidia-smi` and `statvfs` before pulling weights. A rental with several GPUs runs every server across all of them (`--tensor-parallel-size`), and the check and the sizing are per card. VRAM sums across co-resident servers, since each loads its own copy; disk counts once per distinct model, since servers of the same model share one copy of the weights. Silent when `nvidia-smi` is absent — an unknown is not a failure. The rental then divides the card between its servers: the budget is the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM) less a reserve of 10% or 2 GB per card, whichever is more, and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card. Each server runs with vLLM's startup plan, so the KV cache size measured after CUDA graph capture is kept on the volume and reused, rather than re-estimated on every boot (the estimate can miss the graphs, and a tight card may fail its first boot before the plan exists). A fraction set in `models.yaml` is kept and deducted from the budget first.
 
-Limits of that sizing, all in `hosting/README.md`: it happens once, at install; re-running the install on a box whose servers are already up sees little free memory and sets no fraction; and servers that load at the same moment get less KV cache than their share.
+Limits of that sizing, all in `hosting/README.md`: it happens once, at install; re-running the install on a rental whose servers are already up sees little free memory and sets no fraction; and servers that load at the same moment get less KV cache than their share.
 
 **Observed state:** the `/models` drill-down shows measured KV cache against the served context window, the cache size taken from each reading of vLLM's `/metrics` by the sampler, and the window from `/v1/models` with the working key, asked on the transition into Healthy and again until it has answered, while the key is refused, or while no listing names the host. A `--max-model-len` above what the cache holds makes vLLM hang rather than error, which was previously only visible by reading a startup log.
 
 **A hardening round from a security audit** landed on 2026-11-12, thirteen commits, each saying which audit finding it answers and where the audit's rating or proposal was wrong. The portal trusts the one Apache proxy in front of it for the client address (hypercorn's `ProxyFixMiddleware`, one hop) and names a rental by that corrected peer, not a header it sent. A rental's `/v1/models` and `/metrics` replies are read up to a 2 MB cap, streamed, since a timeout bounds the wait and never the size. The key list is walked page by page, so a key past the hundredth can be revoked. `@api` replies carry `no-store`, and the prompt log drops credential-shaped custom headers by a pattern over the name, not a list. The tier row's read-change-write is serialised within the one process. Deciding an access request takes a site admin; a cap raised before the request's save failed is said in the admin notice. Ports are range-checked, stored request rows are checked on the way in, two refusals say the same thing whether the key is invisible or someone else's. `log_level` in `config.yaml` sets the level (default DEBUG, so nothing changes until the node yaml says INFO; the p6 side is a class parameter and a template line) and the timestamps carry year, seconds and offset. The fleet key goes over https only, loopback excepted.
 
-Remaining: long vLLM boot, config revision on the box, pending-assignment table, box smoke, and nothing restarting a GPU box automatically.
+Remaining: long vLLM boot, config revision on the rental, pending-assignment table, rental smoke, and nothing restarting a GPU rental automatically.
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
@@ -153,9 +153,6 @@ before any code.
 - **Issue #68, the scanner.** A source probes `/v1/models` daily with
   model names as tokens. A refused-at-the-door admin signal, kept apart
   from refusals of model calls.
-- **The "box" to "rental" sweep.** The settled word for the machine is
-  Rental; "box" survives in doc file names, comments, log lines and the
-  strip text. One sweep, not line by line.
 
 ### The larger threads
 
@@ -247,7 +244,7 @@ with a three-step plan agreed and nothing built).
 
 ### Held on GitHub for colleagues
 
-- **#72, request priority on our boxes.** vLLM's priority scheduling
+- **#72, request priority on our rentals.** vLLM's priority scheduling
   would let the analysis judge queue behind users, but any client could
   then raise its own priority; it needs the proxy to strip the field from
   everyone not allowed to set it. Not done.
@@ -277,14 +274,14 @@ Recorded here because the order matters more than any individual value.
 **Apache `ProxyTimeout` killed any generation over 60 seconds.** It looked
 exactly like a model truncating. Now 1800s.
 
-**vLLM's `max_num_batched_tokens` defaults to 2048**, which held every box
+**vLLM's `max_num_batched_tokens` defaults to 2048**, which held every rental
 to 2–3 concurrent requests while 90% of each card's KV cache sat idle —
 requests spent 4.3× longer queued than being processed. Raised, the 27B
 went from 2 concurrent to 38.
 
 The value is **not portable between cards**: 16384 suits the 96GB and 80GB
-boxes, and on a 24GB card it OOM'd during an FP8 matmul and killed the
-engine outright. That box runs 4096. It scales with headroom, not with the
+rentals, and on a 24GB card it OOM'd during an FP8 matmul and killed the
+engine outright. That rental runs 4096. It scales with headroom, not with the
 model.
 
 **KV cache was never the constraint.** It is consumed by context, not by
@@ -313,7 +310,7 @@ what `qwen3-8b-bf16` is. `qwen3.8-27b` is the same kind of checkpoint and
 should be expected to fail the same way there.
 
 **A unified-memory machine has no VRAM to query.** On the GB10
-`nvidia-smi --query-gpu=memory.total` prints `[N/A]`. The box reads
+`nvidia-smi --query-gpu=memory.total` prints `[N/A]`. The rental reads
 `MemTotal` and `MemAvailable` from `/proc/meminfo` instead, and vLLM agrees
 with that view: it reported 121.63 GiB as the device total.
 
@@ -324,7 +321,7 @@ GiB against 15.27 GiB of weights, most likely for both copies, and ended
 with 17.11 GiB of KV cache where their 0.436 share allowed about 36. They
 serve; they hold roughly half the context they could. vLLM's own suggestion
 is an explicit `--kv-cache-memory` in bytes, which does not depend on what
-else is loading. Not done: the installer is left alone while the boxes are
+else is loading. Not done: the installer is left alone while the rentals are
 in use.
 
 ---
@@ -342,7 +339,7 @@ via `ps`.
 | | what it answers |
 |---|---|
 | `llmao-smoke` | does every model still work: completion, reasoning control, tool calling, vision, sustained output, large prompt. Exits non-zero, so it works in CI |
-| `llmao-saturate` | where does a box start queueing, and is the limit the scheduler or memory — which decides whether a bigger card would help |
+| `llmao-saturate` | where does a rental start queueing, and is the limit the scheduler or memory — which decides whether a bigger card would help |
 
 `llmao-smoke --direct` bypasses LiteLLM; the difference between the two runs
 is the gateway's own overhead. Do not run the two scripts together — smoke
@@ -448,7 +445,7 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
 
 - **Event history** per deployment: record every lifecycle transition with
   a timestamp and show the latest ("Loading since 12:04"). Debugging a
-  stalled box otherwise means guessing.
+  stalled rental otherwise means guessing.
 - **Check LiteLLM now** per deployment: force LiteLLM's health check from
   the page. It costs tokens, so a per-deployment cooldown (proposed five
   minutes); paid providers flagged. The shape is settled under "Where the
@@ -498,10 +495,10 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
 6. Site admin via `rai` PMC (optional keep cfg list)
 7. PMC notification email on key/budget lifecycle
 8. Advisor / richer routing
-9. **Nothing restarts a GPU box.** All three were launched by hand; a
-    host restart leaves the box up and the model down. RunPod pods carry
+9. **Nothing restarts a GPU rental.** All three were launched by hand; a
+    host restart leaves the rental up and the model down. RunPod pods carry
     their launch command in `--docker-args` and recover; the hand-launched
-    box does not.
+    rental does not.
 10. **Active notification when a model goes unserved.** A server was lost
     unseen for days in late October; Infra has been asked for a monitor.
     Until then the redundancy rule on `/admin/capacity` is the only
@@ -514,7 +511,7 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
 
 ## Data handling
 
-Nothing is stored on the GPU boxes. They run vLLM and nothing else — no
+Nothing is stored on the GPU rentals. They run vLLM and nothing else — no
 database, no application state. Prompt content exists in GPU memory for the
 duration of one request and is overwritten. Deleting a pod leaves nothing
 behind.

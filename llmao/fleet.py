@@ -17,15 +17,15 @@
 
 """The live fleet: the intended servers and deployments, the runners that observe them, and the joins.
 
-GPU boxes fetch GET /vllm/config (llmao/provisioning.py). A server is named
-by the id its provider gives the machine, which is what the box sends as its
-host (legacy and local boxes by their IP), and placed on its Rental by
+GPU rentals fetch GET /vllm/config (llmao/provisioning.py). A server is named
+by the id its provider gives the machine, which is what the rental sends as its
+host (legacy and local rentals by their IP), and placed on its Rental by
 address (docs/rental-lifecycle.md).
 
 Terminology: **models.yaml** is admin definitions. A **model** is one row
 (`model_name`). A **VllmServer** is one vLLM process. A **FleetDeployment**
 is one intended LiteLLM backend (self-host public api_base or commercial
-static api_base). The LiteLLM **Router** is the whole proxy. Box JSON
+static api_base). The LiteLLM **Router** is the whole proxy. Rental JSON
 `servers[].model` is still the HF weights id.
 """
 
@@ -91,7 +91,7 @@ _FLEET_NUMBERS = (
 
 
 def _is_ip_literal(name: str) -> bool:
-    """Whether a server's name is itself an address (a legacy or local box), so it can be dialed as given."""
+    """Whether a server's name is itself an address (a legacy or local rental), so it can be dialed as given."""
     try:
         ipaddress.ip_address(name)
     except ValueError:
@@ -99,21 +99,21 @@ def _is_ip_literal(name: str) -> bool:
     return True
 
 
-# How often RunPod's list of our pods is read. Placing a box is not urgent: a
+# How often RunPod's list of our pods is read. Placing a rental is not urgent: a
 # new pod is still provisioning when the next read comes round.
 RUNPOD_LISTING_INTERVAL_S = 600
 
 # Two hysteresis counts, one per clock. Each is a constant rather than a config
 # key: no p6 change, no eyaml round-trip. Both mirror fleet.health_fail_threshold,
-# which exists for the same reason: one failed vLLM probe does not mean a box
+# which exists for the same reason: one failed vLLM probe does not mean a rental
 # is down, and one absence does not mean a thing is gone.
 #
 # Consecutive provider listings that must omit a host before llmao calls it
 # unlisted (the listing clock). Not one: a RunPod pod is absent from the pod
 # list while it provisions -- measured at over 90 minutes after a recreate --
 # and a single absence means "not yet" as often as "gone". The count does not
-# have to outlast that gap: unlisted is an attention verdict, a serving box
-# keeps its route whatever the listing says, and a box that is still coming
+# have to outlast that gap: unlisted is an attention verdict, a serving rental
+# keeps its route whatever the listing says, and a rental that is still coming
 # up stays quiet (docs/fleet-reconcile-design.md). Today Vast is read on the
 # probe pass and RunPod every RUNPOD_LISTING_INTERVAL_S; the design moves both
 # to one listing interval of about a minute, so three passes is a few minutes.
@@ -122,7 +122,7 @@ UNLISTED_PASSES = 3
 # Consecutive reads of the LiteLLM deployments (skew_interval_s, 180s) on
 # which a deployment no intent claims must persist before the attention strip
 # shows it (the skew clock). Absence has innocent causes -- a provider lookup
-# that failed this pass, a box mid-recreate, a deployment llmao is about to
+# that failed this pass, a rental mid-recreate, a deployment llmao is about to
 # claim -- so the item waits this many passes. It is never deleted unattended:
 # something instructed LiteLLM to serve it, and a human decides.
 ORPHAN_PASSES = 3
@@ -137,8 +137,8 @@ def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
 
     ``by_listen`` is keyed by the listen port as a string, which is how both
     providers' maps are built. A map that lacks this server's listen port is
-    a warning: the listing knows the box but not this port, so the row or
-    the box is wrong. A listen port llmao does not allow is left alone.
+    a warning: the listing knows the rental but not this port, so the row or
+    the rental is wrong. A listen port llmao does not allow is left alone.
     """
     if not _listen_port_allowed(srv.host, srv.listen_port):
         return
@@ -223,7 +223,7 @@ def validate_fleet(cfg: Any, *, models: list) -> None:
         if legacy:
             shared = str(getattr(cfg.fleet, "selfhost_api_key", "") or "").strip()
             if not shared or shared.startswith("CHANGE_ME"):
-                raise ValueError(f"config.yaml: fleet.selfhost_api_key is required while {host} is still a legacy box")
+                raise ValueError(f"config.yaml: fleet.selfhost_api_key is required while {host} is a legacy rental")
 
 
 class VllmServer:
@@ -253,13 +253,13 @@ class VllmServer:
         # ask for. Not `name`, which only labels this server.
         self.served_name = served_name or model_name
         # KV cache per token of context, from the model's architecture. With
-        # max_model_len it is memory the box needs before serving anything;
-        # sent so the box's fit check can count it. None: not declared.
+        # max_model_len it is memory the rental needs before serving anything;
+        # sent so the rental's fit check can count it. None: not declared.
         self.kv_bytes_per_token = kv_bytes_per_token
-        # The server's name: its fleet.hosts key, what the box sends as its
+        # The server's name: its fleet.hosts key, what the rental sends as its
         # host, what the bearer is minted from. A provider's id for the
         # machine (a Vast instance id, a RunPod pod id), or an address for
-        # a legacy or local box; llmao does not care which.
+        # a legacy or local rental; llmao does not care which.
         self.host = host
         # Where it is dialed, or None while unknown. A name that is an IP
         # literal is its own address; any other name has none until the
@@ -270,7 +270,7 @@ class VllmServer:
         # The port this server is dialed on: from the listing of the
         # provider that places it (Vast's HostPort, RunPod's portMappings),
         # applied on every lifecycle pass. None until a listing names the
-        # box, unless a deprecated fourth host-row element seeds it, or the
+        # rental, unless a deprecated fourth host-row element seeds it, or the
         # fleet is local and public is listen.
         self.public_port = int(public_port) if public_port is not None else None
         self.hf_model = hf_model
@@ -278,14 +278,14 @@ class VllmServer:
         self.args = args
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
-        # Declared requirements, served to the box so it can refuse before
+        # Declared requirements, served to the rental so it can refuse before
         # pulling tens of GB of weights. NOT host capacity -- that is
-        # discovered on the box from nvidia-smi, because a hand-typed figure
+        # discovered on the rental from nvidia-smi, because a hand-typed figure
         # is wrong the first time a provider supplies a different card than
         # was ordered.
         self.vram_gb = vram_gb
         self.disk_gb = disk_gb
-        # Observed from the box, not configured. None until read: the KV
+        # Observed from the rental, not configured. None until read: the KV
         # cache size by the sampler from /metrics, the served window (and
         # observed_at) by the fleet from /v1/models once SERVING.
         #
@@ -316,7 +316,7 @@ class VllmServer:
         # from the last /v1/models answer that carried one, and when.
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
-        # Named by model_status. Awaiting contact until the box fetches its
+        # Named by model_status. Awaiting contact until the rental fetches its
         # config (config_served_at) and the probes run; see self_hosted_lifecycle.
         self.state = AWAITING
         self.config_served_at: float | None = None
@@ -344,7 +344,7 @@ class VllmServer:
             host=intended.host,
             listen_port=intended.listen_port,
             hf_model=recipe.hf_model,
-            # Minted with the intent (intent.vllm_api_key): what the box runs
+            # Minted with the intent (intent.vllm_api_key): what the rental runs
             # with, what /v1/models is asked with, what LiteLLM registers.
             api_key=intended.api_key,
             args=list(recipe.args),
@@ -407,8 +407,8 @@ class VllmServer:
         (Rental.ident) are the stable part: an address changes when the
         provider moves the machine, and is gone once the rental ends.
         Before a provider's report places the server, the host it was
-        configured under stands in, which for a named box is already the
-        provider's id and for a legacy box is its address. The key stays
+        configured under stands in, which for a named rental is already the
+        provider's id and for a legacy rental is its address. The key stays
         the identity for joining records; this is what people read.
         """
         where = self.rental.ident if self.rental is not None else self.host
@@ -460,7 +460,7 @@ class VllmServer:
         """One probe pass: keep the probe, step the history, name the state.
 
         ``found.ok`` is a 200 from /health: vLLM says it is up. Not "all is
-        well": /health takes no key, so a box that refuses ours is ok and
+        well": /health takes no key, so a rental that refuses ours is ok and
         Rejected. The /v1/models verdict and window are history: a probe
         that did not ask leaves the last ones standing.
         """
@@ -529,9 +529,9 @@ class VllmServer:
 # What a deployment's cost figure means, when it is not simply money owed.
 COST_BASIS_CAPACITY = "derived_capacity"
 
-# The LiteLLM access group every deployment on our own boxes is put in. A
+# The LiteLLM access group every deployment on our own rentals is put in. A
 # LiteLLM team can be limited to a group in place of a list of models, and
-# the group then follows the fleet: a box added or removed changes what the
+# the group then follows the fleet: a rental added or removed changes what the
 # group contains, and nothing that names the group has to be told.
 ACCESS_GROUP_SELF_HOSTED = "llmao:self-hosted"
 
@@ -562,7 +562,7 @@ class FleetDeployment:
         self._api_base = api_base
         self.vllm = vllm
         # A provider deployment's account (config.yaml providers.<name>) and
-        # the provider's model, as LiteLLM names it. None on our boxes.
+        # the provider's model, as LiteLLM names it. None on our rentals.
         self.provider = provider
         self.litellm_model = litellm_model
         # What the last read of the LiteLLM deployments had under this one's
@@ -589,7 +589,7 @@ class FleetDeployment:
 
     @classmethod
     def from_intended(cls, intended: IntendedDeployment) -> FleetDeployment:
-        """A provider-line deployment. Our boxes go through from_vllm, with their observed server."""
+        """A provider-line deployment. Our rentals go through from_vllm, with their observed server."""
         return cls(
             model_name=intended.model_name,
             name=intended.name,
@@ -629,8 +629,8 @@ class FleetDeployment:
         """Whether this deployment's cost is a capacity estimate or real money.
 
         A fact about where the deployment runs, and nothing else. The same
-        model can be served from our own boxes or bought from a provider:
-        on our boxes the dollars are derived from throughput and are a share
+        model can be served from our own rentals or bought from a provider:
+        on our rentals the dollars are derived from throughput and are a share
         of capacity already paid for, and from a provider they are a bill.
         None means real money.
         """
@@ -711,13 +711,13 @@ class Discovered:
 
     @property
     def name(self) -> str:
-        """What the box sends as its host, and so what an approval is keyed by."""
+        """What the rental sends as its host, and so what an approval is keyed by."""
         return self.rental.name
 
 
 @dataclass(frozen=True)
 class Unintended:
-    """A machine nobody intends, by the name its box sends, joined from two sources.
+    """A machine nobody intends, by the name its rental sends, joined from two sources.
 
     ``rental`` is what its provider reports about it (None when no provider
     reports a machine of that name), with ``finding`` the line its probes
@@ -798,7 +798,7 @@ class Fleet:
         # to both. Each probe pass reads it (update_config_fetches), and
         # unintended() shows the names nothing intends.
         self.provisioning = provisioning or ProvisioningRecord()
-        # What an admin told an unknown box to load (intent.Approval), keyed by
+        # What an admin told an unknown rental to load (intent.Approval), keyed by
         # normalized host. Process memory only; config.yaml is not written.
         self.approvals: dict[str, Approval] = {}
         # The last read of the LiteLLM deployments (llmao/proxy/deployments.py),
@@ -811,7 +811,7 @@ class Fleet:
         # from its own runner (run_runpod_listing).
         self.vast_rentals: ProviderRentals | None = None
         self.runpod_rentals: ProviderRentals | None = None
-        # Rentals nobody intends, by the name the box sends (discover_rentals, every pass).
+        # Rentals nobody intends, by the name the rental sends (discover_rentals, every pass).
         self.discovered: dict[str, Discovered] = {}
 
     @classmethod
@@ -830,7 +830,7 @@ class Fleet:
             srv = VllmServer.from_intended(intended)
             if intended.public_port is not None:
                 # Deprecated: the listing supplies the public port now.
-                # The value seeds it until the box is placed; it is not
+                # The value seeds it until the rental is placed; it is not
                 # refused, so a stale row never stops llmao.
                 index = sum(1 for s in servers if s.host == srv.host)
                 _LOGGER.warning(
@@ -964,7 +964,7 @@ class Fleet:
         return fmt.ago_short(at)
 
     def approve_models(self, host: str, names: list[str], *, now: float | None = None) -> Approval:
-        """An admin names the models an unknown box loads: the host is intended from here on.
+        """An admin names the models an unknown rental loads: the host is intended from here on.
 
         It leaves the strip and gets its servers at once (Awaiting, one per
         model on VLLM_LISTEN_PORTS in order), so it reads with the other
@@ -987,7 +987,7 @@ class Fleet:
             if model is None:
                 raise ValueError(f"Unknown model: {name}")
             if VllmRecipe.from_model(model) is None:
-                raise ValueError(f"{name} has no vLLM recipe, so a box cannot load it")
+                raise ValueError(f"{name} has no vLLM recipe, so a rental cannot load it")
         approval = self.approvals[host] = Approval(host, tuple(chosen), now or time.time())
         self._materialize_approved(host)
         return approval
@@ -1138,19 +1138,19 @@ class Fleet:
         A single absence is not a conclusion, learned from one incident: a
         RunPod pod is missing from the pod list while it provisions, over 90
         minutes in the case measured. Before unlisted drove deletion that was
-        cosmetic. Then it deleted the route of a box that was up and serving,
+        cosmetic. Then it deleted the route of a rental that was up and serving,
         which the next pass re-added -- the add fires on healthy-and-absent,
         the delete on unlisted -- so the two alternated for as long as the
         listing gap lasted. Observed on qwen3.8-27b at 47 seconds a cycle, 33
         times in an hour, unroutable through the gateway for half of each
         cycle while /fleet showed it serving and a direct completion against
-        the box passed.
+        the rental passed.
 
         A host no list has ever named is unlisted like any other once the
         passes run. A provider with no key configured is not one we rent
         from, so a host rented there would be called unlisted for ever; the
         cost is a sentence on the attention strip, never a deletion, since
-        the delete fires on unlisted-and-not-Healthy and a box that is
+        the delete fires on unlisted-and-not-Healthy and a rental that is
         Unhealthy, Stalled, Rejected or Foreign is deleted by the probe gate
         anyway. Guarding against it cost a restart hole: a rental that ended
         while llmao was down was, after the restart, a host no listing had
@@ -1219,7 +1219,7 @@ class Fleet:
     async def discover_rentals(self, client: httpx.AsyncClient, *, now: float | None = None) -> None:
         """Rentals nobody intends, with what a probe finds on each: Fleet.discovered, rebuilt every pass.
 
-        A listed machine that no server sits on and whose name (what its box
+        A listed machine that no server sits on and whose name (what its rental
         sends as its host) and address are neither in fleet.hosts nor
         approved. Adoption requires an admin's approval, so nothing here
         adds a server: the /models strip shows the finding with Approve,
@@ -1253,7 +1253,7 @@ class Fleet:
         for listen, public in rental.ports.items():
             if int(listen) not in VLLM_LISTEN_PORTS:
                 continue
-            # The bearer is minted from the name the box sends, not from where it is dialed.
+            # The bearer is minted from the name the rental sends, not from where it is dialed.
             key = vllm_api_key(self.cfg, rental.name, int(listen))
             out[int(listen)] = await probe(client, f"http://{host}:{int(public)}", key, ask_models=True, now=now)
         return out
@@ -1364,7 +1364,7 @@ def remove_refusal(dep) -> str | None:
 
     "The same gate" is load-bearing, and was briefly untrue: e1567cb let
     sync_selfhost delete an unlisted server's route while it was still
-    serving, which this function would have refused. A serving box keeps its
+    serving, which this function would have refused. A serving rental keeps its
     route in both paths.
     """
     if not dep.self_hosted or dep.vllm is None:

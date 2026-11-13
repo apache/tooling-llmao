@@ -88,7 +88,7 @@ def test_deployment_body_from_models():
     assert body["model_info"]["asf_api_base"] == "http://10.0.0.1:8001"
     assert body["model_info"]["llmao_key"] == "http://10.0.0.1:8001"
     assert body["model_info"]["self_hosted"] is True
-    # Our boxes first: LiteLLM uses the lowest order among healthy deployments.
+    # Our rentals first: LiteLLM uses the lowest order among healthy deployments.
     assert body["litellm_params"]["order"] == ORDER_SELF_HOSTED
     # in the group the pretend projects are limited to
     assert body["model_info"]["access_groups"] == ["llmao:self-hosted"]
@@ -209,7 +209,7 @@ def test_sync_selfhost_deletes_a_rental_no_provider_lists():
 
 
 def test_a_serving_rental_no_provider_lists_keeps_its_route():
-    """The invariant remove_refusal states: a box that answers keeps its route.
+    """The invariant remove_refusal states: a rental that answers keeps its route.
 
     e1567cb deleted an unlisted server's route regardless of health, and a
     RunPod pod absent from the pod list while provisioning lost its route on
@@ -326,7 +326,7 @@ def test_the_stamp_is_the_listen_url_not_the_public_one():
 
 
 def test_a_stamped_deployment_is_found_after_a_remap():
-    """The box is down and its deployment points at the old public port.
+    """The rental is down and its deployment points at the old public port.
 
     Matched by address, the id lookup fails ("no LiteLLM id") and the stale
     deployment stays. Matched by the stamp, it is deleted.
@@ -348,7 +348,7 @@ def test_a_stamped_deployment_is_found_after_a_remap():
 
 
 def test_a_stamp_for_another_key_is_not_this_deployment():
-    """Same model name and, by coincidence, the same address: the stamp says it is another box's."""
+    """Same model name and, by coincidence, the same address: the stamp says it is another rental's."""
     fleet = _listen_and_public()
     (dep,) = fleet.deployments
     dep.vllm.state = UNHEALTHY
@@ -403,7 +403,7 @@ def test_duplicates_under_one_key_are_skew_and_all_go_together():
 
 
 def test_a_deployment_at_the_listen_port_does_not_stand_in_for_the_reachable_one():
-    """Off-box the listen port is unreachable, so the server is registered properly."""
+    """Off the rental the listen port is unreachable, so the server is registered properly."""
     fleet = _listen_and_public()
     be = _manager(fleet, _info("10.0.0.7", 10100))
     asyncio.run(be.sync_selfhost())
@@ -559,10 +559,10 @@ def test_health_on_a_shared_api_base_is_per_model():
 
 
 def _unplaced():
-    """A box whose public port is not known this pass, after an earlier pass knew it."""
-    box = _server(host="10.0.0.5", listen_port=8001, public_port=None)
-    box.state = HEALTHY
-    fleet = Fleet(CFG, [box], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    """A rental whose public port is not known this pass, after an earlier pass knew it."""
+    rental = _server(host="10.0.0.5", listen_port=8001, public_port=None)
+    rental.state = HEALTHY
+    fleet = Fleet(CFG, [rental], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
     (dep,) = fleet.deployments
     _registered(dep, api_base="http://10.0.0.5:41234")
     _health(dep, True, at=1000.0)
@@ -590,7 +590,7 @@ def test_an_unknown_address_is_found_by_its_stamp():
 
 
 def test_an_unknown_address_is_not_found_by_an_unstamped_row_on_its_listen_port():
-    """Off-box the listen port is unreachable, and an unstamped row there is nobody's anyway."""
+    """Off the rental the listen port is unreachable, and an unstamped row there is nobody's anyway."""
     fleet, dep = _unplaced()
     dep.litellm = ()
     info = {"data": [{"model_name": "gemma4-26b", "litellm_params": {"api_base": "http://10.0.0.5:8001/v1"}}]}

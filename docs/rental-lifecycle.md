@@ -1,6 +1,6 @@
 # The self-hosted rental lifecycle
 
-What llmao believes about one vLLM server on one of our GPU boxes, how
+What llmao believes about one vLLM server on one of our GPU rentals, how
 that belief changes, and what each belief makes llmao do. This is the
 state machine as the code runs it today (`llmao/model_status.py`,
 `llmao/fleet.py`, `llmao/proxy/deployments.py`, `pages.py`), not the
@@ -8,7 +8,7 @@ reconcile design; where the two differ, `docs/fleet-reconcile-design.md`
 says what is planned.
 
 One server is one row of `fleet.hosts` (or one approved model on an
-unknown box): a host, a listen port, a model. Its lifecycle is a name
+unknown rental): a host, a listen port, a model. Its lifecycle is a name
 recomputed on every probe pass from a handful of stored observations.
 There is no transition table in the code; `self_hosted_lifecycle` is a
 pure function of the observations and the clock, and the diagram below
@@ -20,7 +20,7 @@ Everything the lifecycle reads, and where it comes from.
 
 | Observation | Set by | Meaning |
 |---|---|---|
-| `config_served_at` | `Fleet.update_config_fetches`, each probe pass, from the box's last `GET /vllm/config` | A **loading start**. The box has been told what to run, so a loading window has started. `None` until then. |
+| `config_served_at` | `Fleet.update_config_fetches`, each probe pass, from the rental's last `GET /vllm/config` | A **loading start**. The rental has been told what to run, so a loading window has started. `None` until then. |
 | `probe_ok` | the last `VllmProbe` (`srv.probe`, from `vllm_client.probe`) | `True` on a 200 from `/health`: vLLM says it is serving. Not "all is well": `/health` takes no key. |
 | `reached` | the last `VllmProbe` | Any HTTP answer at all, a 503 included. `False` is no connection, a timeout, or no address to dial (`VllmProbe.no_address`). |
 | `first_reached_at` | the first probe in this process that vLLM answered | The other **loading start**: vLLM is listening, so the model is loading, whether or not this process served the config (an approved host that fetched before a restart never fetches again). The loading start is the earlier of the two. |
@@ -41,31 +41,31 @@ server claims is shown as an orphan; not part of this machine).
 When `/v1/models` is asked: on every pass in which `/health` passed and
 the server was not already Healthy, or its served window has never been
 read, or its key was refused last time, or its host is unlisted. A
-Healthy, listed box whose window is known is not asked again.
+Healthy, listed rental whose window is known is not asked again.
 
 ## The states
 
 | State | Means | LiteLLM | Shown as |
 |---|---|---|---|
-| **Awaiting** | No loading start, and nothing decisive observed. The box has not fetched its config, or a probe reached it but it is not up. | nothing | "has not requested its config", or the last probe |
+| **Awaiting** | No loading start, and nothing decisive observed. The rental has not fetched its config, or a probe reached it but it is not up. | nothing | "has not requested its config", or the last probe |
 | **Loading** | Loading started, not yet up, inside `health_grace_s` of the start. | nothing | "vLLM up, model loading" (reached) or "vLLM not listening yet" |
 | **Healthy** | `/health` 200 and the key not refused. | **add** the deployment when it has a public address and is absent | green when in LiteLLM; yellow "Not in LiteLLM" until then |
 | **Unhealthy** | Was up, now `health_fail_threshold` failures running (loading started), or any failure while in LiteLLM with no loading start. | **delete** the deployment | attention item |
 | **Stalled** | Loading started and never up past the grace; or no loading start, never reached, past the grace from the first attempt. | **delete** the deployment | attention item |
-| **Rejected** | `/health` 200 but `/v1/models` 401 with the working key. | **delete** on the first 401 | attention: "vLLM is up but rejects our key... Check the api key on the box." |
+| **Rejected** | `/health` 200 but `/v1/models` 401 with the working key. | **delete** on the first 401 | attention: "vLLM is up but rejects our key... Check the api key on the rental." |
 | **Foreign** | Rejected for `REJECTED_PASSES` passes running, and the host is unlisted: something else is serving there. | **delete** | attention, with "If so, remove it from fleet.hosts." |
 
 "Add" and "delete" are what `sync_selfhost` does after each probe pass,
 and what the Fleet buttons may do by hand; both apply the same gate
 (`add_refusal`, `remove_refusal`). The delete gate has one more clause:
 an unlisted server that is not Healthy loses its deployment whatever its
-state, Awaiting and Loading included. A serving box keeps its route
+state, Awaiting and Loading included. A serving rental keeps its route
 whatever a listing claims.
 
 The roll-up for a model counts Healthy, Unhealthy and Rejected rows whose
 probe signal is fresh. Any Healthy row: Available; Available with an
 Unhealthy or Rejected row beside it: Degraded; none: Unavailable.
-Foreign is not counted at all: it is not our box. A row whose last probe
+Foreign is not counted at all: it is not our rental. A row whose last probe
 is older than three intervals is stale, and stale is unknown, not down,
 so it drops out of the count.
 
@@ -114,7 +114,7 @@ stateDiagram-v2
 ```
 
 A failed probe also resets `rejected_passes`, so after the hold-over a
-box that still refuses the key is Rejected again and needs three more
+rental that still refuses the key is Rejected again and needs three more
 refused passes to read Foreign. Unhealthy is reached from Rejected or
 Foreign only through the hold-over: three failures running.
 
@@ -142,9 +142,9 @@ names a different state depending on whether loading has started
 
 A control-plane restart loses every observation: each server starts
 Awaiting with no loading start, and the first pass names it again from what it
-sees. A serving box is Healthy at once; a box in LiteLLM that does not
-answer is Unhealthy at once; a box answering 503 is Loading from that
-answer; a box still pulling its image is Awaiting until it fetches its
+sees. A serving rental is Healthy at once; a rental in LiteLLM that does not
+answer is Unhealthy at once; a rental answering 503 is Loading from that
+answer; a rental still pulling its image is Awaiting until it fetches its
 config, or Stalled after the grace if it never answers.
 
 ## Two overlays that are not states
@@ -155,12 +155,12 @@ what a state means rather than which state it is:
 | Unlisted and... | Reads | Attention strip |
 |---|---|---|
 | Healthy | serving through a listing gap | "No Vast or RunPod instance has this address, but it is serving; the listing may be behind." No buttons; the route stays. |
-| Awaiting, Loading | a box the listing has lost, still inside its window | "the rental may have ended." No sentence. Its deployment, if any, is deleted. |
+| Awaiting, Loading | a rental the listing has lost, still inside its window | "the rental may have ended." No sentence. Its deployment, if any, is deleted. |
 | Unhealthy, Stalled | a dead rental | "...the rental may have ended. If so, remove it from fleet.hosts." |
 | Rejected | a refusal that may yet be ours | "...the rental may have ended." No sentence until the passes run. |
-| Foreign | someone else's box at our old address | "...and the vLLM there rejects our key; it may be someone else's now. If so, remove it from fleet.hosts." |
+| Foreign | someone else's rental at our old address | "...and the vLLM there rejects our key; it may be someone else's now. If so, remove it from fleet.hosts." |
 
-Unlisted also clears the server's box (its provider, price and listing
+Unlisted also clears the server's rental (its provider, price and listing
 status), and a host with no public port and no listing records a
 "no address to dial" probe so the Stalled clock runs. A host no listing
 has ever named is unlisted like any other once the passes run, so a
@@ -178,15 +178,15 @@ there. The rows carry "Approved · 5m ago" so an admin can see why
 they are there. An approval never changes a computed state.
 
 Approvals are process memory, lost on restart, and so is the record of
-the unknown box that asked. A box asks for its config once: on a 404 the
-installer exits and the box sits idle, so after a restart there is
-nothing in the strip to re-approve, and the box is invisible until its
+the unknown rental that asked. A rental asks for its config once: on a 404 the
+installer exits and the rental sits idle, so after a restart there is
+nothing in the strip to re-approve, and the rental is invisible until its
 provider's rentals name it, when the strip shows it as a rental nobody
-intends. A box its provider reports that has also asked is one strip
+intends. A rental its provider reports that has also asked is one strip
 item, not two. Until a provider names it the way back is by hand:
-reboot the box so it asks again. Membership in
+reboot the rental so it asks again. Membership in
 `fleet.hosts` is the durable gate, so a recycled address gains nothing
-from a stale approval. There are no other admin marks on a host: a box
+from a stale approval. There are no other admin marks on a host: a rental
 that failed to provision is rebooted by hand and shows itself the moment
 it re-requests config and reads Loading.
 
@@ -214,7 +214,7 @@ reads as Unknown, never as Down, and drops the row out of the roll-up.
 Rulings that shaped the machine, kept so they are not relitigated by
 accident.
 
-- **Retirement is not a state.** Retiring a box is manual teardown: remove
+- **Retirement is not a state.** Retiring a rental is manual teardown: remove
   it from `fleet.hosts`; its deployment then reads as an orphan on the
   strip, and Stop tracking removes it. Once off the fleet the row
   disappears rather than accumulating in Stalled.
@@ -222,12 +222,12 @@ accident.
   gave unclear results once, so a reboot is done by hand in the provider's
   console and the lifecycle reports what it sees. A "Reboot requested"
   label was tried and removed (2026-10-27): the probes already say what
-  the box is doing. A Reboot button is a TODO for when a provider API is
-  verified to reboot a box and, better, to report its state.
+  the rental is doing. A Reboot button is a TODO for when a provider API is
+  verified to reboot a rental and, better, to report its state.
 - **One grace window.** `health_grace_s` is the only loading timeout, from
   the loading start (or the first attempt) to Stalled. Big models load slowly, so
   it is config, not a constant.
-- **A serving box keeps its route.** Whatever a listing claims, a box that
+- **A serving rental keeps its route.** Whatever a listing claims, a rental that
   answers `/health` with our key accepted is never deleted from LiteLLM.
   Learned from the listing-gap incident described in `fleet-reconcile-design.md`.
 - **`ok` means contacted, not well.** A 200 from `/health` is vLLM's word
@@ -241,23 +241,23 @@ accident.
 Found while drawing it. None is fixed here; each is a candidate for the
 reconcile migration.
 
-1. **A refused box reads Healthy through a probe blip.** The hold-over
+1. **A refused rental reads Healthy through a probe blip.** The hold-over
    rule (under the threshold, keep the last name) runs on the
    `/health`-failed branch without looking at `key_rejected`, so a
-   Rejected or Foreign box whose next probe times out is Healthy for up
+   Rejected or Foreign rental whose next probe times out is Healthy for up
    to two passes. `sync_selfhost` adds its deployment back, and the
    pass after that deletes it again when the 401 returns. A blip on a
-   Rejected box flaps the route.
-2. **A never-reached box in LiteLLM has no hold-over.** After a
-   control-plane restart, a box LiteLLM still has that never answers is
+   Rejected rental flaps the route.
+2. **A never-reached rental in LiteLLM has no hold-over.** After a
+   control-plane restart, a rental LiteLLM still has that never answers is
    Unhealthy on its first failed probe, not its third, because the
    not-started branch checks `in_litellm and probe failed` before
    anything else. Once `sync_selfhost` has deleted the route it reads
-   Awaiting, then Stalled after the grace. A box that answered once in
+   Awaiting, then Stalled after the grace. A rental that answered once in
    this process has a loading start and the ordinary hold-over.
-3. **A Healthy, listed box is never re-asked for its key.** `/v1/models`
+3. **A Healthy, listed rental is never re-asked for its key.** `/v1/models`
    is asked on the way into Healthy and again only while refused or
-   unlisted. A key rotated on a box that stays up is caught by LiteLLM's
+   unlisted. A key rotated on a rental that stays up is caught by LiteLLM's
    own health check (the "vLLM up, LiteLLM down" skew badge), not by the
    probe.
 4. **Stalled has two meanings.** Started-and-never-up past the grace,
@@ -265,7 +265,7 @@ reconcile migration.
    attempt. Both delete the deployment and show the same attention item.
    The second becomes the first the moment a probe reaches (a 503): that
    probe is a loading start, and the grace runs from it.
-5. **The unlisted delete gate reaches Awaiting and Loading.** A box in
+5. **The unlisted delete gate reaches Awaiting and Loading.** A rental in
    its loading window whose listing is behind loses its deployment,
    which is harmless (it had nothing to serve) but is a different rule
    from "down deletes".

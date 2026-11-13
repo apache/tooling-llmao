@@ -54,14 +54,14 @@ import urllib.request
 GATEWAY = "https://llm.apache.org/v1"
 MODELS = ["gemma4-26b", "qwen3.8-27b", "qwen3-8b"]
 
-# Model -> served window, for sizing prompts that fit. Read from the box when
+# Model -> served window, for sizing prompts that fit. Read from the rental when
 # possible; this is only a fallback.
 WINDOW_FALLBACK = {"gemma4-26b": 131072, "qwen3.8-27b": 131072, "qwen3-8b": 40960}
 
 BOLD, DIM, RESET = "\033[1m", "\033[90m", "\033[0m"
 
 # Prose-shaped filler at ~1.3 tokens/word. Deliberately NOT a repeated
-# phrase: these boxes run --enable-prefix-caching and vLLM matches a prefix
+# phrase: these rentals run --enable-prefix-caching and vLLM matches a prefix
 # from the first token onward, so repeated filler measures the cache rather
 # than the model.
 _WORDS = (
@@ -78,7 +78,7 @@ _WORDS = (
 # every run produces identical prompts, and the SECOND run reads them
 # straight out of the prefix cache.
 #
-# That is not hypothetical. Measured on one box, same command, minutes apart:
+# That is not hypothetical. Measured on one rental, same command, minutes apart:
 #
 #     first run       11,052 tok/s prefill at 38k
 #     second run      30,354 tok/s     -- same prompt, now cached
@@ -672,7 +672,7 @@ def cmd_budget(args) -> None:
     if slow:
         print()
         print(f"  Calls over 60s: {', '.join(str(b) for b, _ in slow)}. Under concurrency")
-        print("  those multiply -- 8 simultaneous on one box is roughly 8x the queue,")
+        print("  those multiply -- 8 simultaneous on one rental is roughly 8x the queue,")
         print("  which is how a 109s call becomes a 1800s timeout.")
 
 
@@ -748,7 +748,7 @@ def main() -> None:
         "--model", action="append", help="repeatable; defaults to all three for phases, qwen3.8-27b for repro/cache"
     )
     ap.add_argument(
-        "--direct", action="store_true", help="bypass the gateway; discovers the box from LiteLLM's routing table"
+        "--direct", action="store_true", help="bypass the gateway; discovers the rental from LiteLLM's routing table"
     )
     ap.add_argument("--base", help="endpoint override, http://HOST:PORT/v1")
     ap.add_argument("--timeout", type=int, default=1800)

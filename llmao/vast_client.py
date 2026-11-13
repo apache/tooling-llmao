@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Vast.ai show-instances: each box's public ports, where it is, and what it costs.
+"""Vast.ai show-instances: each rental's public ports, where it is, and what it costs.
 
 httpx only (no vastai SDK). One GET, no pagination; rentals_from_body
 turns the body into Rentals, ports and all.
@@ -90,7 +90,7 @@ def rentals_from_body(body: Any) -> edict:
 
     Every instance, in any status: ``host`` is public_ipaddr, "" when Vast
     has not given one; ``name`` is the instance id, which
-    hosting/vast/provision.sh sends as the box's host (CONTAINER_ID);
+    hosting/vast/provision.sh sends as the rental's host (CONTAINER_ID);
     ``status`` is actual_status (running, loading,
     exited, ...), the observed state; ``ports`` is container listen port →
     public HostPort, as ports_from_instance reads it.

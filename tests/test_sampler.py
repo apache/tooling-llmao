@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Reading the boxes' /metrics (llmao/sampler.py)."""
+"""Reading the rentals' /metrics (llmao/sampler.py)."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def test_parse_metrics_reads_what_the_rollup_needs():
 
 
 def test_parse_metrics_survives_an_unexpected_body():
-    """A box answering with HTML, or nothing, must not stop the sampler."""
+    """A rental answering with HTML, or nothing, must not stop the sampler."""
     for body in ("", "<html>503</html>", "vllm:num_requests_running{} notanumber"):
         got = parse_metrics(body, now=1.0)
         assert got.running == 0.0

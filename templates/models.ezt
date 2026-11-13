@@ -281,11 +281,11 @@
   <div class="modal-dialog">
     <form class="modal-content" method="post" action="/do-approve-rental">
       <div class="modal-header">
-        <h2 class="modal-title fs-5" id="approveRentalModalLabel">Approve box</h2>
+        <h2 class="modal-title fs-5" id="approveRentalModalLabel">Approve rental</h2>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p class="small text-muted">Choose the models this box loads the next time it asks for its config.</p>
+        <p class="small text-muted">Choose the models this rental loads the next time it asks for its config.</p>
         <input type="hidden" name="host" id="approve-host" value="">
         [for approve_choices]
         <div class="form-check">

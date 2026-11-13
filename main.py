@@ -41,7 +41,7 @@ from hypercorn.middleware import ProxyFixMiddleware
 
 _LOGGER = logging.getLogger(__name__)
 # Year, seconds and the UTC offset. Correlating a portal line with an Apache
-# error log, a journald entry and a box's own log needs all three: minutes
+# error log, a journald entry and the gateway's own log needs all three: minutes
 # alone put eight events in one bucket, and no year makes a January file
 # ambiguous. ISO-8601 order so a sort is chronological.
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S%z"
@@ -117,8 +117,8 @@ def create_app():
     app.add_runner(backend.run_skew, name="litellm-skew")
     app.add_runner(backend.watch_outside_edits, name="litellm-outside-edits")
 
-    # Capacity: what each box did, hour by hour (docs/capacity-design.md).
-    # The sampler reads every box's /metrics and feeds the rollup; the writer
+    # Capacity: what each rental did, hour by hour (docs/capacity-design.md).
+    # The sampler reads every rental's /metrics and feeds the rollup; the writer
     # stores finished hours in LiteLLM, apart from the sampler so a slow
     # LiteLLM cannot stall the readings; the pruner drops old days.
     rollup = HourlyRollup(interval_s=interval)

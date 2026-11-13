@@ -33,7 +33,7 @@ that model and the cluster's present exemplar; each verdict is written
 as it returns, so a run that stops keeps what it judged. One request in
 flight, through the front door, with the service key in config.yaml
 analysis_key. Clusters from the master key are the operators' smoke
-tests and are never judged. A judge must run only on our boxes.
+tests and are never judged. A judge must run only on our rentals.
 
 verdicts reads the store's consensus view: Foundation work leans
 towards "no", the tier towards "high", the activity is the majority. A

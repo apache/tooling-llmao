@@ -5,8 +5,8 @@ at `/admin/capacity`, linked from `/admin`. It answers, per model:
 
 1. **Is there enough capacity?** How often requests queue, how full the KV
    cache gets at peak, and whether vLLM is preempting.
-2. **Is there too much?** How busy each box is, and tokens served against
-   what the box can do.
+2. **Is there too much?** How busy each rental is, and tokens served against
+   what the rental can do.
 3. **What does it cost?** Rental dollars per day, and the real cost per
    million tokens: rental divided by tokens served.
 4. **Which way is demand going?** Tokens per day, and the busiest hours.
@@ -70,7 +70,7 @@ someone asks.
 
 ### Recommendations
 
-Above the cards, a box says what to do, or says in one line that there
+Above the cards, a rental says what to do, or says in one line that there
 is nothing to change; it is never blank. Each recommendation is three
 parts in a fixed order: a headline naming the verb and the rental
 ("Replace Vast 53865410:8001 (RTX 3060 x2), serving qwen3-8b, with a
@@ -90,7 +90,7 @@ the same advice two mornings in a row.
 
 **Done (2026-11-03):**
 
-- The box, its "nothing to change" line, the three-part shape, and the
+- The rental, its "nothing to change" line, the three-part shape, and the
   link from each recommendation to its model's card.
 - `Advisor` and `Recommendation` in `llmao/planning.py`, with the
   hour-over-threshold counts on every model and rental line.
@@ -119,7 +119,7 @@ built now):
   becomes noise. One per recommendation key (rule, model, rental) with
   an until date, in LiteLLM memory like access requests; keyed on the
   rental so advice about another rental is not hidden with it. Snoozed
-  items sit in a closed disclosure under the box, "Snoozed (n)", each
+  items sit in a closed disclosure under the rental, "Snoozed (n)", each
   with its headline and when it wakes; a small form on each item offers
   a few durations.
 
@@ -144,7 +144,7 @@ way to put words in the advisor's mouth.
 | 3 | Rental prices from the Vast and RunPod APIs | done |
 | 4 | Provider spend from LiteLLM's daily activity | done |
 | 5 | The page, `/admin/capacity` | done |
-| 6 | Recommendations: what to do about what the rows say | the box and the Replace rule, 2026-11-03; the rest under "Recommendations" above and in issue #70 |
+| 6 | Recommendations: what to do about what the rows say | the rental and the Replace rule, 2026-11-03; the rest under "Recommendations" above and in issue #70 |
 | 7 | Demand rows: what was asked per model per hour, from LiteLLM's spend log, rolled up once a day; "What was asked" on the page | done 2026-11-02 |
 
 Demand, the other side of the capacity values (what was asked, against
@@ -172,7 +172,7 @@ they are written once from readings that cannot be re-taken.
 **Future, on demand only:** a CSV download of the report. Not built until
 someone asks for it.
 
-## Measuring the boxes
+## Measuring the rentals
 
 llmao has no database (see ARCHITECTURE.md), so the measurements live in
 LiteLLM's `/v1/memory`, like access requests and tier changes.
@@ -181,14 +181,14 @@ Four parts, each knowing one thing:
 
 | Part | Knows | Runs |
 |---|---|---|
-| **Sampler** (`llmao/sampler.py`) | which boxes are serving; fetching and parsing vLLM's `/metrics` | every `sample_interval_s` |
+| **Sampler** (`llmao/sampler.py`) | which rentals are serving; fetching and parsing vLLM's `/metrics` | every `sample_interval_s` |
 | **Rollup** (`HourlyRollup`) | turning readings into one row per server per clock hour | no; fed by the sampler |
 | **Writer** (`CapacityWriter`) | when an hour is finished; handing it to the store | about every minute |
 | **Store** (`CapacityStore`) | the `/v1/memory` key layout; write, read, prune | no; used by the writer, pruner and page |
 
 Plus the **pruner** (`CapacityPruner`), once a day.
 
-The sampler is the only reader of each box's `/metrics`, and it presents
+The sampler is the only reader of each rental's `/metrics`, and it presents
 the server's bearer: vLLM alone leaves `/metrics` open, our rentals do not
 (`RequireKey` in `hosting/install_set.py`). The writer is
 separate from the sampler so that a slow or absent LiteLLM delays storing
@@ -210,7 +210,7 @@ One row per server per UTC clock hour, keyed by hour then server:
 | `kv_avg`, `kv_peak` | KV cache use, as a fraction |
 | `prompt_tokens`, `generation_tokens`, `requests`, `preemptions` | growth of vLLM's counters over the hour |
 | `queue_avg_s`, `queue_p95_s` | time requests spent queued, from vLLM's histogram |
-| `usd_per_hour` | this server's share of its box's rental price; empty if no provider prices the box |
+| `usd_per_hour` | this server's share of its rental's price; empty if no provider prices the rental |
 | `rental`, `rental_label` | the machine as its provider names it (`Rental.ident`, "Vast 53865410") and labels it ("RTX 3060 x2"); empty until a provider places the server. Rows from before 2026-11-02 have neither |
 
 The server is an address and listen port. A provider changes the address
@@ -221,10 +221,10 @@ stamp is what joins them.
 
 Counters are vLLM's totals since it started. A total that goes down means
 the server restarted, and the new total is counted from zero. A reading the
-box did not answer breaks the chain: the next reading starts afresh rather
+rental did not answer breaks the chain: the next reading starts afresh rather
 than crediting the gap to one hour.
 
-`waiting_frac` is the evidence for "add a box": it shows whether requests
+`waiting_frac` is the evidence for "add a rental": it shows whether requests
 actually queue, which the spend log cannot (it records what ran, not what
 waited). It replaces the contention log lines the sampler used to write.
 
@@ -235,22 +235,22 @@ kept per model and per rental line. An average hides a burst: qwen3-8b
 was busy 1% of October and still ran out of cache for ten hours of it,
 and those hours are what a recommendation turns on.
 
-The price is on each row because a box's rental price is fixed for as long
-as we hold it, and a returned box vanishes from its provider's API. Kept on
-the row, a returned box keeps its price in history.
+The price is on each row because a rental's price is fixed for as long
+as we hold it, and a returned rental vanishes from its provider's API. Kept on
+the row, a returned rental keeps its price in history.
 
-A row carries its server's **share** of the box: a box running two servers
+A row carries its server's **share** of the rental: a rental running two servers
 puts half its price on each, so adding rows up gives the real bill. Prices
-come from the providers, through the box the listing places the server on
+come from the providers, through the rental the listing places the server on
 (by address, else the instance or pod it was on before): Vast's `dph_total` from the
 instance list the fleet already reads for ports, and RunPod's `costPerHr`
 from its pod list (`providers.runpod.api_key`), read every 10 minutes by its
-own runner. A box no provider prices has no price, never $0, so the report
+own runner. A rental no provider prices has no price, never $0, so the report
 can tell "free" from "unknown".
 
 ### Size
 
-20 boxes x 24 hours x 90 days is about 43,000 rows, roughly 17 MB to read
+20 rentals x 24 hours x 90 days is about 43,000 rows, roughly 17 MB to read
 for a 90-day view. Reads go one day per request (24 rows per server, within
 the memory API's page of 500 up to twenty servers), all at once, timed with
 a Stopwatch. If the 90-day view proves too slow even for two admins, rows
@@ -275,7 +275,7 @@ get cleared.
 
 - **Self-hosted:** rental dollars per hour (Vast `dph_total`, RunPod
   `costPerHr`), set against tokens served. There is no hand-set price: every
-  box is on a provider that reports one. A box that is not would show as
+  rental is on a provider that reports one. A rental that is not would show as
   unpriced, and a setting can be added when one exists. LiteLLM records self-hosted requests at $0.00 on
   purpose, since a price there would count against team budgets.
 - **Model providers:** read from LiteLLM's daily activity, broken down by the

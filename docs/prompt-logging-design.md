@@ -253,7 +253,7 @@ track L; the rest is the new data the log exists for.
 | `call_id`, `trace_id` | `litellm_call_id`, `trace_id` | the call id | the id the client got in `x-litellm-call-id`, which also keys LiteLLM's spend row; the trace groups retries and fallbacks |
 | `call_type` | `call_type` | yes | LiteLLM's name for the endpoint (`acompletion`, `aembedding`, ...) |
 | `status`, `error` | `status`, `error_information` | yes | `success` or `failure`; on failure the class, code and provider, not the message (an error message can quote the prompt) |
-| `model`, `deployment`, `api_base`, `provider` | `model_group`, `model`, `api_base`, `custom_llm_provider` | yes | what the user asked for; what served it; which box or provider |
+| `model`, `deployment`, `api_base`, `provider` | `model_group`, `model`, `api_base`, `custom_llm_provider` | yes | what the user asked for; what served it; which rental or provider |
 | `stream` | `stream` | no | |
 | `tokens` | `prompt_tokens`, `completion_tokens`, `total_tokens` | yes | |
 | `finish_reason` | the response | no | the one word we keep from the response: it is how truncation and tool use show up in aggregate. **The exception to decision 2; drop it if that reads as a result.** |
@@ -458,9 +458,9 @@ hour and model. It holds the model-hour's totals and latency, and under
 | Field | Source | Meaning |
 |---|---|---|
 | `requests`, `prompt_tokens`, `completion_tokens` | LiteLLM | totals for the model-hour |
-| `duration_p50_s`, `duration_p95_s` | LiteLLM | latency as the client felt it, successful requests, to set against the box's queue times |
+| `duration_p50_s`, `duration_p95_s` | LiteLLM | latency as the client felt it, successful requests, to set against the rental's queue times |
 | `by_project` | LiteLLM | each project's share, keyed by team alias: its `requests`, `prompt_tokens`, `completion_tokens`; `by_tool`, the same three split by user-agent family; `refused`; `prompt_len`; and its own `duration_p50_s`, `duration_p95_s` |
-| `refused`, in a share | LiteLLM | the project's requests that failed, by LiteLLM's `normalized_error` (`429_RATE_LIMIT_EXCEEDED`, `400_CONTEXT_WINDOW_EXCEEDED`, ...). `waiting_frac` on a capacity value sees requests queueing on a box; a request the proxy rejected never reaches one and is invisible to `/metrics` |
+| `refused`, in a share | LiteLLM | the project's requests that failed, by LiteLLM's `normalized_error` (`429_RATE_LIMIT_EXCEEDED`, `400_CONTEXT_WINDOW_EXCEEDED`, ...). `waiting_frac` on a capacity value sees requests queueing on a rental; a request the proxy rejected never reaches one and is invisible to `/metrics` |
 | `prompt_len`, in a share | LiteLLM | counts in token-length buckets (`<1k`, `1k-8k`, `8k-32k`, `32k-128k`, `>128k`), for whether anyone uses the context we pay KV cache for |
 | `ttft_p50_s`, `ttft_p95_s` | the log | time to first token: the spend log sets `completionStartTime` on every request, streamed or not, so it cannot tell |
 | `streamed`, `with_tools`, `finish_length` | the log | counts |
@@ -526,7 +526,7 @@ tables from both sources would only invite arguing about which is right.
 ### What the capacity page gains
 
 Against its four questions: enough capacity gains the refused count and
-the user-felt latency; too much capacity gains who would notice if a box
+the user-felt latency; too much capacity gains who would notice if a rental
 went away; which way demand is going gains the split by project and by
 tool, the only version of that question a human can act on; and the step
 6 suggestions get prompt-length and refusal inputs they cannot get from

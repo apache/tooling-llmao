@@ -54,7 +54,7 @@ def _rental(price, provider="Vast", id="1", label="GB10 x1", host="", status="ru
         url="",
         usd_per_hour=price,
         host=host,
-        # What the box sends as its host: the provider's id for the machine.
+        # What the rental sends as its host: the provider's id for the machine.
         name=id,
         status=status,
         ports=edict(ports or {}),

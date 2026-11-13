@@ -164,9 +164,9 @@ which tier.
 
 **Startup checks.** Every model a run mentions, the judges and all of
 the tier map, must be defined in `models.yaml`, or the command stops and
-names the unknown ones. And a judge must run only on our boxes: a model
+names the unknown ones. And a judge must run only on our rentals: a model
 that a paid provider in `config.yaml` also serves is refused, since the
-gateway falls back to the provider when our boxes cannot answer, and a
+gateway falls back to the provider when our rentals cannot answer, and a
 judge's request carries other projects' prompts.
 
 **What a day costs.** `build` touches every record of the days it

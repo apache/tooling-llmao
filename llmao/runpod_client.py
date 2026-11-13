@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""RunPod's pods: where each running box is, and what it costs.
+"""RunPod's pods: where each running rental is, and what it costs.
 
 httpx only. One GET of the REST API's pod list, with providers.runpod.api_key.
 Every pod is kept, with its status and its public IP, which is empty while
@@ -25,7 +25,7 @@ the fleet's unlisted count. `desiredStatus` is the pod's requested state
 (RUNNING, EXITED, TERMINATED), the only status the API reports.
 
 The same list carries each pod's portMappings, container port to public
-port, which is where a RunPod box's public port comes from, as Vast's comes
+port, which is where a RunPod rental's public port comes from, as Vast's comes
 from its instance listing. RunPod reassigns the port on every pod recreate.
 """
 
@@ -48,7 +48,7 @@ def rentals_from_pods(pods: Any) -> edict:
 
     Every pod, in any status. ``host`` is the public IP, "" while the pod
     initializes or once it has stopped; ``name`` is the pod id, which
-    hosting/runpod/provision.sh sends as the box's host (RUNPOD_POD_ID),
+    hosting/runpod/provision.sh sends as the rental's host (RUNPOD_POD_ID),
     since a pod's address is not known until it runs; ``status`` is ``desiredStatus`` in
     lower case; ``ports`` is portMappings as container port → public port
     (``{"8002": 16643}``), empty when the pod has none. A stopped pod still

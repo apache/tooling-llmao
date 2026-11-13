@@ -143,13 +143,13 @@ def test_catalog_shows_rollup_not_the_yaml_context():
     row = rows[0]
     assert row.rollup == DEGRADED
     assert row.rollup_label == "Degraded"
-    # nothing in the catalog says so; its deployments are on our boxes
+    # nothing in the catalog says so; its deployments are on our rentals
     assert row.hosting_label == "Self-hosted"
     assert row.available
     assert row.degraded
     # The catalog said 999,999. The roll-up reports the served window.
     assert row.context_window == "40,960"
-    # The unhealthy replica is not added. One healthy box, four slots.
+    # The unhealthy replica is not added. One healthy rental, four slots.
     assert row.concurrency == "4 long requests at once"
     assert row.private
     assert row.privacy_lead == "Private"
@@ -238,7 +238,7 @@ def test_admin_rows_carry_their_models_deployments_and_summary():
     pages = _app()
     healthy = _server("gemma")
     down = _server("gemma", host="10.0.0.2", port=8002, ok=False)
-    # A fresh box that has fetched config but not been probed: Loading.
+    # A fresh rental that has fetched config but not been probed: Loading.
     loading = VllmServer(
         model_name="qwen",
         name="qwen",
@@ -415,7 +415,7 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     _orphan(fleet, ORPHAN_PASSES, stamp="http://198.51.100.9:8001")
     (item,) = pages.attention_items(fleet)
     assert item.detail.startswith("llmao added it")
-    # No listing names the host: nothing to approve, the box is invisible.
+    # No listing names the host: nothing to approve, the rental is invisible.
     assert [a.label for a in item.actions] == ["Stop tracking"]
     rental = Rental(
         provider="vast",
@@ -470,7 +470,7 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
         "1": Discovered(vast, {8001: serving}, now),
         "pod-1": Discovered(pod, {8001: dead}, now),
     }
-    # The pod also asked for its config: the same machine, seen by the box protocol too.
+    # The pod also asked for its config: the same machine, seen by the rental protocol too.
     fleet.provisioning.fetches["pod-1"] = ConfigFetch("pod-1", time.time() - 100, time.time() - 5, 3)
     items = pages.attention_items(fleet)
     assert [i.what for i in items] == [
@@ -479,7 +479,7 @@ def test_the_strip_shows_a_machine_nobody_intends_once_with_approve_by_name():
     ]
     assert items[0].detail == "nothing listening; fleet key presented, seen 5s · 3 requests"
     assert items[1].detail == "8001: serving gemma with our key"
-    # Approve is by the name the box sends: the provider's id for the machine.
+    # Approve is by the name the rental sends: the provider's id for the machine.
     assert [[a.label for a in i.actions] for i in items] == [["Approve"], ["Approve"]]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), attention=items, admin=True)
     assert out.count('data-bs-target="#approveRentalModal"') == 2
@@ -514,13 +514,13 @@ def test_drill_down_renders_add_and_remove_actions():
     c = _server("gemma", host="10.0.0.3", ok=False)  # unhealthy, in LiteLLM -> enabled Remove
     d = _server("gemma", host="10.0.0.4", ok=False)  # unhealthy, not in LiteLLM -> disabled Add
     fleet = _fleet(a, b, c, d)
-    for dep in fleet.deployments:  # _fleet defaults every box into LiteLLM
+    for dep in fleet.deployments:  # _fleet defaults every rental into LiteLLM
         if dep.vllm.host in ("10.0.0.2", "10.0.0.4"):
             dep.litellm = ()
     rows = pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
 
-    # Exactly one enabled Add (the healthy box not yet in LiteLLM) posts the row.
+    # Exactly one enabled Add (the healthy rental not yet in LiteLLM) posts the row.
     assert out.count("/do-add-deployment") == 1
     assert 'name="host" value="10.0.0.2"' in out
     assert 'aria-label="Add gemma on 10.0.0.2:8001"' in out
@@ -528,7 +528,7 @@ def test_drill_down_renders_add_and_remove_actions():
     assert "Not in LiteLLM yet, so no traffic. llmao adds it on its next pass; Add does it now." in out
     assert 'title="Register this server in LiteLLM now, so it gets traffic"' in out
 
-    # Exactly one enabled Stop tracking (the unhealthy box still in LiteLLM) posts the row.
+    # Exactly one enabled Stop tracking (the unhealthy rental still in LiteLLM) posts the row.
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="10.0.0.3"' in out
     assert "Stop tracking" in out
@@ -673,8 +673,8 @@ def test_card_copies_the_model_id_from_an_icon():
 
 def test_mixed_card_and_unavailable_card():
     pages = _app()
-    box = _server("gemma")
-    fleet = _fleet(box)
+    rental = _server("gemma")
+    fleet = _fleet(rental)
     commercial = FleetDeployment.from_intended(
         provider_intent("example", "gemma", "example/gemma", "https://api.example")
     )
@@ -842,7 +842,7 @@ def test_a_gone_rental_has_no_buttons():
 
 
 def test_an_unlisted_host_still_serving_gets_no_remove_sentence():
-    # A listing gap with the box answering: the listing is in doubt, not the
+    # A listing gap with the rental answering: the listing is in doubt, not the
     # rental. The item shows, the deployment stays, nothing says "remove".
     pages = _app()
     srv = _server("gemma", host="10.0.0.9", ok=True)
@@ -893,7 +893,8 @@ def test_a_rental_that_rejects_our_key_is_work_needed_with_the_fix_named():
     assert item.kind == "rejected"
     assert "rejected" in item.rest
     assert (
-        item.detail == "vLLM is up but rejects our key, so it was dropped from LiteLLM. Check the api key on the box."
+        item.detail
+        == "vLLM is up but rejects our key, so it was dropped from LiteLLM. Check the api key on the rental."
     )
     (add,) = [a for a in pages.admin_actions(fleet, dep) if a.kind == "add"]
     assert (add.kind, add.enabled, add.reason) == ("add", ezt.boolean(False), "vLLM rejects our key")

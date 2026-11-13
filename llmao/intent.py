@@ -21,13 +21,13 @@ One ``IntendedDeployment`` per intended LiteLLM deployment, from three
 origins, all of them config:
 
 - a ``fleet.hosts`` row in config.yaml: one vLLM process on one of our
-  boxes, ``[model, port]`` or ``[model, port, name]``;
-- an approval, held in memory by the fleet: an unknown box an admin told
+  rentals, ``[model, port]`` or ``[model, port, name]``;
+- an approval, held in memory by the fleet: an unknown rental an admin told
   to load some models, one process per model on the listen ports in
   order;
 - a ``config.yaml`` provider line: a model bought from a provider account.
 
-``models.yaml`` supplies the recipe for our boxes (``VllmRecipe``). This
+``models.yaml`` supplies the recipe for our rentals (``VllmRecipe``). This
 module is the only one that reads a host row or a provider line; every
 other module reads the record. The record carries everything derivable
 from config at parse time, and that includes the bearer: it is minted
@@ -46,7 +46,7 @@ for us, each line one deployment::
         models:
           grok-4: openrouter/x-ai/grok-4      # model_name: the provider's model, as LiteLLM names it
 
-A GPU host rents us the boxes our own vLLM servers run on (Vast, RunPod).
+A GPU host rents us the machines our own vLLM servers run on (Vast, RunPod).
 It is known by name (llmao has an API client for each, in GPU_HOSTS) and
 carries only its api_key; llmao reads its API for port mappings and
 prices::
@@ -57,7 +57,7 @@ prices::
 
 Where a model is served is a fact about the deployment, never the model, so
 none of this is in models.yaml. The same model can be listed under several
-providers and run on our own boxes as well; which one serves a request is
+providers and run on our own rentals as well; which one serves a request is
 LiteLLM's routing, steered by ``order`` (proxy.deployments.ORDER_SELF_HOSTED and
 proxy.deployments.ORDER_SPEND). The keys live in config.yaml, which is not committed.
 """
@@ -78,29 +78,29 @@ from llmao.reconcile import DeploymentKey, deployment_key, normalize_peer_ip
 _LOGGER = logging.getLogger(__name__)
 
 # The GPU hosts llmao has an API client for. An account under one of these
-# names rents boxes; any other name is a model provider.
+# names rents machines; any other name is a model provider.
 GPU_HOSTS = ("vast", "runpod")
 
-# The three container ports a box's template exposes for vLLM, in order (the
-# Vast template and the RunPod image alike). A box does not get a fourth. A
+# The three container ports a rental's template exposes for vLLM, in order (the
+# Vast template and the RunPod image alike). A rental does not get a fourth. A
 # host row may name any of them; an approval takes them in order. Either
 # provider's listing maps each one to the public port a server is dialed on.
 VLLM_LISTEN_PORTS = (8001, 8002, 8003)
 
-# Boxes already up on other ports. Delete a pair when that box is replaced.
+# Rentals already up on other ports. Delete a pair when that rental is replaced.
 # Not a template for new hosts. These run the shared fleet.selfhost_api_key,
 # which validate_fleet requires while one of them is configured; every other
-# box runs the key derived from the salt. vllm_api_key applies the rule.
+# rental runs the key derived from the salt. vllm_api_key applies the rule.
 LEGACY_SERVERS = {
     ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
     ("103.196.86.105", 8004),  # qwen3.8-27b, public port from RunPod
-    # 8003 is a normal listen port. This box still runs the shared key.
+    # 8003 is a normal listen port. This rental still runs the shared key.
     ("213.173.110.78", 8003),
 }
 
 # Where an IntendedDeployment came from.
 HOSTS = "hosts"  # a fleet.hosts row
-APPROVAL = "approval"  # an admin approved an unknown box for these models
+APPROVAL = "approval"  # an admin approved an unknown rental for these models
 PROVIDER = "provider"  # a config.yaml provider line
 
 
@@ -126,7 +126,7 @@ class Approval:
 class IntendedDeployment:
     """One intended LiteLLM deployment, as config says it.
 
-    On our boxes (``recipe`` set): ``host`` and ``listen_port`` are the
+    On our rentals (``recipe`` set): ``host`` and ``listen_port`` are the
     identity, ``name`` labels the process, ``api_key`` is the bearer it
     runs with. From a provider (``provider`` set): ``api_base`` is the
     identity, ``litellm_model`` the provider's model as LiteLLM names it,
@@ -146,7 +146,7 @@ class IntendedDeployment:
     litellm_model: str | None = None
     api_base: str | None = None
     # Deprecated: a fourth host-row element pinning the public port. It
-    # seeds the port until a listing names the box; see parse_host_row.
+    # seeds the port until a listing names the rental; see parse_host_row.
     public_port: int | None = None
 
     @property
@@ -157,9 +157,9 @@ class IntendedDeployment:
 # --- the bearer ------------------------------------------------------------
 #
 # Derived, not stored. The salt stays in llmao config; fleet.key is only the
-# bearer for GET /vllm/config, so a box that copied FLEET_KEY cannot compute
-# another box's key. The payload carries the derived bearer; that is how
-# Vast boxes receive it (instance env injection does not work). The box
+# bearer for GET /vllm/config, so a rental that copied FLEET_KEY cannot compute
+# another rental's key. The payload carries the derived bearer; that is how
+# Vast rentals receive it (instance env injection does not work). The rental
 # needs it before `vllm serve` and LiteLLM needs the same value at
 # /model/new, so it is computable on both sides from the host and listen
 # port alone; llmao keeps no key table. Prefix sk-vllm- marks the key as a
@@ -194,12 +194,12 @@ def vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
     """The bearer this vLLM process runs with, and so what every reader of it uses.
 
     The shared fleet.selfhost_api_key for LEGACY_SERVERS, the key derived
-    from fleet.vllm_api_salt for every other box. One rule, applied once,
-    when the IntendedDeployment is minted: the payload tells the box this
+    from fleet.vllm_api_salt for every other rental. One rule, applied once,
+    when the IntendedDeployment is minted: the payload tells the rental this
     key, the probe asks /v1/models with it, LiteLLM is registered with it.
     The wrong key 401s, and the next probe says so (Rejected).
 
-    Not fleet.key (boxes have that). Not a models.yaml field. The salt is
+    Not fleet.key (rentals have that). Not a models.yaml field. The salt is
     required and validate_fleet checked it at startup; read it as an
     attribute, never with a default, so a config that skipped validation
     raises here rather than HMAC an empty salt into a public bearer.
@@ -209,17 +209,17 @@ def vllm_api_key(cfg: Any, host: str, listen_port: int) -> str:
     return derive_vllm_api_key(cfg.fleet.vllm_api_salt, host, listen_port)
 
 
-# --- our boxes: fleet.hosts rows and approvals -----------------------------
+# --- our rentals: fleet.hosts rows and approvals -----------------------------
 
 
 def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int | None]:
     """[model, port] | [model, port, name] | [model, port, name, public_port]
 
     The fourth element is deprecated. It pinned the public port for RunPod
-    boxes while their mapping could not be looked up; now both providers'
+    rentals while their mapping could not be looked up; now both providers'
     listings carry it (Vast's HostPort, RunPod's portMappings). A row that
     still has one loads, with a warning from Fleet.from_cfg, and the value
-    only seeds public_port until a listing names the box. Drop it from
+    only seeds public_port until a listing names the rental. Drop it from
     config; it is not refused so that a config change never stops llmao.
     """
     if not isinstance(raw, (list, tuple)) or len(raw) not in (2, 3, 4):
@@ -260,7 +260,7 @@ def vllm_intent(
     origin: str,
     public_port: int | None = None,
 ) -> IntendedDeployment:
-    """One vLLM process on one of our boxes, minted with its recipe and its bearer."""
+    """One vLLM process on one of our rentals, minted with its recipe and its bearer."""
     model_name = str(model.model_name)
     return IntendedDeployment(
         key=deployment_key(model_name, host=host, listen_port=port),
@@ -408,7 +408,7 @@ def validate_providers(cfg: Any, models: list) -> None:
         if not key or key.startswith("CHANGE_ME"):
             raise ValueError(f"{where}.api_key is required")
         if name in GPU_HOSTS:
-            # A GPU host rents boxes; it serves no model by itself.
+            # A GPU host rents machines; it serves no model by itself.
             extra = sorted(k for k in entry if k != "api_key")
             if extra:
                 raise ValueError(f"{where} is a GPU host and takes only api_key, not {', '.join(extra)}")

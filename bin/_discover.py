@@ -76,17 +76,17 @@ def _legacy_env(known: set[str]) -> tuple[dict[str, str], dict[str, str]]:
 
 
 def direct_endpoints(models: list[str] | None = None, unresolved: dict[str, str] | None = None) -> dict[str, str]:
-    """{model_name: 'host:port'} -- one reachable box per model.
+    """{model_name: 'host:port'} -- one reachable rental per model.
 
-    When a model has several boxes, the one with a LiteLLM route wins, since
+    When a model has several rentals, the one with a LiteLLM route wins, since
     that is what the gateway would have sent the request to anyway. Use
     llmao-fleet to see all of them.
     """
-    boxes, _meta = fleet()
+    rentals, _meta = fleet()
     out: dict[str, str] = {}
-    for b in sorted(boxes, key=lambda b: (bool(b.routes), bool(b.public_port))):
+    for b in sorted(rentals, key=lambda b: (bool(b.routes), bool(b.public_port))):
         if b.addr and b.model:
-            out[b.model] = b.addr  # last wins; routed boxes sort last
+            out[b.model] = b.addr  # last wins; routed rentals sort last
 
     legacy, unmatched = _legacy_env(set(models or ()) | set(out))
     out.update(legacy)  # an explicit override wins

@@ -149,7 +149,7 @@ LOG_SAFE_LIMIT = 500
 def log_safe(value: Any, limit: int = LOG_SAFE_LIMIT) -> str:
     """One line of someone else's text, safe to put in a log line.
 
-    Anything that reaches a log through %s and came from off the box can
+    Anything that reaches a log through %s and came from outside the gateway can
     forge a line of its own: a newline in the middle of a value makes the
     rest of it look like the next entry. Escaping the three characters that
     do that -- CR, LF and NUL -- plus the ESC that would otherwise colour or

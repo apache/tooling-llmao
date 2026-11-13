@@ -18,7 +18,7 @@
 
 """Print the derived vLLM --api-key for a host listen port.
 
-Same string GET /vllm/config returns. Hand-launched boxes: paste into
+Same string GET /vllm/config returns. Hand-launched rentals: paste into
 vllm serve / Supervisor.
 
     bin/llmao-vllm-api-key --host 203.0.113.10 --port 8001
