@@ -45,6 +45,8 @@ def _render(
     approvals=(),
     recent=(),
     disk=None,
+    requests_down=False,
+    skew_down=False,
 ):
     matches = bool(running) and running == expected
     data = edict(
@@ -80,6 +82,8 @@ def _render(
         attention=list(attention),
         approve_choices=list(approve_choices),
         skew_count=(len(skew) + len(attention)) or None,
+        requests_down=ezt.boolean(requests_down),
+        skew_down=ezt.boolean(skew_down),
         litellm_running=running,
         litellm_expected=expected,
         litellm_matches=ezt.boolean(matches),
@@ -329,6 +333,29 @@ def test_admin_shows_a_version_mismatch_and_unavailable():
     missing = _render(running=None, expected="1.102.2")
     assert "LiteLLM unavailable" in missing
     assert re.search(r'admin-tile-figure-text">\s*down\s*<', missing)
+
+
+def test_a_read_that_failed_is_a_dash_and_a_sentence_not_a_zero():
+    """0 and "Nothing waiting" are claims about LiteLLM; a failed read makes none."""
+    pin = "1.0.0"
+    out = _render(running=None, expected=pin, requests_down=True, skew_down=True)
+    tiles = out[out.index('href="#work"') : out.index('href="/models" class="card')]
+    assert tiles.count("&ndash;") == 3
+    assert ">0<" not in tiles
+    assert "admin-tile-hot" not in tiles
+    assert out.count("Could not read LiteLLM") == 3
+    assert "Nothing waiting" not in out and "None outstanding" not in out
+    assert 'id="work"' in out  # the section is there to carry the sentence
+    # A fleet item still shows while the skew store cannot be read: it never came from LiteLLM.
+    item = edict(
+        what="Vast 1 is rented, nobody intends it", detail="", anchor="", ident="", rest="", flag="", actions=[]
+    )
+    both = _render(running=None, expected=pin, skew_down=True, attention=[item])
+    assert "nobody intends it" in both and "Could not read LiteLLM, so what it holds" in both
+    # Fine reads say what they found.
+    fine = _render(running=pin, expected=pin)
+    assert "&ndash;" not in fine and "Could not read" not in fine
+    assert "Nothing waiting" in fine and "None outstanding" in fine
 
 
 def test_the_gateway_tile_shows_disk_room_and_goes_warm_when_low(tmp_path):

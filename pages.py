@@ -1520,10 +1520,15 @@ async def admin_index(result):
     ident = await current_identity(APP.cfg)
     mine = quart.request.args.get("who") == "me"
 
+    # A read that fails is said to have failed: a tile shows a dash and its
+    # section says so, since "0" and "Nothing waiting" would be a claim
+    # about LiteLLM that nothing checked.
     try:
         stored = await APP.backend.requests.find_all()
+        requests_down = False
     except BackendUnavailableError:
-        stored = []
+        stored, requests_down = [], True
+    result.requests_down = ezt.boolean(requests_down)
     pending = sorted((r for r in stored if r.state == "pending"), key=lambda r: r.created_at or "")
     result.requests = _request_rows(pending)
     result.pending_count = len(pending) or None
@@ -1532,8 +1537,10 @@ async def admin_index(result):
 
     try:
         skew = await APP.seam.work_needed(ident)
+        skew_down = False
     except (AuthzError, BackendUnavailableError):
-        skew = []
+        skew, skew_down = [], True
+    result.skew_down = ezt.boolean(skew_down)
     result.skew = _skew_rows(skew)
     # The fleet's items, with their buttons, so this page is the one list of
     # what needs an admin; the deployment rows on /models keep theirs too.

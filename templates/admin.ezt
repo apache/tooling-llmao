@@ -10,7 +10,7 @@
     <div class="col">
       <a href="#work" class="card h-100 admin-tile[if-any skew_count] admin-tile-warm[end]">
         <div class="card-body">
-          <div class="admin-tile-figure">[if-any skew_count][skew_count][else]0[end]</div>
+          <div class="admin-tile-figure">[if-any skew_down]&ndash;[else][if-any skew_count][skew_count][else]0[end][end]</div>
           <div class="admin-tile-label"><i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Work needed</div>
         </div>
       </a>
@@ -18,7 +18,7 @@
     <div class="col">
       <a href="#requests" class="card h-100 admin-tile[if-any pending_count] admin-tile-hot[end]">
         <div class="card-body">
-          <div class="admin-tile-figure">[if-any pending_count][pending_count][else]0[end]</div>
+          <div class="admin-tile-figure">[if-any requests_down]&ndash;[else][if-any pending_count][pending_count][else]0[end][end]</div>
           <div class="admin-tile-label"><i class="bi bi-inbox" aria-hidden="true"></i> Awaiting your decision</div>
         </div>
       </a>
@@ -26,7 +26,7 @@
     <div class="col">
       <a href="#approvals" class="card h-100 admin-tile[if-any approval_count] admin-tile-warm[end]">
         <div class="card-body">
-          <div class="admin-tile-figure">[if-any approval_count][approval_count][else]0[end]</div>
+          <div class="admin-tile-figure">[if-any requests_down]&ndash;[else][if-any approval_count][approval_count][else]0[end][end]</div>
           <div class="admin-tile-label"><i class="bi bi-key" aria-hidden="true"></i> Approvals not yet used</div>
         </div>
       </a>
@@ -52,9 +52,13 @@
     </div>
   </div>
 
-  [if-any skew attention]
+  [if-any skew attention skew_down]
   <section id="work" class="mb-4">
-    <h2 class="h5 mb-2">Work needed <span class="badge text-bg-warning align-middle">[skew_count]</span></h2>
+    <h2 class="h5 mb-2">Work needed[if-any skew_count] <span class="badge text-bg-warning align-middle">[skew_count]</span>[end]</h2>
+    [if-any skew_down]
+    <p class="text-muted small"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Could not read LiteLLM, so what it holds is not listed.</p>
+    [end]
+    [if-any skew attention]
     <div class="list-group">
       [for skew]
       <div class="list-group-item d-flex justify-content-between align-items-start">
@@ -115,6 +119,7 @@
       [end]
     </div>
     <p class="small text-muted mt-1 mb-0">Each stays until it is put right. A deployment's name opens its row on Models.</p>
+    [end]
   </section>
   [end]
 
@@ -179,7 +184,11 @@
     </div>
     [end]
     [else]
+    [if-any requests_down]
+    <p class="text-muted small"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Could not read LiteLLM.</p>
+    [else]
     <p class="text-muted small"><i class="bi bi-check2-all text-success" aria-hidden="true"></i> Nothing waiting.</p>
+    [end]
     [end]
   </section>
 
@@ -202,7 +211,11 @@
       [end]
     </div>
     [else]
+    [if-any requests_down]
+    <p class="text-muted small"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Could not read LiteLLM.</p>
+    [else]
     <p class="text-muted small">None outstanding.</p>
+    [end]
     [end]
   </section>
 
