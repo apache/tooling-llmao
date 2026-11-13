@@ -44,7 +44,7 @@
           [if-any disk]
           <div class="admin-tile-label">
             <i class="bi [if-any disk.low]bi-exclamation-triangle[else]bi-hdd[end]" aria-hidden="true"></i>
-            [disk.free_h] of [disk.total_h] free on disk
+            <span class="llmao-hover" title="[disk.free_h] free of [disk.total_h] on disk">[disk.free_h] free ([disk.free_pct]%)</span>
           </div>
           [end]
         </div>

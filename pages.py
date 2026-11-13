@@ -1582,7 +1582,14 @@ def disk_room(path: pathlib.Path):
     except FileNotFoundError:
         return None
     low = usage.free < usage.total * DISK_LOW_FRACTION
-    return edict(free_h=fmt.gigabytes(usage.free), total_h=fmt.gigabytes(usage.total), is_low=low, low=ezt.boolean(low))
+    return edict(
+        free_h=fmt.gigabytes(usage.free),
+        total_h=fmt.gigabytes(usage.total),
+        # The free share is the glance: "is this low?" is a percentage question.
+        free_pct=fmt.pct(usage.free / usage.total),
+        is_low=low,
+        low=ezt.boolean(low),
+    )
 
 
 # How far back Recent work reaches.

@@ -364,17 +364,22 @@ def test_the_gateway_tile_shows_disk_room_and_goes_warm_when_low(tmp_path):
 
     room = pages.disk_room(tmp_path)
     assert room.free_h.endswith(" GB") and room.total_h.endswith(" GB")
+    assert 0 <= room.free_pct <= 100
     assert pages.disk_room(tmp_path / "missing") is None
 
     pin = "1.0.0"
-    out = _render(running=pin, expected=pin, disk=edict(free_h="41 GB", total_h="98 GB", is_low=False, low=None))
+    fine = edict(free_h="88 GB", total_h="103 GB", free_pct=85, is_low=False, low=None)
+    out = _render(running=pin, expected=pin, disk=fine)
     tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
-    assert "41 GB of 98 GB free on disk" in tile
+    # The glance leads with what is left and its share; the total is under the pointer.
+    assert 'title="88 GB free of 103 GB on disk">88 GB free (85%)</span>' in tile
     assert "admin-tile-warm" not in tile
-    low = _render(running=pin, expected=pin, disk=edict(free_h="9 GB", total_h="98 GB", is_low=True, low="yes"))
+    scarce = edict(free_h="9 GB", total_h="103 GB", free_pct=9, is_low=True, low="yes")
+    low = _render(running=pin, expected=pin, disk=scarce)
     tile = low[low.index('href="/models" class="card') : low.index("</a>", low.index('href="/models" class="card'))]
+    assert "9 GB free (9%)" in tile
     assert "admin-tile-warm" in tile and "bi-exclamation-triangle" in tile
-    assert "free on disk" not in _render(running=pin, expected=pin)
+    assert "GB free" not in _render(running=pin, expected=pin)
 
 
 class _Resp:
