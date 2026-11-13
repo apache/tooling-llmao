@@ -294,6 +294,13 @@ def test_admin_pages_share_one_nav_with_the_current_page_marked():
     assert 'class="nav-link" href="/admin/tiers"' in out
 
 
+def test_admin_tiles_run_in_the_order_of_the_sections_they_open():
+    """Work needed is the first section, so it is the first tile."""
+    out = _render(running="1.0.0", expected="1.0.0")
+    tiles = [out.index(f'href="#{anchor}" class="card') for anchor in ("work", "requests", "approvals", "litellm")]
+    assert tiles == sorted(tiles)
+
+
 def test_admin_shows_a_version_mismatch_and_unavailable():
     out = _render(running="1.0.0", expected="1.102.2")
     assert "Running 1.0.0; the pin is 1.102.2." in out

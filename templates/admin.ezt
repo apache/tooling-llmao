@@ -8,6 +8,14 @@
 
   <div class="row row-cols-2 row-cols-lg-4 g-3 mb-4">
     <div class="col">
+      <a href="#work" class="card h-100 admin-tile[if-any skew_count] admin-tile-warm[end]">
+        <div class="card-body">
+          <div class="admin-tile-figure">[if-any skew_count][skew_count][else]0[end]</div>
+          <div class="admin-tile-label"><i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Work needed</div>
+        </div>
+      </a>
+    </div>
+    <div class="col">
       <a href="#requests" class="card h-100 admin-tile[if-any pending_count] admin-tile-hot[end]">
         <div class="card-body">
           <div class="admin-tile-figure">[if-any pending_count][pending_count][else]0[end]</div>
@@ -20,14 +28,6 @@
         <div class="card-body">
           <div class="admin-tile-figure">[if-any approval_count][approval_count][else]0[end]</div>
           <div class="admin-tile-label"><i class="bi bi-key" aria-hidden="true"></i> Approvals not yet used</div>
-        </div>
-      </a>
-    </div>
-    <div class="col">
-      <a href="#work" class="card h-100 admin-tile[if-any skew_count] admin-tile-warm[end]">
-        <div class="card-body">
-          <div class="admin-tile-figure">[if-any skew_count][skew_count][else]0[end]</div>
-          <div class="admin-tile-label"><i class="bi bi-wrench-adjustable" aria-hidden="true"></i> Work needed</div>
         </div>
       </a>
     </div>
