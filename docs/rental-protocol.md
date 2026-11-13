@@ -292,7 +292,17 @@ flowchart LR
 
 **The CA.** One key pair, generated once by hand, the private key in the
 eyaml beside the salt and never anywhere else; the public certificate in
-hiera. It signs two kinds of certificate and nothing else.
+hiera. It signs two kinds of certificate and nothing else. The key is
+online, on the gateway box, because the mint happens at every rental boot
+with nobody watching; that box already holds the salt that mints every
+bearer and LiteLLM's master key, so the CA key adds no new place to
+protect.
+
+**Keys.** ECDSA on P-384, for the CA, the client and every rental: a
+192-bit security level, above RSA 4096, in a certificate a fraction of
+the size. Strength is the criterion. The mint runs once per rental at
+setup, and a handshake once per pooled connection, against a rental
+lifetime of months; neither cost is worth a weaker curve.
 
 **The rental's server certificate.** Minted by llmao at `GET /vllm/config`,
 one per rental (not per server: the vLLM processes on a rental share the
@@ -351,7 +361,10 @@ written by Puppet to `/opt/llmao/certs/litellm-client.pem`. LiteLLM
 presents it through `litellm_settings.ssl_certificate`; llmao's probe and
 sampler load the same file for their `httpx` client. vLLM checks only that
 the chain ends at our CA, not the subject, which is enough: there is one
-client.
+client. The setting is global to LiteLLM, but a TLS client sends its
+certificate only when the server asks for one in the handshake, and the
+paid providers never ask; the certificate goes to our rentals and nowhere
+else.
 
 **Trust on the gateway box.** `litellm_settings.ssl_verify` names one CA
 file and that file replaces LiteLLM's default (certifi) outright, so it
@@ -430,6 +443,7 @@ back to `http`, because a fallback is the attack.
   restarts; the LiteLLM restart drops in-flight requests, so an OS root
   update costs one interruption.
 - Whether `cryptography` becomes a direct dependency of the portal (it is
-  in the lock through LiteLLM) or the mint shells out to `openssl`.
+  in the lock through LiteLLM) or the mint shells out to `openssl`. Either
+  does P-384.
 - The exact `Retry-After` and how many retries the installer makes before
   it gives up and lets Supervisor's log say why.
