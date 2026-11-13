@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-11-05<br>
+**As of:** 2026-11-12<br>
 **Repo:** `apache/tooling-llmao`<br>
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`<br>
 **How to run/use this software:** repo [`README.md`](../README.md)<br>
@@ -22,6 +22,8 @@
 ## Done (today — thin)
 
 Implemented enough for local production-shaped use: asfquart OAuth; LiteLLMBackend + fail-fast team cache warm; `models.yaml` definitions; PAT UX (**My Keys**, including key requests; automation keys are listed for site admins as **Service keys**); **Models** page (supply-path redaction for non–site-admins); secrets as dual YAML / eyaml intent; system Postgres + prisma setup; offline `tests/mock_backend.py`.
+
+**The front door** is three steps, sign in, make a key, send a request, each marked done when the server can see it is: a key exists for this person, a spend-log row exists for them ever, each one question to LiteLLM with a one-record answer. Picking a model is advice inside the connect step, not a step, since nothing is stored when someone picks one. The welcome page says nothing about who sees prompts; hosting facts live on the Models page, the FAQ and the Terms. A site admin can **operate as a normal user** from the name menu: the standing goes everywhere, the Admin link, the work pointer and `/admin` itself, and the flag is per browser session and names the uid that set it.
 
 **Models page:** definitions-first table (name, id, Available Yes/No, Request a key → `/keys/new?model=`). Context, license, and hosting live in Details; supply-path fields stay site-admin in the modal. Available is policy (always true until P5) **and** in service **and** in LiteLLM. Self-hosted with nothing Healthy or no deployment is No. Sort puts No last. Per-process state is in the `/models` admin drill-down.
 
@@ -66,8 +68,13 @@ the prompt log. Design: `docs/capacity-design.md`.
 serves, one JSON line per request in one file per UTC day on the gateway
 host, written by a LiteLLM hook through loguru, which owns rotation,
 compression and the 90-day retention. The prompt is kept, the response is
-not. Design: `docs/prompt-logging-design.md`; what is kept and who reads
-it is under "Data handling" below and in the Terms of Use.
+not. A record is a plain dict, since a client's tool schema may carry a
+key named `items`; the key block is hash, purpose, user, project, the
+purpose being the text typed when the key was made. A project or person
+that is none is labelled `llmao:none`, a master-key request
+`llmao:master-key`: one word each, and the prefix says the gateway made
+the label up. Design: `docs/prompt-logging-design.md`; what is kept and
+who reads it is under "Data handling" below and in the Terms of Use.
 
 **The analysis of the log** is R&D in `analysis/`, outside the package:
 one entry point, `prompts`, that clusters a span of days by project,
@@ -76,8 +83,13 @@ models three questions about each cluster (Foundation work or not, the
 lowest tier that would do, what people are doing), and reports the
 consensus and the clusters running on a heavier model than the work needs.
 Four judges on the first day's 23 clusters agreed on Foundation work every
-time and on the activity nearly so; the tier needed rules. Design:
-`docs/analysis-design.md`.
+time and on the activity nearly so; the tier needed rules. Since
+2026-11-11 the four judges run on production (p6 #2933) with the
+`analysis_*` settings rendered by Puppet and required by the script; the
+store was rebuilt there under the new labels and nothing waits for a
+judge. A cluster's exemplar is re-picked when the day it came from is
+pruned, so a steady cluster's verdict is renewed once per retention.
+Design: `docs/analysis-design.md`.
 
 **Fleet reconciliation** is most of the way through: each source the
 portal watches (rentals, config fetches, approvals, LiteLLM deployments,
@@ -105,7 +117,7 @@ Edge cases that bite operators (LiteLLM down, pagination, master key drift, pris
 
 ## Where the work stands
 
-As of 2026-11-05. Three lists: what is small enough to pick up in an
+As of 2026-11-12. Three lists: what is small enough to pick up in an
 hour, what is an afternoon, and the larger threads with the steps each
 still has. Then what is waiting on a decision, and what is parked on
 purpose. Issues on GitHub hold the ideas that want colleagues' eyes
@@ -160,8 +172,10 @@ before any code.
 **The UX rethink** (started 2026-11-02; the capacity display round is
 done).
 
-- The tiles-and-words commit on `/admin/capacity`; whether an idle-rental
-  dollar tile belongs is a question to ask first.
+- The tiles-and-words commit on `/admin/capacity`: the card's $/day is
+  the period average (verified, not a bug) beside present-tense $/hr
+  rental lines, so label it so and add the current rate; whether an
+  idle-rental dollar tile belongs is a question to ask first.
 - Details on `/models` as a tabbed dialog: general; provenance from
   Apache Sourcelume; an admin tab with provisioning facts and GPU
   metrics.
@@ -193,15 +207,28 @@ A8; parked 2026-11-05 until the judges have run for a while).
 - The taxonomy refined with colleagues against real verdicts; tests for
   `analysis/_core.py` once its functions stop moving.
 
-**Access control** (`docs/access-control-design.md`, a draft).
+**Access control** (`docs/access-control-design.md`; paused 2026-11-08
+with a three-step plan agreed and nothing built).
 
-- Who grants a restricted group: site admins only, or a PMC for its own
-  project.
-- Paid models restricted by default, granted per project with a budget;
-  whether the fallback to a provider stays open to everyone.
-- A model going from Private to Mixed (an orphan, or a provider line
-  added) means prompts may leave our infrastructure; keys minted under
-  the Private promise may want revoking or re-consenting.
+- The design, revised 2026-11-08: LiteLLM's groups cover a model name;
+  its tag routing chooses among a name's deployments, and a `!` or `&`
+  tag from the key or team cannot be taken off by the caller. So the
+  second name per paid route is withdrawn: provider deployments carry
+  `paid`, teams that may never spend carry `!paid`. The hole it closes:
+  once a provider deployment shares a name with ours, the free tier
+  reaches it as fallback.
+- Step 1: llmao tags `paid` and `self-hosted` on the deployments it adds,
+  `router_settings` in the example config; the live rows backfilled by
+  hand.
+- Step 2: the p6 change that switches `enable_tag_filtering` on, a
+  reviewed PR.
+- Step 3: `!paid` on the pretend projects' teams in the existing
+  out-of-line check; the analysis judge sends `!paid` (#73).
+- Still open: who grants a restricted group (site admins only, or a PMC
+  for its own project); paid models granted per project with a budget;
+  a model going from Private to Mixed means prompts may leave our
+  infrastructure, and keys minted under the Private promise may want
+  revoking or re-consenting; the doc's questions 2, 3, 4, 6 and 7.
 
 ### Waiting on a decision
 
@@ -222,11 +249,11 @@ A8; parked 2026-11-05 until the judges have run for a while).
   would let the analysis judge queue behind users, but any client could
   then raise its own priority; it needs the proxy to strip the field from
   everyone not allowed to set it. Not done.
-- **#73, "self-hosted only" on a request.** LiteLLM's tag filtering:
-  tag the paid deployments when the portal adds them, switch the filter
-  on in `litellm.yaml`, and a request sends `!paid`. Not in our hook,
-  which runs before routing and cannot choose a deployment. Not a
-  development item while nothing is served from a paid provider.
+- **#73, "self-hosted only" on a request.** Now step 3 of the access
+  control plan above: tags on the deployments, the filter switched on
+  in `litellm.yaml`, and a request sends `!paid`. Not in our hook, which
+  runs before routing and cannot choose a deployment. Not a development
+  item while nothing is served from a paid provider.
 - **#68, the scanner**, above.
 
 ### Parked on purpose
