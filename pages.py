@@ -26,6 +26,7 @@ import json
 import logging
 import pathlib
 import re
+import shutil
 from urllib.parse import quote, urlsplit
 
 import asfquart
@@ -75,6 +76,7 @@ from llmao.model_status import (
 )
 from llmao.models import VllmRecipe, model_available_for, model_in_service, ux_models
 from llmao.planning import Advisor, days_to_read, summarise_capacity, summarise_demand, summarise_spend
+from llmao.prompt_log import log_dir
 from llmao.proxy.client import (
     PRETEND_PROJECTS,
     TIER_FREE,
@@ -1548,10 +1550,30 @@ async def admin_index(result):
     except BackendUnavailableError:
         result.litellm_running = None
     result.litellm_expected = pinned_litellm_version()
-    result.litellm_matches = ezt.boolean(
-        bool(result.litellm_running) and result.litellm_running == result.litellm_expected
-    )
+    matches = bool(result.litellm_running) and result.litellm_running == result.litellm_expected
+    result.litellm_matches = ezt.boolean(matches)
+    # The disk the prompt log grows on: the host has one, and it fills.
+    result.disk = disk_room(log_dir(APP.cfg))
+    result.gateway_ok = ezt.boolean(matches and not (result.disk and result.disk.is_low))
     return result
+
+
+# Below this share of the disk free, the Gateway tile goes warm.
+DISK_LOW_FRACTION = 0.15
+
+
+def disk_room(path: pathlib.Path):
+    """Free and total space of the disk holding `path`, for the Gateway tile.
+
+    None when the path is not there, which is a developer's checkout
+    without a prompt log, not a disk to report on.
+    """
+    try:
+        usage = shutil.disk_usage(path)
+    except FileNotFoundError:
+        return None
+    low = usage.free < usage.total * DISK_LOW_FRACTION
+    return edict(free_h=fmt.gigabytes(usage.free), total_h=fmt.gigabytes(usage.total), is_low=low, low=ezt.boolean(low))
 
 
 # How far back Recent work reaches.

@@ -20,6 +20,7 @@
 import asyncio
 import io
 import pathlib
+import re
 
 import ezt
 import httpx
@@ -43,7 +44,9 @@ def _render(
     requests=(),
     approvals=(),
     recent=(),
+    disk=None,
 ):
+    matches = bool(running) and running == expected
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
@@ -79,7 +82,9 @@ def _render(
         skew_count=(len(skew) + len(attention)) or None,
         litellm_running=running,
         litellm_expected=expected,
-        litellm_matches=ezt.boolean(bool(running) and running == expected),
+        litellm_matches=ezt.boolean(matches),
+        disk=disk,
+        gateway_ok=ezt.boolean(matches and not (disk and disk.is_low)),
     )
     buf = io.StringIO()
     template = ezt.Template(
@@ -296,7 +301,8 @@ def test_admin_drops_models_and_shows_a_version_match():
     pin = pinned_litellm_version()
     out = _render(running=pin, expected=pin)
     assert "Routes, hosts and serving state" not in out
-    assert f"{pin}, matches the pin." in out
+    assert pin in out and "LiteLLM matches the pin" in out
+    assert 'id="litellm"' not in out  # the tile says it once; there is no card at the foot
 
 
 def test_admin_pages_share_one_nav_with_the_current_page_marked():
@@ -312,15 +318,35 @@ def test_admin_pages_share_one_nav_with_the_current_page_marked():
 def test_admin_tiles_run_in_the_order_of_the_sections_they_open():
     """Work needed is the first section, so it is the first tile."""
     out = _render(running="1.0.0", expected="1.0.0")
-    tiles = [out.index(f'href="#{anchor}" class="card') for anchor in ("work", "requests", "approvals", "litellm")]
+    tiles = [out.index(f'href="{href}" class="card') for href in ("#work", "#requests", "#approvals", "/models")]
     assert tiles == sorted(tiles)
 
 
 def test_admin_shows_a_version_mismatch_and_unavailable():
     out = _render(running="1.0.0", expected="1.102.2")
-    assert "Running 1.0.0; the pin is 1.102.2." in out
+    assert "1.0.0" in out and "differs from the pin, 1.102.2" in out
+    assert "admin-tile-warm" in out[out.index('href="/models" class="card') :]
     missing = _render(running=None, expected="1.102.2")
-    assert "Unavailable." in missing
+    assert "LiteLLM unavailable" in missing
+    assert re.search(r'admin-tile-figure-text">\s*down\s*<', missing)
+
+
+def test_the_gateway_tile_shows_disk_room_and_goes_warm_when_low(tmp_path):
+    import pages
+
+    room = pages.disk_room(tmp_path)
+    assert room.free_h.endswith(" GB") and room.total_h.endswith(" GB")
+    assert pages.disk_room(tmp_path / "missing") is None
+
+    pin = "1.0.0"
+    out = _render(running=pin, expected=pin, disk=edict(free_h="41 GB", total_h="98 GB", is_low=False, low=None))
+    tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
+    assert "41 GB of 98 GB free on disk" in tile
+    assert "admin-tile-warm" not in tile
+    low = _render(running=pin, expected=pin, disk=edict(free_h="9 GB", total_h="98 GB", is_low=True, low="yes"))
+    tile = low[low.index('href="/models" class="card') : low.index("</a>", low.index('href="/models" class="card'))]
+    assert "admin-tile-warm" in tile and "bi-exclamation-triangle" in tile
+    assert "free on disk" not in _render(running=pin, expected=pin)
 
 
 class _Resp:

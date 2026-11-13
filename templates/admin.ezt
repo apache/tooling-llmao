@@ -32,15 +32,21 @@
       </a>
     </div>
     <div class="col">
-      <a href="#litellm" class="card h-100 admin-tile[if-any litellm_matches][else] admin-tile-warm[end]">
+      <a href="/models" class="card h-100 admin-tile[if-any gateway_ok][else] admin-tile-warm[end]">
         <div class="card-body">
           <div class="admin-tile-figure admin-tile-figure-text">
             [if-any litellm_running][litellm_running][else]down[end]
           </div>
           <div class="admin-tile-label">
             <i class="bi [if-any litellm_matches]bi-check-circle text-success[else]bi-exclamation-triangle[end]" aria-hidden="true"></i>
-            LiteLLM [if-any litellm_matches]matches the pin[else][if-any litellm_running]differs from the pin[else]unavailable[end][end]
+            LiteLLM [if-any litellm_matches]matches the pin[else][if-any litellm_running]differs from the pin, [litellm_expected][else]unavailable[end][end]
           </div>
+          [if-any disk]
+          <div class="admin-tile-label">
+            <i class="bi [if-any disk.low]bi-exclamation-triangle[else]bi-hdd[end]" aria-hidden="true"></i>
+            [disk.free_h] of [disk.total_h] free on disk
+          </div>
+          [end]
         </div>
       </a>
     </div>
@@ -225,24 +231,6 @@
     [end]
   </section>
 
-  <section id="litellm">
-    <div class="card">
-      <div class="card-body py-2 small d-flex align-items-center gap-2">
-        <i class="bi bi-hdd-stack" aria-hidden="true"></i>
-        <span class="fw-semibold">LiteLLM</span>
-        [if-any litellm_running]
-        [if-any litellm_matches]
-        <span>[litellm_running], matches the pin.</span>
-        [else]
-        <span>Running [litellm_running]; the pin is [litellm_expected].</span>
-        [end]
-        [else]
-        <span>Unavailable.</span>
-        [end]
-        <span class="text-muted ms-auto">Read from LiteLLM as this page loaded. Each deployment's health is on <a href="/models">Models</a>.</span>
-      </div>
-    </div>
-  </section>
 </div>
 <div class="modal fade" id="approveRentalModal" tabindex="-1" aria-labelledby="approveRentalModalLabel" aria-hidden="true">
   <div class="modal-dialog">

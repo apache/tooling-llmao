@@ -45,6 +45,11 @@ def tokens(n: int) -> str:
     return str(n)
 
 
+def gigabytes(n: int) -> str:
+    """A byte count as whole gigabytes, the way a disk is sold: 98 GB."""
+    return f"{n / 1_000_000_000:.0f} GB"
+
+
 def pct(fraction: float) -> int:
     """A fraction as a whole percentage, held to 0..100."""
     return max(0, min(100, round(fraction * 100)))
