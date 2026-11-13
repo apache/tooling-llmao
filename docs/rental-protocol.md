@@ -2,7 +2,9 @@
 
 The contract between a GPU rental and llmao: the one request a rental makes at
 boot, what it must present, and what it gets back. This is how the fleet
-works today, not a proposal. Rental boot on each provider is
+works today, not a proposal, with one exception: the last section,
+[Transport security](#transport-security-mtls-to-the-rentals), is a design
+that is not built. Rental boot on each provider is
 [`../hosting/README.md`](../hosting/README.md); how the running fleet is
 kept in step with LiteLLM is
 [`fleet-reconcile-design.md`](fleet-reconcile-design.md).
@@ -241,3 +243,193 @@ runbooks are [`../hosting/vast/README.md`](../hosting/vast/README.md) and
 - Hardening that is possible without changing the rest: instance binding,
   short-lived bootstrap tokens, a signed token in place of the static fleet
   key. None is planned until the leaked-map revisit above.
+
+## Transport security: mTLS to the rentals
+
+**Design, not built.** Everything above this heading describes the running
+fleet; this section describes what replaces its one unencrypted hop.
+
+### The problem
+
+Every hop from the gateway box to a rental is plain HTTP across the public
+internet: the dial URL is `http://address:public_port` (`Rental.api_base`
+in `llmao/fleet.py`), and LiteLLM's `api_base` is copied from it. Three
+things cross in the clear:
+
+1. the prompts and completions themselves, every request LiteLLM routes to
+   a self-hosted model;
+2. the per-rental vLLM bearer, in every LiteLLM request, every `/v1/models`
+   probe and every `/metrics` sample;
+3. the metrics.
+
+Only `GET /vllm/config` is HTTPS today. The first item is the one that
+matters: the portal tells users where their prompts are hosted, and the wire
+to that host is readable by anyone on the path between an AWS box and a
+rented GPU in someone's data centre. The second means a passive observer
+holds a working bearer for a rental for as long as that rental lives.
+
+Nothing authenticates the rental to llmao either. A passing `/health` says
+something answers at the address; the bearer on `/v1/models` is the only
+proof that it is ours.
+
+### The design
+
+Mutual TLS, terminated by vLLM itself, with one private certificate
+authority that llmao owns. No reverse proxy, no agent, no overlay network on
+the rental: the installer already builds the `vllm serve` argv from the
+config JSON, and the JSON already carries a per-rental secret, so a server
+certificate and key arrive the same way the bearer does.
+
+```mermaid
+flowchart LR
+    LLMAO["llmao<br/>CA key in config.yaml"]
+    RENTAL["GPU rental<br/>vllm serve --ssl-*"]
+    LITELLM["LiteLLM<br/>ssl_verify + ssl_certificate"]
+    LLMAO -- "/vllm/config: + server key, cert, CA cert" --> RENTAL
+    LLMAO -- "probe, sample: client cert" --> RENTAL
+    LITELLM -- "completions: client cert" --> RENTAL
+```
+
+**The CA.** One key pair, generated once by hand, the private key in the
+eyaml beside the salt and never anywhere else; the public certificate in
+hiera. It signs two kinds of certificate and nothing else.
+
+**The rental's server certificate.** Minted by llmao at `GET /vllm/config`,
+one per rental (not per server: the vLLM processes on a rental share the
+address and so share the certificate). The response gains three fields
+beside `servers`:
+
+```json
+{
+  "host": "...",
+  "servers": [...],
+  "tls": {
+    "key": "<PEM: the rental's private key>",
+    "cert": "<PEM: its certificate, signed by the CA>",
+    "ca": "<PEM: the CA certificate>"
+  }
+}
+```
+
+The key is generated on the portal and travels once, inside the HTTPS
+response that already carries the bearer and the Hugging Face token; the
+rental never makes a second request (no CSR round trip), which keeps the
+one-request contract. The installer writes the three files under the data
+directory, root-only, and adds to every program's argv:
+
+```
+--ssl-keyfile   <key>   --ssl-certfile <cert>
+--ssl-ca-certs  <ca>    --ssl-cert-reqs 2
+```
+
+`--ssl-cert-reqs 2` is `ssl.CERT_REQUIRED`: a connection without a client
+certificate signed by our CA fails in the handshake, on every path,
+`/health` included. No `--enable-ssl-refresh`: a certificate lives as long
+as its rental, and a rental that needs a new one re-provisions. The
+certificate carries `extendedKeyUsage = serverAuth`, a `notBefore` an hour
+in the past for a rental whose clock is behind, and a validity long enough
+to outlive any rental we would keep (a year; the fleet turns over faster
+than that, and a rental past its certificate's end goes Rejected and tells
+us so).
+
+**The SAN.** The certificate must name the address LiteLLM dials, as an IP
+SAN, because `httpx` verifies the host in the URL against the certificate
+and the URL host is the provider's public IP. The rental does not know its
+public address or port, so llmao supplies it: at `GET /vllm/config` the
+name is placed on an address through the provider listing, the same join
+the fleet uses. When the listing has not placed the name yet (RunPod's
+`publicIp` is empty while a pod initializes; a Vast listing may not have
+been read since the instance started), llmao refreshes the listing once,
+and if the name is still unplaced answers `503` with `Retry-After`; the
+installer retries. An address change after mint is a re-provision, as a
+change of assignment is today.
+
+**The client certificate.** One, for the gateway box, minted once by hand
+(`clientAuth`), long-lived, rotated with the CA. Stored in the eyaml as
+cert plus key in one PEM, because that is the form LiteLLM takes, and
+written by Puppet to `/opt/llmao/certs/litellm-client.pem`. LiteLLM
+presents it through `litellm_settings.ssl_certificate`; llmao's probe and
+sampler load the same file for their `httpx` client. vLLM checks only that
+the chain ends at our CA, not the subject, which is enough: there is one
+client.
+
+**Trust on the gateway box.** `litellm_settings.ssl_verify` names one CA
+file and that file replaces LiteLLM's default (certifi) outright, so it
+must hold the public roots too or every paid provider breaks. The file is
+`/opt/llmao/certs/ca-bundle.pem`: the OS bundle
+(`/etc/ssl/certs/ca-certificates.crt`, which Infra keeps current) followed
+by our CA certificate. A Puppet exec rebuilds it on every run, guarded by a
+checksum compare so nothing happens when nothing changed, and notifies the
+LiteLLM service: LiteLLM reads the file once, when its first client is
+built, and caches the context for the life of the process. The OS trust
+store is read and never written; everything we add lives under
+`/opt/llmao`. certifi stops mattering, whatever version the venv pins.
+
+**The dial URL** becomes `https://address:public_port`. The deployment key
+in `llmao/reconcile.py` embeds a scheme too (`http://peer:listen_port`);
+it is an identity, not a URL anyone dials, so it keeps its spelling and the
+stamps in LiteLLM's `model_info` stay valid. Only the dialed base changes.
+
+**The bearer stays.** The client certificate authenticates the gateway box;
+the bearer authenticates the request to a particular vLLM. Two layers,
+both cheap, and the `RequireKey` middleware is unchanged.
+
+### What changes in the lifecycle
+
+- The probe presents the client certificate on every path, `/health`
+  included. "Something answers at this address" and "it is ours" collapse
+  into the handshake: a server that completes it holds a certificate we
+  minted. `/v1/models` with the bearer remains the check that the right
+  models are served.
+- A handshake failure is a new way to be Rejected, and a rental past its
+  certificate's validity is one example. The verdicts in
+  `rental-lifecycle.md` need a pass for this.
+- The daily scanner that probes `/v1/models` with model names as tokens
+  (issue #68) no longer reaches the middleware: it fails in the handshake.
+
+### Rollout
+
+A fleet-wide switch, not a mixed fleet. `fleet.tls: true` turns on the
+mint, the `https` dial and the client certificate on the probe; every
+rental is re-provisioned under it. llmao does not try `https` and fall
+back to `http`, because a fallback is the attack.
+
+### Considered and not chosen
+
+- **An overlay network** (WireGuard, Tailscale) between the gateway box and
+  the rentals. Needs a tun device the Vast containers do not offer, or a
+  userspace stack, a second daemon on every rental, and a key per rental
+  to manage. The traffic it would protect is the same traffic mTLS
+  protects.
+- **An SSH reverse tunnel from each rental.** No inbound port on the rental
+  at all, which is attractive, but an sshd and a key per rental on the
+  gateway box, one tunnel process per rental to keep alive, and LiteLLM
+  dialing local ports that mean nothing in the listing.
+- **RunPod's HTTPS proxy** (`https://<podId>-<listen>.proxy.runpod.net`).
+  Already rejected for the fleet on other grounds: the proxy imposes its own
+  request timeouts, and a model's first token can take longer than that
+  under load, so completions would fail at the proxy before vLLM answered.
+  It would also be RunPod only, terminated by RunPod rather than the
+  rental, with no client authentication.
+- **An `ssl.SSLContext` instead of the bundle file.** LiteLLM accepts one
+  as `ssl_verify`, and llmao could build it in code from the OS defaults
+  plus our CA plus the client chain, with no file to assemble. It would
+  have to be set as an import side effect in the hooks module before
+  LiteLLM builds its clients, and LiteLLM has had a regression in exactly
+  that path (BerriAI/litellm#14396). Not a place for a security boundary.
+- **Adding our CA to the OS trust store.** The cleanest bundle, with the OS
+  package keeping it current, but it changes the box for every process on
+  it. Everything llmao adds stays under `/opt/llmao`.
+- **Pinning the CA and skipping the hostname check**, which would spare
+  the SAN problem. Our own `httpx` client could do it; LiteLLM's could not
+  without the `SSLContext` above.
+
+### Open
+
+- Where the Puppet exec that builds `ca-bundle.pem` lives in p6 and what it
+  restarts; the LiteLLM restart drops in-flight requests, so an OS root
+  update costs one interruption.
+- Whether `cryptography` becomes a direct dependency of the portal (it is
+  in the lock through LiteLLM) or the mint shells out to `openssl`.
+- The exact `Retry-After` and how many retries the installer makes before
+  it gives up and lets Supervisor's log say why.
