@@ -37,6 +37,7 @@ def _render(*, running, expected, skew=(), flashes=(), notices=(), work=None, re
         admin_at_heart=ezt.boolean(True),
         as_user=ezt.boolean(False),
         nav="admin",
+        admin_nav="admin",
         login_back="/admin",
         restarted_at="2026-10-08 14:30 UTC",
         restarted_ago="3d ago",
@@ -114,6 +115,7 @@ def test_capacity_page_renders_demand_beside_the_rentals():
         admin_at_heart=ezt.boolean(True),
         as_user=ezt.boolean(False),
         nav="admin",
+        admin_nav="capacity",
         login_back="/admin/capacity",
         restarted_at="",
         restarted_ago="",
@@ -280,6 +282,16 @@ def test_admin_drops_models_and_shows_a_version_match():
     out = _render(running=pin, expected=pin)
     assert "Routes, hosts and serving state" not in out
     assert f"{pin}, matches the pin." in out
+
+
+def test_admin_pages_share_one_nav_with_the_current_page_marked():
+    """The four admin pages are reached from pills under the heading, not cards at the foot."""
+    out = _render(running="1.0.0", expected="1.0.0")
+    assert "Settings and lists" not in out
+    for href in ("/admin", "/admin/capacity", "/admin/tiers", "/keys/other"):
+        assert f'href="{href}"' in out
+    assert 'class="nav-link active" href="/admin" aria-current="page"' in out
+    assert 'class="nav-link" href="/admin/tiers"' in out
 
 
 def test_admin_shows_a_version_mismatch_and_unavailable():

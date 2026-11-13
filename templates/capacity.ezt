@@ -2,7 +2,7 @@
 <div class="container py-4 admin-page capacity-page">
   <div class="mt-2">[include "flashes.ezt"]</div>
 
-  <p class="small mb-2"><a href="/admin">&larr; Admin</a></p>
+  [include "admin-nav.ezt"]
   <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2 mb-1">
     <h1 class="h3 mb-0">Capacity</h1>
     <div class="btn-group btn-group-sm" role="group" aria-label="Period">

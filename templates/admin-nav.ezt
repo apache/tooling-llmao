@@ -1,0 +1,18 @@
+[if-any is_site_admin]
+<nav class="admin-nav mb-3" aria-label="Admin pages">
+  <ul class="nav nav-pills">
+    <li class="nav-item">
+      <a class="nav-link[is admin_nav "admin"] active[end]" href="/admin"[is admin_nav "admin"] aria-current="page"[end]><i class="bi bi-speedometer2 me-1" aria-hidden="true"></i>Overview</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link[is admin_nav "capacity"] active[end]" href="/admin/capacity"[is admin_nav "capacity"] aria-current="page"[end]><i class="bi bi-bar-chart-line me-1" aria-hidden="true"></i>Capacity</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link[is admin_nav "tiers"] active[end]" href="/admin/tiers"[is admin_nav "tiers"] aria-current="page"[end]><i class="bi bi-sliders me-1" aria-hidden="true"></i>Tiers</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link[is admin_nav "keys"] active[end]" href="/keys/other"[is admin_nav "keys"] aria-current="page"[end]><i class="bi bi-robot me-1" aria-hidden="true"></i>Service keys</a>
+    </li>
+  </ul>
+</nav>
+[end]

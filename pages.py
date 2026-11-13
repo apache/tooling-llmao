@@ -1511,6 +1511,7 @@ async def admin_index(result):
     """
     if not result.is_site_admin:
         raise AuthzError("Admin is limited to site admins.")
+    result.admin_nav = "admin"
     ident = await current_identity(APP.cfg)
     mine = quart.request.args.get("who") == "me"
 
@@ -1763,6 +1764,7 @@ async def admin_capacity(result):
     """
     if not result.is_site_admin:
         raise AuthzError("Capacity is limited to site admins.")
+    result.admin_nav = "capacity"
     try:
         days = int(quart.request.args.get("days") or 30)
     except ValueError:
@@ -2068,6 +2070,7 @@ def _spend_provider_row(p, *, days: list[str] = ()) -> edict:
 @page(title="Tiers")
 async def admin_tiers(result):
     """Allowances and rate limits per tier."""
+    result.admin_nav = "tiers"
     ident = await current_identity(APP.cfg)
     result.tiers = [
         edict(
@@ -2230,6 +2233,7 @@ async def keys_other_list(result):
     """
     if not result.can_create_automation:
         raise AuthzError("Service keys are limited to PMC members and site admins.")
+    result.admin_nav = "keys"  # the pills show only to a site admin; a PMC member sees the list alone
     ident = await current_identity(APP.cfg)
     seam = APP.seam
     admin_projects = ident.all_projects() if ident.is_site_admin else list(ident.committees)

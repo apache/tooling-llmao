@@ -2,7 +2,7 @@
 <div class="container py-4">
   <div class="mt-2">[include "flashes.ezt"]</div>
 
-  <p class="small mb-2"><a href="/admin">&larr; Admin</a></p>
+  [include "admin-nav.ezt"]
   <h1 class="h3 mb-3">Tiers</h1>
   <p class="text-muted small">
     Applies to every key on the tier. Set conservatively, measure, revise.
