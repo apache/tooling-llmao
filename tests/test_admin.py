@@ -444,13 +444,15 @@ def test_admin_shows_work_needed():
             subject="t1",
             action="",
             action_label="",
-            since="2026-10-12 09:00 UTC",
+            since_ago="3d ago",
+            since_at="2026-10-12 09:00 UTC",
         )
     ]
     out = _render(running=pin, expected=pin, skew=skew)
     assert "Work needed" in out
     assert "limits differ from the service tier" in out
-    assert "since 2026-10-12 09:00 UTC" in out
+    # The glance, with the exact time under the pointer, like every other time on the page.
+    assert 'since <span class="llmao-hover" title="2026-10-12 09:00 UTC">3d ago</span>' in out
     assert "/do-acknowledge" not in out
     section = out[out.index('id="work"') : out.index('id="requests"')]
     assert "<form" not in section
@@ -465,7 +467,8 @@ def test_work_with_a_way_to_do_it_has_a_button_that_does_it():
             subject="llmao:project:free-tier",
             action="/do-restrict-project",
             action_label="Restrict",
-            since="",
+            since_ago="",
+            since_at="",
         )
     ]
     out = _render(running=pin, expected=pin, skew=skew)
@@ -525,6 +528,14 @@ def test_work_needed_is_one_line_saying_where_to_go():
     assert "3 things need doing." in out
     assert 'href="/keys">Go to My Keys</a>' in out
     assert "3 things need doing." not in _render(running=pin, expected=pin)
+
+
+def test_the_reason_placeholder_mentions_a_number_only_where_there_is_one():
+    pin = pinned_litellm_version()
+    key = _render(running=pin, expected=pin, requests=[_pending()])
+    assert 'placeholder="Why &mdash; required to deny"' in key
+    capacity = _render(running=pin, expected=pin, requests=[_pending(what="capacity", is_capacity=ezt.boolean(True))])
+    assert 'placeholder="Why &mdash; required if you change the number or deny"' in capacity
 
 
 def _pending(**over):

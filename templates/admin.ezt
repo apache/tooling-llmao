@@ -64,7 +64,7 @@
       <div class="list-group-item d-flex justify-content-between align-items-start">
         <div>
           <div class="fw-semibold">[skew.what]</div>
-          [if-any skew.since]<div class="small text-muted">since [skew.since]</div>[end]
+          [if-any skew.since_ago]<div class="small text-muted">since <span class="llmao-hover" title="[skew.since_at]">[skew.since_ago]</span></div>[end]
         </div>
         [if-any skew.action]
         <form method="post" action="[skew.action]" class="mb-0 ms-3">
@@ -169,7 +169,7 @@
             [end]
             <div class="col">
               <input class="form-control form-control-sm" type="text" name="reason"
-                     placeholder="Why &mdash; required if you change the number or deny"
+                     placeholder="Why &mdash; required [if-any requests.is_capacity]if you change the number or deny[else]to deny[end]"
                      aria-label="Reason">
             </div>
             <div class="col-auto">

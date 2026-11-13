@@ -1727,9 +1727,12 @@ def _skew_rows(entries) -> list:
             subject=n.get("subject") or "",
             action=_SKEW_ACTIONS.get(n.get("kind"), ("", ""))[0],
             action_label=_SKEW_ACTIONS.get(n.get("kind"), ("", ""))[1],
-            # How long it has been wrong. An unchanged row is not rewritten,
-            # so its last write says nothing about when it was last checked.
-            since=_stamp(n.get("first_seen")),
+            # How long it has been wrong, the glance and the exact time under
+            # the pointer like every other time on the page. An unchanged row
+            # is not rewritten, so its last write says nothing about when it
+            # was last checked.
+            since_ago=fmt.ago(n.get("first_seen") or ""),
+            since_at=fmt.moment(n.get("first_seen") or ""),
         )
         for n in entries
     ]
