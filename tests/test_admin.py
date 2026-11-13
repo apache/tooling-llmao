@@ -75,6 +75,7 @@ def _render(
         requests=list(requests),
         approvals=list(approvals),
         approval_count=len(approvals) or None,
+        approvals_soon=ezt.boolean(any(row.soon for row in approvals)),
         recent=list(recent),
         recent_days=14,
         recent_mine=ezt.boolean(False),
@@ -579,6 +580,22 @@ def test_approvals_not_yet_used_say_who_may_do_what_until_when():
     assert "approved by admin1 on 2026-10-19" in out
     assert "lapses on 2026-11-02" in out
     assert "None outstanding." in _render(running=pin, expected=pin)
+
+
+def test_the_approvals_tile_is_warm_only_when_one_is_about_to_lapse():
+    """An unused approval is normal; the tile colours for the one that lapses within days."""
+    pin = pinned_litellm_version()
+
+    def tile(out: str) -> str:
+        start = out.index('href="#approvals" class="card')
+        return out[start : out.index("</a>", start)]
+
+    calm = edict(requester="a", ask="one key", decided_by="x", decided_on="2026-11-01", expires_h="Nov 20", soon=None)
+    soon = edict(
+        requester="b", ask="one key", decided_by="x", decided_on="2026-10-31", expires_h="tomorrow", soon="yes"
+    )
+    assert "admin-tile-warm" not in tile(_render(running=pin, expected=pin, approvals=[calm]))
+    assert "admin-tile-warm" in tile(_render(running=pin, expected=pin, approvals=[calm, soon]))
 
 
 def test_recent_work_reads_as_sentences_with_who_and_when():

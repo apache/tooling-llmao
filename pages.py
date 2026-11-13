@@ -1534,6 +1534,8 @@ async def admin_index(result):
     result.pending_count = len(pending) or None
     result.approvals = _open_approval_rows(stored)
     result.approval_count = len(result.approvals) or None
+    # An unused approval is normal; one about to lapse is the thing to notice.
+    result.approvals_soon = ezt.boolean(any(row.soon for row in result.approvals))
 
     try:
         skew = await APP.seam.work_needed(ident)

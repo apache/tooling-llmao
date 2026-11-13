@@ -24,7 +24,7 @@
       </a>
     </div>
     <div class="col">
-      <a href="#approvals" class="card h-100 admin-tile[if-any approval_count] admin-tile-warm[end]">
+      <a href="#approvals" class="card h-100 admin-tile[if-any approvals_soon] admin-tile-warm[end]">
         <div class="card-body">
           <div class="admin-tile-figure">[if-any requests_down]&ndash;[else][if-any approval_count][approval_count][else]0[end][end]</div>
           <div class="admin-tile-label"><i class="bi bi-key" aria-hidden="true"></i> Approvals not yet used</div>
