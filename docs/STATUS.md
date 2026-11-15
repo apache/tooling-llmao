@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-11-12<br>
+**As of:** 2026-11-14<br>
 **Repo:** `apache/tooling-llmao`<br>
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`<br>
 **How to run/use this software:** repo [`README.md`](../README.md)<br>
@@ -121,7 +121,7 @@ Edge cases that bite operators (LiteLLM down, pagination, master key drift, pris
 
 ## Where the work stands
 
-As of 2026-11-12. Three lists: what is small enough to pick up in an
+As of 2026-11-14. Three lists: what is small enough to pick up in an
 hour, what is an afternoon, and the larger threads with the steps each
 still has. Then what is waiting on a decision, and what is parked on
 purpose. Issues on GitHub hold the ideas that want colleagues' eyes
@@ -148,6 +148,17 @@ before any code.
 - **Issue #68, the scanner.** A source probes `/v1/models` daily with
   model names as tokens. A refused-at-the-door admin signal, kept apart
   from refusals of model calls.
+- **asfquart 0.1.13, once it is on PyPI.** Everything the release needs
+  is on asfquart's main as of 2026-11-14 (CI green): `use_template`
+  passes a `Response` through, and `auth.require` accepts the
+  classmethods of a `Requirements` subclass; the CHANGELOG is written and
+  a colleague cuts the tag the week of the 16th. Then here: pin
+  `asfquart>=0.1.13`, delete the `use_template` shim in `pages.py` and
+  go back to `@APP.use_template`, add a `Requirements` subclass with a
+  `site_admin` check, register an error handler that turns
+  `AuthenticationFailed` into the flash-and-redirect `@page` does for
+  `AuthzError`, and put `@asfquart.auth.require(...site_admin)` on the
+  admin routes in place of the checks in their bodies.
 
 ### The larger threads
 
@@ -498,9 +509,9 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
     unseen for days in late October; Infra has been asked for a monitor.
     Until then the redundancy rule on `/admin/capacity` is the only
     signal, and only to someone looking.
-11. **asfquart `Response` pass-through.** `pages.py` carries a
-    `use_template` shim that should go upstream into asfquart and then be
-    dropped here.
+11. **asfquart `Response` pass-through.** Upstream since 2026-11-14, in
+    the unreleased 0.1.13. The `use_template` shim in `pages.py` goes
+    when llmao pins that release (the afternoon item above).
 
 ---
 
