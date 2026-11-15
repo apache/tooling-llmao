@@ -110,6 +110,18 @@ def test_a_recipe_needs_the_template_for_our_rentals():
         validate_models([row])
 
 
+def test_a_recipe_is_served_as_hosted_vllm_and_nothing_else():
+    """openai/<name> would make LiteLLM talk to vLLM as something it is not."""
+    row = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
+    row.litellm_params.model = "openai/gemma4-26b"
+    with pytest.raises(
+        ValueError, match=re.escape("must be hosted_vllm/<name> for a vLLM recipe, not openai/gemma4-26b")
+    ):
+        validate_models([row])
+    row.litellm_params.model = "hosted_vllm/gemma4-26b"
+    validate_models([row])
+
+
 def test_deprecated_keys_are_warned_and_not_refused(caplog):
     row = edict(
         {

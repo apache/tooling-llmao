@@ -171,8 +171,14 @@ def validate_models(models: list, *, path: pathlib.Path | str = "models.yaml") -
         if not hasattr(recipe, "get") or not recipe.get("model"):
             raise ValueError(f"{name}: model_info.vllm.model is required")
         # The template for registering one of our rentals: hosted_vllm/<name>.
-        if not (model.get("litellm_params") or {}).get("model"):
+        # Any other prefix makes LiteLLM speak to vLLM as something it is not.
+        served_as = str((model.get("litellm_params") or {}).get("model") or "")
+        if not served_as:
             raise ValueError(f"{name}: litellm_params.model is required to serve it from our rentals")
+        if not served_as.startswith("hosted_vllm/"):
+            raise ValueError(
+                f"{name}: litellm_params.model must be hosted_vllm/<name> for a vLLM recipe, not {served_as}"
+            )
 
 
 def public_models(models: list) -> list[dict[str, Any]]:
