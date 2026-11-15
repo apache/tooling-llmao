@@ -139,9 +139,6 @@ Nothing at the moment.
   `GET /health?model_id=<id>` for that one deployment and feeds the
   result into the same fields the skew check writes. A paid deployment
   would get a note that it spends tokens.
-- **"At or near their limit" on `/admin`.** Free-tier people at 80% of
-  the rolling allowance and projects at 80% of their weekly cap, from the
-  activity rows the usage pages already read. Quiet when nobody is near.
 - **Issue #68, the scanner.** A source probes `/v1/models` daily with
   model names as tokens. A refused-at-the-door admin signal, kept apart
   from refusals of model calls.
@@ -260,6 +257,17 @@ with a three-step plan agreed and nothing built).
 
 ### Parked on purpose
 
+- **"At or near their limit" on `/admin`** (parked 2026-11-14). The
+  idea: free-tier people at 80% of the rolling allowance and projects at
+  80% of their weekly cap, between Approvals and Recent work, quiet when
+  nobody is near. It is not buildable on what exists. It rests on budget
+  and capacity usage, and that base is not baked: the plumbing from
+  LiteLLM's spend to a per-person and per-project position against a
+  limit, the tracking and aggregation that position needs over a rolling
+  window, and the UX that says it to a person, a PMC and an admin. The
+  request and budget scaffolding in `seam.py` is a colleague's
+  in-progress work, and the colleague has input on this item. The base
+  comes first, with the colleague; this section follows from it.
 - Withdraw an approval from the UI; a Reboot button once a provider API
   is verified to reboot a rental; a RunPod console link per pod once a
   stable per-pod URL is confirmed; explicit `--kv-cache-memory` on a
