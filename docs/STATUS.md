@@ -129,10 +129,7 @@ before any code.
 
 ### Small, an hour or less
 
-- **`hosted_vllm/` check in `validate_models`:** a model with a vLLM
-  recipe must name `hosted_vllm/...` in `litellm_params.model`.
-- **`analysis/prompts` under a closed pipe** (`prompts clusters | head`)
-  ends in a BrokenPipe traceback.
+Nothing at the moment.
 
 ### Medium, an afternoon
 
