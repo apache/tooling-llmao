@@ -148,4 +148,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # `prompts clusters | head`: the reader has gone. Say nothing more,
+        # and give the interpreter somewhere to flush stdout at exit so it
+        # does not raise the same error again on the way out.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)
