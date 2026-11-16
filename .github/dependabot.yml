@@ -1,0 +1,110 @@
+# Required by https://infra.apache.org/dependabot.html for any repo using
+# GitHub Actions. Shape follows tooling-trusted-releases and rai-governor.
+#
+# pre-commit is deliberately absent: the ecosystem does not support cooldowns
+# yet, so it would propose same-day releases. Revisit when it does.
+
+version: 2
+
+updates:
+  # Not grouped. astral-sh/setup-uv is third-party, and the ASF allowlist
+  # (actions.yml in apache/infrastructure-actions) admits only approved SHAs,
+  # so a bump to a release that has not been approved fails the workflow at
+  # startup. One pull request per action isolates which bump is at fault.
+  # actions/* are GitHub's own and are not in that file at all.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+
+  # uv, not pip. pyproject.toml and uv.lock have to agree: the uv-lock hook
+  # fails `make check` when they drift, `uv sync --frozen` fails in CI, and
+  # the proxy's systemd unit starts with `uv run --frozen`, which refuses to
+  # re-resolve. The pip ecosystem would edit pyproject.toml and leave the
+  # lockfile behind.
+  #
+  # lockfile-only: version floors in pyproject.toml stay put and the lock is
+  # refreshed underneath them.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    versioning-strategy: lockfile-only
+    allow:
+      - dependency-type: direct
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+    ignore:
+      # litellm 1.106.0 imports mcp.types.CacheableResult, which no released
+      # mcp provides -- the same ceiling rai-governor hit. The pin here is
+      # also load-bearing beyond that: the MCP federation design is verified
+      # against 1.105.0 internals, so a bump is a review, not a bump.
+      # Redundant under lockfile-only, which cannot move an == pin; kept so
+      # the reason survives a change of strategy.
+      - dependency-name: litellm
+        versions:
+          - ">=1.106"
+
+  # supervisor, hash-pinned and vendored into the RunPod image. Separate from
+  # the uv block above because it is a plain requirements.txt installed with
+  # pip --require-hashes; Dependabot regenerates the hash alongside the
+  # version. One pure-Python dependency, installed --no-deps.
+  - package-ecosystem: pip
+    directory: /hosting/runpod
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - python
+
+  # The image the rented GPU boxes are built from.
+  - package-ecosystem: docker
+    directory: /hosting/runpod
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    ignore:
+      # vLLM is the inference server on every box in the fleet. A bump moves
+      # metric names (the sampler reads vllm:kv_cache_usage_perc and falls
+      # back to vllm:gpu_cache_usage_perc), served-model reporting, and
+      # --api-key handling. That is a fleet change rehearsed on one box, not
+      # a dependency bump. Patches still come through.
+      - dependency-name: vllm/vllm-openai
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      # The interpreter uv.lock was resolved against.
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
