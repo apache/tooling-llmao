@@ -50,7 +50,7 @@ class Rental:
     provision.sh): the provider's id for the machine, a Vast instance id
     or a RunPod pod id. A ``fleet.hosts`` key, an approval and the bearer
     are all by name; the address is only ever dialed. ``status`` is the provider's own word, lower case
-    (Vast's actual_status, RunPod's desiredStatus), "" when not given.
+    (Vast's actual_status, RunPod's status), "" when not given.
     ``ports`` maps a container listen port, as a string, to the public
     port it is published on; empty when the provider gives none.
     ``usd_per_hour`` is None when the provider does not say: unknown,

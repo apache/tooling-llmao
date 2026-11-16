@@ -268,7 +268,7 @@ class VllmServer:
         self.address: str | None = host if _is_ip_literal(host) else None
         self.listen_port = int(listen_port)
         # The port this server is dialed on: from the listing of the
-        # provider that places it (Vast's HostPort, RunPod's portMappings),
+        # provider that places it (Vast's HostPort, RunPod's live port map),
         # applied on every lifecycle pass. None until a listing names the
         # rental, unless a deprecated fourth host-row element seeds it, or the
         # fleet is local and public is listen.

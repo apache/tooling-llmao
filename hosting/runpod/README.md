@@ -128,9 +128,10 @@ of:
    `https://<podId>-<listen>.proxy.runpod.net`. Recreate does not change it.
    Use it as `api_base` only after proving LiteLLM and long generations
    survive that proxy (timeouts, TLS, HTTP/1.1).
-2. **Direct TCP + API.** Expose `N/tcp`; RunPod REST v2 `GET /pods/{id}` →
-   `portMappings` can fill `public_port` the way `vast_client` fills HostPort.
-   GraphQL is deprecated; new code should use REST.
+2. **Direct TCP + API.** Expose `N/tcp`; RunPod REST v2 `GET /v2/pods/{id}`
+   → `runtime.ports` fills `public_port` the way `vast_client` fills HostPort.
+   This is what `llmao/runpod_client.py` does today. GraphQL is deprecated
+   and REST v1 retired on 2026-11-15; new code uses REST v2.
 
 Until one of those is wired, keep the fourth slot.
 

@@ -112,18 +112,27 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
         {
             "id": "tafo5",
             "name": "llmao-qwen38-27b",
-            "desiredStatus": "RUNNING",
-            "publicIp": "203.0.113.20",
-            "costPerHr": 2.49,
-            # Container port → public port. "22/tcp" is the shape of the pod's
-            # `ports` field, tolerated here; a value that is not a port is dropped.
-            "portMappings": {"8002": 16643, "22/tcp": "10341", "8003": None},
+            "status": "RUNNING",
+            "cost": 2.49,
+            "ports": ["8002/tcp", "22/tcp", "8003/tcp"],
+            # The live port map, as fetch_pods merges it from the pod's own
+            # GET. The http entry is RunPod's own port, skipped; an entry
+            # that is not a port pair is dropped; the IP is any entry's.
+            "runtime": {
+                "uptime": 918889,
+                "ports": [
+                    {"private": 19123, "public": 60569, "type": "http", "ip": "203.0.113.20"},
+                    {"private": 8002, "public": 16643, "type": "tcp", "ip": "203.0.113.20"},
+                    {"private": "22", "public": "10341", "type": "tcp", "ip": "203.0.113.20"},
+                    {"private": 8003, "public": None, "type": "tcp", "ip": "203.0.113.20"},
+                ],
+            },
         },
-        # A stopped pod has no address and still reports a price: listed, not running.
-        {"id": "tjfs5", "name": "testing", "desiredStatus": "EXITED", "publicIp": "", "costPerHr": 0.89},
-        # Initializing: RUNNING with no address yet.
-        {"id": "x", "desiredStatus": "RUNNING", "publicIp": None, "costPerHr": "0.89", "portMappings": None},
-        {"name": "no id", "desiredStatus": "RUNNING"},
+        # A stopped pod has no map and still reports a price: listed, not running.
+        {"id": "tjfs5", "name": "testing", "status": "EXITED", "cost": 0.89, "runtime": None},
+        # Just started: RUNNING, and no map yet, so no address.
+        {"id": "x", "status": "RUNNING", "cost": "0.89", "runtime": None},
+        {"name": "no id", "status": "RUNNING"},
     ]
     assert rentals_from_pods(pods) == {
         "tafo5": Rental(
@@ -270,8 +279,18 @@ def _fleet_with_runpod(servers):
     return Fleet(edict(providers=edict(runpod=edict(api_key="rp-test"))), servers)
 
 
-def _pod(ip, price=2.49):
-    return {"id": "p", "name": "n", "desiredStatus": "RUNNING", "publicIp": ip, "costPerHr": price}
+def _runpod_v2(ip, price=2.49):
+    """A MockTransport handler: RunPod's v2 list (no runtime) and the one pod's GET (with it)."""
+
+    def handle(request):
+        pod = {"id": "p", "name": "n", "status": "RUNNING", "cost": price, "runtime": None}
+        if request.url.path == "/v2/pods":
+            return httpx.Response(200, json={"pods": [pod], "pagination": {"hasNextPage": False, "nextCursor": None}})
+        assert request.url.path == "/v2/pods/p"
+        pod["runtime"] = {"ports": [{"private": 8001, "public": 16643, "type": "tcp", "ip": ip}]}
+        return httpx.Response(200, json=pod)
+
+    return handle
 
 
 def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
@@ -279,15 +298,16 @@ def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
     fleet = _fleet_with_runpod([srv])
 
     async def read():
-        transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[_pod("203.0.113.20")]))
-        async with httpx.AsyncClient(transport=transport) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_runpod_v2("203.0.113.20"))) as client:
             await fleet.read_runpod_rentals(client)
 
     asyncio.run(read())
     assert fleet.runpod_rentals.provider == "RunPod"
+    assert fleet.runpod_rentals.by_id["p"].host == "203.0.113.20", "the address comes from the pod's own GET"
     assert srv.rental is None, "the runner only reads; the lifecycle places"
     fleet.place_servers()
     assert srv.rental_usd_per_hour == 2.49
+    assert srv.public_port == 16643
     assert srv.unlisted is False
 
 

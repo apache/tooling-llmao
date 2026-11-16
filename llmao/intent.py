@@ -217,7 +217,7 @@ def parse_host_row(raw: Any, host: str, index: int) -> tuple[str, int, str, int 
 
     The fourth element is deprecated. It pinned the public port for RunPod
     rentals while their mapping could not be looked up; now both providers'
-    listings carry it (Vast's HostPort, RunPod's portMappings). A row that
+    listings carry it (Vast's HostPort, RunPod's live port map). A row that
     still has one loads, with a warning from Fleet.from_cfg, and the value
     only seeds public_port until a listing names the rental. Drop it from
     config; it is not refused so that a config change never stops llmao.

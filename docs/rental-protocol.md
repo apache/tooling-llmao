@@ -134,7 +134,8 @@ a rental gets at most three), plus the handful of older pairs in
 
 A provider publishes each listen port on some other public port. llmao
 learns that mapping from the provider's listing (Vast's instance ports,
-RunPod's `portMappings`) and uses it for everything that dials the rental:
+RunPod's live port map, `runtime.ports`, read per running pod since the v2
+list leaves it out) and uses it for everything that dials the rental:
 the LiteLLM deployment's `api_base`, the health probe, the `/v1/models`
 read and the metrics sampler. A fourth element on a host row, a public
 port written by hand, is deprecated: it loads with a warning and only
@@ -347,8 +348,8 @@ SAN, because `httpx` verifies the host in the URL against the certificate
 and the URL host is the provider's public IP. The rental does not know its
 public address or port, so llmao supplies it: at `GET /vllm/config` the
 name is placed on an address through the provider listing, the same join
-the fleet uses. When the listing has not placed the name yet (RunPod's
-`publicIp` is empty while a pod initializes; a Vast listing may not have
+the fleet uses. When the listing has not placed the name yet (a RunPod
+pod is RUNNING for a while before its port map appears; a Vast listing may not have
 been read since the instance started), llmao refreshes the listing once,
 and if the name is still unplaced answers `503` with `Retry-After`; the
 installer retries. An address change after mint is a re-provision, as a
@@ -419,9 +420,11 @@ back to `http`, because a fallback is the attack.
   gateway box, one tunnel process per rental to keep alive, and LiteLLM
   dialing local ports that mean nothing in the listing.
 - **RunPod's HTTPS proxy** (`https://<podId>-<listen>.proxy.runpod.net`).
-  Already rejected for the fleet on other grounds: the proxy imposes its own
-  request timeouts, and a model's first token can take longer than that
-  under load, so completions would fail at the proxy before vLLM answered.
+  Already rejected for the fleet on other grounds: the proxy sits behind
+  Cloudflare, whose request timeout (about 100 s) is shorter than a long
+  generation or a first token under load, so completions would fail at the
+  proxy before vLLM answered. That is why every pod publishes its listen
+  ports as `N/tcp` and the fleet dials the public TCP port.
   It would also be RunPod only, terminated by RunPod rather than the
   rental, with no client authentication.
 - **An `ssl.SSLContext` instead of the bundle file.** LiteLLM accepts one

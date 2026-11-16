@@ -243,7 +243,7 @@ A row carries its server's **share** of the rental: a rental running two servers
 puts half its price on each, so adding rows up gives the real bill. Prices
 come from the providers, through the rental the listing places the server on
 (by address, else the instance or pod it was on before): Vast's `dph_total` from the
-instance list the fleet already reads for ports, and RunPod's `costPerHr`
+instance list the fleet already reads for ports, and RunPod's `cost`
 from its pod list (`providers.runpod.api_key`), read every 10 minutes by its
 own runner. A rental no provider prices has no price, never $0, so the report
 can tell "free" from "unknown".
@@ -274,7 +274,7 @@ get cleared.
 ## Cost
 
 - **Self-hosted:** rental dollars per hour (Vast `dph_total`, RunPod
-  `costPerHr`), set against tokens served. There is no hand-set price: every
+  `cost`), set against tokens served. There is no hand-set price: every
   rental is on a provider that reports one. A rental that is not would show as
   unpriced, and a setting can be added when one exists. LiteLLM records self-hosted requests at $0.00 on
   purpose, since a price there would count against team budgets.
