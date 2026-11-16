@@ -35,7 +35,8 @@ entries count: a rental's listen ports are published as `N/tcp` on
 purpose, because RunPod's HTTPS proxy (`<podId>-<port>.proxy.runpod.net`)
 sits behind Cloudflare, whose request timeout is shorter than a long
 generation, so completions would fail at the proxy before vLLM answered.
-The map's one `http` entry is RunPod's own port, not ours.
+The map's one `http` entry is RunPod's own port, not ours, and its `ip` is
+the proxy's address, not the machine's.
 """
 
 from __future__ import annotations
@@ -97,20 +98,19 @@ def rentals_from_pods(pods: Any) -> edict:
 def ports_from_pod(pod: dict[str, Any]) -> tuple[edict, str]:
     """(container port → public port, public IP) from one pod's live port map, ``runtime.ports``.
 
-    Only TCP entries map (see the module docstring); an entry that is not
-    a port pair is dropped. The IP is the first any entry names, "" when
-    the map is absent: RunPod publishes every port on the one address.
+    Only TCP entries count (see the module docstring), for the address
+    too: the ``http`` entry's ``ip`` is the proxy's address, not the
+    machine's, and it is often the first entry. An entry that is not a
+    port pair is dropped. The IP is "" when the map is absent.
     """
     runtime = pod.get("runtime")
     entries = runtime.get("ports") if isinstance(runtime, dict) else None
     out = edict()
     host = ""
     for entry in entries if isinstance(entries, list) else []:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or entry.get("type") != "tcp":
             continue
         host = host or str(entry.get("ip") or "").strip()
-        if entry.get("type") != "tcp":
-            continue
         # The container port is kept as the string the server's listen
         # port is looked up by (Vast's map is keyed the same way),
         # normalized through int so "08002" and "8002" are one port.

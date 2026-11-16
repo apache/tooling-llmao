@@ -116,12 +116,14 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             "cost": 2.49,
             "ports": ["8002/tcp", "22/tcp", "8003/tcp"],
             # The live port map, as fetch_pods merges it from the pod's own
-            # GET. The http entry is RunPod's own port, skipped; an entry
-            # that is not a port pair is dropped; the IP is any entry's.
+            # GET. The http entry is RunPod's own port on the proxy's
+            # address, first in the list as it often is, skipped for both
+            # the port and the IP; an entry that is not a port pair is
+            # dropped; the IP is the TCP entries'.
             "runtime": {
                 "uptime": 918889,
                 "ports": [
-                    {"private": 19123, "public": 60569, "type": "http", "ip": "203.0.113.20"},
+                    {"private": 19123, "public": 60569, "type": "http", "ip": "198.51.100.7"},
                     {"private": 8002, "public": 16643, "type": "tcp", "ip": "203.0.113.20"},
                     {"private": "22", "public": "10341", "type": "tcp", "ip": "203.0.113.20"},
                     {"private": 8003, "public": None, "type": "tcp", "ip": "203.0.113.20"},
