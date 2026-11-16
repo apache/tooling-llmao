@@ -32,7 +32,7 @@
 
 # supervisor is pure Python with no dependencies, so it is installed here,
 # in a small image, and copied across. Hash-pinned in requirements.txt.
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS vendor
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS vendor
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --no-deps --require-hashes --target /vendor -r /tmp/requirements.txt
 
