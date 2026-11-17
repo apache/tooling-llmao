@@ -411,14 +411,15 @@ def test_work_needed_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
     assert "disabled" in out
 
 
-def test_a_stamped_orphan_on_a_listed_host_offers_approve():
+def test_a_stamped_orphan_offers_stop_tracking_only_even_on_a_listed_host():
+    """An approval is by a machine's name; an orphan carries only the address its route dials, and an
+    approval by address keys the machine wrongly. The listed machine's own item carries the Approve."""
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.cfg.fleet.hosts = {}
     _orphan(fleet, ORPHAN_PASSES, stamp="http://198.51.100.9:8001")
     (item,) = pages.attention_items(fleet)
     assert item.detail.startswith("llmao added it")
-    # No listing names the host: nothing to approve, the rental is invisible.
     assert [a.label for a in item.actions] == ["Stop tracking"]
     rental = Rental(
         provider="vast",
@@ -432,10 +433,8 @@ def test_a_stamped_orphan_on_a_listed_host_offers_approve():
     )
     fleet.vast_rentals = ProviderRentals("vast", by_id={"1": rental})
     (item,) = pages.attention_items(fleet)
-    assert [a.label for a in item.actions] == ["Approve", "Stop tracking"]
-    # A host in fleet.hosts is intended already; this is a route for a model it does not run.
-    fleet.cfg.fleet.hosts = {"198.51.100.9": 8001}
-    assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Stop tracking"]
+    assert [a.label for a in item.actions] == ["Stop tracking"]
+    assert all(a.host != "198.51.100.9" or a.kind == "remove" for a in item.actions), "never an Approve by address"
 
 
 def test_work_needed_shows_a_machine_nobody_intends_once_with_approve_by_name():

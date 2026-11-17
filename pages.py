@@ -50,7 +50,6 @@ from llmao.fleet import (
     ORPHAN_PASSES,
     add_refusal,
     fetch_detail,
-    normalize_peer_ip,
     orphan_refusal,
     remove_refusal,
     snapshot_for_status,
@@ -85,7 +84,6 @@ from llmao.proxy.client import (
     KeyInfo,
     pinned_litellm_version,
 )
-from llmao.rental import match_rental
 from llmao.seam import AuthzError
 
 # Replica summary order: the calm states first, the ones needing attention last.
@@ -855,7 +853,7 @@ def attention_items(fleet) -> list:
                 rest="",
                 detail=_orphan_detail(orphan),
                 flag="",
-                actions=_orphan_actions(fleet, orphan),
+                actions=_orphan_actions(orphan),
             )
         )
     return items
@@ -888,15 +886,20 @@ def _orphan_detail(orphan) -> str:
     return "not added by llmao; someone added it in LiteLLM"
 
 
-def _orphan_actions(fleet, orphan) -> list:
-    """Stop tracking deletes an orphan. Approve, when a listing names a host not in fleet.hosts, intends it again."""
+def _orphan_actions(orphan) -> list:
+    """Stop tracking deletes an orphan: the one action on a route nothing intends.
+
+    No Approve here. An approval is by the machine's name, and all an
+    orphan carries is the address its route dials; approving that would
+    key the machine by address, which places it on whichever rental
+    answers there (two pods can share one). The machine itself, when a
+    provider lists it and nothing intends it, has its own Work needed
+    item with the Approve by name.
+    """
     row = orphan.deployment
-    hosts = {normalize_peer_ip(str(ip)) for ip in fleet.cfg.fleet.hosts}
-    listed = match_rental(row.host, None, fleet.vast_rentals, fleet.runpod_rentals) is not None
-    actions = admin_actions(fleet, host=row.host, approve=listed and row.host not in hosts)
     reason = orphan_refusal(orphan) or ""
     ident = row.display
-    actions.append(
+    return [
         _action(
             kind="remove",
             label="Stop tracking",
@@ -909,8 +912,7 @@ def _orphan_actions(fleet, orphan) -> list:
             enabled=ezt.boolean(reason == ""),
             reason=reason,
         )
-    )
-    return actions
+    ]
 
 
 def _hosting_label(ours: int, bought: int) -> str:
