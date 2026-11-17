@@ -591,10 +591,27 @@ def _dep_where(dep) -> edict:
     rental = srv.rental
     if rental is None:
         return edict(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
-    label = rental.label
+    label = _rental_description(rental)
     if rental.status and not rental.running:
         label += f", {rental.status}"
     return edict(label=label, url=rental.url or "", unknown=ezt.boolean(False))
+
+
+def _rental_description(rental) -> str:
+    """What the machine is, for an admin sizing the next one: its label and its hardware as the provider lists it.
+
+    "RTX 3090 x4, 24 GB each, 40 GB disk, 30 used" for a Vast instance,
+    whose label is the card and count the hardware line opens with, so it
+    is not said twice; "gemma4, NVIDIA RTX PRO 6000 ... x1, 96 GB, 5 GB
+    disk + 60 GB volume" for a RunPod pod, whose label is its name. The
+    label alone when the provider lists no hardware.
+    """
+    hardware = rental.hardware
+    if not hardware:
+        return rental.label
+    if hardware.startswith(rental.label):
+        return hardware
+    return f"{rental.label}, {hardware}" if rental.label else hardware
 
 
 def _dep_anchor(dep) -> str:
@@ -847,7 +864,7 @@ def _unintended_what(machine) -> str:
     """One machine nobody intends: a rental when a provider reports it, else the stranger that asked."""
     rental = machine.rental
     if rental is not None:
-        return f"{rental.ident} ({rental.label}) is rented, nobody intends it"
+        return f"{rental.ident} ({_rental_description(rental)}) is rented, nobody intends it"
     return f"Fleet key presented from {machine.name} (not in fleet.hosts)"
 
 
@@ -1063,6 +1080,14 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             vllm_fact = ""
             if srv is not None:
                 vllm_fact = f"last healthy {ago(last_ok)}" if ago(last_ok) else "never healthy"
+                # The build first, as read from /version on the edge into
+                # Healthy; or why it was not read, since a vLLM that keeps
+                # its version to itself is still serving and the admin
+                # should know which it is.
+                if srv.observed_version:
+                    vllm_fact = f"{srv.observed_version}, {vllm_fact}"
+                elif srv.version_error:
+                    vllm_fact = f"version not read ({srv.version_error}), {vllm_fact}"
             litellm_fact = ""
             if litellm_health != "—":
                 verdict = "check passed" if dep.litellm_healthy else "check failed"
