@@ -19,12 +19,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 import httpx
 import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
+import llmao.fleet
 from llmao.capacity import HOUR_S, HourlyRollup
 from llmao.fleet import UNLISTED_PASSES, Fleet, VllmServer
 from llmao.rental import ProviderRentals, Rental, match_rental
@@ -313,25 +315,86 @@ def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
     assert srv.unlisted is False
 
 
-def test_without_a_runpod_key_the_runner_ends_at_once():
+def test_without_a_provider_key_the_runner_ends_at_once():
     fleet = Fleet(edict(), [_server("203.0.113.20")])
-    asyncio.run(asyncio.wait_for(fleet.run_runpod_rentals(), timeout=1))
+    asyncio.run(asyncio.wait_for(fleet.run_rentals(), timeout=1))
+    assert fleet.rentals_read.is_set(), "the lifecycle's first pass must not wait on a runner that has nothing to read"
 
 
-def test_the_runner_reads_the_rentals_on_its_first_pass():
-    """The runner calls the reader by its name: a rename once left it calling a method that did not exist,
+def test_the_runner_reads_both_providers_on_its_first_pass():
+    """The runner calls each reader by its name: a rename once left it calling a method that did not exist,
     and every pass failed with a warning while the pods went unread."""
-    fleet = _fleet_with_runpod([_server("203.0.113.20")])
+    fleet = _fleet_renting_from_both([_server("203.0.113.20")])
     calls = []
 
-    async def read(client):
-        calls.append(client)
+    async def read_vast(client):
+        calls.append("Vast")
+
+    async def read_runpod(client):
+        calls.append("RunPod")
         raise asyncio.CancelledError
 
-    fleet.read_runpod_rentals = read
+    fleet.read_vast_rentals = read_vast
+    fleet.read_runpod_rentals = read_runpod
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(fleet.run_runpod_rentals())
-    assert len(calls) == 1
+        asyncio.run(fleet.run_rentals())
+    assert calls == ["Vast", "RunPod"]
+    assert fleet.rentals_read.is_set()
+
+
+def test_one_provider_failing_to_answer_leaves_the_other_read(caplog):
+    fleet = _fleet_renting_from_both([_server("203.0.113.20")])
+
+    async def read_vast(client):
+        raise httpx.ConnectError("vast is down")
+
+    async def read_runpod(client):
+        fleet.runpod_rentals = _reported()
+
+    fleet.read_vast_rentals = read_vast
+    fleet.read_runpod_rentals = read_runpod
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(fleet.read_rentals(None))
+    assert fleet.vast_rentals is None, "the outage leaves the last set, here none"
+    assert fleet.runpod_rentals is not None
+    assert "the Vast rentals could not be read" in caplog.text
+
+
+def test_the_first_lifecycle_pass_waits_for_the_first_listing_read(monkeypatch):
+    """At startup the runner's first read lands before the first probe, so a server keyed by a
+    provider's id has its address; otherwise it read as unreached for one health interval."""
+    fleet = _fleet_renting_from_both([_server("203.0.113.20")])
+    # The whole pass runs, so the knobs every step reads are here. The probe
+    # ends the lifecycle; a step that raised before it would be caught and
+    # the loop would spin at health_interval_s, so that is not zero.
+    fleet.cfg.fleet = edict(
+        hosts={}, health_interval_s=1, health_timeout_s=1, health_grace_s=60, health_fail_threshold=3
+    )
+    order = []
+
+    async def read_rentals(client):
+        order.append("read")
+        fleet.vast_rentals = _reported()
+        fleet.runpod_rentals = _reported()
+
+    async def probe_all(*, client=None, now=None):
+        order.append("probe")
+        raise asyncio.CancelledError
+
+    fleet.read_rentals = read_rentals
+    fleet.probe_all = probe_all
+    monkeypatch.setattr(llmao.fleet, "RENTALS_INTERVAL_S", 3600)
+
+    async def both():
+        rentals = asyncio.create_task(fleet.run_rentals())
+        try:
+            await fleet.run_lifecycle()
+        finally:
+            rentals.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(both())
+    assert order == ["read", "probe"]
 
 
 def _fleet_renting_from_both(servers):

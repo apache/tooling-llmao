@@ -182,8 +182,9 @@ log files and the fleet.
   first pass before the skew runner is allowed to compare, and the
   demand rollup catches up on every closed day the store lacks.
 - **Every interval:** the lifecycle probe (`health_interval_s`), the
-  RunPod listing (ten minutes), the skew and outside-edits checks
-  (`skew_interval_s`), the metrics sample (`sample_interval_s`).
+  provider listings, Vast and RunPod on one clock (a minute), the skew
+  and outside-edits checks (`skew_interval_s`), the metrics sample
+  (`sample_interval_s`).
 - **At UTC midnight, inside the proxy:** the prompt log's sink closes
   the day's file, gzips it, and deletes files past
   `prompt_log_retention_days`.

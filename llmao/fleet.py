@@ -99,9 +99,16 @@ def _is_ip_literal(name: str) -> bool:
     return True
 
 
-# How often RunPod's list of our pods is read. Placing a rental is not urgent: a
-# new pod is still provisioning when the next read comes round.
-RUNPOD_LISTING_INTERVAL_S = 600
+# How often the providers' lists of our machines are read (run_rentals), both
+# on one clock. Placing a rental is not urgent: a new pod is still
+# provisioning when the next read comes round. A read costs Vast one request
+# and RunPod one plus one per running pod, against RunPod's 180 a minute.
+RENTALS_INTERVAL_S = 60
+
+# How long the first lifecycle pass waits for the first read of the listings,
+# so that at startup a server keyed by a provider's id has its address before
+# it is probed, rather than reading as unreached for one health interval.
+FIRST_RENTALS_WAIT_S = 30.0
 
 # Two hysteresis counts, one per clock. Each is a constant rather than a config
 # key: no p6 change, no eyaml round-trip. Both mirror fleet.health_fail_threshold,
@@ -114,9 +121,9 @@ RUNPOD_LISTING_INTERVAL_S = 600
 # and a single absence means "not yet" as often as "gone". The count does not
 # have to outlast that gap: unlisted is an attention verdict, a serving rental
 # keeps its route whatever the listing says, and a rental that is still coming
-# up stays quiet (docs/fleet-reconcile-design.md). Today Vast is read on the
-# probe pass and RunPod every RUNPOD_LISTING_INTERVAL_S; the design moves both
-# to one listing interval of about a minute, so three passes is a few minutes.
+# up stays quiet (docs/fleet-reconcile-design.md). Counted on the lifecycle
+# pass, against the listings run_rentals last read, so three passes is a few
+# health intervals.
 UNLISTED_PASSES = 3
 
 # Consecutive reads of the LiteLLM deployments (skew_interval_s, 180s) on
@@ -807,10 +814,13 @@ class Fleet:
         self.litellm: LiteLLMDeployments | None = None
         self.orphans: list[Orphan] = []
         # What each provider we rent from last reported (llmao/rental.py).
-        # None until read: Vast's comes with every lifecycle pass, RunPod's
-        # from its own runner (run_runpod_listing).
+        # None until read, by run_rentals, the one place the providers are
+        # asked; the lifecycle applies the latest sets it finds here.
         self.vast_rentals: ProviderRentals | None = None
         self.runpod_rentals: ProviderRentals | None = None
+        # Set once run_rentals has made its first read, answered or not. The
+        # first lifecycle pass waits for it (FIRST_RENTALS_WAIT_S at most).
+        self.rentals_read = asyncio.Event()
         # Rentals nobody intends, by the name the rental sends (discover_rentals, every pass).
         self.discovered: dict[str, Discovered] = {}
 
@@ -1100,31 +1110,47 @@ class Fleet:
         self.vast_rentals = ProviderRentals("Vast", rentals_from_body(await fetch_instances(key, client=client)))
 
     async def read_runpod_rentals(self, client: httpx.AsyncClient) -> None:
-        """Read what RunPod reports about our pods into runpod_rentals. Raises if RunPod does not answer."""
+        """Read what RunPod reports about our pods into runpod_rentals. Nothing when RunPod is not configured."""
         key = gpu_host_api_key(self.cfg, "runpod")
+        if not key:
+            return
         self.runpod_rentals = ProviderRentals("RunPod", rentals_from_pods(await fetch_pods(key, client=client)))
 
-    async def run_runpod_rentals(self) -> None:
-        """Runner: what RunPod reports about our pods, every RUNPOD_LISTING_INTERVAL_S.
+    async def read_rentals(self, client: httpx.AsyncClient) -> None:
+        """One read of every provider we rent from, each on its own: an outage at one leaves the other read.
 
-        Kept apart from the lifecycle so that RunPod is asked on its own
-        schedule rather than on every probe pass; the lifecycle applies the
-        latest list it has. Pods do not move: a new one waits at most an
-        interval to be placed, and it is still provisioning by then. Ends at
-        once when no RunPod key is configured.
+        A provider that does not answer keeps its last set, which the
+        outage only makes older, and is logged. Raises nothing.
         """
-        if not gpu_host_api_key(self.cfg, "runpod"):
+        for provider, read in (("Vast", self.read_vast_rentals), ("RunPod", self.read_runpod_rentals)):
+            try:
+                await read(client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                _LOGGER.warning("the %s rentals could not be read: %s", provider, fmt.log_safe(e))
+
+    async def run_rentals(self) -> None:
+        """Runner: keep vast_rentals and runpod_rentals current, reading both providers every RENTALS_INTERVAL_S.
+
+        This is the only place llmao asks a provider about our machines.
+        The lifecycle never asks; on each pass it places servers from
+        whatever sets are here (place_servers), so a provider's clock and
+        the probe clock are independent. The interval is enough: a new
+        machine is still provisioning when the next read places it, and a
+        machine never moves. With no provider key configured (a local
+        fleet) there is nothing to read, and the runner returns at once.
+        """
+        if not (gpu_host_api_key(self.cfg, "vast") or gpu_host_api_key(self.cfg, "runpod")):
+            self.rentals_read.set()
             return
         while True:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                    await self.read_runpod_rentals(client)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                # The last report stands; an outage only makes it older.
-                _LOGGER.warning("the RunPod rentals could not be read: %s", e)
-            await asyncio.sleep(RUNPOD_LISTING_INTERVAL_S)
+                    await self.read_rentals(client)
+            finally:
+                self.rentals_read.set()
+            await asyncio.sleep(RENTALS_INTERVAL_S)
 
     def place_servers(self) -> None:
         """Put each server on its Rental from the latest provider sets, and decide which are unlisted.
@@ -1273,13 +1299,23 @@ class Fleet:
     async def run_lifecycle(self) -> None:
         interval = float(self.cfg.fleet.health_interval_s)
         timeout = float(self.cfg.fleet.health_timeout_s)
+        # The listings are read by run_rentals, not here. The first pass
+        # waits for its first read so that a server keyed by a provider's id
+        # has an address to probe; a provider that is slow to answer costs
+        # the wait, not the pass. A local fleet rents from nobody and has
+        # nothing to wait for.
+        #
+        # TO DISCUSS: this handshake between two runners, the event, the
+        # timeout and the keys checked in two places, is brittle. How the
+        # Rentals are managed wants a rethink.
+        if gpu_host_api_key(self.cfg, "vast") or gpu_host_api_key(self.cfg, "runpod"):
+            try:
+                await asyncio.wait_for(self.rentals_read.wait(), FIRST_RENTALS_WAIT_S)
+            except TimeoutError:
+                _LOGGER.warning("fleet: no listing read within %.0fs of start; probing without", FIRST_RENTALS_WAIT_S)
         while True:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
-                    try:
-                        await self.read_vast_rentals(client)
-                    except Exception:
-                        _LOGGER.exception("the Vast rentals could not be read")
                     self.place_servers()
                     await self.discover_rentals(client)
                     await self.probe_all(client=client)
