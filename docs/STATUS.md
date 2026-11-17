@@ -167,11 +167,12 @@ Nothing at the moment.
 
 ### The larger threads
 
-**Fleet reconciliation, the Deployment step.** Waiting on a decision
-(below) since 2026-10-30.
+**Fleet reconciliation, the Deployment step.** Decided 2026-11-17: a
+rental's state is computed from the rental alone, never from whether
+LiteLLM has a route to it; whether to delete a route is decided in the
+list of actions a pass produces, where the other LiteLLM actions are.
+The matrix is corrected accordingly. Next, in order:
 
-- Correct the design doc's transition matrix: a walk of its cells
-  against the code found four undeclared mismatches, agreed to be real.
 - `deployment.py` commit 1: the Deployment class and its transition
   table, absorbing `model_status.py`; `deployment_status(...)` becomes a
   method, retiring the five-call pair in `fleet.py` and `pages.py`.
@@ -242,11 +243,6 @@ with a three-step plan agreed and nothing built).
 
 ### Waiting on a decision
 
-- **The reconcile matrix correction**, two ways: (a) take LiteLLM's
-  "has the deployment" fact out of the Deployment step and make the
-  delete a plan rule, which is the recommendation; or (b) keep it in and
-  rewrite three cells to what the code does, carrying the crossed concern
-  into `deployment.py`.
 - **Who creates automation PATs** (design §5.1.1): RAI, a Chair or VP, or
   any PMC; the code is provisionally the last.
 - **The Open RAI numbers** under the UX backlog: trial amounts and

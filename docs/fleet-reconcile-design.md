@@ -105,13 +105,19 @@ pieces, and only the first is a table:
    Rejected into Foreign.
 
 4. **The plan**, `actions(history, observed)`: add when Serving, dialable
-   and absent from LiteLLM; delete when present and Down; update the
+   and absent from LiteLLM; delete when present and Down; delete when
+   present, Awaiting and silent, the restart case, where the route
+   predates the process and nothing has answered since; update the
    `api_base` when present and it differs from the dialable URL; delete
    the extra copies under one key. The policy table marks each kind auto
-   or human. "Unlisted and not Healthy" stops being a delete gate: once
-   `last_ok` is set a rental that is not Healthy is Unhealthy, and the Down
-   verdict already deletes that. The plan is the next step's work
-   (`reconcile.py`); this step builds what it reads.
+   or human. Whether to delete a route is decided here and nowhere else:
+   the state is computed from the rental alone and never reads whether
+   LiteLLM has the deployment. A Loading rental keeps its route, as
+   today, until the hold-over or the grace runs out.
+   "Unlisted and not Healthy" stops being a delete gate: once `last_ok`
+   is set a rental that is not Healthy is Unhealthy, and Down already
+   deletes that. The plan is the next step's work (`reconcile.py`); this
+   step builds what it reads.
 
 Two rulings carried forward unchanged: history is process memory, so a
 restart starts cautious; and nothing derived is carried between passes
@@ -131,19 +137,24 @@ said about the rental, and there are only four things it can say:
   loads;
 - **silent**: no connection, a timeout, or no address to dial.
 
+A listed host with no address yet is not probed at all: a provider names
+the machine and has not placed it, so its state and clocks stand until
+the listing does. Only an unlisted host with no address is probed, as
+silent (`VllmProbe.no_address`), because nothing will ever place it.
+
 Each cell is the next state. `grace` is `health_grace_s`; `threshold` is
 `health_fail_threshold`; `fails` is the consecutive probes without a 200,
 reset by any 200.
 
 | Was | serving | refusing | listening | silent |
 |---|---|---|---|---|
-| **Awaiting** | Healthy | Rejected | Loading | Unhealthy if LiteLLM has the deployment; Stalled once `grace` has passed since the first attempt; else Awaiting |
+| **Awaiting** | Healthy | Rejected | Loading | Stalled once `grace` has passed since the first attempt; else Awaiting |
 | **Loading** | Healthy | Rejected | Loading inside `grace` of the loading start; Stalled past it | same as listening |
 | **Healthy** | Healthy | Rejected | Healthy while `fails < threshold`; Unhealthy at it | same as listening |
 | **Unhealthy** | Healthy | Rejected | Unhealthy | Unhealthy |
 | **Stalled** | Healthy | Rejected | Loading when no loading start existed before this probe; otherwise Stalled | Stalled |
 | **Rejected** | Healthy | Foreign if the host is unlisted and the refusal has run `REJECTED_PASSES` passes; else Rejected | Rejected while `fails < threshold`; Unhealthy at it | same as listening |
-| **Foreign** | Healthy | Foreign | Foreign while `fails < threshold`; Unhealthy at it | same as listening |
+| **Foreign** | Healthy | Foreign while the host is unlisted; Rejected once a listing names it again | Foreign while `fails < threshold`; Unhealthy at it | same as listening |
 
 One thing moves a deployment that is not a probe: a config fetch seen for
 its name sets the loading start. From Awaiting that is Loading, the same
@@ -175,13 +186,16 @@ not serving means different things depending on what it was doing:
   that has to cope with a process restart, since after one every
   deployment begins here whatever its rental is doing. A 503 is the rental
   coming up: the loading start is set, and the grace runs from it.
-  Silence is three different things. If LiteLLM has the deployment, the
-  rental was serving before we restarted and is down now: Unhealthy, and a
-  delete, not patience. If nothing has ever answered and `grace` has
+  Silence is two things. If nothing has ever answered and `grace` has
   passed since the first attempt, it is a rental that died: Stalled,
   which is what lets the unlisted sentence show. Otherwise it is a rental
   still pulling its image, and it must not read Stalled five minutes
-  after an admin created it.
+  after an admin created it. Whether LiteLLM still has a route to it is
+  not the state's business: a route to a silent rental nothing has heard
+  from since the restart is the plan's delete, and it fires on this same
+  pass whether the rental reads Awaiting or Stalled. Today's code reads
+  Unhealthy here when the route exists, by taking LiteLLM's fact into the
+  probe pass; that is the crossed concern the step removes.
 - From *Loading*, there is a clock and nothing else: `grace` from the
   loading start to answer a 200, Stalled past it. Listening and silent
   are the same here, since the start is already set. The start is the
@@ -206,22 +220,25 @@ not serving means different things depending on what it was doing:
   hold-over is computed from `last_ok` and `fails` without knowing the
   rental was Rejected (quirk 1 in `rental-lifecycle.md`). With the previous
   state in the row it stays Rejected under the threshold and goes
-  Unhealthy at it. That is the one behaviour the matrix changes;
-  everything else reproduces `self_hosted_lifecycle`, and the fixtures
-  from the prior version's table are the proof.
+  Unhealthy at it. That is one of two behaviours the matrix changes. The
+  other is the first pass after a restart: a silent rental with a route
+  in LiteLLM reads Awaiting, not Unhealthy, and the route is deleted on
+  that pass by the plan rather than by the state, so what LiteLLM sees is
+  the same. Everything else reproduces `self_hosted_lifecycle`, and the
+  fixtures from the prior version's table are the proof.
 
 **What the step reads and keeps.** The observation for one pass is the
 probe (its column, and the window when `/v1/models` carried one), the
 loading-start candidates (the config fetch time, the first reached
-probe), whether LiteLLM has the deployment, and whether the host is
-unlisted. The history the step keeps is `state`, `fails`, `last_ok`,
-`first_probed_at`, `first_reached_at`, `config_served_at`, `key_rejected`
-(standing until asked again, which is why "serving" can mean "not asked
-and last accepted"), `rejected_passes`, and the observed window.
-`in_litellm` is not history and not a probe argument: the Deployment
-holds its own LiteLLM rows and reads them in the Awaiting row. The one
-thing that clears history is a new rental at the same key, which is a
-new rental to be checked afresh.
+probe), and whether the host is unlisted. The history the step keeps is
+`state`, `fails`, `last_ok`, `first_probed_at`, `first_reached_at`,
+`config_served_at`, `key_rejected` (standing until asked again, which is
+why "serving" can mean "not asked and last accepted"), `rejected_passes`,
+and the observed window. Whether LiteLLM has the deployment is neither:
+the step never reads it. The Deployment holds its own LiteLLM rows for
+the plan, which is the only reader of that fact. The one thing that
+clears history is a new rental at the same key, which is a new rental to
+be checked afresh.
 
 **A provider line** has no probe. Its machine is three states and one
 source: Configured until LiteLLM's `/health` has spoken, then Healthy or
