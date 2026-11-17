@@ -71,7 +71,7 @@ from llmao.models import VllmRecipe, validate_models, warn_deprecated
 from llmao.provisioning import ConfigFetch, ProvisioningRecord
 from llmao.reconcile import DeploymentKey, deployment_key, norm_base, normalize_peer_ip
 from llmao.rental import ProviderRentals, Rental, match_rental
-from llmao.runpod_client import fetch_pods, rentals_from_pods
+from llmao.runpod_client import fetch_hardware, fetch_pods, rentals_from_pods
 from llmao.vast_client import fetch_instances, rentals_from_body
 from llmao.vllm_client import VllmProbe, probe
 
@@ -1114,7 +1114,9 @@ class Fleet:
         key = gpu_host_api_key(self.cfg, "runpod")
         if not key:
             return
-        self.runpod_rentals = ProviderRentals("RunPod", rentals_from_pods(await fetch_pods(key, client=client)))
+        pods = await fetch_pods(key, client=client)
+        hardware = await fetch_hardware(key, pods, client=client)
+        self.runpod_rentals = ProviderRentals("RunPod", rentals_from_pods(pods, hardware=hardware))
 
     async def read_rentals(self, client: httpx.AsyncClient) -> None:
         """One read of every provider we rent from, each on its own: an outage at one leaves the other read.

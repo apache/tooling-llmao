@@ -476,6 +476,9 @@ classDiagram
     +provider, id, name
     +host, ports, status
     +usd_per_hour
+    +gpu, gpus, vram_gb
+    +disk_gb, volume_gb, disk_used_gb
+    +hardware
   }
   class VllmProbe {
     +url, at

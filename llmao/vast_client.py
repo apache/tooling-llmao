@@ -111,6 +111,10 @@ def rentals_from_body(body: Any) -> edict:
             continue
         gpus = inst.get("num_gpus") or 1
         gpu = str(inst.get("gpu_name") or "GPU")
+        # The hardware, as the host reports it to Vast: gpu_ram is one
+        # card's memory in MB, and the one disk_space is the whole of the
+        # instance's disk, container and weights, of which disk_usage is used.
+        vram_mb = price(inst.get("gpu_ram"))
         rentals[instance_id] = Rental(
             provider="Vast",
             id=instance_id,
@@ -121,8 +125,19 @@ def rentals_from_body(body: Any) -> edict:
             name=instance_id,
             status=str(inst.get("actual_status") or "").lower(),
             ports=ports_from_instance(inst),
+            gpu=str(inst.get("gpu_name") or ""),
+            gpus=int(gpus),
+            vram_gb=vram_mb and float(round(vram_mb / 1024)),
+            disk_gb=_gb(inst.get("disk_space")),
+            disk_used_gb=_gb(inst.get("disk_usage")),
         )
     return rentals
+
+
+def _gb(value: Any) -> float | None:
+    """A size Vast reports in GB, to one decimal (79.99999999999997 is 80), or None."""
+    gb = price(value)
+    return gb and round(gb, 1)
 
 
 async def fetch_instances(api_key: str, *, client: httpx.AsyncClient) -> Any:

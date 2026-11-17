@@ -27,10 +27,11 @@ import pytest
 from easydict import EasyDict as edict  # noqa: N813
 
 import llmao.fleet
+import llmao.runpod_client
 from llmao.capacity import HOUR_S, HourlyRollup
 from llmao.fleet import UNLISTED_PASSES, Fleet, VllmServer
 from llmao.rental import ProviderRentals, Rental, match_rental
-from llmao.runpod_client import rentals_from_pods
+from llmao.runpod_client import fetch_hardware, rentals_from_pods
 from llmao.sampler import MetricsSampler
 from llmao.vast_client import VAST_CONSOLE_URL, rentals_from_body
 
@@ -80,8 +81,14 @@ def test_a_vast_rental_is_its_instance_gpus_status_address_and_price():
                 "dph_total": 0.2059,
                 "actual_status": "running",
                 "ports": {"8001/tcp": [{"HostIp": "0.0.0.0", "HostPort": "41234"}]},
+                # The hardware as the host reports it: one card's memory in
+                # MB, the one disk in GB with Vast's float noise, and what
+                # is used of it.
+                "gpu_ram": 131072,
+                "disk_space": 79.99999999999997,
+                "disk_usage": 37.0,
             },
-            {"id": 53865410, "public_ipaddr": "198.51.100.8", "gpu_name": "RTX 3060", "num_gpus": 2},
+            {"id": 53865410, "public_ipaddr": "198.51.100.8", "gpu_name": "RTX 3060", "num_gpus": 2, "gpu_ram": 12288},
             {"id": 1, "public_ipaddr": "", "dph_total": 0.5, "actual_status": "loading"},
         ]
     }
@@ -96,13 +103,22 @@ def test_a_vast_rental_is_its_instance_gpus_status_address_and_price():
         name="55406468",
         status="running",
         ports={"8001": 41234},
+        gpu="GB10",
+        gpus=1,
+        vram_gb=128.0,
+        disk_gb=80.0,
+        disk_used_gb=37.0,
     )
+    assert rentals["55406468"].hardware == "GB10 x1, 128 GB, 80 GB disk, 37 used"
     # Listed, but no price: unknown, not free. No status given: unknown, not running. No ports: none.
     assert rentals["53865410"].label == "RTX 3060 x2"
     assert rentals["53865410"].usd_per_hour is None
     assert rentals["53865410"].status == ""
     assert rentals["53865410"].running is False
     assert rentals["53865410"].ports == {}
+    # Two cards: the memory is each card's. No disk figures: none said.
+    assert rentals["53865410"].hardware == "RTX 3060 x2, 12 GB each"
+    assert rentals["1"].hardware == ""
     # Listed, no address yet: kept, with its status, so it is not a miss.
     assert (rentals["1"].host, rentals["1"].status) == ("", "loading")
     assert set(rentals) == {"55406468", "53865410", "1"}
@@ -117,6 +133,12 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             "status": "RUNNING",
             "cost": 2.49,
             "ports": ["8002/tcp", "22/tcp", "8003/tcp"],
+            # The hardware: the card by type id and count (gpu.memory is
+            # the pod's system RAM, not VRAM, and is not read), the
+            # container disk, and the volume at /workspace.
+            "gpu": {"count": 1, "id": "NVIDIA RTX PRO 6000 Blackwell Server Edition", "memory": 188, "vcpuCount": 16},
+            "disk": 30,
+            "mounts": {"persistent": {"path": "/workspace", "size": 80}},
             # The live port map, as fetch_pods merges it from the pod's own
             # GET. The http entry is RunPod's own port on the proxy's
             # address, first in the list as it often is, skipped for both
@@ -132,13 +154,28 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
                 ],
             },
         },
-        # A stopped pod has no map and still reports a price: listed, not running.
-        {"id": "tjfs5", "name": "testing", "status": "EXITED", "cost": 0.89, "runtime": None},
+        # A stopped pod has no map and still reports a price: listed, not
+        # running. Its volume is a network volume, named by id: the size
+        # comes from the lookup.
+        {
+            "id": "tjfs5",
+            "name": "testing",
+            "status": "EXITED",
+            "cost": 0.89,
+            "runtime": None,
+            "gpu": {"count": 2, "id": "NVIDIA A100 80GB PCIe"},
+            "disk": 5,
+            "mounts": {"network": [{"path": "/workspace", "volumeId": "vol1"}]},
+        },
         # Just started: RUNNING, and no map yet, so no address.
         {"id": "x", "status": "RUNNING", "cost": "0.89", "runtime": None},
         {"name": "no id", "status": "RUNNING"},
     ]
-    assert rentals_from_pods(pods) == {
+    hardware = edict(
+        vram_gb_by_card={"NVIDIA RTX PRO 6000 Blackwell Server Edition": 96.0, "NVIDIA A100 80GB PCIe": 80.0},
+        volume_gb_by_id={"vol1": 200.0},
+    )
+    assert rentals_from_pods(pods, hardware=hardware) == {
         "tafo5": Rental(
             provider="RunPod",
             id="tafo5",
@@ -149,6 +186,11 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             name="tafo5",
             status="running",
             ports={"8002": 16643, "22": 10341},
+            gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            gpus=1,
+            vram_gb=96.0,
+            disk_gb=30.0,
+            volume_gb=80.0,
         ),
         "tjfs5": Rental(
             provider="RunPod",
@@ -159,12 +201,59 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             host="",
             name="tjfs5",
             status="exited",
+            gpu="NVIDIA A100 80GB PCIe",
+            gpus=2,
+            vram_gb=80.0,
+            disk_gb=5.0,
+            volume_gb=200.0,
         ),
         "x": Rental(
             provider="RunPod", id="x", label="", url="", usd_per_hour=0.89, host="", name="x", status="running"
         ),
     }
+    rentals = rentals_from_pods(pods, hardware=hardware)
+    assert (
+        rentals["tafo5"].hardware == "NVIDIA RTX PRO 6000 Blackwell Server Edition x1, 96 GB, 30 GB disk + 80 GB volume"
+    )
+    assert rentals["tjfs5"].hardware == "NVIDIA A100 80GB PCIe x2, 80 GB each, 5 GB disk + 200 GB volume"
+    # Without the lookups the card and disks are still read; the VRAM and the network volume are unknown.
+    assert rentals_from_pods(pods)["tjfs5"].hardware == "NVIDIA A100 80GB PCIe x2, 5 GB disk"
     assert rentals_from_pods({"error": "nope"}) == {}
+
+
+def test_a_card_type_and_a_network_volume_are_looked_up_once_per_process(monkeypatch):
+    """The second read names the same card type and volume: no request. Their sizes never change."""
+    monkeypatch.setattr(llmao.runpod_client, "_VRAM_GB_BY_CARD", {})
+    monkeypatch.setattr(llmao.runpod_client, "_VOLUME_GB_BY_ID", {})
+    requests = []
+
+    def handle(request):
+        # raw_path is what went on the wire: the card type's spaces quoted.
+        requests.append(request.url.raw_path.decode())
+        if request.url.path == "/v2/catalog/gpus/NVIDIA GeForce RTX 4090":
+            return httpx.Response(200, json={"id": "NVIDIA GeForce RTX 4090", "memory": 24, "name": "RTX 4090"})
+        assert request.url.path == "/v2/network-volumes/vol1"
+        return httpx.Response(200, json={"id": "vol1", "size": 150})
+
+    pods = [
+        {"id": "a", "gpu": {"count": 1, "id": "NVIDIA GeForce RTX 4090"}, "mounts": {"persistent": {"size": 20}}},
+        {
+            "id": "b",
+            "gpu": {"count": 1, "id": "NVIDIA GeForce RTX 4090"},
+            "mounts": {"network": [{"volumeId": "vol1"}]},
+        },
+        {"id": "c", "status": "EXITED"},
+    ]
+
+    async def twice():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            first = await fetch_hardware("rp", pods, client=client)
+            second = await fetch_hardware("rp", pods, client=client)
+        return first, second
+
+    first, second = asyncio.run(twice())
+    assert first == second == {"vram_gb_by_card": {"NVIDIA GeForce RTX 4090": 24.0}, "volume_gb_by_id": {"vol1": 150.0}}
+    assert sorted(requests) == ["/v2/catalog/gpus/NVIDIA%20GeForce%20RTX%204090", "/v2/network-volumes/vol1"]
 
 
 def test_a_provider_set_is_stamped_when_made_and_iterates_its_rentals():

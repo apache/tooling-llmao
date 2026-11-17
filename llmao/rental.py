@@ -56,6 +56,16 @@ class Rental:
     ``usd_per_hour`` is None when the provider does not say: unknown,
     not free. ``url`` is a console link, "" where the provider has no
     stable page per machine.
+
+    The hardware is what the provider lists, fixed for the life of the
+    machine: ``gpu`` is the card as the provider names it, ``gpus`` how
+    many, ``vram_gb`` the memory of one card, ``disk_gb`` the disk
+    (Vast's one allotment, or a RunPod pod's container disk), ``volume_gb``
+    a RunPod pod's volume, where its weights live (Vast has no second
+    disk), ``disk_used_gb`` what is used, which Vast reports and RunPod
+    does not. Each is "" / 0 / None where the provider does not say. These
+    are the actual figures, where a model's ``vram_gb`` and ``disk_gb`` in
+    models.yaml are what it needs, typed by hand and wrong before now.
     """
 
     provider: str
@@ -67,10 +77,37 @@ class Rental:
     name: str
     status: str
     ports: dict[str, int] = field(default_factory=edict)
+    gpu: str = ""
+    gpus: int = 0
+    vram_gb: float | None = None
+    disk_gb: float | None = None
+    volume_gb: float | None = None
+    disk_used_gb: float | None = None
 
     @property
     def running(self) -> bool:
         return self.status == "running"
+
+    @property
+    def hardware(self) -> str:
+        """The machine in one line, for an admin sizing a rental: "RTX 3090 x4, 24 GB each, 40 GB disk, 0 used".
+
+        A RunPod pod's two disks read "5 GB disk + 60 GB volume". Only what
+        the provider said is in it; "" when it said nothing.
+        """
+        parts = []
+        if self.gpu:
+            parts.append(f"{self.gpu} x{self.gpus}" if self.gpus else self.gpu)
+        if self.vram_gb is not None:
+            parts.append(f"{self.vram_gb:g} GB each" if self.gpus > 1 else f"{self.vram_gb:g} GB")
+        if self.disk_gb is not None:
+            disk = f"{self.disk_gb:g} GB disk"
+            if self.volume_gb is not None:
+                disk += f" + {self.volume_gb:g} GB volume"
+            if self.disk_used_gb is not None:
+                disk += f", {self.disk_used_gb:g} used"
+            parts.append(disk)
+        return ", ".join(parts)
 
     @property
     def ident(self) -> str:
