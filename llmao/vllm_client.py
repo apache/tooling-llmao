@@ -18,7 +18,8 @@
 
 The one module that knows vLLM's HTTP surface: ``/health`` and its 200
 against a 503 while the model loads, ``/v1/models`` and the
-``max_model_len`` field that is the served context window, and
+``max_model_len`` field that is the served context window, ``/version``
+for the build, and
 ``/metrics`` with the ``cache_config_info`` line (the KV cache size) and
 the gauges and counters capacity planning rolls up. It dials whatever URL
 it is handed and knows no port plan; the fleet decides what to ask and
@@ -70,6 +71,12 @@ class VllmProbe:
     served_status: int | None = None
     max_model_len: int | None = None
     hf_id: str = ""
+    # vLLM's build, from /version, read with /v1/models when that answered
+    # 200 (the same bearer guards both). "" when not asked or not given;
+    # version_error then says why it was not given ("HTTP 404", "timeout"),
+    # for the admin, and is "" when it was, or was not asked.
+    version: str = ""
+    version_error: str = ""
 
     @classmethod
     def no_address(cls, at: float) -> VllmProbe:
@@ -112,6 +119,10 @@ async def probe(
     if not (ok and ask_models):
         return VllmProbe(root, at, reached, ok, error)
     served = await fetch_served_models(client, root, api_key)
+    # The build is fixed for the process, like the served window, so it is
+    # read on the same asks; and only once the key is known good, since
+    # /version is behind the same bearer and a 401 would say nothing new.
+    build = await fetch_version(client, root, api_key) if served.status == 200 else edict(version="", error="")
     return VllmProbe(
         root,
         at,
@@ -121,7 +132,33 @@ async def probe(
         served_status=served.status,
         max_model_len=served.max_model_len,
         hf_id=served.hf_id,
+        version=build.version,
+        version_error=build.error,
     )
+
+
+async def fetch_version(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
+    """GET /version with the key: ``(version, error)``, vLLM's build ("0.25.1") or why it was not read.
+
+    Never raises, and logs nothing: the build is a fact for the admin, a
+    vLLM that will not give it is not thereby unhealthy, and the reason
+    ("HTTP 404", "timeout", "not JSON") goes to the admin with the probe
+    rather than to a log nobody is reading.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        status, raw = await _get_capped(client, f"{base}/version", headers)
+        if status != 200:
+            return edict(version="", error=f"HTTP {status}")
+        body = json.loads(raw)
+        version = str(body.get("version") or "") if isinstance(body, dict) else ""
+        return edict(version=version, error="" if version else "no version in the answer")
+    except httpx.TimeoutException:
+        return edict(version="", error="timeout")
+    except httpx.HTTPError as e:
+        return edict(version="", error=type(e).__name__)
+    except ValueError:
+        return edict(version="", error="not JSON")
 
 
 async def fetch_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:

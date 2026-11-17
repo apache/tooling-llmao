@@ -46,14 +46,21 @@ def _probe(answer, *, ask_models=True, now=10.0) -> tuple[VllmProbe, list[str]]:
     return asyncio.run(run()), asked
 
 
-def _vllm(health: int, models: int = 200, body=None):
-    """A stand-in that answers /health and /v1/models with these statuses."""
+def _vllm(health: int, models: int = 200, body=None, version=None):
+    """A stand-in that answers /health and /v1/models with these statuses, and /version with ``version``
+    (a status, a body, or an exception; by default the build "0.25.1")."""
 
     def answer(request):
         if request.url.path == "/health":
             return httpx.Response(health)
-        assert str(request.url) == f"{ROOT}/v1/models", "the root is dialed, never a /v1-suffixed base"
         assert request.headers["Authorization"] == "Bearer sk-x"
+        if request.url.path == "/version":
+            if isinstance(version, int):
+                return httpx.Response(version)
+            if isinstance(version, Exception):
+                return version
+            return httpx.Response(200, json={"version": "0.25.1"} if version is None else version)
+        assert str(request.url) == f"{ROOT}/v1/models", "the root is dialed, never a /v1-suffixed base"
         return httpx.Response(models, json=body if body is not None else MODELS)
 
     return answer
@@ -65,16 +72,31 @@ def test_serving_with_our_key():
     assert got.served_status == 200
     assert got.key_rejected is False
     assert (got.max_model_len, got.hf_id) == (131072, "google/gemma")
+    assert (got.version, got.version_error) == ("0.25.1", "")
     assert (got.url, got.at) == (ROOT, 10.0)
-    assert asked == ["/health", "/v1/models"]
+    assert asked == ["/health", "/v1/models", "/version"]
 
 
 def test_up_but_refusing_our_key():
-    got, _ = _probe(_vllm(200, models=401))
+    got, asked = _probe(_vllm(200, models=401))
     assert got.ok is True
     assert got.served_status == 401
     assert got.key_rejected is True
     assert (got.max_model_len, got.hf_id) == (None, "")
+    # The same bearer guards /version: a refused key is not asked again there.
+    assert (got.version, got.version_error) == ("", "")
+    assert asked == ["/health", "/v1/models"]
+
+
+def test_a_version_that_is_not_given_is_said_so_and_is_not_a_failure():
+    """The admin is told why the build is unknown; the probe itself is as healthy as /health and /v1/models say."""
+    got, _ = _probe(_vllm(200, version=404))
+    assert (got.ok, got.key_rejected, got.max_model_len) == (True, False, 131072)
+    assert (got.version, got.version_error) == ("", "HTTP 404")
+    got, _ = _probe(_vllm(200, version={"build": "x"}))
+    assert (got.version, got.version_error) == ("", "no version in the answer")
+    got, _ = _probe(_vllm(200, version=httpx.ReadTimeout("slow")))
+    assert (got.version, got.version_error) == ("", "timeout")
 
 
 def test_loading_answers_503_and_is_not_asked_for_its_models():

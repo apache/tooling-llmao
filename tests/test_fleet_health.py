@@ -117,6 +117,26 @@ def _health(dep, healthy: bool, *, at: float | None = None) -> None:
     dep.litellm_health = LiteLLMHealth(healthy, at or time.time())
 
 
+def test_the_build_is_kept_across_probes_and_a_failed_read_of_it_is_said():
+    """The version is read on the edge into Healthy and stands through probes that do not ask; an ask that
+    gets none keeps the last build and carries the reason, until an ask answers."""
+    srv = _server()
+    srv.address, srv.public_port = "203.0.113.5", 8001
+
+    def probe(**fields):
+        found = VllmProbe(f"http://{srv.address}:{srv.public_port}", 10.0, True, True, None, **fields)
+        srv.record_probe(found, grace_s=60.0, fail_threshold=3, in_litellm=True)
+
+    probe(served_status=200, max_model_len=4096, version="0.25.1")
+    assert (srv.observed_version, srv.version_error) == ("0.25.1", "")
+    probe()
+    assert (srv.observed_version, srv.version_error) == ("0.25.1", ""), "a probe that did not ask changes nothing"
+    probe(served_status=200, max_model_len=4096, version_error="HTTP 404")
+    assert (srv.observed_version, srv.version_error) == ("0.25.1", "HTTP 404")
+    probe(served_status=200, max_model_len=4096, version="0.26.0")
+    assert (srv.observed_version, srv.version_error) == ("0.26.0", "")
+
+
 def test_probe_serving():
     s = _server()
     _record(s, True, now=100.0, grace_s=1800, fail_threshold=3)
@@ -613,7 +633,9 @@ def test_probe_all_scrapes_from_root_not_api_base():
 
     assert s.state == HEALTHY
     assert s.observed_max_model_len == 131072
-    assert calls == [f"{root}/health", f"{root}/v1/models"]
+    # /version follows on the same root; this vLLM's 404 reaches the admin, and nothing else changes.
+    assert calls == [f"{root}/health", f"{root}/v1/models", f"{root}/version"]
+    assert (s.observed_version, s.version_error) == ("", "HTTP 404")
 
 
 def test_the_fleet_is_ready_after_its_first_pass_even_a_failed_one():

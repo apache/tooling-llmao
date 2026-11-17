@@ -320,9 +320,14 @@ class VllmServer:
         # the current time from it and the history below.
         self.probe: VllmProbe | None = None
         # History, kept across probes by record_probe. The served window
-        # from the last /v1/models answer that carried one, and when.
+        # from the last /v1/models answer that carried one, and when; the
+        # build from the last /version answer, read on the same asks, or
+        # why the last ask for it got none (for the admin: a vLLM that
+        # keeps its version to itself is still serving).
         self.observed_max_model_len: int | None = None
         self.observed_at: float | None = None
+        self.observed_version: str = ""
+        self.version_error: str = ""
         # Named by model_status. Awaiting contact until the rental fetches its
         # config (config_served_at) and the probes run; see self_hosted_lifecycle.
         self.state = AWAITING
@@ -500,6 +505,13 @@ class VllmServer:
         if found.max_model_len is not None:
             self.observed_max_model_len = found.max_model_len
             self.observed_at = now
+        if found.version:
+            self.observed_version = found.version
+            self.version_error = ""
+        elif found.version_error:
+            # Asked and not answered: the last build read stands, with the
+            # reason this one was not, until an ask answers.
+            self.version_error = found.version_error
         if found.ok and self.key_rejected:
             self.rejected_passes += 1
         else:

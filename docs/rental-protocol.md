@@ -16,7 +16,7 @@ flowchart LR
     LITELLM["LiteLLM proxy"]
     RENTAL -- "GET /vllm/config<br/>Bearer fleet key<br/>X-LLMAO-Host" --> LLMAO
     LLMAO -- "{host, servers[]}" --> RENTAL
-    LLMAO -- "probe /health, /v1/models<br/>sample /metrics" --> RENTAL
+    LLMAO -- "probe /health, /v1/models, /version<br/>sample /metrics" --> RENTAL
     LLMAO -- "/model/new when Healthy<br/>/model/delete when down" --> LITELLM
     LITELLM -- "completions, per-rental bearer<br/>public port of :8001 :8002 :8003" --> RENTAL
 ```

@@ -545,7 +545,8 @@ def test_served_window_is_asked_for_with_the_working_key():
             return _Resp(401)
 
     asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
-    assert bearers == ["Bearer sk-shared"]
+    # /v1/models, then /version once that passed: both with the shared key.
+    assert bearers == ["Bearer sk-shared", "Bearer sk-shared"]
     assert srv.observed_max_model_len == 8192
 
 
