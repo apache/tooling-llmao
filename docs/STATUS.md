@@ -113,7 +113,7 @@ Remaining: long vLLM boot, config revision on the rental, pending-assignment tab
 
 Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
 
-**`/admin` is the admin's inbox** (2026-11-13). Four pages share a row of pills under the heading: Overview, Capacity, Tiers, Service keys. Work needed lists everything that needs a site admin, the skew store's items and the fleet's (a machine nobody intends, a stalled or unhealthy deployment, an orphan in LiteLLM) with their buttons and the Approve modal; `/models` shows no list of them, only each deployment's row with its state and buttons, which a Work needed item links to. The tiles run in the order of the sections. The Gateway tile carries the LiteLLM version against the pin and free space on the disk the prompt log grows on, warm under 15%. A read of LiteLLM that fails leaves a dash on its tile and "Could not read LiteLLM" in its section, never a 0. The DataDog half of disk monitoring is Infra's.
+**`/admin` is the admin's inbox** (2026-11-13). Four pages share a row of pills under the heading: Overview, Capacity, Tiers, Service keys. Work needed lists everything that needs a site admin, the skew store's items and the fleet's (a machine nobody intends, a stalled or unhealthy deployment, an orphan in LiteLLM) with their buttons and the Approve modal; `/models` shows no list of them, only each deployment's row with its state and buttons, which a Work needed item links to. The tiles run in the order of the sections. The Gateway tile carries the LiteLLM version against the pin and free space on the disk the prompt log grows on, warm under 15%. A read of LiteLLM that fails leaves a dash on its tile and "Could not read LiteLLM" in its section, never a 0. The DataDog half of disk monitoring is Infra's. Since 2026-11-17 the Gateway tile also carries each provider's listing and how long since it was read, warm with the last error once a listing is older than three listing intervals, because RunPod's v1 API was retired and the last report stood for a day with nothing saying so; a stale listing concludes nothing about the hosts it lacks, and a `/models` row no listing names says the listing is stale rather than that the rental may have ended.
 
 Edge cases that bite operators (LiteLLM down, pagination, master key drift, prisma path, etc.) are tracked as work items, not product design.
 
@@ -142,17 +142,6 @@ Nothing at the moment.
 - **Issue #68, the scanner.** A source probes `/v1/models` daily with
   model names as tokens. A refused-at-the-door admin signal, kept apart
   from refusals of model calls.
-- **A stale provider listing shows on `/admin`.** When RunPod retired
-  REST v1 (2026-11-15), production's RunPod runner failed every pass for
-  a day and, by design, kept its last report; `/models` looked normal
-  for the old pods and said "no provider lists this host" for a new one,
-  with nothing on `/admin` saying RunPod had not been read since the
-  day before. Each `ProviderRentals` set is stamped when it is made, so
-  the age is known. Show "RunPod last read N hours ago: <error>" on the
-  Gateway tile, or a Work needed item once a set is older than a few
-  listing intervals, in the spirit of the "Could not read LiteLLM"
-  sections; and in the same breath make the `/models` card say "the
-  listing is stale" rather than "the rental may have ended" when it is.
 - **asfquart 0.1.13, once it is on PyPI.** Everything the release needs
   is on asfquart's main as of 2026-11-14 (CI green): `use_template`
   passes a `Response` through, and `auth.require` accepts the

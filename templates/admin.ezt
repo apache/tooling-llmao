@@ -47,6 +47,12 @@
             <span class="llmao-hover" title="[disk.free_h] free of [disk.total_h] on disk">[disk.free_h] free ([disk.free_pct]%)</span>
           </div>
           [end]
+          [for listings]
+          <div class="admin-tile-label">
+            <i class="bi [if-any listings.stale]bi-exclamation-triangle[else]bi-list-check[end]" aria-hidden="true"></i>
+            [if-any listings.stale][listings.provider] last read [listings.ago][if-any listings.error]: [listings.error][end][else][listings.provider] listed [listings.ago][end]
+          </div>
+          [end]
         </div>
       </a>
     </div>

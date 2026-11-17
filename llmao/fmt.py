@@ -128,11 +128,14 @@ def moment(stamp: str) -> str:
     return at.astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M UTC") if at else ""
 
 
-def ago_short(ts: float | None) -> str:
-    """'5s', '3m', '2h' from a timestamp, for a log line or a tight cell; 'never' for none."""
+def ago_short(ts: float | None, *, now: float | None = None) -> str:
+    """'5s', '3m', '2h' from a timestamp, for a log line or a tight cell; 'never' for none.
+
+    ``now`` is the reference time, the clock unless a test says otherwise.
+    """
     if ts is None:
         return "never"
-    sec = max(0, int(time.time() - ts))
+    sec = max(0, int((now or time.time()) - ts))
     if sec < 60:
         return f"{sec}s"
     if sec < 3600:

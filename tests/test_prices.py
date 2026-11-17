@@ -582,6 +582,65 @@ def test_nothing_is_concluded_until_every_provider_has_answered():
     assert local.servers[0].unlisted is False
 
 
+def test_a_stale_listing_concludes_nothing_about_the_hosts_it_lacks():
+    """RunPod's v1 API was retired and the last report stood for a day; a host absent from a report that old
+    is not absent, it is unheard of. The report still places the hosts it has: the machines have not moved."""
+    on_old = _server("203.0.113.30")
+    absent = _server("203.0.113.31")
+    fleet = _fleet_renting_from_both([on_old, absent])
+    old = time.time() - llmao.fleet.STALE_LISTING_PASSES * llmao.fleet.RENTALS_INTERVAL_S - 1
+    fleet.vast_rentals = _reported()
+    fleet.runpod_rentals = ProviderRentals(
+        "RunPod", edict(p=_rental(2.49, provider="RunPod", id="p", host="203.0.113.30")), fetched_at=old
+    )
+    for _ in range(UNLISTED_PASSES + 1):
+        fleet.place_servers()
+    assert on_old.rental is not None and on_old.rental.id == "p"
+    assert absent.unlisted is False and absent.unlisted_passes == 0
+
+
+def test_listings_say_each_providers_age_staleness_and_last_error(caplog):
+    now = 1_000_000.0
+    fleet = _fleet_renting_from_both([_server("203.0.113.30")])
+    # Configured, never read: stale, "never".
+    assert [(li.provider, li.ago, li.stale, li.error) for li in fleet.listings(now=now)] == [
+        ("Vast", "never", True, ""),
+        ("RunPod", "never", True, ""),
+    ]
+    fleet.vast_rentals = ProviderRentals("Vast", fetched_at=now - 32)
+    limit = llmao.fleet.STALE_LISTING_PASSES * llmao.fleet.RENTALS_INTERVAL_S
+    fleet.runpod_rentals = ProviderRentals("RunPod", fetched_at=now - limit - 1)
+    vast, runpod = fleet.listings(now=now)
+    assert (vast.ago, vast.stale) == ("32s ago", False)
+    assert runpod.stale is True
+    # A read that fails leaves its reason beside the age, logged once per run of failures; a read that
+    # answers clears it.
+    calls = []
+
+    async def read_vast(client):
+        calls.append("Vast")
+
+    async def read_runpod(client):
+        raise httpx.ConnectError("name resolution failed")
+
+    fleet.read_vast_rentals = read_vast
+    fleet.read_runpod_rentals = read_runpod
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(fleet.read_rentals(None))
+        asyncio.run(fleet.read_rentals(None))
+    assert caplog.text.count("the RunPod rentals could not be read") == 1
+    assert fleet.listings(now=now)[1].error == "ConnectError: name resolution failed"
+
+    async def read_runpod_ok(client):
+        fleet.runpod_rentals = ProviderRentals("RunPod", fetched_at=now)
+
+    fleet.read_runpod_rentals = read_runpod_ok
+    asyncio.run(fleet.read_rentals(None))
+    assert fleet.listings(now=now)[1] == edict(provider="RunPod", ago="0s ago", stale=False, error="")
+    # A fleet that rents from nobody lists nothing.
+    assert Fleet(edict(), []).listings() == []
+
+
 def test_each_row_carries_its_servers_share_of_the_machine():
     """Two servers on a $0.206 machine are $0.103 each, so adding rows up gives the bill."""
     a = _server("203.0.113.10", 8001, public_port=8001)

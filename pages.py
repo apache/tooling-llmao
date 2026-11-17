@@ -573,21 +573,26 @@ def _badge_class(state: str, *, routed: bool = True) -> str:
     return _BADGE_CLASS.get(state, _BADGE_DEFAULT)
 
 
-def _dep_where(dep) -> edict:
+def _dep_where(dep, stale: list | None = None) -> edict:
     """The line under a deployment's label: what the rental is, beyond its name.
 
     The label already says the provider and id. This adds the Rental's own
     label (Vast's GPUs, RunPod's pod name), the provider's status when that
     is not running ("RTX 3060 x2, exited": listed, not running), and the
     console link. A host no provider lists says so, which is how a machine
-    whose rental has gone shows up. A model provider's deployment needs no
-    line: "grok-4 at xAI" is the whole of it.
+    whose rental has gone shows up; unless a listing is stale (``stale``,
+    the fleet's listings that are), in which case the host may well be
+    listed and we have not heard, and the line says that instead. A model
+    provider's deployment needs no line: "grok-4 at xAI" is the whole of it.
     """
     srv = dep.vllm
     if srv is None:
         return edict(label="", url="", unknown=ezt.boolean(False))
     rental = srv.rental
     if rental is None:
+        if stale:
+            aged = ", ".join(f"{s.provider} last read {s.ago}" for s in stale)
+            return edict(label=f"location unknown: a listing is stale ({aged})", url="", unknown=ezt.boolean(True))
         return edict(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
     label = rental.label
     if rental.status and not rental.running:
@@ -1011,6 +1016,8 @@ def deployment_rows(fleet, *, admin: bool) -> list:
     """
     rows = []
     cfg = fleet.cfg.fleet
+    # The listings not read lately: a host they lack may be listed after all.
+    stale = [listing for listing in fleet.listings() if listing.stale] if admin else []
     for dep in fleet.deployments:
         srv = dep.vllm
         if srv is not None:
@@ -1146,7 +1153,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 primary=primary,
                 menu=menu,
                 ident=dep.label if admin else "",
-                where=_dep_where(dep) if admin else edict(label="", url="", unknown=ezt.boolean(False)),
+                where=_dep_where(dep, stale) if admin else edict(label="", url="", unknown=ezt.boolean(False)),
                 anchor=_dep_anchor(dep) if admin else "",
                 external=ezt.boolean(not dep.self_hosted),
                 attention=ezt.boolean(
@@ -1594,7 +1601,15 @@ async def admin_index(result):
     result.litellm_matches = ezt.boolean(matches)
     # The disk the prompt log grows on: the host has one, and it fills.
     result.disk = disk_room(log_dir(APP.cfg))
-    result.gateway_ok = ezt.boolean(matches and not (result.disk and result.disk.is_low))
+    # Each provider's listing and its age; stale when not read lately,
+    # which is how a provider outage shows the same day (RunPod's v1 API
+    # was retired and the last report stood for a day before anyone saw).
+    listings = APP.fleet.listings()
+    result.listings = [
+        edict(provider=li.provider, ago=li.ago, error=li.error, stale=ezt.boolean(li.stale)) for li in listings
+    ]
+    stale = any(listing.stale for listing in listings)
+    result.gateway_ok = ezt.boolean(matches and not (result.disk and result.disk.is_low) and not stale)
     return result
 
 

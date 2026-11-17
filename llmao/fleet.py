@@ -126,6 +126,13 @@ FIRST_RENTALS_WAIT_S = 30.0
 # health intervals.
 UNLISTED_PASSES = 3
 
+# Listing intervals a provider may go unread before its set is stale: the
+# staleness rule of the design's guards, the threshold times the source's own
+# interval, with the threshold a constant like the two above (production's
+# health_fail_threshold is 3). A stale set still places the servers on it, and
+# concludes nothing about the hosts it lacks.
+STALE_LISTING_PASSES = 3
+
 # Consecutive reads of the LiteLLM deployments (skew_interval_s, 180s) on
 # which a deployment no intent claims must persist before Work needed
 # shows it (the skew clock). Absence has innocent causes -- a provider lookup
@@ -833,6 +840,10 @@ class Fleet:
         # Set once run_rentals has made its first read, answered or not. The
         # first lifecycle pass waits for it (FIRST_RENTALS_WAIT_S at most).
         self.rentals_read = asyncio.Event()
+        # Why the last read of a provider failed, by provider name, while it
+        # keeps failing; cleared by a read that answers. With the set's age
+        # it is what /admin shows for a listing that has gone stale.
+        self.listing_errors: dict[str, str] = {}
         # Rentals nobody intends, by the name the rental sends (discover_rentals, every pass).
         self.discovered: dict[str, Discovered] = {}
 
@@ -1142,7 +1153,44 @@ class Fleet:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                _LOGGER.warning("the %s rentals could not be read: %s", provider, fmt.log_safe(e))
+                # Logged on the first failure of a run of them, not on each:
+                # an outage lasts, and /admin carries the error meanwhile.
+                if provider not in self.listing_errors:
+                    _LOGGER.warning("the %s rentals could not be read: %s", provider, fmt.log_safe(e))
+                self.listing_errors[provider] = f"{type(e).__name__}: {fmt.log_safe(e)}"
+            else:
+                if self.listing_errors.pop(provider, None):
+                    _LOGGER.info("the %s rentals are read again", provider)
+
+    def listings(self, *, now: float | None = None) -> list[edict]:
+        """Each provider we rent from, with how long since its listing was last read, and whether that is stale.
+
+        ``edict(provider, ago, stale, error)``: ``ago`` reads "32s ago",
+        "26h ago" or "never"; ``stale`` when no read has answered
+        within STALE_LISTING_PASSES listing intervals, the one staleness
+        rule (docs/fleet-reconcile-design.md, guards), which a read that
+        keeps failing reaches in a few minutes; ``error`` is why the last
+        read failed, "" while reads answer. A stale set is still applied to
+        the servers on it, since the machines have not moved, but it
+        concludes nothing about hosts it lacks (place_servers), and /admin
+        says so.
+        """
+        stamp = now or time.time()
+        limit = STALE_LISTING_PASSES * RENTALS_INTERVAL_S
+        out = []
+        for provider, rentals in (("Vast", self.vast_rentals), ("RunPod", self.runpod_rentals)):
+            if not gpu_host_api_key(self.cfg, provider.lower()):
+                continue
+            read_at = rentals and rentals.fetched_at
+            out.append(
+                edict(
+                    provider=provider,
+                    ago=f"{fmt.ago_short(read_at, now=stamp)} ago" if read_at else "never",
+                    stale=read_at is None or stamp - read_at > limit,
+                    error=self.listing_errors.get(provider, ""),
+                )
+            )
+        return out
 
     async def run_rentals(self) -> None:
         """Runner: keep vast_rentals and runpod_rentals current, reading both providers every RENTALS_INTERVAL_S.
@@ -1171,9 +1219,9 @@ class Fleet:
 
         Unlisted means every provider we rent from has answered with its
         list and none has this host for UNLISTED_PASSES passes running. With
-        a list missing (an outage, or RunPod not read yet) nothing is
-        concluded, and the last verdict stands. Logged when the verdict
-        changes, not on every pass.
+        a list missing or stale (an outage, or a provider not read yet)
+        nothing is concluded, and the last verdict stands. Logged when the
+        verdict changes, not on every pass.
 
         A single absence is not a conclusion, learned from one incident: a
         RunPod pod is missing from the pod list while it provisions, over 90
@@ -1196,14 +1244,14 @@ class Fleet:
         while llmao was down was, after the restart, a host no listing had
         ever named, and the sentence never showed.
         """
-        vast_wanted = bool(gpu_host_api_key(self.cfg, "vast"))
-        runpod_wanted = bool(gpu_host_api_key(self.cfg, "runpod"))
         placed = self.apply_rentals(self.runpod_rentals, self.vast_rentals)
-        # Neither provider configured (a local fleet): nothing is unlisted.
-        complete = (vast_wanted or runpod_wanted) and (
-            (not vast_wanted or self.vast_rentals is not None)
-            and (not runpod_wanted or self.runpod_rentals is not None)
-        )
+        # Every provider we rent from has a fresh set: only then does a host
+        # none of them names count as absent. A set that is unread or stale
+        # (listings) says nothing, so an outage at a provider leaves the
+        # verdicts standing rather than calling its hosts unlisted. Neither
+        # provider configured (a local fleet): nothing is unlisted.
+        listings = self.listings()
+        complete = bool(listings) and not any(listing.stale for listing in listings)
         if not complete:
             return
         for srv in self.servers:

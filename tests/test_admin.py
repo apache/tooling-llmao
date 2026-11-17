@@ -45,10 +45,12 @@ def _render(
     approvals=(),
     recent=(),
     disk=None,
+    listings=(),
     requests_down=False,
     skew_down=False,
 ):
     matches = bool(running) and running == expected
+    stale = any(listing.stale for listing in listings)
     data = edict(
         title="Admin",
         is_site_admin=ezt.boolean(True),
@@ -89,7 +91,10 @@ def _render(
         litellm_expected=expected,
         litellm_matches=ezt.boolean(matches),
         disk=disk,
-        gateway_ok=ezt.boolean(matches and not (disk and disk.is_low)),
+        listings=[
+            edict(provider=li.provider, ago=li.ago, error=li.error, stale=ezt.boolean(li.stale)) for li in listings
+        ],
+        gateway_ok=ezt.boolean(matches and not (disk and disk.is_low) and not stale),
     )
     buf = io.StringIO()
     template = ezt.Template(
@@ -380,6 +385,31 @@ def test_the_gateway_tile_shows_disk_room_and_goes_warm_when_low(tmp_path):
     assert "9 GB free (9%)" in tile
     assert "admin-tile-warm" in tile and "bi-exclamation-triangle" in tile
     assert "GB free" not in _render(running=pin, expected=pin)
+
+
+def test_the_gateway_tile_shows_each_listing_age_and_goes_warm_when_one_is_stale():
+    """RunPod's v1 API was retired and the last report stood for a day with nothing on /admin saying so."""
+    pin = "1.0.0"
+    fresh = [
+        edict(provider="Vast", ago="32s ago", error="", stale=False),
+        edict(provider="RunPod", ago="5s ago", error="", stale=False),
+    ]
+    out = _render(running=pin, expected=pin, listings=fresh)
+    tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
+    assert "Vast listed 32s ago" in tile and "RunPod listed 5s ago" in tile
+    assert "admin-tile-warm" not in tile
+    stale = [
+        fresh[0],
+        edict(provider="RunPod", ago="26h ago", error="ConnectError: name resolution failed", stale=True),
+    ]
+    out = _render(running=pin, expected=pin, listings=stale)
+    tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
+    assert "RunPod last read 26h ago: ConnectError: name resolution failed" in tile
+    assert "admin-tile-warm" in tile and "bi-exclamation-triangle" in tile
+    # Configured but never read: said so, and stale.
+    never = [edict(provider="RunPod", ago="never", error="", stale=True)]
+    out = _render(running=pin, expected=pin, listings=never)
+    assert "RunPod last read never" in out and "admin-tile-warm" in out
 
 
 class _Resp:

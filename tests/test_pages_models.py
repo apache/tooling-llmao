@@ -852,6 +852,18 @@ def test_each_deployment_says_where_to_find_it():
     assert "text-warning-emphasis" in out
 
 
+def test_a_host_no_provider_lists_says_so_differently_when_a_listing_is_stale():
+    """When RunPod's v1 API was retired the last report stood for a day and a new pod read as a rental that
+    may have ended. A listing not read lately is the likelier reason, and the line says which one."""
+    pages = _app()
+    lost = _server("gemma", host="10.0.0.3")
+    fleet = _fleet(lost)
+    fleet.listings = lambda now=None: [edict(provider="RunPod", ago="26h ago", stale=True, error="HTTP 404")]
+    out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
+    assert "location unknown: a listing is stale (RunPod last read 26h ago)" in out
+    assert "no provider lists this host" not in out
+
+
 def test_where_a_deployment_lives_is_for_admins_only():
     pages = _app()
     srv = _server("gemma", host="10.0.0.1")
