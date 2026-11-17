@@ -121,7 +121,11 @@ body {
   border-left-color: var(--bs-warning);
 }
 
-/* Deployments: one list group, fixed columns so rows align across models. */
+/* Deployments: one list group. The state column is fixed so the badges
+   line up across models; the name and the reason share the width, the name
+   first, so "gemma4-26b on RunPod qh2v0ubvwph1qz:8001" and the line under
+   it fit on one line each; the approval note and the actions take only
+   the room they need, and a row without either gives it to the text. */
 .models-page .dep-model {
   padding-top: 0.4rem;
   padding-bottom: 0.4rem;
@@ -129,7 +133,7 @@ body {
 }
 .models-page .dep-grid {
   display: grid;
-  grid-template-columns: 6.5rem 13rem minmax(0, 1fr) 11rem 7.5rem;
+  grid-template-columns: 6.5rem minmax(20rem, 3fr) minmax(0, 2fr) auto auto;
   grid-template-areas: "state ident reason flag actions";
   gap: 0.25rem 0.75rem;
   align-items: center;

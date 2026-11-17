@@ -62,12 +62,13 @@ RUNPOD_PODS_URL = "https://api.runpod.io/v2/pods"
 RUNPOD_GPU_URL = "https://api.runpod.io/v2/catalog/gpus"
 RUNPOD_VOLUME_URL = "https://api.runpod.io/v2/network-volumes"
 
-# Two facts a pod names by id and never changes: its card type's VRAM in
-# GB (the catalog's `memory`; the pod's own `gpu.memory` is system RAM) and
-# its network volume's size in GB. Each id is asked once per process
-# (fetch_hardware) and kept here; a fleet has a handful of card types and
-# volumes, so the catalog is never read again for one it has seen.
-_VRAM_GB_BY_CARD: dict[str, float] = {}
+# Two facts a pod names by id and never changes: its card type, as the
+# catalog has it (`name`, the short "RTX PRO 6000" for the pod's long type
+# id, and `memory`, the VRAM in GB; the pod's own `gpu.memory` is system
+# RAM) and its network volume's size in GB. Each id is asked once per
+# process (fetch_hardware) and kept here; a fleet has a handful of card
+# types and volumes, so the catalog is never read again for one it has seen.
+_CARD_BY_ID: dict[str, edict] = {}
 _VOLUME_GB_BY_ID: dict[str, float] = {}
 
 
@@ -84,16 +85,18 @@ def rentals_from_pods(pods: Any, *, hardware: edict | None = None) -> edict:
     entries as container port → public port (``{"8002": 16643}``), empty
     when the pod has none. A stopped pod still reports a price.
 
-    The hardware is the pod's ``gpu`` (card type and count) and ``disk``
-    (the container disk, GB) plus its volume: ``mounts.persistent.size``,
-    or a network volume's size and the card's VRAM from ``hardware``, what
-    fetch_hardware looked up (``vram_gb_by_card``, ``volume_gb_by_id``);
-    None where it was not given.
+    The hardware is the pod's ``gpu`` (card type id and count) and
+    ``disk`` (the container disk, GB) plus its volume:
+    ``mounts.persistent.size``, or a network volume's size, and the card's
+    short name and VRAM, from ``hardware``, what fetch_hardware looked up
+    (``cards_by_id``, ``volume_gb_by_id``). The card is its short name when
+    the catalog gave one, else the pod's type id; the sizes are None where
+    not given.
 
     No console link yet: RunPod's console URL for one pod has not been
     confirmed, so the row names the pod and an admin finds it by name.
     """
-    hardware = hardware or edict(vram_gb_by_card={}, volume_gb_by_id={})
+    hardware = hardware or edict(cards_by_id={}, volume_gb_by_id={})
     rentals = edict()
     for pod in pods if isinstance(pods, list) else []:
         if not isinstance(pod, dict):
@@ -103,7 +106,8 @@ def rentals_from_pods(pods: Any, *, hardware: edict | None = None) -> edict:
             continue
         ports, host = ports_from_pod(pod)
         gpu = pod.get("gpu") if isinstance(pod.get("gpu"), dict) else {}
-        card = str(gpu.get("id") or "")
+        card_id = str(gpu.get("id") or "")
+        card = hardware.cards_by_id.get(card_id) or edict(name="", vram_gb=None)
         mounts = pod.get("mounts") if isinstance(pod.get("mounts"), dict) else {}
         persistent = mounts.get("persistent") if isinstance(mounts.get("persistent"), dict) else {}
         volume_gb = price(persistent.get("size"))
@@ -119,9 +123,9 @@ def rentals_from_pods(pods: Any, *, hardware: edict | None = None) -> edict:
             name=pod_id,
             status=str(pod.get("status") or "").lower(),
             ports=ports,
-            gpu=card,
+            gpu=card.name or card_id,
             gpus=int(gpu.get("count") or 0),
-            vram_gb=hardware.vram_gb_by_card.get(card),
+            vram_gb=card.vram_gb,
             disk_gb=price(pod.get("disk")),
             volume_gb=volume_gb,
         )
@@ -137,33 +141,39 @@ def network_volume_id(pod: dict[str, Any]) -> str:
 
 
 async def fetch_hardware(api_key: str, pods: list[dict[str, Any]], *, client: httpx.AsyncClient) -> edict:
-    """The VRAM of each card type and the size of each network volume the pods name: looked up once, then kept.
+    """Each card type (short name, VRAM) and each network volume's size the pods name: looked up once, then kept.
 
     One GET per card type or volume id not seen before in this process
     (the module's two caches), none at all on a read that names only
-    known ones. Returns ``edict(vram_gb_by_card, volume_gb_by_id)`` for
-    rentals_from_pods. Raises on a lookup that fails, as fetch_pods does,
-    so the read is retried whole next interval.
+    known ones. Returns ``edict(cards_by_id, volume_gb_by_id)`` for
+    rentals_from_pods, ``cards_by_id`` mapping a type id to
+    ``edict(name, vram_gb)``. Raises on a lookup that fails, as fetch_pods
+    does, so the read is retried whole next interval.
     """
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    async def look_up(url: str, key: str, field: str, cache: dict[str, float]) -> None:
+    async def get(url: str, key: str) -> dict[str, Any]:
         # A card type's id has spaces ("NVIDIA GeForce RTX 4090"), so it is quoted.
         resp = await client.get(f"{url}/{quote(key, safe='')}", headers=headers, timeout=30.0)
         resp.raise_for_status()
         body = resp.json()
-        size = price(body.get(field)) if isinstance(body, dict) else None
+        return body if isinstance(body, dict) else {}
+
+    async def look_up_card(card_id: str) -> None:
+        body = await get(RUNPOD_GPU_URL, card_id)
+        _CARD_BY_ID[card_id] = edict(name=str(body.get("name") or ""), vram_gb=price(body.get("memory")))
+
+    async def look_up_volume(volume_id: str) -> None:
+        size = price((await get(RUNPOD_VOLUME_URL, volume_id)).get("size"))
         if size is not None:
-            cache[key] = size
+            _VOLUME_GB_BY_ID[volume_id] = size
 
     cards = {str(pod["gpu"].get("id") or "") for pod in pods if isinstance(pod.get("gpu"), dict)}
     volumes = {network_volume_id(pod) for pod in pods}
-    new_cards = [c for c in cards if c and c not in _VRAM_GB_BY_CARD]
-    new_volumes = [v for v in volumes if v and v not in _VOLUME_GB_BY_ID]
-    lookups = [look_up(RUNPOD_GPU_URL, c, "memory", _VRAM_GB_BY_CARD) for c in new_cards]
-    lookups += [look_up(RUNPOD_VOLUME_URL, v, "size", _VOLUME_GB_BY_ID) for v in new_volumes]
+    lookups = [look_up_card(c) for c in cards if c and c not in _CARD_BY_ID]
+    lookups += [look_up_volume(v) for v in volumes if v and v not in _VOLUME_GB_BY_ID]
     _ = await asyncio.gather(*lookups)
-    return edict(vram_gb_by_card=dict(_VRAM_GB_BY_CARD), volume_gb_by_id=dict(_VOLUME_GB_BY_ID))
+    return edict(cards_by_id=dict(_CARD_BY_ID), volume_gb_by_id=dict(_VOLUME_GB_BY_ID))
 
 
 def ports_from_pod(pod: dict[str, Any]) -> tuple[edict, str]:

@@ -591,20 +591,21 @@ def _dep_where(dep) -> edict:
     rental = srv.rental
     if rental is None:
         return edict(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
-    label = _rental_description(rental)
+    label = rental.label
     if rental.status and not rental.running:
         label += f", {rental.status}"
     return edict(label=label, url=rental.url or "", unknown=ezt.boolean(False))
 
 
 def _rental_description(rental) -> str:
-    """What the machine is, for an admin sizing the next one: its label and its hardware as the provider lists it.
+    """What the machine is, in one phrase: its label and its hardware as the provider lists it.
 
     "RTX 3090 x4, 24 GB each, 40 GB disk, 30 used" for a Vast instance,
     whose label is the card and count the hardware line opens with, so it
-    is not said twice; "gemma4, NVIDIA RTX PRO 6000 ... x1, 96 GB, 5 GB
-    disk + 60 GB volume" for a RunPod pod, whose label is its name. The
-    label alone when the provider lists no hardware.
+    is not said twice; "gemma4, RTX PRO 6000 x1, 96 GB, 5 GB disk + 60 GB
+    volume" for a RunPod pod, whose label is its name. The label alone
+    when the provider lists no hardware. For a sentence (Work needed); the
+    deployment row keeps the hardware as its own fact.
     """
     hardware = rental.hardware
     if not hardware:
@@ -1092,9 +1093,12 @@ def deployment_rows(fleet, *, admin: bool) -> list:
             if litellm_health != "—":
                 verdict = "check passed" if dep.litellm_healthy else "check failed"
                 litellm_fact = f"{verdict} {ago(litellm_health_ago)}".strip()
+            # The machine as its provider lists it, for sizing the next one.
+            machine = srv.rental.hardware if srv is not None and srv.rental is not None else ""
             fields = [
                 # The public address only when Vast maps it to another port.
                 ("Public", public if srv is not None and public != listen else "", False),
+                ("Machine", machine, False),
                 ("Context", context, False),
                 ("KV cache", kv_cache, False),
                 ("vLLM", vllm_fact, srv is not None and state == UNHEALTHY),

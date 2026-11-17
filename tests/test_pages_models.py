@@ -615,6 +615,29 @@ def test_the_vllm_fact_opens_with_the_build_or_says_why_it_is_unknown():
     srv.observed_version = "0.25.1"
     facts = {d.label: d for d in pages.deployment_rows(fleet, admin=True)[0].diags}
     assert facts["vLLM"].value.startswith("0.25.1, last healthy ")
+    # No rental, or one with no hardware listed: no Machine fact.
+    assert "Machine" not in facts
+    srv.rental = Rental(
+        provider="RunPod", id="p", label="n", url="", usd_per_hour=1.0, host="10.0.0.1", name="p", status="running"
+    )
+    assert "Machine" not in {d.label for d in pages.deployment_rows(fleet, admin=True)[0].diags}
+    srv.rental = Rental(
+        provider="RunPod",
+        id="p",
+        label="n",
+        url="",
+        usd_per_hour=1.0,
+        host="10.0.0.1",
+        name="p",
+        status="running",
+        gpu="RTX PRO 6000",
+        gpus=1,
+        vram_gb=96.0,
+        disk_gb=5.0,
+        volume_gb=60.0,
+    )
+    facts = {d.label: d for d in pages.deployment_rows(fleet, admin=True)[0].diags}
+    assert facts["Machine"].value == "RTX PRO 6000 x1, 96 GB, 5 GB disk + 60 GB volume"
     # Asked and not given: the admin is told, and it is not a failure.
     srv.observed_version, srv.version_error = "", "HTTP 404"
     facts = {d.label: d for d in pages.deployment_rows(fleet, admin=True)[0].diags}
@@ -812,17 +835,19 @@ def test_each_deployment_says_where_to_find_it():
     )
     rows = pages.model_catalog_rows(_fleet(vast, runpod, lost), [_catalog("gemma")], admin=True)
     out = _render(rows, admin=True)
-    # The label names the rental; the line under it says what the rental
-    # is: its hardware as the provider lists it, for sizing the next one.
-    # Vast's label is the card and count the hardware opens with, said once.
+    # The label names the rental; the line under it says what the rental is.
+    # The hardware is a fact on the row's second line, not here, where the
+    # column is narrow.
     assert "gemma on Vast 53865410:8001" in out
     assert '<a href="https://cloud.vast.ai/instances/"' in out
-    assert "RTX 3060 x2, 12 GB each, 40 GB disk, 9 used</a>" in out
-    # No link for RunPod yet; the pod is named so it can be found, then its
-    # hardware. Listed, not running: the provider's status follows.
+    assert "RTX 3060 x2</a>" in out
+    assert "12 GB each</a>" not in out
+    assert "RTX 3060 x2, 12 GB each, 40 GB disk, 9 used" in out
+    # No link for RunPod yet; the pod is named so it can be found. Listed,
+    # not running: the provider's status follows the label.
     assert "gemma on RunPod 6jqrsngxdor2mc:8001" in out
-    assert "llmao-qwen3-8b, NVIDIA GeForce RTX 4090 x1, 24 GB, 25 GB disk + 30 GB volume, exited" in out
-    assert "exited</a>" not in out
+    assert "llmao-qwen3-8b, exited" in out
+    assert "llmao-qwen3-8b, exited</a>" not in out
     # A host no provider lists stands out.
     assert "location unknown: no provider lists this host" in out
     assert "text-warning-emphasis" in out

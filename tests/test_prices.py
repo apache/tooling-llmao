@@ -171,8 +171,13 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
         {"id": "x", "status": "RUNNING", "cost": "0.89", "runtime": None},
         {"name": "no id", "status": "RUNNING"},
     ]
+    # What fetch_hardware looked up: the catalog's short name and VRAM per
+    # card type id, and the network volume's size.
     hardware = edict(
-        vram_gb_by_card={"NVIDIA RTX PRO 6000 Blackwell Server Edition": 96.0, "NVIDIA A100 80GB PCIe": 80.0},
+        cards_by_id={
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition": edict(name="RTX PRO 6000", vram_gb=96.0),
+            "NVIDIA A100 80GB PCIe": edict(name="A100 PCIe", vram_gb=80.0),
+        },
         volume_gb_by_id={"vol1": 200.0},
     )
     assert rentals_from_pods(pods, hardware=hardware) == {
@@ -186,7 +191,7 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             name="tafo5",
             status="running",
             ports={"8002": 16643, "22": 10341},
-            gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            gpu="RTX PRO 6000",
             gpus=1,
             vram_gb=96.0,
             disk_gb=30.0,
@@ -201,7 +206,7 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
             host="",
             name="tjfs5",
             status="exited",
-            gpu="NVIDIA A100 80GB PCIe",
+            gpu="A100 PCIe",
             gpus=2,
             vram_gb=80.0,
             disk_gb=5.0,
@@ -212,18 +217,17 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
         ),
     }
     rentals = rentals_from_pods(pods, hardware=hardware)
-    assert (
-        rentals["tafo5"].hardware == "NVIDIA RTX PRO 6000 Blackwell Server Edition x1, 96 GB, 30 GB disk + 80 GB volume"
-    )
-    assert rentals["tjfs5"].hardware == "NVIDIA A100 80GB PCIe x2, 80 GB each, 5 GB disk + 200 GB volume"
-    # Without the lookups the card and disks are still read; the VRAM and the network volume are unknown.
+    assert rentals["tafo5"].hardware == "RTX PRO 6000 x1, 96 GB, 30 GB disk + 80 GB volume"
+    assert rentals["tjfs5"].hardware == "A100 PCIe x2, 80 GB each, 5 GB disk + 200 GB volume"
+    # Without the lookups the card is its type id and the disks are still
+    # read; the VRAM and the network volume are unknown.
     assert rentals_from_pods(pods)["tjfs5"].hardware == "NVIDIA A100 80GB PCIe x2, 5 GB disk"
     assert rentals_from_pods({"error": "nope"}) == {}
 
 
 def test_a_card_type_and_a_network_volume_are_looked_up_once_per_process(monkeypatch):
     """The second read names the same card type and volume: no request. Their sizes never change."""
-    monkeypatch.setattr(llmao.runpod_client, "_VRAM_GB_BY_CARD", {})
+    monkeypatch.setattr(llmao.runpod_client, "_CARD_BY_ID", {})
     monkeypatch.setattr(llmao.runpod_client, "_VOLUME_GB_BY_ID", {})
     requests = []
 
@@ -252,7 +256,14 @@ def test_a_card_type_and_a_network_volume_are_looked_up_once_per_process(monkeyp
         return first, second
 
     first, second = asyncio.run(twice())
-    assert first == second == {"vram_gb_by_card": {"NVIDIA GeForce RTX 4090": 24.0}, "volume_gb_by_id": {"vol1": 150.0}}
+    assert (
+        first
+        == second
+        == {
+            "cards_by_id": {"NVIDIA GeForce RTX 4090": {"name": "RTX 4090", "vram_gb": 24.0}},
+            "volume_gb_by_id": {"vol1": 150.0},
+        }
+    )
     assert sorted(requests) == ["/v2/catalog/gpus/NVIDIA%20GeForce%20RTX%204090", "/v2/network-volumes/vol1"]
 
 
