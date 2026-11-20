@@ -11,6 +11,7 @@ Five scripts. Different questions, different times to reach for them.
 | `llmao-usage` | has this rental ever served anything at all | instant |
 | `check-no-log.py` | after a LiteLLM upgrade: can a request still not opt out of the prompt log | ~10s |
 | `llmao-prompt-log` | one day of the prompt log rolled up for the portal: `rollup --json <day> --log-dir <dir>`, what the demand-rollup runner spawns. Runs through uv. The reports for a person are `analysis/prompts report` | seconds per day of records |
+| `sync-nodeping.py` | NodePing's checks made to match the fleet's vLLM servers, from a JSON document on stdin: what the portal runs (`config.yaml` `fleet.servers_hook`) when a server's address changes. By hand: `--settings nodeping.yaml --servers servers.json --dry-run` | ~5s |
 
 All stdlib-only Python 3 — nothing to install. All five share one discovery
 path in `_fleet.py`, so they see the same fleet.

@@ -21,6 +21,9 @@ apptoken.txt
 # LiteLLM proxy config with secrets — use litellm.yaml.example
 litellm.yaml
 
+# A hand copy of the NodePing settings for bin/sync-nodeping.py --settings
+nodeping.yaml
+
 # The developer's prompt log (litellm.yaml.example callback_settings.prompt_log.dir)
 /prompt-log/
 
