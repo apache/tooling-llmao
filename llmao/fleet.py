@@ -33,7 +33,10 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
+import pathlib
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -141,6 +144,18 @@ STALE_LISTING_PASSES = 3
 # something instructed LiteLLM to serve it, and a human decides.
 ORPHAN_PASSES = 3
 
+# The servers hook (fleet.servers_hook): a script llmao runs with every
+# server's address whenever one changes, so that something outside the
+# portal (an uptime monitor) can follow the fleet without polling it or
+# knowing a provider. How long one run may take before it is killed, and
+# how long after a failed run the same servers are tried again.
+HOOK_TIMEOUT_S = 120.0
+HOOK_RETRY_S = 600.0
+
+# The checkout: bin/ is beside the package, and a relative script path is
+# relative to here, not to whatever the service's working directory is.
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
 
 def _listen_port_allowed(host: str, port: int) -> bool:
     return port in VLLM_LISTEN_PORTS or (normalize_peer_ip(host), port) in LEGACY_SERVERS
@@ -203,6 +218,7 @@ def validate_fleet(cfg: Any, *, models: list) -> None:
     key = cfg.fleet.get("key")
     if not isinstance(key, str) or not key.strip() or key.strip().startswith("CHANGE_ME"):
         raise ValueError("config.yaml: fleet.key is missing or CHANGE_ME")
+    _validate_servers_hook(cfg.fleet.get("servers_hook"))
     validate_models(models)
     warn_deprecated(models)
     validate_providers(cfg, models)
@@ -238,6 +254,31 @@ def validate_fleet(cfg: Any, *, models: list) -> None:
             shared = str(getattr(cfg.fleet, "selfhost_api_key", "") or "").strip()
             if not shared or shared.startswith("CHANGE_ME"):
                 raise ValueError(f"config.yaml: fleet.selfhost_api_key is required while {host} is a legacy rental")
+
+
+def hook_script(hook: Any) -> pathlib.Path | None:
+    """The script fleet.servers_hook names, as a path under the checkout; None when no hook is configured."""
+    if not hook:
+        return None
+    return _ROOT / str(hook.script).strip()
+
+
+def _validate_servers_hook(hook: Any) -> None:
+    """Fail-fast on a fleet.servers_hook that could not run: the script must exist, the settings must be a mapping.
+
+    Optional, since a local fleet has nothing to tell anyone. The settings
+    are whatever the script wants, passed through as given and never read
+    here, so only their shape is checked.
+    """
+    if hook is None:
+        return
+    if not isinstance(hook, dict) or not str(hook.get("script") or "").strip():
+        raise ValueError("config.yaml: fleet.servers_hook must be a mapping with script (and optionally settings)")
+    script = hook_script(hook)
+    if not script.is_file():
+        raise ValueError(f"config.yaml: fleet.servers_hook.script {script} is not a file")
+    if "settings" in hook and not isinstance(hook.settings, dict):
+        raise ValueError("config.yaml: fleet.servers_hook.settings must be a mapping")
 
 
 class VllmServer:
@@ -846,6 +887,15 @@ class Fleet:
         self.listing_errors: dict[str, str] = {}
         # Rentals nobody intends, by the name the rental sends (discover_rentals, every pass).
         self.discovered: dict[str, Discovered] = {}
+        # The servers hook (run_servers_hook): what the last run that
+        # succeeded was given, the run in progress if any, and, after a run
+        # that failed, what it was given and when the same may be tried again.
+        self.hook_sent: list[edict] | None = None
+        self.hook_task: asyncio.Task | None = None
+        self.hook_failed: list[edict] | None = None
+        self.hook_retry_at = 0.0
+        # How a run happens; a test hands in a recorder instead.
+        self.hook_runner = run_hook
 
     @classmethod
     def from_cfg(cls, cfg: Any, models: list, *, provisioning: ProvisioningRecord | None = None) -> Fleet:
@@ -1304,6 +1354,71 @@ class Fleet:
                 srv.rental = rental
         return placed
 
+    # --- the servers hook ------------------------------------------------
+
+    def servers_payload(self) -> list[edict]:
+        """Each server as the hook sees it: the model, the name, the listen port, and where it is dialed.
+
+        ``health_url`` is None until a listing places the server, and stays
+        the last known value while its rental is listed without an address
+        (apply_rentals). ``provider`` is the rental's, None while unplaced.
+        """
+        return [
+            edict(
+                model=srv.model_name,
+                host=srv.host,
+                listen_port=srv.listen_port,
+                provider=srv.rental and srv.rental.provider,
+                health_url=srv.health_url,
+            )
+            for srv in self.servers
+        ]
+
+    def run_servers_hook(self, *, now: float | None = None) -> None:
+        """Start the hook when the servers differ from what its last run was given. Every lifecycle pass, after placing.
+
+        One run at a time: a change during a run is caught on the next
+        pass, since the comparison is against what was sent, not against
+        the pass before. A run that fails is tried again with the same
+        servers after HOOK_RETRY_S, and at once with different ones; a
+        monitor that is down for an hour costs a warning every ten minutes,
+        not every pass.
+        """
+        hook = self.cfg.fleet.get("servers_hook")
+        if not hook:
+            return
+        if self.hook_task is not None and not self.hook_task.done():
+            return
+        stamp = now or time.time()
+        payload = self.servers_payload()
+        if payload == self.hook_sent:
+            return
+        if payload == self.hook_failed and stamp < self.hook_retry_at:
+            return
+        self.hook_task = asyncio.create_task(self._servers_hook(hook, payload, stamp))
+
+    async def _servers_hook(self, hook: Any, payload: list[edict], stamp: float) -> None:
+        """One run of the hook with these servers; records how it went for run_servers_hook."""
+        script = hook_script(hook)
+        document = edict(settings=hook.get("settings") or {}, servers=payload)
+        try:
+            code, output = await self.hook_runner(script, document)
+        except OSError as e:
+            # The interpreter or the script could not be started: a failed
+            # run like any other, retried on the same clock.
+            code, output = -1, str(e)
+        last = output.strip().splitlines()[-1:] or ["no output"]
+        if code == 0:
+            self.hook_sent = payload
+            self.hook_failed = None
+            _LOGGER.info("fleet: %s ran for %d servers: %s", script.name, len(payload), fmt.log_safe(last[0]))
+            return
+        self.hook_failed = payload
+        self.hook_retry_at = stamp + HOOK_RETRY_S
+        _LOGGER.warning(
+            "fleet: %s exited %s for %d servers: %s", script.name, code, len(payload), fmt.log_safe(last[0])
+        )
+
     async def discover_rentals(self, client: httpx.AsyncClient, *, now: float | None = None) -> None:
         """Rentals nobody intends, with what a probe finds on each: Fleet.discovered, rebuilt every pass.
 
@@ -1379,6 +1494,7 @@ class Fleet:
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
                     self.place_servers()
+                    self.run_servers_hook()
                     await self.discover_rentals(client)
                     await self.probe_all(client=client)
                     if self.after_probe is not None:
@@ -1389,6 +1505,30 @@ class Fleet:
             # would stop the comparisons for good, and they report the failure.
             self.ready.set()
             await asyncio.sleep(interval)
+
+
+async def run_hook(script: pathlib.Path, document: edict, *, timeout_s: float = HOOK_TIMEOUT_S) -> tuple[int, str]:
+    """Run the hook script under the portal's own interpreter with the document as JSON on stdin.
+
+    The exit status and everything it printed, both streams in one. Killed
+    at the timeout, which reads as exit -9 with what it said so far. The
+    document carries the hook's settings from config.yaml, which is how a
+    secret reaches the script without a second file on disk.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(json.dumps(document).encode()), timeout_s)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return proc.returncode or -9, f"killed after {timeout_s:g}s"
+    return proc.returncode or 0, out.decode("utf-8", "replace")
 
 
 def snapshot_for_status(dep) -> DeploymentSnapshot:

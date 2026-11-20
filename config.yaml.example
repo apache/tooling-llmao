@@ -237,6 +237,18 @@ fleet:
   skew_interval_s: 180
   # Seconds between LiteLLM GET /health (real completions; tokens) vs fleet probe state.
   litellm_health_interval_s: 14400
+  # Optional. A script run with every server's address whenever one changes
+  # (and once at startup, once the listings have placed them), so an uptime
+  # monitor can follow the fleet without polling it. Run by the portal's own
+  # interpreter, with one JSON document on stdin: these settings as given,
+  # which llmao never reads, and the servers, each with its model, host,
+  # listen_port, provider and health_url (null until placed). A failed run
+  # is retried after ten minutes. bin/sync-nodeping.py is the one there is.
+  # servers_hook:
+  #   script: bin/sync-nodeping.py
+  #   settings:
+  #     api_key: CHANGE_ME_NODEPING_API_KEY
+  #     prefix: rai
   # Host row port is the container listen port (vLLM --port / rental JSON).
   # Without providers.vast, the public port equals the listen port (local).
   # fleet.hosts is loaded once at process start. Standalone (runx) watches
