@@ -93,28 +93,71 @@ qwen -m "$MODEL"
 ## OpenCode
 
 Chat completions under `/v1`, as an OpenAI-compatible provider named `llmao`. The model has
-to be declared, since models.dev does not list the gateway's. In
+to be declared: discovery works only for a few local servers (Ollama, LM Studio, vLLM at
+its default local address), never for a custom provider. In
 `~/.config/opencode/opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
+  "providers": {
     "llmao": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "https://llm.apache.org/v1", "apiKey": "{env:LLMAO_KEY}" },
-      "models": { "qwen3.8-27b": { "name": "qwen3.8-27b" } }
+      "name": "Apache LLMAO",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "https://llm.apache.org/v1" },
+      "models": {
+        "gemma4-26b": { "limit": { "context": 131072, "output": 32768 },
+                        "capabilities": { "tools": true, "input": ["text", "image"] } }
+      }
     }
-  }
+  },
+  "model": "llmao/gemma4-26b"
 }
 ```
 
 ```sh
-opencode -m "llmao/$MODEL"
+opencode
 ```
 
-The launcher writes the key literally; `{env:LLMAO_KEY}` is OpenCode's own substitution and
-keeps the PAT out of the file.
+There is no `$LLMAO_KEY` anywhere in that block, and this is the one thing worth knowing
+about OpenCode. It will not take the PAT from the config at all. A literal token, an
+`{env:LLMAO_KEY}` substitution and an `env: ["LLMAO_KEY"]` list were each tried on macOS
+and each failed the same way: the provider loads, `/models` lists it, and every request
+returns `Authentication Error, No api key passed in.` from the gateway's auth path, with
+nothing on the request to authenticate. The credential lives in OpenCode's own store and
+`/connect` is the only way in — one time, persisted, in the terminal interface and the
+desktop build alike. This is the only harness here whose key cannot be set from a file,
+which is why the launcher has no OpenCode adapter to copy.
+
+It also means a PAT per project needs a provider entry per project, since the store holds
+one credential per provider. Declaring `llmao-netbeans` and `llmao-tooling` side by side,
+each connected separately, puts the project in the model name
+(`llmao-netbeans/gemma4-26b`) and is the pattern in use.
+
+OpenCode 2.x renamed every other key this section used to carry, and a config written
+against the older shape is ignored rather than rejected: `provider` is now `providers`,
+`npm` is `package` and takes `@opencode/ai/providers/openai-compatible` rather than
+`@ai-sdk/openai-compatible`, and `options` is `settings`. There is no documented `-m` flag
+any more; the model is the top-level `model`, or `/models` in the session.
+
+`limit` is worth setting even though it is optional. OpenCode cannot detect context or
+output limits for a declared model and falls back to its own defaults, which is the same
+class of failure as Claude Code assuming 200k and Muse asking for 128k of output.
+
+A provider declared this way does list in `/models` without connecting first, so the
+earlier reading of [#50726](https://github.com/anomalyco/opencode/issues/50726) — that the
+desktop picker ignores config providers outright — was wrong; connecting is about the
+credential, not the listing. If a provider is missing from the picker anyway, toggling
+another provider group off and on rebuilds the list.
+
+Auto-discovery from `GET /v1/models` has been asked for repeatedly
+([#6231](https://github.com/anomalyco/opencode/issues/6231),
+[#27553](https://github.com/anomalyco/opencode/issues/27553),
+[#46941](https://github.com/anomalyco/opencode/issues/46941)) and implemented in an unmerged
+pull request ([#32731](https://github.com/anomalyco/opencode/pull/32731)) that no maintainer
+has ruled on. Several third-party plugins do it; none is worth taking as a dependency here.
+Until one of them lands, the `models` map is the gateway's model list and has to be edited
+when the fleet changes.
 
 ## Grok Build
 
@@ -223,7 +266,7 @@ Not possible: Copilot CLI has no base-URL override and talks only to GitHub.
 | Claude Code | `https://llm.apache.org` | `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_MODEL` and the role defaults |
 | Codex | `https://llm.apache.org/v1`, `wire_api = "responses"` | `env_key` of the provider | `model` / `-m` |
 | Qwen Code | `https://llm.apache.org/v1` | `OPENAI_API_KEY` | `-m` |
-| OpenCode | `https://llm.apache.org/v1`, `@ai-sdk/openai-compatible` | `options.apiKey` | `llmao/<model>`, declared |
+| OpenCode | `https://llm.apache.org/v1`, `@opencode/ai/providers/openai-compatible` | `/connect` only, never from the file | `llmao/<model>`, declared |
 | Grok Build | `https://llm.apache.org/v1`, `chat_completions` | `api_key` / `XAI_API_KEY` | `[model.<id>]`, `-m <id>` |
 | pi | `https://llm.apache.org/v1`, `openai-completions` | `apiKey` in `models.json` | `llmao/<model>`, listed |
 | Gemini CLI | `https://llm.apache.org` | `GEMINI_API_KEY` | `-m` |
