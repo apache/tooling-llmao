@@ -101,7 +101,7 @@ what remains; see "Where the work stands". Design:
 `docs/fleet-reconcile-design.md`, a tracking document that is deleted when
 the work is done.
 
-**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and optionally `kv_bytes_per_token` (KV cache per token of context, so a server's need at `max_model_len` is counted, not just its weights), and a rental checks them against `nvidia-smi` and `statvfs` before pulling weights. A rental with several GPUs runs every server across all of them (`--tensor-parallel-size`), and the check and the sizing are per card. VRAM sums across co-resident servers, since each loads its own copy; disk counts once per distinct model, since servers of the same model share one copy of the weights. Silent when `nvidia-smi` is absent — an unknown is not a failure. The rental then divides the card between its servers: the budget is the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM) less a reserve of 10% or 2 GB per card, whichever is more, and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card. Each server runs with vLLM's startup plan, so the KV cache size measured after CUDA graph capture is kept on the volume and reused, rather than re-estimated on every boot (the estimate can miss the graphs, and a tight card may fail its first boot before the plan exists). A fraction set in `models.yaml` is kept and deducted from the budget first.
+**Fit validation:** `models.yaml` declares `vram_gb` and `disk_gb`, and optionally `kv_bytes_per_token` (KV cache per token of context, so a server's need at `max_model_len` is counted, not just its weights), and a rental checks them against `nvidia-smi` and `statvfs` before pulling weights. A rental with several GPUs runs every server across all of them (`--tensor-parallel-size`), and the check and the sizing are per card. VRAM sums across co-resident servers, since each loads its own copy; disk counts once per distinct model, since servers of the same model share one copy of the weights. Silent when `nvidia-smi` is absent — an unknown is not a failure. The rental then divides the card between its servers: the budget is the memory that is free (`MemAvailable` on a unified-memory machine, where `nvidia-smi` reports no VRAM) less a reserve of 10% or 2 GB per card, whichever is more, and each gets its `vram_gb` plus a share of the remainder in proportion to its context window, passed as `--gpu-memory-utilization`, so two servers can share one card. Each server runs with vLLM's startup plan, so the KV cache size measured after CUDA graph capture is kept on the volume and reused, rather than re-estimated on every boot (the estimate can miss the graphs, and a tight card may fail its first boot before the plan exists); not on a unified-memory machine, where the plan's NVML lookup kills vLLM 0.32 (below). A fraction set in `models.yaml` is kept and deducted from the budget first.
 
 Limits of that sizing, all in `hosting/README.md`: it happens once, at install; re-running the install on a rental whose servers are already up sees little free memory and sets no fraction; and servers that load at the same moment get less KV cache than their share.
 
@@ -320,6 +320,20 @@ should be expected to fail the same way there.
 `nvidia-smi --query-gpu=memory.total` prints `[N/A]`. The rental reads
 `MemTotal` and `MemAvailable` from `/proc/meminfo` instead, and vLLM agrees
 with that view: it reported 121.63 GiB as the device total.
+
+**vLLM's startup plan kills a unified-memory machine.** With
+`VLLM_ENABLE_STARTUP_PLAN=1`, vLLM 0.32 fingerprints the plan with the
+device's total memory from NVML, which a GB10 answers with
+`NVMLError_NotSupported`, and nothing catches it. The engine dies after
+the weights are loaded and before the KV cache is sized, supervisord
+restarts it, and the log grows by a ten-minute load per attempt (2026-11-20,
+three servers on one GB10, for hours). The installer now leaves the
+variable out on a unified-memory machine (`unified_memory()`: `nvidia-smi`
+answers, but not with a number). vLLM fixed the lookup after 0.32.0
+([#57378](https://github.com/vllm-project/vllm/pull/57378)); the guard can
+go once the fleet runs a release that carries it, though the plan buys
+nothing on that machine either way. `grep -c NVMLError_NotSupported` on a
+server's log is the tell.
 
 **Servers that load together shrink each other's KV cache.** vLLM charges a
 server for the drop in device-wide free memory while it loads. Two

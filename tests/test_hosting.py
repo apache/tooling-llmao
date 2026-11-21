@@ -182,6 +182,19 @@ def test_program_ini_and_write(tmp_path, monkeypatch):
     assert "HF_TOKEN" not in text
 
 
+def test_a_unified_memory_machine_runs_without_the_startup_plan(tmp_path, monkeypatch):
+    """vLLM 0.32's plan fingerprint asks NVML for a total a GB10 cannot give, and dies."""
+    monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
+    monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
+    written = inst.write_units(inst.servers_from_config(SAMPLE), tmp_path / "conf.d", startup_plan=False)
+    for path in written:
+        text = path.read_text()
+        assert "VLLM_ENABLE_STARTUP_PLAN" not in text
+        # The rest of the environment is as before.
+        assert f'VLLM_CACHE_ROOT="{tmp_path / ".vllm_cache"}"' in text
+        assert 'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"' in text
+
+
 def test_the_hf_token_reaches_every_program(tmp_path, monkeypatch):
     monkeypatch.setattr(inst, "VLLM_BIN", "vllm")
     monkeypatch.setenv("DATA_DIRECTORY", str(tmp_path))
@@ -483,6 +496,19 @@ def test_unified_memory_falls_back_to_meminfo(monkeypatch, tmp_path):
     assert inst.free_vram_gb() == pytest.approx(100.0)
 
 
+def test_unified_memory_is_nvidia_smi_answering_without_a_number(monkeypatch):
+    _smi(monkeypatch, "[N/A]\n")
+    assert inst.unified_memory() is True
+    _smi(monkeypatch, "49140\n")
+    assert inst.unified_memory() is False
+    # Two discrete cards.
+    _smi(monkeypatch, "24576\n24576\n")
+    assert inst.unified_memory() is False
+    # No nvidia-smi is an unknown, not a unified-memory machine.
+    _smi(monkeypatch, missing=True)
+    assert inst.unified_memory() is False
+
+
 def test_no_nvidia_smi_is_still_unknown(monkeypatch, tmp_path):
     """System RAM is not GPU memory on a rental with no GPU tooling at all."""
     meminfo = tmp_path / "meminfo"
@@ -553,7 +579,25 @@ def test_main_claims_llmao_host_and_reloads_supervisord(monkeypatch, tmp_path):
     assert seen["host"] == "198.51.100.8"
     assert sorted(p.name for p in (tmp_path / "conf.d").iterdir()) == ["vllm-model-a.conf", "vllm-model-b.conf"]
     assert reloads == [True]
-    assert "HF_TOKEN" not in (tmp_path / "conf.d" / "vllm-model-a.conf").read_text()
+    text = (tmp_path / "conf.d" / "vllm-model-a.conf").read_text()
+    assert "HF_TOKEN" not in text
+    # Memory unknown (no nvidia-smi): the discrete-card default, plan on.
+    assert 'VLLM_ENABLE_STARTUP_PLAN="1"' in text
+
+
+def test_main_leaves_the_startup_plan_off_on_unified_memory(monkeypatch, tmp_path):
+    httpd = _config_server({})
+    _rental_env(monkeypatch, tmp_path, httpd)
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       125444852 kB\nMemAvailable:   104857600 kB\n")
+    monkeypatch.setattr(inst, "MEMINFO", meminfo)
+    _smi(monkeypatch, "[N/A]\n")
+    try:
+        assert inst.main([]) == 0
+    finally:
+        httpd.shutdown()
+    for path in (tmp_path / "conf.d").iterdir():
+        assert "VLLM_ENABLE_STARTUP_PLAN" not in path.read_text()
 
 
 def test_main_carries_the_payloads_hf_token_into_the_units(monkeypatch, tmp_path):

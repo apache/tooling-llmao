@@ -181,18 +181,8 @@ def _meminfo_gb(key: str) -> float | None:
     return None
 
 
-def _gpus_gb(field: str, meminfo_key: str) -> list[float] | None:
-    """One nvidia-smi memory field for every GPU in GB, or None if it is unavailable.
-
-    Capacity is read from the card rather than declared in models.yaml: a
-    hand-typed figure is wrong the first time a provider supplies a different
-    GPU than was ordered, and with rented instances that is a matter of when.
-
-    A unified-memory machine (GB10) has no VRAM of its own: nvidia-smi is
-    there and answers "[N/A]". The GPU draws on system memory, so that is
-    what ``meminfo_key`` reads, as one GPU. No nvidia-smi at all is still an
-    unknown.
-    """
+def _smi_lines(field: str) -> list[str] | None:
+    """nvidia-smi's answer for one per-GPU field, a line per GPU; None without nvidia-smi."""
     try:
         out = (
             subprocess.run(
@@ -207,6 +197,22 @@ def _gpus_gb(field: str, meminfo_key: str) -> list[float] | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    return out or None
+
+
+def _gpus_gb(field: str, meminfo_key: str) -> list[float] | None:
+    """One nvidia-smi memory field for every GPU in GB, or None if it is unavailable.
+
+    Capacity is read from the card rather than declared in models.yaml: a
+    hand-typed figure is wrong the first time a provider supplies a different
+    GPU than was ordered, and with rented instances that is a matter of when.
+
+    A unified-memory machine (GB10) has no VRAM of its own: nvidia-smi is
+    there and answers "[N/A]". The GPU draws on system memory, so that is
+    what ``meminfo_key`` reads, as one GPU. No nvidia-smi at all is still an
+    unknown.
+    """
+    out = _smi_lines(field)
     if not out:
         return None
     try:
@@ -214,6 +220,22 @@ def _gpus_gb(field: str, meminfo_key: str) -> list[float] | None:
     except ValueError:
         unified = _meminfo_gb(meminfo_key)
         return [unified] if unified is not None else None
+
+
+def unified_memory() -> bool:
+    """Whether the GPU draws on system memory (GB10): nvidia-smi answers, but not with a number.
+
+    No nvidia-smi at all is not that; it is an unknown, and the discrete-card
+    assumptions stand.
+    """
+    out = _smi_lines("memory.total")
+    if not out:
+        return False
+    try:
+        _ = [int(line.strip()) for line in out]
+    except ValueError:
+        return True
+    return False
 
 
 def gpu_count() -> int:
@@ -506,6 +528,7 @@ def program_ini(
     log_dir: str,
     data_dir: str,
     hf_token: str | None = None,
+    startup_plan: bool = True,
 ) -> str:
     name = program_name(spec["name"])
     command = shlex.join(build_argv(spec))
@@ -515,11 +538,23 @@ def program_ini(
     # The estimate can miss the graphs entirely (it did on 2x12GB cards), so
     # a server may fail its first boot; supervisord's restart then reads the
     # plan. It lives in VLLM_CACHE_ROOT, on the volume so it survives restarts.
+    #
+    # Not on a unified-memory machine (``startup_plan`` False). The plan's
+    # fingerprint asks NVML for the device's total memory, which a GB10 does
+    # not support, and vLLM 0.32 lets that error kill the engine after the
+    # weights are loaded and before the KV cache is sized: every boot, for
+    # as long as supervisord restarts it. vLLM fixed the lookup after 0.32.0
+    # (vllm-project/vllm#57378). The plan was for tight cards; a machine with
+    # a hundred-odd GB to draw on loses nothing without it.
+    #
     # expandable_segments is what PyTorch's own out-of-memory error advises.
     pairs = [
         f'HF_HOME="{_ini_escape(hf_home)}"',
         f'VLLM_CACHE_ROOT="{_ini_escape(vllm_cache)}"',
-        'VLLM_ENABLE_STARTUP_PLAN="1"',
+    ]
+    if startup_plan:
+        pairs.append('VLLM_ENABLE_STARTUP_PLAN="1"')
+    pairs += [
         'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"',
         f'VLLM_API_KEY="{_ini_escape(spec["api_key"])}"',
         # RequireKey (--middleware above) is imported from this file.
@@ -544,7 +579,13 @@ def program_ini(
     )
 
 
-def write_units(specs: list[dict[str, Any]], conf_dir: Path, *, hf_token: str | None = None) -> list[Path]:
+def write_units(
+    specs: list[dict[str, Any]],
+    conf_dir: Path,
+    *,
+    hf_token: str | None = None,
+    startup_plan: bool = True,
+) -> list[Path]:
     data_dir = Path(require_env("DATA_DIRECTORY"))
     weights = hf_home(data_dir)
     # Where the Vast vLLM template already keeps it.
@@ -565,6 +606,7 @@ def write_units(specs: list[dict[str, Any]], conf_dir: Path, *, hf_token: str | 
                 log_dir=str(log_dir),
                 data_dir=str(data_dir),
                 hf_token=hf_token,
+                startup_plan=startup_plan,
             )
         )
         path.chmod(0o600)
@@ -652,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
         if total and gmu is not None:
             card = f"each of {cards} cards" if cards > 1 else "the card"
             print(f"install_set: {spec['name']} gets {gmu} of {card} ({gmu * total:.1f}GB)", file=sys.stderr)
-    write_units(specs, CONF_DIR, hf_token=data.get("hf_token"))
+    write_units(specs, CONF_DIR, hf_token=data.get("hf_token"), startup_plan=not unified_memory())
     if args.no_reload:
         return 0
     supervisorctl_update()

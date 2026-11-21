@@ -144,7 +144,12 @@ several GPUs) and a second server cannot start. `install_set.py` divides the mem
   uses it instead of estimating. A server on a tight card may therefore fail
   its first boot; supervisord restarts it and the second boot reads the
   plan. vLLM measures again by itself when the model, flags, vLLM version
-  or GPU change.
+  or GPU change. Not on a unified-memory machine (GB10): the plan's
+  fingerprint asks NVML for the device's total memory, which that machine
+  cannot answer, and vLLM 0.32 dies on the error after loading the weights,
+  on every boot. The installer leaves the variable out there. vLLM fixed the
+  lookup after 0.32.0 ([#57378](https://github.com/vllm-project/vllm/pull/57378));
+  the plan buys nothing on a machine with that much memory anyway.
 - Each server gets its `vram_gb`, plus a share of the remainder in
   proportion to its `max_model_len`. An equal split if any server has none.
 - The result is passed as `--gpu-memory-utilization`, a fraction of the
