@@ -410,7 +410,7 @@ class DeploymentManager:
         self.fleet.refresh_skew()
 
     async def delete_orphan(self, orphan) -> None:
-        """POST /model/delete for an orphan, on an admin's Stop tracking. orphan_refusal is the gate."""
+        """POST /model/delete for an orphan, on an admin's Remove from LiteLLM. orphan_refusal is the gate."""
         row = orphan.deployment
         resp = await self._transport.request("POST", "model/delete", json={"id": row.id})
         self._transport.raise_http(resp)

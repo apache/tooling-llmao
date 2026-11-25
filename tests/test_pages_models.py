@@ -383,7 +383,7 @@ def _orphan(fleet, passes: int, *, stamp: str = "", id: str = "orphan-1") -> Non
         fleet.update_litellm_deployments(LiteLLMDeployments.from_rows(rows, now=time.time()))
 
 
-def test_work_needed_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
+def test_work_needed_shows_an_orphan_once_it_has_persisted_with_remove_from_litellm():
     pages = _app()
     fleet = _fleet(_server("gemma"))
     fleet.cfg.fleet.hosts = {}
@@ -394,13 +394,13 @@ def test_work_needed_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
     (item,) = pages.attention_items(fleet)
     assert item.what == "gemma on 198.51.100.9:18490 is in LiteLLM, not in config"
     assert item.detail == "not added by llmao; someone added it in LiteLLM"
-    assert [a.label for a in item.actions] == ["Stop tracking"]
+    assert [a.label for a in item.actions] == ["Remove from LiteLLM"]
     out = _render_admin(attention=[item])
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="198.51.100.9"' in out
     assert 'name="name" value="gemma"' in out
     assert 'name="port" value="18490"' in out
-    assert 'data-confirm="Stop tracking 198.51.100.9:18490?' in out
+    assert 'data-confirm="Remove 198.51.100.9:18490 from LiteLLM?' in out
     # The post finds the orphan the way the form named it.
     assert pages._match_orphan(fleet, "gemma", "198.51.100.9", "18490") is fleet.orphans[0]
     assert pages._match_orphan(fleet, "gemma", "198.51.100.9", "8001") is None
@@ -411,7 +411,7 @@ def test_work_needed_shows_an_orphan_once_it_has_persisted_with_stop_tracking():
     assert "disabled" in out
 
 
-def test_a_stamped_orphan_offers_stop_tracking_only_even_on_a_listed_host():
+def test_a_stamped_orphan_offers_remove_from_litellm_only_even_on_a_listed_host():
     """An approval is by a machine's name; an orphan carries only the address its route dials, and an
     approval by address keys the machine wrongly. The listed machine's own item carries the Approve."""
     pages = _app()
@@ -420,7 +420,7 @@ def test_a_stamped_orphan_offers_stop_tracking_only_even_on_a_listed_host():
     _orphan(fleet, ORPHAN_PASSES, stamp="http://198.51.100.9:8001")
     (item,) = pages.attention_items(fleet)
     assert item.detail.startswith("llmao added it")
-    assert [a.label for a in item.actions] == ["Stop tracking"]
+    assert [a.label for a in item.actions] == ["Remove from LiteLLM"]
     rental = Rental(
         provider="vast",
         id="1",
@@ -433,7 +433,7 @@ def test_a_stamped_orphan_offers_stop_tracking_only_even_on_a_listed_host():
     )
     fleet.vast_rentals = ProviderRentals("vast", by_id={"1": rental})
     (item,) = pages.attention_items(fleet)
-    assert [a.label for a in item.actions] == ["Stop tracking"]
+    assert [a.label for a in item.actions] == ["Remove from LiteLLM"]
     assert all(a.host != "198.51.100.9" or a.kind == "remove" for a in item.actions), "never an Approve by address"
 
 
@@ -530,11 +530,11 @@ def test_drill_down_renders_add_and_remove_actions():
     assert "Not in LiteLLM yet, so no traffic. llmao adds it on its next pass; Add does it now." in out
     assert 'title="Register this server in LiteLLM now, so it gets traffic"' in out
 
-    # Exactly one enabled Stop tracking (the unhealthy rental still in LiteLLM) posts the row.
+    # Exactly one enabled Remove from LiteLLM (the unhealthy rental still in LiteLLM) posts the row.
     assert out.count("/do-remove-deployment") == 1
     assert 'name="host" value="10.0.0.3"' in out
-    assert "Stop tracking" in out
-    assert 'data-confirm="Stop tracking gemma on 10.0.0.3:8001?' in out
+    assert "Remove from LiteLLM" in out
+    assert 'data-confirm="Remove gemma on 10.0.0.3:8001 from LiteLLM?' in out
 
     # Actions that do not apply are not rendered in the Deployments list.
     assert "disabled" not in out

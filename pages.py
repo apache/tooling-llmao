@@ -727,9 +727,9 @@ def _action(**kwargs):
 def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> list:
     """Buttons shared by Work needed on /admin and the deployment rows on /models.
 
-    Add and Stop tracking use the existing refusal gates. A disabled action
-    carries the reason as visible text. Approve is only for an unknown host.
-    Add and Stop tracking act on one host:port.
+    Add and Remove from LiteLLM use the existing refusal gates. A disabled
+    action carries the reason as visible text. Approve is only for an
+    unknown host. Add and Remove from LiteLLM act on one host:port.
     """
     actions = []
     if approve and host:
@@ -770,19 +770,19 @@ def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> 
         actions.append(
             _action(
                 kind="remove",
-                label="Stop tracking",
+                label="Remove from LiteLLM",
                 host=target,
                 name=dep.name,
                 port=port,
-                aria=f"Stop tracking {ident}",
-                confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The instance keeps running.",
+                aria=f"Remove {ident} from LiteLLM",
+                confirm=f"Remove {ident} from LiteLLM? It gets no more traffic. The rental keeps running.",
                 post="/do-remove-deployment",
                 enabled=ezt.boolean(reason == ""),
                 reason=reason,
             )
         )
     if dep.vllm is not None and dep.vllm.unlisted:
-        # The rental is gone: there is nothing to reboot, add or stop tracking.
+        # The rental is gone: there is nothing to reboot, add or remove from LiteLLM.
         # sync_selfhost drops its LiteLLM deployment by itself; the one thing
         # left is taking it out of fleet.hosts, which is config.
         return []
@@ -892,7 +892,7 @@ def _orphan_detail(orphan) -> str:
 
 
 def _orphan_actions(orphan) -> list:
-    """Stop tracking deletes an orphan: the one action on a route nothing intends.
+    """Remove from LiteLLM deletes an orphan: the one action on a route nothing intends.
 
     No Approve here. An approval is by the machine's name, and all an
     orphan carries is the address its route dials; approving that would
@@ -907,12 +907,12 @@ def _orphan_actions(orphan) -> list:
     return [
         _action(
             kind="remove",
-            label="Stop tracking",
+            label="Remove from LiteLLM",
             host=row.host,
             name=row.model_name,
             port=str(row.port),
-            aria=f"Stop tracking {ident}",
-            confirm=f"Stop tracking {ident}? This drops its LiteLLM route. The rental keeps running.",
+            aria=f"Remove {ident} from LiteLLM",
+            confirm=f"Remove {ident} from LiteLLM? It gets no more traffic. The rental keeps running.",
             post="/do-remove-deployment",
             enabled=ezt.boolean(reason == ""),
             reason=reason,
@@ -1229,7 +1229,7 @@ async def do_remove_deployment():
     matches = _match_deployments(APP.fleet, name, host, port)
     orphan = not matches and _match_orphan(APP.fleet, name, host, port)
     if orphan:
-        return await _stop_tracking_orphan(ident, orphan)
+        return await _remove_orphan(ident, orphan)
     if len(matches) != 1:
         await flash_danger(f"No deployment {name} on {host}:{port}." if port else f"No deployment {name} on {host}.")
         return _see_other("/models")
@@ -1243,12 +1243,12 @@ async def do_remove_deployment():
         await flash_danger(str(e))
         return _see_other("/models")
     label = matches[0].label
-    await _done(ident, "remove_deployment", label, f"Stopped tracking {label}.")
+    await _done(ident, "remove_deployment", label, f"Removed {label} from LiteLLM.")
     return _see_other("/models")
 
 
-async def _stop_tracking_orphan(ident, orphan):
-    """Stop tracking an orphan: delete the LiteLLM deployment nothing intends."""
+async def _remove_orphan(ident, orphan):
+    """Remove an orphan from LiteLLM: delete the deployment nothing intends."""
     reason = orphan_refusal(orphan)
     if reason:
         await flash_danger(reason)
@@ -1263,7 +1263,7 @@ async def _stop_tracking_orphan(ident, orphan):
         ident,
         "remove_deployment",
         row.display,
-        f"Stopped tracking {row.model_name} on {row.display}; nothing in config intended it.",
+        f"Removed {row.model_name} on {row.display} from LiteLLM; nothing in config intended it.",
     )
     return _see_other("/models")
 

@@ -749,8 +749,8 @@ class Orphan:
     Something instructed LiteLLM to serve it, so it is shown, never deleted
     unattended. Its stamp says who: llmao's own add whose intent has gone
     since (an approval lost in a restart, a ``fleet.hosts`` row removed), or,
-    unstamped, a hand add in LiteLLM's UI. Stop tracking on /models deletes
-    it. ``passes`` is how many reads running it has been one; Work needed
+    unstamped, a hand add in LiteLLM's UI. Remove from LiteLLM on /admin or
+    /models deletes it. ``passes`` is how many reads running it has been one; Work needed
     shows it from ORPHAN_PASSES on, so a transient read is not an item.
     Fleet.update_litellm_deployments builds these.
     """
@@ -1615,5 +1615,5 @@ def remove_refusal(dep) -> str | None:
 
 
 def orphan_refusal(orphan: Orphan) -> str | None:
-    """Why Stop tracking must not delete an orphan: only when LiteLLM reported it without an id."""
+    """Why Remove from LiteLLM must not delete an orphan: only when LiteLLM reported it without an id."""
     return (not orphan.deployment.id and "LiteLLM reported it without an id") or None

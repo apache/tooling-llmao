@@ -202,7 +202,7 @@ lifecycle emits these six badges and nothing else (`SKEW_PHRASE` in
 | Intended, not in LiteLLM | A deployment config intends, and LiteLLM lacks. Emitted only for Healthy, or for a commercial deployment that is Configured. | `sync_selfhost` adds it, or Add does. |
 | vLLM up, LiteLLM down | The probe passes but LiteLLM's own `/health` reports the endpoint down. The two signals carry their own ages, so a difference reads as two snapshots, not a contradiction. | LiteLLM's next health pass agrees. |
 | vLLM down, LiteLLM up | The reverse. | likewise |
-| In LiteLLM, not in config | An orphan: a LiteLLM deployment whose stamp no intended one has, or with no stamp at all, whatever address it sits at (`Fleet.orphans`, rebuilt on every read). In Work needed after `ORPHAN_PASSES` reads, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Stop tracking; an approval of the host, or a config row, that claims it |
+| In LiteLLM, not in config | An orphan: a LiteLLM deployment whose stamp no intended one has, or with no stamp at all, whatever address it sits at (`Fleet.orphans`, rebuilt on every read). In Work needed after `ORPHAN_PASSES` reads, saying who added it: llmao's own add carries the `llmao_key` stamp, a hand add in LiteLLM has none. Never deleted unattended. | Remove from LiteLLM; an approval of the host, or a config row, that claims it |
 | Duplicated in LiteLLM | LiteLLM holds more than one deployment under this key: it keeps a second copy when asked twice, and every copy takes traffic. | the extra copies are deleted (every copy goes when the deployment is dropped; removing extras from a serving one is the plan's) |
 
 A signal is stale after `health_fail_threshold` missed intervals (about
@@ -216,7 +216,7 @@ accident.
 
 - **Retirement is not a state.** Retiring a rental is manual teardown: remove
   it from `fleet.hosts`; its deployment then reads as an orphan on the
-  strip, and Stop tracking removes it. Once off the fleet the row
+  strip, and Remove from LiteLLM deletes its route. Once off the fleet the row
   disappears rather than accumulating in Stalled.
 - **Reboot is observed, not assumed.** Rebooting through a provider's API
   gave unclear results once, so a reboot is done by hand in the provider's

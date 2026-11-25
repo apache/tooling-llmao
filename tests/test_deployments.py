@@ -261,7 +261,7 @@ def test_an_orphan_says_whether_llmao_added_it():
     assert fleet.orphans[0].deployment.key == DeploymentKey("http://198.51.100.9:8001", "gemma4-26b")
 
 
-def test_stop_tracking_an_orphan_deletes_it_by_id():
+def test_remove_from_litellm_deletes_an_orphan_by_id():
     fleet, info = _orphan()
     be = _manager(fleet, _litellm(info["data"]))
     asyncio.run(be.check_config_skew())
