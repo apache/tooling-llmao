@@ -314,7 +314,7 @@ The words the pages and the fleet code share.
 ## Rules worth knowing
 
 - **Always asfquart.** No dev auth mode. `config.yaml` is loaded as
-  `APP.cfg`, an EasyDict, read with dotted access. Standalone
+  `APP.cfg`, a Box, read with dotted access. Standalone
   `python main.py` watches `config.yaml` for changes; production
   restarts the service after Puppet writes it.
 - **HTML mutations are `POST /do-*` then 303** to a GET display, with a

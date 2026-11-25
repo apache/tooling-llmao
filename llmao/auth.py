@@ -17,7 +17,7 @@
 
 """Authentication / identity resolution via asfquart.
 
-``cfg`` is ``APP.cfg`` (EasyDict). Site admins from ``cfg.site_admins``.
+``cfg`` is ``APP.cfg`` (a Box). Site admins from ``cfg.site_admins``.
 
 A site admin can choose to operate as a normal user for a while, to see
 the site as everyone else does. The choice is a flag in the browser

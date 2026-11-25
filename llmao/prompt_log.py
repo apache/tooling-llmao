@@ -140,12 +140,11 @@ def record(payload: Mapping, purpose: str | None = None) -> dict:
     reason. Field names are ours. ``purpose`` is the key's, from
     key_purpose(); it is the only field not in the payload.
 
-    A record is a plain dict, not an EasyDict, here and when read back:
+    A record is a plain dict, not a Box, here and when read back:
     ``params`` and ``messages`` are trees the client wrote, with keys we
-    do not choose, and EasyDict mirrors every key as an attribute. A tool
-    schema with an array parameter ({"type": "array", "items": {...}})
-    shadows the dict's items() method, and json.dumps, which calls it,
-    fails with "'EasyDict' object is not callable". Readers use get().
+    do not choose, so readers use get(), never an attribute. (A tool
+    schema's "items" key once broke json.dumps on the EasyDict this was;
+    a Box keeps the method and would not break, but the boundary stays.)
     """
     meta = payload.get("metadata") or {}
     streamed = bool(payload.get("stream"))

@@ -86,7 +86,7 @@ def create_app():
     )
     from llmao.fleet import Fleet, validate_fleet
 
-    # Config is app.cfg (EasyDict from config.yaml) — dotted access throughout.
+    # Config is app.cfg (a Box from config.yaml) — dotted access throughout.
     from llmao.models import load_models
     from llmao.provisioning import ProvisioningRecord
     from llmao.proxy.client import LiteLLMBackend

@@ -456,7 +456,7 @@ def add_counts(
 ) -> None:
     if name not in bucket:
         bucket[name] = dict(requests=0, prompt_tokens=0, completion_tokens=0)
-    # Looked up after the assignment: an EasyDict stores a COPY of a dict
+    # Looked up after the assignment: a Box stores a converted COPY of a dict
     # assigned into it, so the one created above is not the one it holds.
     acc = bucket[name]
     acc["requests"] += requests
