@@ -18,7 +18,7 @@
 """The judges: their verdict on each cluster, and the reports read from the verdicts.
 
     prompts judge                       # dry run: the clusters to judge, the calls --judge would make, where they go
-    prompts judge --judge               # send them, one at a time, judge after judge
+    prompts judge --judge               # send them, one at a time, judge after judge; the forecast first
     prompts judge --judge --limit 20    # at most 20 calls per judge this run
     prompts judge --judge --model qwen3-8b   # one judge, instead of the configured list
     prompts verdicts                    # the judges' consensus per cluster, marked where they split
@@ -86,6 +86,15 @@ def _consensus(args: argparse.Namespace, days: list[dt.date], prompt_hash: str) 
 SECONDS_PER_CALL = 2.5  # measured on the int4 27b; the docs quote it
 
 
+def _plan_lines(todo: dict[str, list]) -> list[str]:
+    """The calls to make and the time they should take, per judge: the dry run's forecast, and the run's."""
+    calls = sum(len(cs) for cs in todo.values())
+    per_judge = ", ".join(f"{len(cs)} to {m}" for m, cs in todo.items() if cs)
+    seconds = calls * SECONDS_PER_CALL
+    about = f"{seconds / 60:.0f} minutes" if seconds >= 90 else f"{seconds:.0f} seconds"
+    return [f"{fmt.plural(calls, 'call')}, about {about} at {SECONDS_PER_CALL:g} s a call", f"  {per_judge}"]
+
+
 def _dry_run(todo: dict[str, list], judges: list[str], days: list[dt.date], prompt, *, request: bool) -> None:
     """What --judge would do: the clusters, which judges each lacks, the calls, the time, and where they go."""
     lacking: dict[str, list[str]] = {}
@@ -93,7 +102,6 @@ def _dry_run(todo: dict[str, list], judges: list[str], days: list[dt.date], prom
         for c in cs:
             lacking.setdefault(c.fingerprint, []).append(model)
     by_fp = {c.fingerprint: c for cs in todo.values() for c in cs}
-    calls = sum(len(cs) for cs in todo.values())
     print(f"dry run over {_core.span_text(days)}: {fmt.plural(len(by_fp), 'cluster')} lack a verdict from some judge\n")
     if not by_fp:
         print("nothing to do: every cluster has a verdict from every judge")
@@ -111,11 +119,9 @@ def _dry_run(todo: dict[str, list], judges: list[str], days: list[dt.date], prom
         for c in (by_fp[fp],)
     ]
     _core.table("To judge", ["fingerprint", "project", "who", "tool", "requests", "lacks"], rows)
-    per_judge = ", ".join(f"{len(cs)} to {m}" for m, cs in todo.items() if cs)
-    seconds = calls * SECONDS_PER_CALL
-    about = f"{seconds / 60:.0f} minutes" if seconds >= 90 else f"{seconds:.0f} seconds"
-    print(f"\nwith --judge: {fmt.plural(calls, 'call')}, about {about} at {SECONDS_PER_CALL:g} s a call")
-    print(f"  {per_judge}")
+    plan, per_judge = _plan_lines(todo)
+    print(f"\nwith --judge: {plan}")
+    print(per_judge)
     print(f"  each through {_core.gateway()} with the {_core.ANALYSIS_KEY_PURPOSE} key")
     print("a verdict is written as it arrives: a run stopped midway resumes where it stopped")
     print("--limit N caps the calls per judge; --request prints the first request as it would be sent")
@@ -149,6 +155,13 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         if not args.judge:
             _dry_run(todo, judges, days, prompt, request=args.request)
             return 0
+        if not any(todo.values()):
+            print(f"nothing to do over {_core.span_text(days)}: every cluster has a verdict from every judge")
+            return 0
+        # The forecast first, so a long run is seen for what it is.
+        plan, per_judge = _plan_lines(todo)
+        print(f"over {_core.span_text(days)}: {plan}")
+        print(per_judge + "\n")
         tally: dict[str, collections.Counter] = {m: collections.Counter() for m in judges}
         timed_out = 0
         for model, cs in todo.items():

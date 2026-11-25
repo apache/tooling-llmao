@@ -215,6 +215,7 @@ def test_a_judge_run_skips_a_timed_out_call_and_goes_on(tmp_path, monkeypatch, c
     ap = argparse.ArgumentParser()
     span = dict(days=7, start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 2), log_dir=tmp_path, analysis_dir=tmp_path)
     assert _clusters.run_build(ap, argparse.Namespace(**span, rebuild=False)) == 0
+    _ = capsys.readouterr()  # the build's lines; the judge's output is what the test reads
     monkeypatch.setattr(_core, "judge_settings", lambda: Box(gateway="http://g", models=["judge-1"], key="k"))
     monkeypatch.setattr(_core, "require_models", lambda names: None)
     monkeypatch.setattr(_core, "require_private", lambda judges: None)
@@ -233,6 +234,8 @@ def test_a_judge_run_skips_a_timed_out_call_and_goes_on(tmp_path, monkeypatch, c
     args = argparse.Namespace(**span, judge=True, request=False, limit=None, model=None)
     assert _judge.run_judge(ap, args) == 1
     out = capsys.readouterr().out
+    # The forecast first, as the dry run gives it.
+    assert out.startswith("over 2026-11-01 to 2026-11-02: 2 calls, about 5 seconds at 2.5 s a call\n  2 to judge-1\n\n")
     assert "ReadTimeout: timed out (after 120 s" in out
     assert "judge-1: 1 verdict this run (asf yes 1, tier low 1, timed out 1)" in out
     assert "1 call timed out and left the cluster without that judge's verdict" in out
