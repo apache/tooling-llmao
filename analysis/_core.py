@@ -528,7 +528,7 @@ class Store:
 
     def cluster(self, fp: str) -> Box | None:
         row = self.db.execute("SELECT * FROM clusters WHERE fingerprint = ?", (fp,)).fetchone()
-        return row and Box(row)
+        return row and Box(dict(row))  # Box does not take a sqlite3.Row directly
 
     def rebuild(self) -> None:
         """Forget every scanned day and cluster. Verdicts, when there are any, stay."""
@@ -658,7 +658,7 @@ class Store:
             (first, last),
         )
         for row in rows:
-            c = Box(row)
+            c = Box(dict(row))
             models: dict[str, int] = {}
             for line in (c.pop("models_rows") or "").split("\n"):
                 for model, n in json.loads(line or "{}").items():
@@ -707,7 +707,7 @@ class Store:
         """A verdict row with its integers named again."""
         if row is None:
             return None
-        v = Box(row)
+        v = Box(dict(row))
         v.asf_work = ASF_WORK[v.asf_work]
         v.tier = TIERS[v.tier]
         return v
