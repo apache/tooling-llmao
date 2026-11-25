@@ -30,7 +30,7 @@ no function every call is answered `{}`.
 
 from __future__ import annotations
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import BackendUnavailableError
 
@@ -41,10 +41,10 @@ class FakeTransport:
         # True behaves like a proxy that cannot be reached at all.
         self.down = down
         # Every call made, in order.
-        self.calls: list[edict] = []
+        self.calls: list[Box] = []
 
     async def request(self, method: str, path: str, *, params=None, json=None, **kwargs):
-        call = edict(method=method, path=path, params=params or {}, json=json)
+        call = Box(method=method, path=path, params=params or {}, json=json)
         self.calls.append(call)
         if self.down:
             # Same text the real transport raises, so a test that asserts on
@@ -52,7 +52,7 @@ class FakeTransport:
             raise BackendUnavailableError("the LiteLLM backend is unreachable")
         answer = self._answer(call) if self._answer else {}
         status, body = answer if isinstance(answer, tuple) else (200, answer)
-        return edict(status_code=status, content=b"x", text=str(body), json=lambda: body)
+        return Box(status_code=status, content=b"x", text=str(body), json=lambda: body)
 
     def raise_http(self, resp) -> None:
         if resp.status_code >= 400:

@@ -22,7 +22,7 @@ import pathlib
 
 import asfquart
 import ezt
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -56,10 +56,10 @@ def test_unknown_slug_is_missing(tmp_path):
 def test_help_template_uses_the_page_frame(tmp_path):
     (tmp_path / "index.md").write_text("# Overview\n\nBody text\n", encoding="utf-8")
     doc = _pages().help_article("index", tmp_path)
-    data = edict(
+    data = Box(
         title=doc.title,
         body=doc.html,
-        guides=[edict(slug="pi", title="Pi")],
+        guides=[Box(slug="pi", title="Pi")],
         flashes=[],
         work=None,
         notices=[],
@@ -187,7 +187,7 @@ def _frame(**extra):
         can_create_automation=ezt.boolean(False),
     )
     data.update(extra)
-    return edict(data)
+    return Box(data)
 
 
 def _generate(name: str, data) -> str:
@@ -235,10 +235,10 @@ def test_home_page_is_the_steps_to_a_first_request():
 
 def test_create_key_form_preselects_a_given_project():
     common = dict(uid="alice", name="Alice", form_purpose="", for_model="", has_for_model=ezt.boolean(False))
-    one = _generate("key_create.ezt", _frame(projects=[edict(name="infra")], form_project="infra", **common))
+    one = _generate("key_create.ezt", _frame(projects=[Box(name="infra")], form_project="infra", **common))
     assert '<option value="infra" selected>infra</option>' in one
     two = _generate(
         "key_create.ezt",
-        _frame(projects=[edict(name="infra"), edict(name="tooling")], form_project="", **common),
+        _frame(projects=[Box(name="infra"), Box(name="tooling")], form_project="", **common),
     )
     assert " selected>" not in two

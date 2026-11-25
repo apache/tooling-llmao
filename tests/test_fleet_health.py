@@ -20,7 +20,7 @@
 import asyncio
 import time
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import (
     Fleet,
@@ -179,7 +179,7 @@ def test_model_rollup_aggregate():
     _record(a, True, now=10_000.0, grace_s=1800, fail_threshold=3)
     b.config_served_at = 9_990.0
     _record(b, False, now=10_000.0, grace_s=1800, fail_threshold=3, err="refused")
-    cfg = edict({"fleet": dict(FLEET_KNOBS)})
+    cfg = Box({"fleet": dict(FLEET_KNOBS)})
     fleet = Fleet(cfg=cfg, servers=[a, b])
     assert fleet.model_rollup("gemma4-26b", now=10_000.0).rollup == AVAILABLE
     # Loading is not counted, so a model with only that replica is unavailable.
@@ -200,7 +200,7 @@ def test_the_record_keeps_every_fetch_by_name():
 
 def test_a_stranger_is_a_fetch_whose_name_nothing_intends():
     """The record does not know membership; the fleet's join makes the split."""
-    cfg = edict({"fleet": {"hosts": {"203.0.113.10": []}}})
+    cfg = Box({"fleet": {"hosts": {"203.0.113.10": []}}})
     fleet = Fleet(cfg=cfg, servers=[])
     fleet.provisioning.note("198.51.100.8", now=10)
     fleet.provisioning.note("198.51.100.8", now=20)
@@ -264,7 +264,7 @@ def test_skew_sentences_replace_old_phrases():
     assert srv.state == LOADING
     dep = FleetDeployment.from_vllm(srv)
     dep.skew = ["missing from LiteLLM", "LiteLLM health disagrees"]
-    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=Box({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     backend, litellm = _skew_manager(fleet, [])
     asyncio.run(backend.check_config_skew())
     # Loading is not a missing-route badge. The old sentence is dropped.
@@ -290,7 +290,7 @@ def test_skew_sentences_replace_old_phrases():
 def test_extra_routes_are_per_port_and_model():
     srv = _server()
     dep = FleetDeployment.from_vllm(srv)
-    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=Box({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     info = [
         {"model_name": "other-a", "litellm_params": {"api_base": "http://10.0.0.1:9001/v1"}},
         {"model_name": "other-b", "litellm_params": {"api_base": "http://10.0.0.1:9002/v1"}},
@@ -307,7 +307,7 @@ def test_duplicates_survive_the_health_check_and_clear_with_the_extra_copy():
     srv = _server()
     srv.state = HEALTHY
     dep = FleetDeployment.from_vllm(srv)
-    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=Box({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[srv], deployments=[dep])
     copy = {"model_name": srv.model_name, "litellm_params": {"api_base": srv.api_base}}
     stamped = [{**copy, "model_info": {"id": n, "llmao_key": dep.key.url}} for n in ("one", "two")]
     backend, litellm = _skew_manager(fleet, stamped)
@@ -326,7 +326,7 @@ def test_duplicates_survive_the_health_check_and_clear_with_the_extra_copy():
 def test_add_calls_deployment_only_when_serving():
     srv = _server()
     dep = FleetDeployment.from_vllm(srv)
-    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
+    fleet = Fleet(cfg=Box({"fleet": {"hosts": {}}}), servers=[srv], deployments=[dep])
     added = []
 
     def attempt():
@@ -354,7 +354,7 @@ def test_local_from_cfg_public_equals_listen():
     from llmao.models import load_models
 
     example = Path(__file__).resolve().parent.parent / "models.yaml"
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
@@ -385,9 +385,9 @@ def test_local_from_cfg_public_equals_listen():
 def test_probe_skips_without_public_port():
     s = _server(public_port=None)
     assert s.health_url is None
-    cfg = edict(
+    cfg = Box(
         {
-            "fleet": edict(
+            "fleet": Box(
                 {
                     "health_timeout_s": 1,
                     "health_grace_s": 1800,
@@ -416,7 +416,7 @@ def test_an_orphan_serving_the_name_makes_the_model_mixed_once_the_strip_shows_i
 
     s = _server()
     _record(s, True, now=time.time(), grace_s=1800, fail_threshold=3)
-    fleet = Fleet(cfg=edict({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[s])
+    fleet = Fleet(cfg=Box({"fleet": {"hosts": {}, **FLEET_KNOBS}}), servers=[s])
     _registered(fleet.deployments[0])
     assert fleet.model_rollup("gemma4-26b").privacy == PRIVATE
     stranger = LiteLLMDeployment(id="x", model_name="gemma4-26b", api_base="http://198.51.100.9:18490", key=None)
@@ -627,7 +627,7 @@ def test_probe_all_scrapes_from_root_not_api_base():
                 return _Resp(200, body={"data": [{"max_model_len": 131072}]})
             return _Resp(404)
 
-    cfg = edict({"fleet": edict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    cfg = Box({"fleet": Box({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
     fleet = Fleet(cfg=cfg, servers=[s])
     asyncio.run(fleet.probe_all(client=_Client(), now=1.0))
 
@@ -640,7 +640,7 @@ def test_probe_all_scrapes_from_root_not_api_base():
 
 def test_the_fleet_is_ready_after_its_first_pass_even_a_failed_one():
     """A comparison that waited on a fleet whose first pass failed would never run."""
-    fleet = Fleet(edict(fleet=edict(FLEET_KNOBS)), [])
+    fleet = Fleet(Box(fleet=Box(FLEET_KNOBS)), [])
 
     async def fail(*_args, **_kwargs):
         raise RuntimeError("Vast API unreachable")
@@ -663,9 +663,9 @@ def test_the_fleet_is_ready_after_its_first_pass_even_a_failed_one():
 def test_litellm_is_not_compared_with_the_fleet_before_its_first_pass():
     from llmao.proxy.client import LiteLLMBackend
 
-    fleet = Fleet(edict(fleet=edict(FLEET_KNOBS)), [])
+    fleet = Fleet(Box(fleet=Box(FLEET_KNOBS)), [])
     fake = FakeTransport(lambda call: {"data": []} if call.path == "model/info" else {})
-    backend = LiteLLMBackend(edict(fleet=edict(FLEET_KNOBS)), fleet, transport=fake)
+    backend = LiteLLMBackend(Box(fleet=Box(FLEET_KNOBS)), fleet, transport=fake)
 
     async def scenario():
         task = asyncio.create_task(backend.run_skew())
@@ -722,7 +722,7 @@ def test_an_unlisted_host_with_no_address_is_still_an_attempt():
     """Nothing to dial counts as not reached: the clock runs and Stalled follows."""
     s = _server(public_port=None)
     s.unlisted = True
-    cfg = edict({"fleet": edict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    cfg = Box({"fleet": Box({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
 
     class _Boom:
         async def get(self, url):
@@ -760,7 +760,7 @@ class _KeyClient(StreamsViaGet):
 
 
 def _key_fleet(s):
-    cfg = edict({"fleet": edict({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
+    cfg = Box({"fleet": Box({"health_timeout_s": 1, "health_grace_s": 1800, "health_fail_threshold": 3})})
     return Fleet(cfg=cfg, servers=[s])
 
 

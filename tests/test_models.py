@@ -24,7 +24,7 @@ import re
 
 import pytest
 import yaml
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 from litellm.types.router import Deployment
 
 from llmao.models import (
@@ -67,7 +67,7 @@ def test_missing_models_yaml_fails_fast():
 
 
 def test_models_path_from_cfg():
-    cfg = edict({"models_path": "models.yaml"})
+    cfg = Box({"models_path": "models.yaml"})
     p = models_path_from_cfg(cfg)
     assert p.name == "models.yaml"
     assert p.is_file()
@@ -94,17 +94,17 @@ def test_ux_models_redacts_supply_path_for_non_admins():
 
 def test_a_model_need_not_say_where_it_is_served():
     """Who serves a model is each deployment's, so a model may carry no recipe."""
-    row = edict({"model_name": "grok-4", "model_info": {"license": "proprietary"}})
+    row = Box({"model_name": "grok-4", "model_info": {"license": "proprietary"}})
     validate_models([row])
     assert VllmRecipe.from_model(row) is None
 
-    ours = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
+    ours = Box(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
     validate_models([ours])
     assert VllmRecipe.from_model(ours).hf_model
 
 
 def test_a_recipe_needs_the_template_for_our_rentals():
-    row = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
+    row = Box(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
     row.pop("litellm_params")
     with pytest.raises(ValueError, match=re.escape("litellm_params.model is required")):
         validate_models([row])
@@ -112,7 +112,7 @@ def test_a_recipe_needs_the_template_for_our_rentals():
 
 def test_a_recipe_is_served_as_hosted_vllm_and_nothing_else():
     """openai/<name> would make LiteLLM talk to vLLM as something it is not."""
-    row = edict(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
+    row = Box(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))["models"][0])
     row.litellm_params.model = "openai/gemma4-26b"
     with pytest.raises(
         ValueError, match=re.escape("must be hosted_vllm/<name> for a vLLM recipe, not openai/gemma4-26b")
@@ -123,7 +123,7 @@ def test_a_recipe_is_served_as_hosted_vllm_and_nothing_else():
 
 
 def test_deprecated_keys_are_warned_and_not_refused(caplog):
-    row = edict(
+    row = Box(
         {
             "model_name": "old-style",
             "litellm_params": {"model": "xai/grok-4", "api_base": "https://api.x.ai/v1", "api_key": "secret"},

@@ -11,7 +11,7 @@ dependencies = [
     "asfpy", # stopwatch timing; also arrives via asfquart
     "litellm[proxy,extra-proxy]==1.105.0", # proxy stack + prisma (DB client)
     "PyYAML>=6.0.1", # model_list.yaml / config loading
-    "easydict>=1.13", # APP.cfg dotted access / tests
+    "python-box>=7.4.1,<8", # APP.cfg dotted access / tests; <8 as asfpy and asfquart pin it
     "dunamai>=1.26.0",
     "cmarkgfm>=2024.11.20",
     "loguru>=0.7.3",

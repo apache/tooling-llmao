@@ -20,7 +20,7 @@
 import asyncio
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import HOOK_RETRY_S, Fleet, validate_fleet
 from llmao.models import load_models
@@ -46,7 +46,7 @@ class _Runner:
 def _fleet(hook=HOOK):
     cfg = _cfg({"58458812": [["qwen3-8b", 8001]]})
     if hook is not None:
-        cfg.fleet.servers_hook = edict(hook)
+        cfg.fleet.servers_hook = Box(hook)
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     return Fleet.from_cfg(cfg, models=models)
@@ -62,7 +62,7 @@ def _place(fleet, address, public_port):
         host=address,
         name="58458812",
         status="running",
-        ports=edict({"8001": public_port}),
+        ports=Box({"8001": public_port}),
     )
     fleet.apply_rentals(ProviderRentals("Vast", {rental.id: rental}))
 
@@ -141,9 +141,9 @@ def test_a_failed_run_is_retried_after_the_retry_interval_or_at_once_on_a_change
 
 def test_a_hook_whose_script_is_missing_fails_the_fleet_build():
     cfg = _cfg({"58458812": [["qwen3-8b", 8001]]})
-    cfg.fleet.servers_hook = edict({"script": "bin/no-such-script.py"})
+    cfg.fleet.servers_hook = Box({"script": "bin/no-such-script.py"})
     with pytest.raises(ValueError, match=r"servers_hook\.script"):
         validate_fleet(cfg, models=load_models(EXAMPLE))
-    cfg.fleet.servers_hook = edict({"script": "bin/sync-nodeping.py", "settings": "rai"})
+    cfg.fleet.servers_hook = Box({"script": "bin/sync-nodeping.py", "settings": "rai"})
     with pytest.raises(ValueError, match="settings must be a mapping"):
         validate_fleet(cfg, models=load_models(EXAMPLE))

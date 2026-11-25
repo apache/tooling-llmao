@@ -26,7 +26,7 @@ import json
 import subprocess
 import sys
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao import prompt_log
 
@@ -304,9 +304,9 @@ def test_the_tool_requires_its_log_directory(tmp_path):
 
 
 def test_the_log_directory_is_required_in_config():
-    assert prompt_log.log_dir(edict(prompt_log_dir="/x1/llmao/prompt-log")).as_posix() == "/x1/llmao/prompt-log"
+    assert prompt_log.log_dir(Box(prompt_log_dir="/x1/llmao/prompt-log")).as_posix() == "/x1/llmao/prompt-log"
     try:
-        prompt_log.log_dir(edict())
+        prompt_log.log_dir(Box())
     except ValueError as e:
         assert "prompt_log_dir is required" in str(e)
     else:

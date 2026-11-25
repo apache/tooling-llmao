@@ -49,7 +49,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.rental import Rental, price
 
@@ -68,11 +68,11 @@ RUNPOD_VOLUME_URL = "https://api.runpod.io/v2/network-volumes"
 # RAM) and its network volume's size in GB. Each id is asked once per
 # process (fetch_hardware) and kept here; a fleet has a handful of card
 # types and volumes, so the catalog is never read again for one it has seen.
-_CARD_BY_ID: dict[str, edict] = {}
+_CARD_BY_ID: dict[str, Box] = {}
 _VOLUME_GB_BY_ID: dict[str, float] = {}
 
 
-def rentals_from_pods(pods: Any, *, hardware: edict | None = None) -> edict:
+def rentals_from_pods(pods: Any, *, hardware: Box | None = None) -> Box:
     """pod id → Rental: where it is (pod name and id), its status, its address, its ports, its price, its hardware.
 
     Every pod, in any status, as fetch_pods returns them: the list's pods,
@@ -96,8 +96,8 @@ def rentals_from_pods(pods: Any, *, hardware: edict | None = None) -> edict:
     No console link yet: RunPod's console URL for one pod has not been
     confirmed, so the row names the pod and an admin finds it by name.
     """
-    hardware = hardware or edict(cards_by_id={}, volume_gb_by_id={})
-    rentals = edict()
+    hardware = hardware or Box(cards_by_id={}, volume_gb_by_id={})
+    rentals = Box()
     for pod in pods if isinstance(pods, list) else []:
         if not isinstance(pod, dict):
             continue
@@ -107,7 +107,7 @@ def rentals_from_pods(pods: Any, *, hardware: edict | None = None) -> edict:
         ports, host = ports_from_pod(pod)
         gpu = pod.get("gpu") if isinstance(pod.get("gpu"), dict) else {}
         card_id = str(gpu.get("id") or "")
-        card = hardware.cards_by_id.get(card_id) or edict(name="", vram_gb=None)
+        card = hardware.cards_by_id.get(card_id) or Box(name="", vram_gb=None)
         mounts = pod.get("mounts") if isinstance(pod.get("mounts"), dict) else {}
         persistent = mounts.get("persistent") if isinstance(mounts.get("persistent"), dict) else {}
         volume_gb = price(persistent.get("size"))
@@ -140,14 +140,14 @@ def network_volume_id(pod: dict[str, Any]) -> str:
     return str(first.get("volumeId") or "")
 
 
-async def fetch_hardware(api_key: str, pods: list[dict[str, Any]], *, client: httpx.AsyncClient) -> edict:
+async def fetch_hardware(api_key: str, pods: list[dict[str, Any]], *, client: httpx.AsyncClient) -> Box:
     """Each card type (short name, VRAM) and each network volume's size the pods name: looked up once, then kept.
 
     One GET per card type or volume id not seen before in this process
     (the module's two caches), none at all on a read that names only
-    known ones. Returns ``edict(cards_by_id, volume_gb_by_id)`` for
+    known ones. Returns ``Box(cards_by_id, volume_gb_by_id)`` for
     rentals_from_pods, ``cards_by_id`` mapping a type id to
-    ``edict(name, vram_gb)``. Raises on a lookup that fails, as fetch_pods
+    ``Box(name, vram_gb)``. Raises on a lookup that fails, as fetch_pods
     does, so the read is retried whole next interval.
     """
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -161,7 +161,7 @@ async def fetch_hardware(api_key: str, pods: list[dict[str, Any]], *, client: ht
 
     async def look_up_card(card_id: str) -> None:
         body = await get(RUNPOD_GPU_URL, card_id)
-        _CARD_BY_ID[card_id] = edict(name=str(body.get("name") or ""), vram_gb=price(body.get("memory")))
+        _CARD_BY_ID[card_id] = Box(name=str(body.get("name") or ""), vram_gb=price(body.get("memory")))
 
     async def look_up_volume(volume_id: str) -> None:
         size = price((await get(RUNPOD_VOLUME_URL, volume_id)).get("size"))
@@ -173,10 +173,10 @@ async def fetch_hardware(api_key: str, pods: list[dict[str, Any]], *, client: ht
     lookups = [look_up_card(c) for c in cards if c and c not in _CARD_BY_ID]
     lookups += [look_up_volume(v) for v in volumes if v and v not in _VOLUME_GB_BY_ID]
     _ = await asyncio.gather(*lookups)
-    return edict(cards_by_id=dict(_CARD_BY_ID), volume_gb_by_id=dict(_VOLUME_GB_BY_ID))
+    return Box(cards_by_id=dict(_CARD_BY_ID), volume_gb_by_id=dict(_VOLUME_GB_BY_ID))
 
 
-def ports_from_pod(pod: dict[str, Any]) -> tuple[edict, str]:
+def ports_from_pod(pod: dict[str, Any]) -> tuple[Box, str]:
     """(container port → public port, public IP) from one pod's live port map, ``runtime.ports``.
 
     Only TCP entries count (see the module docstring), for the address
@@ -186,7 +186,7 @@ def ports_from_pod(pod: dict[str, Any]) -> tuple[edict, str]:
     """
     runtime = pod.get("runtime")
     entries = runtime.get("ports") if isinstance(runtime, dict) else None
-    out = edict()
+    out = Box()
     host = ""
     for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, dict) or entry.get("type") != "tcp":

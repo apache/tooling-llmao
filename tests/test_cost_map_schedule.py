@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import LiteLLMBackend
 from tests.fake_transport import FakeTransport
@@ -31,7 +31,7 @@ STATUS = "schedule/model_cost_map_reload/status"
 
 def _check(answer, caplog, *, down=False):
     fake = FakeTransport(lambda call: answer if call.path == STATUS else (404, {}), down=down)
-    backend = LiteLLMBackend(edict(), None, transport=fake)
+    backend = LiteLLMBackend(Box(), None, transport=fake)
     with caplog.at_level(logging.INFO, logger="llmao.proxy.client"):
         asyncio.run(backend.check_cost_map_schedule())
     return [(r.levelname, r.getMessage()) for r in caplog.records]

@@ -39,9 +39,9 @@ import ezt
 import quart
 import werkzeug.sansio.response
 from asfpy.stopwatch import Stopwatch
+from box import Box
 from cmarkgfm.cmark import Options
 from dunamai import Version
-from easydict import EasyDict as edict  # noqa: N813
 
 from llmao import auth, fmt
 from llmao.access_requests import APPROVAL_TTL_DAYS
@@ -150,7 +150,7 @@ async def _server_error(_error):
     """
     if quart.request.path.startswith("/v1/"):
         message = "internal error in gateway; check the server log"
-        return quart.jsonify(edict(error=edict(message=message, type="llmao_error", code=500))), 500
+        return quart.jsonify(Box(error=Box(message=message, type="llmao_error", code=500))), 500
     if quart.request.path == "/":
         return "Something went wrong. It has been logged.", 500
     await flash_danger("Something went wrong on that page. It has been logged.")
@@ -163,7 +163,7 @@ def _flash_rows():
         msgs = quart.get_flashed_messages(with_categories=True)
     except Exception:
         return []
-    return [edict(category=c, message=m) for c, m in msgs]
+    return [Box(category=c, message=m) for c, m in msgs]
 
 
 async def _work_pointer(path: str):
@@ -186,7 +186,7 @@ async def _work_pointer(path: str):
     href, label = ("/admin", "Admin") if ident.is_site_admin else ("/keys", "My Keys")
     if not count or path == href:
         return None
-    return edict(what="1 thing needs doing." if count == 1 else f"{count} things need doing.", href=href, label=label)
+    return Box(what="1 thing needs doing." if count == 1 else f"{count} things need doing.", href=href, label=label)
 
 
 async def _notice_rows() -> list:
@@ -209,7 +209,7 @@ async def _notice_rows() -> list:
     for n in entries:
         count = int(n.get("count") or 1)
         rows.append(
-            edict(
+            Box(
                 what=n.get("what") or "",
                 key=n.key,
                 times=f"{count} times" if count > 1 else "",
@@ -313,9 +313,9 @@ def _nav_section(path: str) -> str:
     return first if first in _NAV_SECTIONS else ""
 
 
-async def basic_info(title: str = "llmao") -> edict:
+async def basic_info(title: str = "llmao") -> Box:
     """Base-level EZT template data shared by HTML pages."""
-    basic = edict()
+    basic = Box()
     basic.title = title
     basic.flashes = []
     basic.work = None
@@ -341,7 +341,7 @@ async def basic_info(title: str = "llmao") -> edict:
                 + list(getattr(client_session, "projects", None) or [])
             )
         )
-        basic.projects = [edict(name=p) for p in projects]
+        basic.projects = [Box(name=p) for p in projects]
         basic.projects_label = ", ".join(projects) if projects else None
         committees = sorted(getattr(client_session, "committees", None) or [])
         basic.committees = committees
@@ -358,7 +358,7 @@ async def basic_info(title: str = "llmao") -> edict:
             admin_names = projects
         else:
             admin_names = committees
-        basic.admin_projects = [edict(name=p) for p in admin_names]
+        basic.admin_projects = [Box(name=p) for p in admin_names]
     else:
         basic.uid = None
         basic.name = None
@@ -393,7 +393,7 @@ def _key_rows(keys: list[KeyInfo], *, after_path: str = "/keys", used_by_token: 
         budget = k.max_budget
         budget_s = f"${budget:.4f}" if budget is not None else "—"
         rows.append(
-            edict(
+            Box(
                 token_id=k.token_id,
                 purpose=k.purpose or "—",
                 # A pretend project is not one to the reader: the column
@@ -485,9 +485,9 @@ def help_article(slug: str, directory: pathlib.Path | None = None, uid=None):
         template = ezt.Template(compress_whitespace=0)
         template.parse(text, base_format=ezt.FORMAT_RAW)
         buf = io.StringIO()
-        template.generate(buf, edict(uid=uid, repo=REPO_URL, commit=COMMIT))
+        template.generate(buf, Box(uid=uid, repo=REPO_URL, commit=COMMIT))
         text = buf.getvalue()
-    return edict(
+    return Box(
         slug=slug,
         title=title,
         html=cmarkgfm.github_flavored_markdown_to_html(text, options=Options.CMARK_OPT_UNSAFE),
@@ -502,7 +502,7 @@ def help_articles(directory: pathlib.Path | None = None) -> list:
         if path.name == "index.md":
             continue
         text = path.read_text(encoding="utf-8")
-        found.append(edict(slug=path.stem, title=_help_title(text, path.stem)))
+        found.append(Box(slug=path.stem, title=_help_title(text, path.stem)))
     found.sort(key=lambda item: item.title.lower())
     return found
 
@@ -573,7 +573,7 @@ def _badge_class(state: str, *, routed: bool = True) -> str:
     return _BADGE_CLASS.get(state, _BADGE_DEFAULT)
 
 
-def _dep_where(dep, stale: list | None = None) -> edict:
+def _dep_where(dep, stale: list | None = None) -> Box:
     """The line under a deployment's label: what the rental is, beyond its name.
 
     The label already says the provider and id. This adds the Rental's own
@@ -587,17 +587,17 @@ def _dep_where(dep, stale: list | None = None) -> edict:
     """
     srv = dep.vllm
     if srv is None:
-        return edict(label="", url="", unknown=ezt.boolean(False))
+        return Box(label="", url="", unknown=ezt.boolean(False))
     rental = srv.rental
     if rental is None:
         if stale:
             aged = ", ".join(f"{s.provider} last read {s.ago}" for s in stale)
-            return edict(label=f"location unknown: a listing is stale ({aged})", url="", unknown=ezt.boolean(True))
-        return edict(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
+            return Box(label=f"location unknown: a listing is stale ({aged})", url="", unknown=ezt.boolean(True))
+        return Box(label="location unknown: no provider lists this host", url="", unknown=ezt.boolean(True))
     label = rental.label
     if rental.status and not rental.running:
         label += f", {rental.status}"
-    return edict(label=label, url=rental.url or "", unknown=ezt.boolean(False))
+    return Box(label=label, url=rental.url or "", unknown=ezt.boolean(False))
 
 
 def _rental_description(rental) -> str:
@@ -648,14 +648,14 @@ def _match_orphan(fleet, name: str, host: str, port: str = ""):
     )
 
 
-def _modality_chips(modality: str) -> list[edict]:
+def _modality_chips(modality: str) -> list[Box]:
     """Labeled capability chips. models.yaml stores 'text' or 'text+vision'."""
     chips = []
     parts = {p.strip().lower() for p in (modality or "").replace("+", " ").split() if p.strip()}
     if "text" in parts:
-        chips.append(edict(label="Text", title="Accepts text"))
+        chips.append(Box(label="Text", title="Accepts text"))
     if "vision" in parts:
-        chips.append(edict(label="Vision", title="Accepts images"))
+        chips.append(Box(label="Vision", title="Accepts images"))
     return chips
 
 
@@ -721,7 +721,7 @@ def _action(**kwargs):
     kwargs.setdefault("confirm", "")
     kwargs.setdefault("title", "")
     kwargs.setdefault("aria", f"{kwargs.get('label', '')} {kwargs.get('host', '')}".strip())
-    return edict(**kwargs)
+    return Box(**kwargs)
 
 
 def admin_actions(fleet, dep=None, *, host: str = "", approve: bool = False) -> list:
@@ -793,10 +793,10 @@ def attention_items(fleet) -> list:
     """The fleet's part of Work needed on /admin: only actionable items, in the
     order they were listed in the design (machines nobody intends, Stalled,
     Unhealthy, true skew)."""
-    items: list[edict] = []
+    items: list[Box] = []
     for machine in fleet.unintended():
         items.append(
-            edict(
+            Box(
                 kind="unintended",
                 what=_unintended_what(machine),
                 ident="",
@@ -833,7 +833,7 @@ def attention_items(fleet) -> list:
         else:
             kind = "skew"
         items.append(
-            edict(
+            Box(
                 kind=kind,
                 what=f"{ident} is {rest}",
                 ident=ident,
@@ -850,7 +850,7 @@ def attention_items(fleet) -> list:
             continue
         row = orphan.deployment
         items.append(
-            edict(
+            Box(
                 kind="skew",
                 what=f"{row.model_name} on {row.display} is {SKEW_PHRASE[SKEW_IN_LITELLM_NOT_IN_CONFIG]}",
                 ident="",
@@ -940,7 +940,7 @@ def model_catalog_rows(fleet, catalog: list, *, admin: bool = False) -> list:
     """
     rows = []
     for m in catalog:
-        row = edict(m)
+        row = Box(m)
         status = fleet.model_rollup(row.model_name)
         rollup = status.rollup
         own = [d for d in fleet.deployments if d.model_name == row.model_name]
@@ -1002,7 +1002,7 @@ def _approve_choices(models: list) -> list:
         if VllmRecipe.from_model(model) is None:
             continue
         choices.append(
-            edict(model_name=str(model.model_name), display_name=str(info.get("display_name") or model.model_name))
+            Box(model_name=str(model.model_name), display_name=str(info.get("display_name") or model.model_name))
         )
     return choices
 
@@ -1114,10 +1114,10 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 ("LiteLLM", litellm_fact, dep.litellm_healthy is False),
                 ("Config", f"served {ago(config_ago)}" if ago(config_ago) else "", False),
             ]
-            diags = [edict(label=k, value=v, bad=ezt.boolean(bad)) for k, v, bad in fields if v and v != "—"]
+            diags = [Box(label=k, value=v, bad=ezt.boolean(bad)) for k, v, bad in fields if v and v != "—"]
         lifecycle = deployment_status(snapshot_for_status(dep), cfg).lifecycle
         rows.append(
-            edict(
+            Box(
                 host=host,
                 name=dep.name,
                 model_name=dep.model_name,
@@ -1153,7 +1153,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 primary=primary,
                 menu=menu,
                 ident=dep.label if admin else "",
-                where=_dep_where(dep, stale) if admin else edict(label="", url="", unknown=ezt.boolean(False)),
+                where=_dep_where(dep, stale) if admin else Box(label="", url="", unknown=ezt.boolean(False)),
                 anchor=_dep_anchor(dep) if admin else "",
                 external=ezt.boolean(not dep.self_hosted),
                 attention=ezt.boolean(
@@ -1305,7 +1305,7 @@ def _project_list_rows(rows) -> list:
         else:
             pct_label = f"{r.pct_used:.0f}%"
         out.append(
-            edict(
+            Box(
                 name=r.project,
                 href=f"/projects/{r.project}",
                 is_steward=ezt.boolean(r.is_steward),
@@ -1386,7 +1386,7 @@ async def project_overview(result, project: str):
     result.pending_request = _request_rows(pending)[0] if pending else None
 
     result.members = [
-        edict(
+        Box(
             name=r.name,
             is_service=ezt.boolean(r.is_service),
             tokens_h=fmt.tokens(r.tokens),
@@ -1417,7 +1417,7 @@ def _see_other(path: str):
 
 async def _flash_key_created(created, *, kind_label: str, keys_back: str, keys_create_another: str) -> None:
     """Render the created-key fragment and stash it as a raw HTML flash."""
-    data = edict(
+    data = Box(
         secret=created.secret,
         purpose=created.info.purpose or "—",
         project=created.info.project,
@@ -1473,7 +1473,7 @@ async def keys_list(result):
 
     try:
         result.approvals = [
-            edict(
+            Box(
                 id=a.id,
                 purpose=a.purpose,
                 tier=a.tier,
@@ -1504,7 +1504,7 @@ def _allowance_row(a):
     """
     pct = min(100, int(a.used() / a.cap * 100)) if a.cap else 0
     returns = a.returns()
-    row = edict(
+    row = Box(
         cap_h=fmt.tokens(a.cap),
         used_h=fmt.tokens(a.used()),
         remaining_h=fmt.tokens(a.remaining()),
@@ -1606,7 +1606,7 @@ async def admin_index(result):
     # was retired and the last report stood for a day before anyone saw).
     listings = APP.fleet.listings()
     result.listings = [
-        edict(provider=li.provider, ago=li.ago, error=li.error, stale=ezt.boolean(li.stale)) for li in listings
+        Box(provider=li.provider, ago=li.ago, error=li.error, stale=ezt.boolean(li.stale)) for li in listings
     ]
     stale = any(listing.stale for listing in listings)
     result.gateway_ok = ezt.boolean(matches and not (result.disk and result.disk.is_low) and not stale)
@@ -1628,7 +1628,7 @@ def disk_room(path: pathlib.Path):
     except FileNotFoundError:
         return None
     low = usage.free < usage.total * DISK_LOW_FRACTION
-    return edict(
+    return Box(
         free_h=fmt.gigabytes(usage.free),
         total_h=fmt.gigabytes(usage.total),
         # The free share is the glance: "is this low?" is a percentage question.
@@ -1687,7 +1687,7 @@ def _open_approval_rows(stored) -> list:
         exp = r.expires_at()
         days_left = (exp.date() - dt.datetime.now(dt.UTC).date()).days if exp else None
         rows.append(
-            edict(
+            Box(
                 requester=r.requester,
                 ask=_key_ask(r),
                 decided_by=r.decided_by,
@@ -1699,10 +1699,8 @@ def _open_approval_rows(stored) -> list:
     return sorted(rows, key=lambda row: row.expires_h)
 
 
-def _work(at: str, by: str, kind: str, sentence: str) -> edict:
-    return edict(
-        at=fmt.moment(at), by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=fmt.ago(at)
-    )
+def _work(at: str, by: str, kind: str, sentence: str) -> Box:
+    return Box(at=fmt.moment(at), by=by or "", sentence=sentence, icon=_WORK_ICONS.get(kind, "bi-dot"), ago=fmt.ago(at))
 
 
 async def _recent_work(stored, *, only: str | None = None) -> list:
@@ -1775,7 +1773,7 @@ _SKEW_ACTIONS = {
 def _skew_rows(entries) -> list:
     """Template rows for the Admin page's "Work needed"."""
     return [
-        edict(
+        Box(
             what=n.get("what") or "",
             subject=n.get("subject") or "",
             action=_SKEW_ACTIONS.get(n.get("kind"), ("", ""))[0],
@@ -1809,7 +1807,7 @@ def _request_rows(reqs) -> list:
             what = "key"
         exp = r.expires_at()
         out.append(
-            edict(
+            Box(
                 id=r.id,
                 kind=r.kind,
                 what=what,
@@ -1867,7 +1865,7 @@ async def admin_capacity(result):
         days = 30
     today = dt.datetime.now(dt.UTC).date()
     result.period_days = days
-    result.periods = [edict(days=d, active=ezt.boolean(d == days)) for d in CAPACITY_PERIODS]
+    result.periods = [Box(days=d, active=ezt.boolean(d == days)) for d in CAPACITY_PERIODS]
 
     try:
         rows = await APP.capacity.read(days)
@@ -1931,9 +1929,9 @@ async def admin_capacity(result):
     return result
 
 
-def _recommendation_row(rec) -> edict:
+def _recommendation_row(rec) -> Box:
     """One recommendation for the template: the verb, the sentences, and the card it points at."""
-    return edict(
+    return Box(
         verb=rec.verb,
         headline=rec.headline,
         evidence=list(rec.evidence),
@@ -1968,17 +1966,17 @@ def capacity_cards(
     the second list, for a footnote, so a retired model does not sit
     among the live ones by the cost it once had.
     """
-    pairs: dict[str, edict] = {}
+    pairs: dict[str, Box] = {}
     for m in supply:
-        pairs.setdefault(m.model_name, edict(supply=None, demand=None)).supply = m
+        pairs.setdefault(m.model_name, Box(supply=None, demand=None)).supply = m
     for d in demand:
-        pairs.setdefault(d.model, edict(supply=None, demand=None)).demand = d
+        pairs.setdefault(d.model, Box(supply=None, demand=None)).demand = d
     recent = (today - dt.timedelta(days=DORMANT_DAYS)).isoformat()
     days = _period(today, period_days)
     cards, dormant, cost = [], [], {}
     for name, pair in pairs.items():
         last = max(h for h in ((pair.supply and pair.supply.last_hour), (pair.demand and pair.demand.last_hour)) if h)
-        card = edict(
+        card = Box(
             model_name=name,
             display_name=catalog.get(name, name),
             live=ezt.boolean(name in live),
@@ -2012,19 +2010,18 @@ def _chart(series: list, days: list[str], unit: str) -> str:
     if not series:
         return ""
     have = {p.day: p.value for p in series}
-    return json.dumps(edict(days=days, values=[have.get(d, 0) for d in days], unit=unit))
+    return json.dumps(Box(days=days, values=[have.get(d, 0) for d in days], unit=unit))
 
 
-def _demand_model_row(m, *, days: list[str] = ()) -> edict:
+def _demand_model_row(m, *, days: list[str] = ()) -> Box:
     """One model's demand over the period, for the template."""
 
     def shares(items, top=6):
         return [
-            edict(name=i.name, requests=f"{i.requests:,}", prompt_tokens=fmt.tokens(i.prompt_tokens))
-            for i in items[:top]
+            Box(name=i.name, requests=f"{i.requests:,}", prompt_tokens=fmt.tokens(i.prompt_tokens)) for i in items[:top]
         ]
 
-    return edict(
+    return Box(
         model=m.model,
         days=m.days,
         requests=f"{m.requests:,}",
@@ -2035,10 +2032,10 @@ def _demand_model_row(m, *, days: list[str] = ()) -> edict:
         refused_any=ezt.boolean(m.refused_total > 0),
         refused_pct=fmt.pct(m.refused_total / m.requests) if m.requests else 0,
         refused_hot=ezt.boolean(m.requests > 0 and m.refused_total / m.requests >= 0.05),
-        refused=[edict(name=r.name, count=f"{r.count:,}") for r in m.refused[:6]],
+        refused=[Box(name=r.name, count=f"{r.count:,}") for r in m.refused[:6]],
         by_project=shares(m.by_project),
         by_tool=shares(m.by_tool),
-        prompt_len=[edict(name=b.name, count=f"{b.count:,}") for b in m.prompt_len],
+        prompt_len=[Box(name=b.name, count=f"{b.count:,}") for b in m.prompt_len],
         duration_p50=fmt.seconds(m.duration_p50_s),
         duration_p95_worst=fmt.seconds(m.duration_p95_worst_s),
         request_chart=_chart(m.daily_requests, days, "requests"),
@@ -2079,7 +2076,7 @@ def _line_status(line, listed: dict[str, str] | None, live_servers: set[str]) ->
 
 def _capacity_model_row(
     m, *, days: list[str] = (), listed: dict[str, str] | None = None, live_servers: set[str] = frozenset()
-) -> edict:
+) -> Box:
     # How long requests sat in vLLM's queue before it started on them. Each
     # hourly row keeps the 95th percentile of that hour (95% of requests
     # waited no longer); this is the worst such hour in the period, the one
@@ -2095,7 +2092,7 @@ def _capacity_model_row(
     worst = m.queue_p95_worst_s
     queue_p95 = f"{worst:g}s" if worst is not None and worst > 0.3 else ""
 
-    return edict(
+    return Box(
         model_name=m.model_name,
         cost_per_day=fmt.money(m.cost_per_day),
         tokens_per_day=fmt.tokens(int(m.tokens_per_day)),
@@ -2127,7 +2124,7 @@ def _capacity_model_row(
         unpriced_hours=m.unpriced_hours or None,
         token_chart=_chart(m.daily_tokens, days, "tokens"),
         servers=[
-            edict(
+            Box(
                 server=srv.server,
                 label=srv.label,
                 seen=fmt.span(srv.first_hour, srv.last_hour),
@@ -2144,17 +2141,17 @@ def _capacity_model_row(
     )
 
 
-def _spend_provider_row(p, *, days: list[str] = ()) -> edict:
+def _spend_provider_row(p, *, days: list[str] = ()) -> Box:
     projected = p.projected_month_usd
-    return edict(
+    return Box(
         provider=p.provider,
         period=fmt.money(p.period_usd),
         today=fmt.money(p.today_usd),
         month_to_date=fmt.money(p.month_to_date_usd),
         projected=fmt.money(projected),
-        models=[edict(name=x.name, usd=fmt.money(x.usd)) for x in p.models],
-        projects=[edict(name=x.name, usd=fmt.money(x.usd)) for x in p.projects],
-        spend_chart=_chart([edict(day=d.day, value=d.usd) for d in p.daily], days, "usd"),
+        models=[Box(name=x.name, usd=fmt.money(x.usd)) for x in p.models],
+        projects=[Box(name=x.name, usd=fmt.money(x.usd)) for x in p.projects],
+        spend_chart=_chart([Box(day=d.day, value=d.usd) for d in p.daily], days, "usd"),
     )
 
 
@@ -2167,7 +2164,7 @@ async def admin_tiers(result):
     result.admin_nav = "tiers"
     ident = await current_identity(APP.cfg)
     result.tiers = [
-        edict(
+        Box(
             tier=t["tier"],
             label=t["tier"].replace("_", " "),
             rpm_limit=t.get("rpm_limit") or "",

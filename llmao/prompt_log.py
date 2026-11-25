@@ -47,7 +47,7 @@ import sys
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
@@ -280,7 +280,7 @@ def percentile(values: list[float], p: float) -> float | None:
 # per hour, the log side of the reconciliation with LiteLLM's count.
 
 
-def rollup(records: Iterable[Mapping]) -> edict:
+def rollup(records: Iterable[Mapping]) -> Box:
     """A day's records as {records, hours}: per model per hour, what only the log can say, and the request count."""
     by_hour: dict[tuple[str, str], list] = defaultdict(list)
     seen = 0
@@ -294,7 +294,7 @@ def rollup(records: Iterable[Mapping]) -> edict:
     for (hour, model), mine in sorted(by_hour.items()):
         ttft = [r["ttft_s"] for r in mine if r.get("ttft_s") is not None]
         hours.append(
-            edict(
+            Box(
                 hour=hour,
                 model=model,
                 requests=len(mine),
@@ -305,14 +305,14 @@ def rollup(records: Iterable[Mapping]) -> edict:
                 ttft_p95_s=percentile(ttft, 0.95),
             )
         )
-    return edict(records=seen, hours=hours)
+    return Box(records=seen, hours=hours)
 
 
-def rollup_json(log_dir: pathlib.Path, day: dt.date) -> edict:
+def rollup_json(log_dir: pathlib.Path, day: dt.date) -> Box:
     """What `llmao-prompt-log rollup --json <day>` prints: the rollup, and whether the day had a file."""
     found = day_file(log_dir, day) is not None
-    out = rollup(read_day(log_dir, day)) if found else edict(records=0, hours=[])
-    return edict(day=day.isoformat(), found=found, **out)
+    out = rollup(read_day(log_dir, day)) if found else Box(records=0, hours=[])
+    return Box(day=day.isoformat(), found=found, **out)
 
 
 class RollupError(Exception):
@@ -323,9 +323,7 @@ class RollupError(Exception):
 TOOL = pathlib.Path(__file__).resolve().parent.parent / "bin" / "llmao-prompt-log"
 
 
-async def rollup_day(
-    day: dt.date, log_dir: pathlib.Path, *, timeout_s: float = 600, tool: pathlib.Path = TOOL
-) -> edict:
+async def rollup_day(day: dt.date, log_dir: pathlib.Path, *, timeout_s: float = 600, tool: pathlib.Path = TOOL) -> Box:
     """A day's rollup from the tool, run as a child: the parsing happens on another core.
 
     The child runs under nice and ionice where they exist, since it shares
@@ -349,7 +347,7 @@ async def rollup_day(
         last = err.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no output"]
         raise RollupError(f"{tool.name} exited {proc.returncode} on {day}: {last[0]}")
     try:
-        return edict(json.loads(out))
+        return Box(json.loads(out))
     except ValueError as e:
         raise RollupError(f"{tool.name} printed no JSON for {day}") from e
 
@@ -376,16 +374,16 @@ def log_dir(cfg: Any) -> pathlib.Path:
 
 
 def _tally(bucket: dict, name: str, tokens: int) -> None:
-    acc = bucket.setdefault(name, edict(requests=0, prompt_tokens=0))
+    acc = bucket.setdefault(name, Box(requests=0, prompt_tokens=0))
     acc.requests += 1
     acc.prompt_tokens += tokens
 
 
-def _ranked(bucket: dict) -> list[edict]:
-    return [edict(name=k, **v) for k, v in sorted(bucket.items(), key=lambda kv: -kv[1].requests)]
+def _ranked(bucket: dict) -> list[Box]:
+    return [Box(name=k, **v) for k, v in sorted(bucket.items(), key=lambda kv: -kv[1].requests)]
 
 
-def report(records: Iterable[Mapping]) -> edict:
+def report(records: Iterable[Mapping]) -> Box:
     """The figures of the design's first reports, over whatever records are given.
 
     ``by_project``, ``by_user``, ``by_model``, ``by_agent``: requests and
@@ -400,7 +398,7 @@ def report(records: Iterable[Mapping]) -> edict:
     by_model: dict = {}
     by_agent: dict = {}
     prompt_len: dict[str, dict] = defaultdict(lambda: dict.fromkeys([b for _l, b in PROMPT_BUCKETS], 0))
-    shares: dict[str, edict] = defaultdict(lambda: edict(requests=0, streamed=0, with_tools=0, finish_length=0))
+    shares: dict[str, Box] = defaultdict(lambda: Box(requests=0, streamed=0, with_tools=0, finish_length=0))
     failures: dict[tuple[str, str], int] = defaultdict(int)
     messages: dict[str, list[int]] = defaultdict(list)
     days: set[str] = set()
@@ -429,22 +427,20 @@ def report(records: Iterable[Mapping]) -> edict:
         prompt_len[model][prompt_bucket(tokens)] += 1
         if isinstance(r.get("messages"), list):
             messages[model].append(len(r["messages"]))
-    return edict(
+    return Box(
         records=seen,
         days=sorted(days),
         by_project=_ranked(by_project),
         by_user=_ranked(by_user),
         by_model=_ranked(by_model),
         by_agent=_ranked(by_agent),
-        prompt_len=[edict(model=m, **prompt_len[m]) for m in sorted(prompt_len)],
-        shares=[edict(model=m, **shares[m]) for m in sorted(shares)],
+        prompt_len=[Box(model=m, **prompt_len[m]) for m in sorted(prompt_len)],
+        shares=[Box(model=m, **shares[m]) for m in sorted(shares)],
         failures=[
-            edict(model=m, error=e, count=n)
-            for (m, e), n in sorted(failures.items(), key=lambda kv: (kv[0][0], -kv[1]))
+            Box(model=m, error=e, count=n) for (m, e), n in sorted(failures.items(), key=lambda kv: (kv[0][0], -kv[1]))
         ],
         conversation=[
-            edict(model=m, p50=percentile(messages[m], 0.5), p95=percentile(messages[m], 0.95))
-            for m in sorted(messages)
+            Box(model=m, p50=percentile(messages[m], 0.5), p95=percentile(messages[m], 0.95)) for m in sorted(messages)
         ],
     )
 

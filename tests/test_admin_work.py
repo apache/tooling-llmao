@@ -24,7 +24,7 @@ import json
 import pathlib
 
 import asfquart
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.access_requests import KIND_CAPACITY, KIND_KEY, STATE_APPROVED, STATE_DENIED, AccessRequest
 from llmao.proxy.client import BackendUnavailableError, KeyInfo
@@ -127,7 +127,7 @@ class _Actions:
 def _recent(monkeypatch, stored, *, keys=(), tiers=None, actions=(), keys_down=False, only=None):
     pages = _app()
     monkeypatch.setattr(
-        pages.APP, "backend", edict(keys=_Keys(keys, keys_down), tiers=_Tiers(tiers or {})), raising=False
+        pages.APP, "backend", Box(keys=_Keys(keys, keys_down), tiers=_Tiers(tiers or {})), raising=False
     )
     monkeypatch.setattr(pages.APP, "actions", _Actions(list(actions)), raising=False)
     return asyncio.run(pages._recent_work(stored, only=only))
@@ -155,10 +155,10 @@ def test_recent_work_merges_every_record_newest_first(monkeypatch):
         last_used=None,
         created_by="admin2",
     )
-    action = edict(
+    action = Box(
         at=_stamp(2), by="admin2", what="restrict_project", sentence="Restricted free-tier to our own rentals."
     )
-    tier = {"free_tier": edict(by="admin1", at=_stamp(4))}
+    tier = {"free_tier": Box(by="admin1", at=_stamp(4))}
     work = _recent(monkeypatch, [approved], keys=[service], tiers=tier, actions=[action])
     assert [w.sentence for w in work] == [
         'johndoe used their approval and created one service key, "hadoop CI".',
@@ -187,7 +187,7 @@ def test_one_source_down_thins_the_list_rather_than_failing_the_page(monkeypatch
 
 
 def _model(**over):
-    m = edict(
+    m = Box(
         model_name="qwen3-8b",
         cost_usd=10.0,
         last_hour="2026-11-02T10",
@@ -213,7 +213,7 @@ def _model(**over):
 
 
 def _demand(**over):
-    d = edict(
+    d = Box(
         model="qwen3-8b",
         days=3,
         last_hour="2026-11-01T23",
@@ -277,7 +277,7 @@ def test_the_worst_queue_time_reads_as_a_person_would_say_it():
 
 
 def _line(**over):
-    line = edict(
+    line = Box(
         server="Vast 1:8001",
         rental="Vast 1",
         label="RTX 3060 x2",
@@ -350,7 +350,7 @@ def test_a_day_series_is_charted_over_every_day_of_the_period_a_missing_day_as_z
     pages = _app()
     days = pages._period(dt.date(2026, 10, 20), 3)
     assert days == ["2026-10-18", "2026-10-19", "2026-10-20"]
-    series = [edict(day="2026-10-18", value=50), edict(day="2026-10-20", value=200)]
+    series = [Box(day="2026-10-18", value=50), Box(day="2026-10-20", value=200)]
     assert json.loads(pages._chart(series, days, "tokens")) == {
         "days": days,
         "values": [50, 0, 200],

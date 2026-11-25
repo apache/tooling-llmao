@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from llmao.vllm_client import Sample
 
 from asfpy.stopwatch import Stopwatch
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao import prompt_log
 from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, prompt_bucket, tool_family
@@ -166,7 +166,7 @@ class Hour:
                 return bound
         return None
 
-    def row(self, interval_s: float) -> edict:
+    def row(self, interval_s: float) -> Box:
         """The stored form, one per server per hour."""
         n = max(self.readings, 1)
         queued = self.counters.get("queued", 0.0)
@@ -174,7 +174,7 @@ class Hour:
         def count(key: str) -> int:
             return round(self.counters.get(key, 0.0))
 
-        return edict(
+        return Box(
             hour=hour_label(self.hour),
             server=self.server,
             model_name=self.model_name,
@@ -269,13 +269,13 @@ class CapacityStore:
     def __init__(self, memory: Any):
         self._memory = memory
 
-    async def write(self, row: edict) -> None:
+    async def write(self, row: Box) -> None:
         await self._memory.put(f"{KEY_PREFIX}{row.hour}:{row.server}", json.dumps(row, sort_keys=True))
 
-    async def _day(self, prefix: str, day: dt.date) -> list[edict]:
-        return [edict(item) for item in await self._memory.find(f"{prefix}{day.isoformat()}T")]
+    async def _day(self, prefix: str, day: dt.date) -> list[Box]:
+        return [Box(item) for item in await self._memory.find(f"{prefix}{day.isoformat()}T")]
 
-    async def _read(self, prefix: str, days: int, today: dt.date | None) -> list[edict]:
+    async def _read(self, prefix: str, days: int, today: dt.date | None) -> list[Box]:
         today = today or dt.datetime.now(dt.UTC).date()
         wanted = [today - dt.timedelta(days=n) for n in range(days)]
         with Stopwatch(name=f"{prefix} read of {days} days"):
@@ -283,12 +283,12 @@ class CapacityStore:
         rows = []
         for item in (item for day in found for item in day):
             try:
-                rows.append(edict(json.loads(item.get("value") or "")))
+                rows.append(Box(json.loads(item.get("value") or "")))
             except (TypeError, ValueError):
                 continue
         return rows
 
-    async def read(self, days: int, *, today: dt.date | None = None) -> list[edict]:
+    async def read(self, days: int, *, today: dt.date | None = None) -> list[Box]:
         """Every capacity row of the last `days` days, today included.
 
         One request per day, all at once. A day holds 24 rows per server, so
@@ -301,19 +301,19 @@ class CapacityStore:
     # capacity rows. A day holds 24 rows per model: one page up to twenty
     # models.
 
-    async def write_demand(self, row: edict) -> None:
+    async def write_demand(self, row: Box) -> None:
         await self._memory.put(f"{DEMAND_PREFIX}{row.hour}:{row.model}", json.dumps(row, sort_keys=True))
 
-    async def read_demand(self, days: int, *, today: dt.date | None = None) -> list[edict]:
+    async def read_demand(self, days: int, *, today: dt.date | None = None) -> list[Box]:
         """Every demand row of the last `days` days, today included."""
         return await self._read(DEMAND_PREFIX, days, today)
 
-    async def demand_days_done(self) -> dict[str, edict]:
+    async def demand_days_done(self) -> dict[str, Box]:
         """Day -> what the rollup wrote for it ({sources, rows}); the days to skip."""
         done = {}
         for item in await self._memory.find(DEMAND_DAY_PREFIX):
             try:
-                done[str(item.get("key") or "").removeprefix(DEMAND_DAY_PREFIX)] = edict(
+                done[str(item.get("key") or "").removeprefix(DEMAND_DAY_PREFIX)] = Box(
                     json.loads(item.get("value") or "")
                 )
             except (TypeError, ValueError):
@@ -470,9 +470,9 @@ def _refusal(meta: dict) -> str:
     return str(info.get("normalized_error") or info.get("error_code") or info.get("error_class") or "unknown")
 
 
-def _empty_demand_value(hour: str, model: str) -> edict:
+def _empty_demand_value(hour: str, model: str) -> Box:
     """A demand value before either source has written to it."""
-    return edict(
+    return Box(
         hour=hour,
         model=model,
         sources=[],
@@ -485,10 +485,10 @@ def _empty_demand_value(hour: str, model: str) -> edict:
     )
 
 
-def _project_share(by_project: edict, project: str) -> edict:
+def _project_share(by_project: Box, project: str) -> Box:
     """A project's share of a demand value, created the first time the project is seen."""
     if project not in by_project:
-        by_project[project] = edict(
+        by_project[project] = Box(
             requests=0,
             prompt_tokens=0,
             completion_tokens=0,
@@ -501,7 +501,7 @@ def _project_share(by_project: edict, project: str) -> edict:
     return by_project[project]
 
 
-def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
+def fold_demand(day: dt.date, spend_rows: list) -> list[Box]:
     """A day of LiteLLM's spend log as demand values, one per model per hour.
 
     Pure: spend rows in, demand values out, so the arithmetic is testable
@@ -512,7 +512,7 @@ def fold_demand(day: dt.date, spend_rows: list) -> list[edict]:
     """
     by_hour: dict[tuple[str, str], list] = defaultdict(list)
     for r in spend_rows:
-        meta = r.metadata or edict()
+        meta = r.metadata or Box()
         start = str(r.startTime or "")
         if not counts_as_demand(r.model_group, meta.get("user_api_key_team_alias")) or start[:10] != day.isoformat():
             continue
@@ -608,7 +608,7 @@ class DemandRollup:
         self._notices = notices
         self._tool = tool
 
-    def missing_days(self, done: dict[str, edict], now: dt.datetime) -> list[dt.date]:
+    def missing_days(self, done: dict[str, Box], now: dt.datetime) -> list[dt.date]:
         """Closed days inside retention with no marker, or one from an older fold; oldest first."""
         last_closed = (now - dt.timedelta(seconds=self._grace_s)).date() - dt.timedelta(days=1)
         day = now.date() - dt.timedelta(days=self._keep_days - 1)
@@ -637,7 +637,7 @@ class DemandRollup:
         await self._store.mark_demand_day(day.isoformat(), sources=sources, rows=len(rows), log=log)
         return len(rows)
 
-    async def _fold_log(self, day: dt.date, rows: list[edict]) -> str:
+    async def _fold_log(self, day: dt.date, rows: list[Box]) -> str:
         """The prompt log's side of the day into `rows`; "ok", "absent" or "failed"."""
         try:
             result = await prompt_log.rollup_day(day, self._log_dir, tool=self._tool)

@@ -32,19 +32,19 @@ import datetime as dt
 from collections import defaultdict
 from dataclasses import dataclass
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao import fmt
 from llmao.capacity import add_counts
 from llmao.prompt_log import NO_PROJECT, PROMPT_BUCKETS, percentile
 
 
-def _ranked_counts(totals: dict[str, dict]) -> list[edict]:
+def _ranked_counts(totals: dict[str, dict]) -> list[Box]:
     """[{name, requests, prompt_tokens, completion_tokens}], most requests first."""
-    return [edict(name=name, **v) for name, v in sorted(totals.items(), key=lambda kv: -kv[1]["requests"])]
+    return [Box(name=name, **v) for name, v in sorted(totals.items(), key=lambda kv: -kv[1]["requests"])]
 
 
-def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[edict]:
+def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[Box]:
     """Each model over the last `period_days` days, from demand values; most requests first.
 
     Rates per day are over the days that have demand values, so a period
@@ -87,7 +87,7 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
         ttft_p50s = [r.ttft_p50_s for r in mine if r.get("ttft_p50_s") is not None]
         ttft_p95s = [r.ttft_p95_s for r in mine if r.get("ttft_p95_s") is not None]
         models.append(
-            edict(
+            Box(
                 model=name,
                 days=days,
                 last_hour=max(r.hour for r in mine),
@@ -96,15 +96,15 @@ def summarise_demand(rows: list, *, today: dt.date, period_days: int) -> list[ed
                 prompt_tokens=sum(r.prompt_tokens for r in mine),
                 completion_tokens=sum(r.completion_tokens for r in mine),
                 refused_total=sum(refused.values()),
-                refused=[edict(name=k, count=v) for k, v in sorted(refused.items(), key=lambda kv: -kv[1])],
+                refused=[Box(name=k, count=v) for k, v in sorted(refused.items(), key=lambda kv: -kv[1])],
                 by_project=_ranked_counts(by_project),
                 by_tool=_ranked_counts(by_tool),
-                prompt_len=[edict(name=label, count=prompt_len.get(label, 0)) for _limit, label in PROMPT_BUCKETS],
+                prompt_len=[Box(name=label, count=prompt_len.get(label, 0)) for _limit, label in PROMPT_BUCKETS],
                 # The median of the hourly medians: a typical hour. The worst
                 # p95 says how bad the slowest hour got.
                 duration_p50_s=percentile(p50s, 0.5),
                 duration_p95_worst_s=max(p95s) if p95s else None,
-                daily_requests=[edict(day=d, value=daily[d]) for d in sorted(daily)],
+                daily_requests=[Box(day=d, value=daily[d]) for d in sorted(daily)],
                 log_requests=sum(r.get("log_requests") or 0 for r in mine),
                 streamed=sum(r.get("streamed") or 0 for r in mine),
                 with_tools=sum(r.get("with_tools") or 0 for r in mine),
@@ -158,7 +158,7 @@ def _port_of(server: str) -> str:
     return server.rsplit(":", 1)[-1]
 
 
-def _server_lines(rows: list) -> list[edict]:
+def _server_lines(rows: list) -> list[Box]:
     """One line per vLLM process over the rows, named by its rental where the rows say which.
 
     A process is a rental and a listen port. Its rows are keyed by address
@@ -184,7 +184,7 @@ def _server_lines(rows: list) -> list[edict]:
         hours = sorted(r.hour for r in theirs)
         queue = [r.queue_p95_s for r in theirs if r.queue_p95_s is not None]
         lines.append(
-            edict(
+            Box(
                 server=f"{rental}:{port}" if rental else port,
                 rental=rental,
                 label=next((r.rental_label for r in theirs if r.get("rental_label")), ""),
@@ -205,7 +205,7 @@ def _server_lines(rows: list) -> list[edict]:
     return sorted(lines, key=lambda line: (line.first_hour, line.server))
 
 
-def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict:
+def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> Box:
     """The fleet and each model over the last `period_days` days, from hourly rows."""
     start = (today - dt.timedelta(days=period_days - 1)).isoformat()
     rows = [r for r in rows if (r.get("hour") or "")[:10] >= start]
@@ -234,7 +234,7 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
         # been read yet.) None when no priced hour served a token.
         priced_tokens = sum(r.prompt_tokens + r.generation_tokens for r in priced)
         models.append(
-            edict(
+            Box(
                 model_name=name,
                 servers=servers,
                 hours=len(mine),
@@ -253,14 +253,14 @@ def summarise_capacity(rows: list, *, today: dt.date, period_days: int) -> edict
                 preemptions=sum(r.preemptions for r in mine),
                 queue_p95_worst_s=max(queue) if queue else None,
                 usd_per_mtok=cost / (priced_tokens / 1e6) if priced_tokens else None,
-                daily_tokens=[edict(day=d, value=daily_tokens[d]) for d in sorted(daily_tokens)],
-                daily_cost=[edict(day=d, value=round(daily_cost[d], 2)) for d in sorted(daily_cost)],
+                daily_tokens=[Box(day=d, value=daily_tokens[d]) for d in sorted(daily_tokens)],
+                daily_cost=[Box(day=d, value=round(daily_cost[d], 2)) for d in sorted(daily_cost)],
                 **_hot_hours(mine),
             )
         )
     hours_seen = len({r.hour for r in rows})
     cost = sum(m.cost_usd for m in models)
-    return edict(
+    return Box(
         models=sorted(models, key=lambda m: -m.cost_usd),
         cost_usd=cost,
         cost_per_day=cost / hours_seen * 24 if hours_seen else 0.0,
@@ -283,12 +283,12 @@ def days_to_read(period_days: int, today: dt.date) -> int:
     return max(period_days, today.day)
 
 
-def _ranked(totals: dict[str, float]) -> list[edict]:
+def _ranked(totals: dict[str, float]) -> list[Box]:
     """[{name, usd}], largest first: the line someone is looking for is the top one."""
-    return [edict(name=name, usd=round(usd, 2)) for name, usd in sorted(totals.items(), key=lambda kv: -kv[1])]
+    return [Box(name=name, usd=round(usd, 2)) for name, usd in sorted(totals.items(), key=lambda kv: -kv[1])]
 
 
-def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[edict]:
+def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[Box]:
     """One entry per provider, largest spend over the period first.
 
     Each carries the period's total, today's, the month to date, and a
@@ -311,7 +311,7 @@ def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[edi
             by_project[r.project or NO_PROJECT] += r.spend_usd
             daily[r.day] += r.spend_usd
         out.append(
-            edict(
+            Box(
                 provider=provider,
                 period_usd=round(sum(r.spend_usd for r in period), 2),
                 today_usd=round(sum(r.spend_usd for r in mine if r.day == today.isoformat()), 2),
@@ -319,7 +319,7 @@ def summarise_spend(rows: list, *, today: dt.date, period_days: int) -> list[edi
                 projected_month_usd=round(to_date / today.day * days_in_month, 2),
                 models=_ranked(by_model),
                 projects=_ranked(by_project),
-                daily=[edict(day=d, usd=round(daily[d], 2)) for d in sorted(daily)],
+                daily=[Box(day=d, usd=round(daily[d], 2)) for d in sorted(daily)],
             )
         )
     return sorted(out, key=lambda p: -p.period_usd)

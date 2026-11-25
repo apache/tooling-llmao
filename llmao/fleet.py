@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao import fmt
 from llmao.intent import (
@@ -565,7 +565,7 @@ class VllmServer:
         else:
             self.rejected_passes = 0
         # The probe and the history above are the observation. The name comes from one place.
-        cfg = edict(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
+        cfg = Box(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
         snap = DeploymentSnapshot(
             model_name=self.model_name,
             self_hosted=True,
@@ -890,9 +890,9 @@ class Fleet:
         # The servers hook (run_servers_hook): what the last run that
         # succeeded was given, the run in progress if any, and, after a run
         # that failed, what it was given and when the same may be tried again.
-        self.hook_sent: list[edict] | None = None
+        self.hook_sent: list[Box] | None = None
         self.hook_task: asyncio.Task | None = None
-        self.hook_failed: list[edict] | None = None
+        self.hook_failed: list[Box] | None = None
         self.hook_retry_at = 0.0
         # How a run happens; a test hands in a recorder instead.
         self.hook_runner = run_hook
@@ -1212,10 +1212,10 @@ class Fleet:
                 if self.listing_errors.pop(provider, None):
                     _LOGGER.info("the %s rentals are read again", provider)
 
-    def listings(self, *, now: float | None = None) -> list[edict]:
+    def listings(self, *, now: float | None = None) -> list[Box]:
         """Each provider we rent from, with how long since its listing was last read, and whether that is stale.
 
-        ``edict(provider, ago, stale, error)``: ``ago`` reads "32s ago",
+        ``Box(provider, ago, stale, error)``: ``ago`` reads "32s ago",
         "26h ago" or "never"; ``stale`` when no read has answered
         within STALE_LISTING_PASSES listing intervals, the one staleness
         rule (docs/fleet-reconcile-design.md, guards), which a read that
@@ -1233,7 +1233,7 @@ class Fleet:
                 continue
             read_at = rentals and rentals.fetched_at
             out.append(
-                edict(
+                Box(
                     provider=provider,
                     ago=f"{fmt.ago_short(read_at, now=stamp)} ago" if read_at else "never",
                     stale=read_at is None or stamp - read_at > limit,
@@ -1356,7 +1356,7 @@ class Fleet:
 
     # --- the servers hook ------------------------------------------------
 
-    def servers_payload(self) -> list[edict]:
+    def servers_payload(self) -> list[Box]:
         """Each server as the hook sees it: the model, the name, the listen port, and where it is dialed.
 
         ``health_url`` is None until a listing places the server, and stays
@@ -1364,7 +1364,7 @@ class Fleet:
         (apply_rentals). ``provider`` is the rental's, None while unplaced.
         """
         return [
-            edict(
+            Box(
                 model=srv.model_name,
                 host=srv.host,
                 listen_port=srv.listen_port,
@@ -1397,10 +1397,10 @@ class Fleet:
             return
         self.hook_task = asyncio.create_task(self._servers_hook(hook, payload, stamp))
 
-    async def _servers_hook(self, hook: Any, payload: list[edict], stamp: float) -> None:
+    async def _servers_hook(self, hook: Any, payload: list[Box], stamp: float) -> None:
         """One run of the hook with these servers; records how it went for run_servers_hook."""
         script = hook_script(hook)
-        document = edict(settings=hook.get("settings") or {}, servers=payload)
+        document = Box(settings=hook.get("settings") or {}, servers=payload)
         try:
             code, output = await self.hook_runner(script, document)
         except OSError as e:
@@ -1507,7 +1507,7 @@ class Fleet:
             await asyncio.sleep(interval)
 
 
-async def run_hook(script: pathlib.Path, document: edict, *, timeout_s: float = HOOK_TIMEOUT_S) -> tuple[int, str]:
+async def run_hook(script: pathlib.Path, document: Box, *, timeout_s: float = HOOK_TIMEOUT_S) -> tuple[int, str]:
     """Run the hook script under the portal's own interpreter with the document as JSON on stdin.
 
     The exit status and everything it printed, both streams in one. Killed

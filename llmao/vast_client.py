@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.rental import Rental, price
 
@@ -46,10 +46,10 @@ def _ip(addr: Any) -> str:
     return ip
 
 
-def ports_from_instance(inst: dict[str, Any]) -> edict:
+def ports_from_instance(inst: dict[str, Any]) -> Box:
     """Container listen port → Vast public HostPort from one instance row."""
     raw = inst.get("ports")
-    out = edict()
+    out = Box()
     if not isinstance(raw, dict):
         return out
     for key, mappings in raw.items():
@@ -85,7 +85,7 @@ def _warn_if_truncated(body: dict, instances: list) -> None:
 VAST_CONSOLE_URL = "https://cloud.vast.ai/instances/"
 
 
-def rentals_from_body(body: Any) -> edict:
+def rentals_from_body(body: Any) -> Box:
     """instance id → Rental: where it is (instance id, GPUs), its status, its address, its ports and its price.
 
     Every instance, in any status: ``host`` is public_ipaddr, "" when Vast
@@ -99,7 +99,7 @@ def rentals_from_body(body: Any) -> edict:
     bandwidth is billed per GB apart from it and is left out. None when
     Vast does not say, which is unknown, not free.
     """
-    rentals = edict()
+    rentals = Box()
     instances = (body.get("instances") or []) if isinstance(body, dict) else []
     if isinstance(body, dict) and isinstance(instances, list):
         _warn_if_truncated(body, instances)

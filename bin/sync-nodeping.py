@@ -58,7 +58,7 @@ from typing import Any
 
 import httpx
 import yaml
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 API = "https://api.nodeping.com/api/1"
 
@@ -139,13 +139,13 @@ def slack_addresses(contacts: dict) -> list[str]:
     return sorted(out)
 
 
-def label_for(prefix: str, srv: edict) -> str:
+def label_for(prefix: str, srv: Box) -> str:
     """The check's label: the server's identity in fleet.hosts, stable across address changes."""
     return f"{prefix} {srv.model} on {srv.host}:{srv.listen_port}"
 
 
-def plan(prefix: str, servers: list[edict], checks: dict) -> list[edict]:
-    """What to do to each check and for each server, as edict(action, label, check, target, reason). Nothing is sent.
+def plan(prefix: str, servers: list[Box], checks: dict) -> list[Box]:
+    """What to do to each check and for each server, as Box(action, label, check, target, reason). Nothing is sent.
 
     ``action`` is one of the constants above, CREATE to UNCHANGED.
     """
@@ -160,25 +160,25 @@ def plan(prefix: str, servers: list[edict], checks: dict) -> list[edict]:
         extra = found if label not in wanted else found[1:]
         reason = "no such server in fleet.hosts" if label not in wanted else "a second check with this label"
         for check in extra:
-            actions.append(edict(action=DELETE, label=label, check=check, target=None, reason=reason))
+            actions.append(Box(action=DELETE, label=label, check=check, target=None, reason=reason))
     for label, srv in wanted.items():
         check = (by_label.get(label) or [None])[0]
         url = srv.health_url
         if url is None:
             action = KEEP if check else WAIT
-            actions.append(edict(action=action, label=label, check=check, target=None, reason="no address"))
+            actions.append(Box(action=action, label=label, check=check, target=None, reason="no address"))
         elif check is None:
-            actions.append(edict(action=CREATE, label=label, check=None, target=url, reason="no check"))
+            actions.append(Box(action=CREATE, label=label, check=None, target=url, reason="no check"))
         elif (check.get("parameters") or {}).get("target") != url:
-            actions.append(edict(action=UPDATE, label=label, check=check, target=url, reason="address changed"))
+            actions.append(Box(action=UPDATE, label=label, check=check, target=url, reason="address changed"))
         else:
-            actions.append(edict(action=UNCHANGED, label=label, check=check, target=url, reason=""))
+            actions.append(Box(action=UNCHANGED, label=label, check=check, target=url, reason=""))
     return actions
 
 
-def apply(np: NodePing, prefix: str, actions: list[edict], notify: list[str], *, dry_run: bool, verbose: bool) -> edict:
+def apply(np: NodePing, prefix: str, actions: list[Box], notify: list[str], *, dry_run: bool, verbose: bool) -> Box:
     """Send each action to NodePing (or say what would be sent) and count them by kind."""
-    counts = edict()
+    counts = Box()
     would = "would " if dry_run else ""
     for act in actions:
         counts[act.action] = counts.get(act.action, 0) + 1
@@ -204,19 +204,19 @@ def apply(np: NodePing, prefix: str, actions: list[edict], notify: list[str], *,
     return counts
 
 
-def summary(counts: edict, *, dry_run: bool) -> str:
+def summary(counts: Box, *, dry_run: bool) -> str:
     """One line for the portal's log: "nodeping: 2 created, 1 deleted, 3 unchanged"."""
     parts = [f"{counts[k]} {word}" for k, word in WORDS.items() if counts.get(k)] or ["nothing to do"]
     return ("nodeping (dry run): " if dry_run else "nodeping: ") + ", ".join(parts)
 
 
-def read_document(path: str | None) -> edict:
+def read_document(path: str | None) -> Box:
     """The document the portal sends, from a file or stdin; a bare list is taken as the servers."""
     text = pathlib.Path(path).read_text(encoding="utf-8") if path else sys.stdin.read()
     data = json.loads(text)
     if isinstance(data, list):
         data = {"servers": data}
-    return edict(data)
+    return Box(data)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     document = read_document(args.servers)
-    settings = edict(document.get("settings") or {})
+    settings = Box(document.get("settings") or {})
     if args.settings:
         settings.update(yaml.safe_load(pathlib.Path(args.settings).read_text(encoding="utf-8")) or {})
     token = str(settings.get("api_key") or "").strip()
@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     if not token or not prefix:
         print("sync-nodeping: settings need api_key and prefix", file=sys.stderr)
         return 2
-    servers = [edict(s) for s in document.get("servers") or []]
+    servers = [Box(s) for s in document.get("servers") or []]
 
     np = NodePing(token)
     try:

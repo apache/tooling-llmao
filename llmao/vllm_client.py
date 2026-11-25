@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao import fmt
 
@@ -122,7 +122,7 @@ async def probe(
     # The build is fixed for the process, like the served window, so it is
     # read on the same asks; and only once the key is known good, since
     # /version is behind the same bearer and a 401 would say nothing new.
-    build = await fetch_version(client, root, api_key) if served.status == 200 else edict(version="", error="")
+    build = await fetch_version(client, root, api_key) if served.status == 200 else Box(version="", error="")
     return VllmProbe(
         root,
         at,
@@ -137,7 +137,7 @@ async def probe(
     )
 
 
-async def fetch_version(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
+async def fetch_version(client: httpx.AsyncClient, base: str, api_key: str) -> Box:
     """GET /version with the key: ``(version, error)``, vLLM's build ("0.25.1") or why it was not read.
 
     Never raises, and logs nothing: the build is a fact for the admin, a
@@ -149,16 +149,16 @@ async def fetch_version(client: httpx.AsyncClient, base: str, api_key: str) -> e
     try:
         status, raw = await _get_capped(client, f"{base}/version", headers)
         if status != 200:
-            return edict(version="", error=f"HTTP {status}")
+            return Box(version="", error=f"HTTP {status}")
         body = json.loads(raw)
         version = str(body.get("version") or "") if isinstance(body, dict) else ""
-        return edict(version=version, error="" if version else "no version in the answer")
+        return Box(version=version, error="" if version else "no version in the answer")
     except httpx.TimeoutException:
-        return edict(version="", error="timeout")
+        return Box(version="", error="timeout")
     except httpx.HTTPError as e:
-        return edict(version="", error=type(e).__name__)
+        return Box(version="", error=type(e).__name__)
     except ValueError:
-        return edict(version="", error="not JSON")
+        return Box(version="", error="not JSON")
 
 
 async def fetch_health(client: httpx.AsyncClient, url: str) -> tuple[bool, bool, str | None]:
@@ -233,7 +233,7 @@ async def _get_capped(
         return resp.status_code, bytes(body)
 
 
-async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str) -> edict:
+async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str) -> Box:
     """GET /v1/models with the key we believe this vLLM has: (status, max_model_len, hf_id).
 
     ``status`` is the HTTP status, or None when nothing usable came back. A
@@ -250,7 +250,7 @@ async def fetch_served_models(client: httpx.AsyncClient, base: str, api_key: str
     unknown and the UX shows them as such.
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    served = edict(status=None, max_model_len=None, hf_id="")
+    served = Box(status=None, max_model_len=None, hf_id="")
     try:
         status, raw = await _get_capped(client, f"{base}/v1/models", headers)
         served.status = status

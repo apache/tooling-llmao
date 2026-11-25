@@ -19,7 +19,7 @@
 import asyncio
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import (
     PRETEND_PROJECTS,
@@ -43,7 +43,7 @@ def _run(coro):
 def test_a_team_not_yet_listed_is_looked_up():
     """A project created since the last listing must not show as no project."""
     listing = {"teams": [{"team_alias": "tooling", "team_id": "team-tooling"}]}
-    teams = TeamManager(edict(), FakeTransport(lambda call: listing))
+    teams = TeamManager(Box(), FakeTransport(lambda call: listing))
     assert _run(teams.projects({"team-tooling"})) == {"team-tooling": "tooling"}
     # ...and once it is known, it is not asked about again
     _run(teams.projects({"team-tooling"}))
@@ -61,7 +61,7 @@ def _new_team(project):
     def litellm(call):
         return {"teams": []} if call.path == "team/list" else {"team_id": "t1", **(call.json or {})}
 
-    cfg = edict(budgets=edict(default_team_budget_usd=100, duration="30d", default_team_token_cap=20_000_000))
+    cfg = Box(budgets=Box(default_team_budget_usd=100, duration="30d", default_team_token_cap=20_000_000))
     teams = TeamManager(cfg, FakeTransport(litellm))
     _run(teams.ensure(project))
     return next(c.json for c in teams._transport.calls if c.path == "team/new")
@@ -99,7 +99,7 @@ def _litellm_with(existing):
             return {"team_info": next(t for t in teams if t["team_id"] == call.params.team_id)}
         return {"teams": teams}
 
-    cfg = edict(budgets=edict(default_team_budget_usd=100, duration="30d", default_team_token_cap=0))
+    cfg = Box(budgets=Box(default_team_budget_usd=100, duration="30d", default_team_token_cap=0))
     return TeamManager(cfg, FakeTransport(litellm))
 
 
@@ -178,7 +178,7 @@ def test_the_order_litellm_lists_models_in_does_not_matter():
 
 
 def _backfill_backend(default_cap=20_000_000):
-    cfg = edict(budgets=edict(default_team_token_cap=default_cap))
+    cfg = Box(budgets=Box(default_team_token_cap=default_cap))
     return TeamManager(cfg, FakeTransport())
 
 
@@ -286,7 +286,7 @@ def test_startup_stops_if_a_pretend_project_cannot_be_made_or_restricted():
                 return {"teams": existing}
             return (500, {"error": "no"})
 
-        cfg = edict(budgets=edict(default_team_budget_usd=100, duration="30d", default_team_token_cap=0))
+        cfg = Box(budgets=Box(default_team_budget_usd=100, duration="30d", default_team_token_cap=0))
         return TeamManager(cfg, FakeTransport(litellm))
 
     with pytest.raises(BackendUnavailableError):

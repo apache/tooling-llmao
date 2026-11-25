@@ -39,7 +39,7 @@ import json
 import secrets
 from typing import Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 KEY_PREFIX = "llmao:action:"
 
@@ -73,24 +73,24 @@ class ActionLog:
         """Keep one action. `sentence` is what the admin was told it did."""
         at = at or _now()
         stamp = at.isoformat(timespec="seconds").removesuffix("+00:00")
-        row = edict(at=stamp, by=by, what=what, subject=subject, sentence=sentence, **detail)
+        row = Box(at=stamp, by=by, what=what, subject=subject, sentence=sentence, **detail)
         # The stamp is to the second, and two actions can land in the same
         # one (two admins, or one handler recording twice). A short random
         # suffix keeps their keys apart, so the second never overwrites the
         # first; the time still leads, so keys sort and group by day.
         await self._memory.put(f"{KEY_PREFIX}{stamp}:{secrets.token_hex(3)}", json.dumps(row, sort_keys=True))
 
-    async def _day(self, day: dt.date) -> list[edict]:
-        return [edict(item) for item in await self._memory.find(f"{KEY_PREFIX}{day.isoformat()}T")]
+    async def _day(self, day: dt.date) -> list[Box]:
+        return [Box(item) for item in await self._memory.find(f"{KEY_PREFIX}{day.isoformat()}T")]
 
-    async def recent(self, days: int, *, today: dt.date | None = None) -> list[edict]:
+    async def recent(self, days: int, *, today: dt.date | None = None) -> list[Box]:
         """Every action of the last `days` days, today included, newest first."""
         today = today or _now().date()
         found = await asyncio.gather(*(self._day(today - dt.timedelta(days=n)) for n in range(days)))
         rows = []
         for item in (item for day in found for item in day):
             try:
-                rows.append(edict(json.loads(item.get("value") or "")))
+                rows.append(Box(json.loads(item.get("value") or "")))
             except (TypeError, ValueError):
                 continue
         return sorted(rows, key=lambda r: r.get("at") or "", reverse=True)

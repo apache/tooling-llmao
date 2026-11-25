@@ -18,7 +18,7 @@
 """intent.py: IntendedDeployment from fleet.hosts rows, approvals and provider lines; the bearer."""
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.intent import (
     APPROVAL,
@@ -165,9 +165,9 @@ def test_a_provider_line_is_one_intended_deployment_keyed_by_its_base():
 
 def test_intended_deployments_is_rows_then_approvals_then_provider_lines():
     cfg = _cfg({"10.0.0.1": [["qwen3-8b", 8003]]})
-    cfg.providers = edict(
-        xai=edict(api_key="xai-test", api_base="https://api.x.ai/v1", models=edict({"qwen3-8b": "xai/qwen"})),
-        vast=edict(api_key="vast-test"),
+    cfg.providers = Box(
+        xai=Box(api_key="xai-test", api_base="https://api.x.ai/v1", models=Box({"qwen3-8b": "xai/qwen"})),
+        vast=Box(api_key="vast-test"),
     )
     approved = {"198.51.100.8": ["gemma4-26b"], "10.0.0.1": ["gemma4-26b"], "10.0.0.2": []}
     out = intended_deployments(cfg, load_models(EXAMPLE), approved)
@@ -182,10 +182,10 @@ def test_intended_deployments_is_rows_then_approvals_then_provider_lines():
 
 def test_a_recipe_leaves_undeclared_requirements_as_none():
     recipe = VllmRecipe.from_model(
-        edict(
+        Box(
             model_name="m",
-            litellm_params=edict(model="hosted_vllm/m"),
-            model_info=edict(vllm=edict(model="org/m", args="--a --b", max_model_len=4096)),
+            litellm_params=Box(model="hosted_vllm/m"),
+            model_info=Box(vllm=Box(model="org/m", args="--a --b", max_model_len=4096)),
         )
     )
     assert recipe.hf_model == "org/m"
@@ -193,4 +193,4 @@ def test_a_recipe_leaves_undeclared_requirements_as_none():
     assert recipe.args == ("--a", "--b")
     assert recipe.max_model_len == 4096
     assert recipe.vram_gb is None and recipe.kv_bytes_per_token is None
-    assert VllmRecipe.from_model(edict(model_name="n", model_info=edict())) is None
+    assert VllmRecipe.from_model(Box(model_name="n", model_info=Box())) is None

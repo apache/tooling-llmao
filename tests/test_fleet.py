@@ -23,7 +23,7 @@ from pathlib import Path
 import httpx
 import pytest
 import yaml
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import (
     Fleet,
@@ -53,7 +53,7 @@ FLEET_KNOBS = {
 
 
 def _cfg(hosts, models_path=EXAMPLE):
-    return edict(
+    return Box(
         {
             "fleet": {"hosts": hosts, "key": "test-fleet-key", "vllm_api_salt": "test-vllm-salt", **FLEET_KNOBS},
             "models_path": str(models_path),
@@ -62,7 +62,7 @@ def _cfg(hosts, models_path=EXAMPLE):
 
 
 def test_example_primary_host():
-    cfg = edict(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
+    cfg = Box(yaml.safe_load(EXAMPLE_CFG.read_text(encoding="utf-8")))
     cfg.fleet.key = "test-fleet-key"
     cfg.fleet.vllm_api_salt = "test-vllm-salt"
     models = load_models(EXAMPLE)
@@ -110,7 +110,7 @@ def _place(fleet, mapping) -> None:
             host=host,
             name=f"r{i}",
             status="running",
-            ports=edict({str(k): int(v) for k, v in ports.items()}),
+            ports=Box({str(k): int(v) for k, v in ports.items()}),
         )
     fleet.apply_rentals(ProviderRentals("Vast", rentals))
 
@@ -142,8 +142,8 @@ def test_approve_rejects_bad_selections():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
-    fleet.models["claude"] = edict(
-        model_name="claude", litellm_params=edict(api_base="https://api.example.com"), model_info=edict()
+    fleet.models["claude"] = Box(
+        model_name="claude", litellm_params=Box(api_base="https://api.example.com"), model_info=Box()
     )
     for names in ([], ["nope"], ["claude"]):
         with pytest.raises(ValueError):
@@ -354,7 +354,7 @@ def test_probe_hits_both_vllm_ports_and_skips_the_rest():
             ]
         }
     )
-    cfg.providers = edict(vast=edict(api_key="vast-test"))
+    cfg.providers = Box(vast=Box(api_key="vast-test"))
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
@@ -386,7 +386,7 @@ def test_missing_hostport_stays_awaiting_while_sibling_is_healthy():
             ]
         }
     )
-    cfg.providers = edict(vast=edict(api_key="vast-test"))
+    cfg.providers = Box(vast=Box(api_key="vast-test"))
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
@@ -408,7 +408,7 @@ def test_missing_hostport_stays_awaiting_while_sibling_is_healthy():
 
 def test_approved_siblings_are_probed_without_another_fetch():
     cfg = _cfg({"127.0.0.1": [["gemma4-26b", 8001]]})
-    cfg.providers = edict(vast=edict(api_key="vast-test"))
+    cfg.providers = Box(vast=Box(api_key="vast-test"))
     models = load_models(EXAMPLE)
     fleet = _approvable(cfg, models)
     fleet.approve_models("198.51.100.8", ["qwen3-8b", "gemma4-26b"])
@@ -480,7 +480,7 @@ def test_legacy_rentals_need_the_shared_key_and_keep_their_ports():
         validate_fleet(missing, models=models)
     cfg = _cfg(hosts)
     cfg.fleet.selfhost_api_key = "sk-shared"
-    cfg.providers = edict(vast=edict(api_key="vast-test"))
+    cfg.providers = Box(vast=Box(api_key="vast-test"))
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
     _place(fleet, {"80.188.223.202": {"10100": 40000, "22": 19022}})
@@ -501,7 +501,7 @@ def test_the_bearer_is_minted_once_with_the_intent():
     """
     cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]], "10.0.0.1": [["qwen3-8b", 8001]]})
     cfg.fleet.selfhost_api_key = "sk-shared"
-    cfg.litellm = edict(base_url="http://127.0.0.1:4000", master_key="sk-m", request_timeout_s=5)
+    cfg.litellm = Box(base_url="http://127.0.0.1:4000", master_key="sk-m", request_timeout_s=5)
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
@@ -628,7 +628,7 @@ def test_the_payload_carries_the_salt_hmac():
 
 def test_the_payload_requires_the_salt():
     """A fleet config that never defines the salt fails at attribute access."""
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {"hosts": {"10.0.0.1": [["qwen3-8b", 8003]]}, **FLEET_KNOBS},
             "models_path": str(EXAMPLE),

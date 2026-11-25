@@ -87,7 +87,7 @@ def main() -> int:
     # showing a traceback for a missing module nobody asked about.
     try:
         import yaml
-        from easydict import EasyDict as edict  # noqa: N813
+        from box import Box
 
         from llmao import actions
         from llmao.capacity import retention_days as capacity_retention_days
@@ -114,7 +114,7 @@ def main() -> int:
 
     path = pathlib.Path(args.config)
     try:
-        cfg = edict(yaml.safe_load(path.read_text(encoding="utf-8")))
+        cfg = Box(yaml.safe_load(path.read_text(encoding="utf-8")))
     except OSError as e:
         print(f"cannot read {path}: {e}", file=sys.stderr)
         return 1

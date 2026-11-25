@@ -21,7 +21,7 @@ import asyncio
 import logging
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import Fleet, VllmServer, validate_fleet
 from llmao.model_status import AWAITING
@@ -122,7 +122,7 @@ def _vast_cfg(*, providers=None, fleet_vast=None, host="127.0.0.1"):
     cfg = {"fleet": fleet, "models_path": str(EXAMPLE)}
     if providers is not None:
         cfg["providers"] = providers
-    return edict(cfg)
+    return Box(cfg)
 
 
 def test_the_vast_key_lives_under_providers():
@@ -167,7 +167,7 @@ def test_validate_fleet_requires_vast_api_key():
 
 
 def test_validate_fleet_vast_ok():
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},
@@ -185,7 +185,7 @@ def test_validate_fleet_vast_ok():
 
 
 def test_refresh_uses_dotted_api_key():
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {
                 "hosts": {"203.0.113.10": [["gemma4-26b", 8001]]},

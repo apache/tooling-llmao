@@ -45,7 +45,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.intent import IntendedDeployment, host_intents
 from llmao.reconcile import normalize_peer_ip
@@ -103,7 +103,7 @@ def rental_name(*, claimed: str | None, remote_addr: str | None) -> str:
     return name
 
 
-def server_json(intended: IntendedDeployment) -> edict:
+def server_json(intended: IntendedDeployment) -> Box:
     """One vLLM process as the rental installs it: the wire shape of ``servers[]``.
 
     ``model`` is the HF weights id, ``served_model_name`` what vLLM answers
@@ -113,7 +113,7 @@ def server_json(intended: IntendedDeployment) -> edict:
     left out, so the installer's fit check knows it was not stated.
     """
     recipe = intended.recipe
-    out = edict(
+    out = Box(
         name=intended.name,
         model=recipe.hf_model,
         served_model_name=recipe.served_name,
@@ -135,7 +135,7 @@ def config_for_host(
     models: list,
     cfg: Any,
     approved: list[str] | None = None,
-) -> edict:
+) -> Box:
     """The payload for one host: its IntendedDeployments as servers JSON.
 
     ``host`` is the name rental_name gave; ``models`` is the list loaded at
@@ -144,7 +144,7 @@ def config_for_host(
     """
     by_name = {str(model.model_name): model for model in models}
     servers = [server_json(i) for i in host_intents(cfg, by_name, host, approved=approved)]
-    payload = edict(host=host, servers=servers)
+    payload = Box(host=host, servers=servers)
     # One account credential for the whole rental, not a per-server fact: the
     # installer puts it in every program's environment. Absent when unset,
     # so an older installer and a rental without one behave as before.

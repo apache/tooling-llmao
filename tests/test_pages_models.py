@@ -29,7 +29,7 @@ import time
 
 import asfquart
 import ezt
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import ORPHAN_PASSES, Fleet, FleetDeployment, VllmServer, remove_refusal
 from llmao.intent import Approval, provider_intent
@@ -94,7 +94,7 @@ def _server(name: str, *, host: str = "10.0.0.1", port: int = 8001, ok: bool = T
 
 
 def _fleet(*servers) -> Fleet:
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {
                 "hosts": {},
@@ -173,7 +173,7 @@ def test_commercial_is_external_and_has_no_concurrency():
     dep = FleetDeployment.from_intended(provider_intent("example", "claude", "anthropic/claude", "https://api.example"))
     _registered(dep)
     _health(dep, True)
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {
                 "health_interval_s": 45,
@@ -362,7 +362,7 @@ def test_work_needed_offers_approve_for_an_unknown_rental_and_nothing_else():
     assert [a.label for a in pages.attention_items(fleet)[0].actions] == ["Approve"]
     out = _render_admin(
         attention=pages.attention_items(fleet),
-        approve_choices=[edict(model_name="gemma", display_name="Gemma")],
+        approve_choices=[Box(model_name="gemma", display_name="Gemma")],
     )
     assert 'action="/do-approve-rental"' in out
     assert 'value="gemma"' in out
@@ -752,7 +752,7 @@ def _render_admin(*, attention, approve_choices=()) -> str:
 
 
 def _render(rows, *, admin=False) -> str:
-    data = edict(
+    data = Box(
         title="Models",
         is_site_admin=ezt.boolean(admin),
         admin_at_heart=ezt.boolean(admin),
@@ -810,7 +810,7 @@ def test_each_deployment_says_where_to_find_it():
         host="10.0.0.1",
         name="53865410",
         status="running",
-        ports=edict({"8001": 41234}),
+        ports=Box({"8001": 41234}),
         gpu="RTX 3060",
         gpus=2,
         vram_gb=12.0,
@@ -858,7 +858,7 @@ def test_a_host_no_provider_lists_says_so_differently_when_a_listing_is_stale():
     pages = _app()
     lost = _server("gemma", host="10.0.0.3")
     fleet = _fleet(lost)
-    fleet.listings = lambda now=None: [edict(provider="RunPod", ago="26h ago", stale=True, error="HTTP 404")]
+    fleet.listings = lambda now=None: [Box(provider="RunPod", ago="26h ago", stale=True, error="HTTP 404")]
     out = _render(pages.model_catalog_rows(fleet, [_catalog("gemma")], admin=True), admin=True)
     assert "location unknown: a listing is stale (RunPod last read 26h ago)" in out
     assert "no provider lists this host" not in out
@@ -876,7 +876,7 @@ def test_where_a_deployment_lives_is_for_admins_only():
         host="10.0.0.1",
         name="53865410",
         status="running",
-        ports=edict({"8001": 41234}),
+        ports=Box({"8001": 41234}),
     )
     out = _render(pages.model_catalog_rows(_fleet(srv), [_catalog("gemma")], admin=False))
     assert "53865410" not in out

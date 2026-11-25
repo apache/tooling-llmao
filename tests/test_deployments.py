@@ -19,7 +19,7 @@
 
 import asyncio
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import ORPHAN_PASSES, Fleet, FleetDeployment
 from llmao.intent import provider_intent
@@ -30,7 +30,7 @@ from tests.fake_transport import FakeTransport
 from tests.test_fleet import FLEET_KNOBS
 from tests.test_fleet_health import _health, _registered, _server
 
-CFG = edict(fleet=edict(FLEET_KNOBS))
+CFG = Box(fleet=Box(FLEET_KNOBS))
 
 
 def _manager(fleet, answer=None, *, cfg=None):
@@ -53,7 +53,7 @@ def _litellm(rows=None):
     model/info answers with the rows; model/new appends the posted body with
     an id; model/delete removes the row with that id. Pass it to _manager.
     """
-    state = edict(rows=list(rows or []), n=0)
+    state = Box(rows=list(rows or []), n=0)
 
     def answer(call):
         if call.path == "model/info":
@@ -75,7 +75,7 @@ def _litellm(rows=None):
 def test_deployment_body_from_models():
     s = _server()
     models = {
-        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(CFG, [s], models=models)
     body = _manager(fleet).deployment_body(fleet.deployments[0])
@@ -97,9 +97,9 @@ def test_deployment_body_from_models():
 def test_a_self_hosted_deployment_carries_no_price():
     """A price would count against team budgets; self-hosted use must never block."""
     s = _server()
-    model = edict(
-        litellm_params=edict(model="hosted_vllm/gemma4-26b"),
-        pricing=edict(input_cost_per_token=1e-07, output_cost_per_token=1e-06),
+    model = Box(
+        litellm_params=Box(model="hosted_vllm/gemma4-26b"),
+        pricing=Box(input_cost_per_token=1e-07, output_cost_per_token=1e-06),
     )
     fleet = Fleet(CFG, [s], models={"gemma4-26b": model})
     body = _manager(fleet).deployment_body(fleet.deployments[0])
@@ -111,7 +111,7 @@ def test_sync_selfhost_posts_new_when_serving():
     s = _server()
     s.state = HEALTHY
     models = {
-        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(CFG, [s], models=models)
     be = _manager(fleet, _litellm())
@@ -130,7 +130,7 @@ def test_presence_after_a_write_is_observed_not_assumed():
     """
     s = _server()
     s.state = HEALTHY
-    fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))})
     be = _manager(fleet, {"data": []})
     asyncio.run(be.sync_selfhost())
     assert "model/new" in _paths(be)
@@ -141,7 +141,7 @@ def test_a_failed_confirm_leaves_the_write_unobserved(caplog):
     """The re-read after a write failed: nothing is assumed, the next read decides, and the tick does not raise."""
     s = _server()
     s.state = HEALTHY
-    fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))})
     reads = []
 
     def answer(call):
@@ -165,7 +165,7 @@ def test_one_failing_deployment_does_not_stop_the_rest(caplog):
     for s in (broken, *fine):
         s.state = HEALTHY
     # "gone" is not in models.yaml, so its body cannot be built.
-    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    models = {"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(CFG, [broken, *fine], models=models)
     be = _manager(fleet, _litellm())
     with caplog.at_level("ERROR", logger="llmao.proxy.deployments"):
@@ -181,7 +181,7 @@ def test_sync_selfhost_deletes_when_down():
     s = _server()
     s.state = UNHEALTHY
     models = {
-        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(CFG, [s], models=models)
     _registered(fleet.deployments[0])
@@ -198,7 +198,7 @@ def test_sync_selfhost_deletes_a_rental_no_provider_lists():
     s.state = AWAITING
     s.unlisted = True
     models = {
-        "gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b")),
+        "gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b")),
     }
     fleet = Fleet(CFG, [s], models=models)
     _registered(fleet.deployments[0])
@@ -218,7 +218,7 @@ def test_a_serving_rental_no_provider_lists_keeps_its_route():
     s = _server()
     s.state = HEALTHY
     s.unlisted = True
-    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    models = {"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(CFG, [s], models=models)
     _registered(fleet.deployments[0])
     be = _manager(fleet, _info("10.0.0.1", 8001, model_id="abc"))
@@ -229,7 +229,7 @@ def test_a_serving_rental_no_provider_lists_keeps_its_route():
 
 def _orphan(model_id="orphan-1"):
     """A LiteLLM route at an address no deployment of ours claims."""
-    fleet = Fleet(CFG, [], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [], models={"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))})
     return fleet, _info("198.51.100.9", 18490, model_id=model_id)
 
 
@@ -312,7 +312,7 @@ def _listen_and_public():
     """A Vast-style server: listens on 10100, published on 12711."""
     s = _server(host="10.0.0.7", listen_port=10100, public_port=12711)
     s.state = HEALTHY
-    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    models = {"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))}
     return Fleet(CFG, [s], models=models)
 
 
@@ -431,7 +431,7 @@ def test_where_the_ports_are_one_the_stamp_is_the_listen_url_all_the_same():
     """Local: no provider in between, the listen port is the public one, and the stamp is still what matches."""
     s = _server(host="127.0.0.1", listen_port=8001, public_port=8001)
     s.state = HEALTHY
-    fleet = Fleet(CFG, [s], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [s], models={"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))})
     be = _manager(fleet, _info("127.0.0.1", 8001, model_id="mine", stamp="http://127.0.0.1:8001"))
     asyncio.run(be.check_config_skew())
     assert fleet.deployments[0].in_litellm is True
@@ -441,7 +441,7 @@ def test_where_the_ports_are_one_the_stamp_is_the_listen_url_all_the_same():
 def test_other_port_is_not_this_deployment():
     s = _server(host="10.1.2.3", listen_port=8001, public_port=18001)
     s.state = HEALTHY
-    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    models = {"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(CFG, [s], models=models)
     be = _manager(fleet, _info("10.1.2.3", 19999))
     asyncio.run(be.sync_selfhost())
@@ -451,18 +451,18 @@ def test_other_port_is_not_this_deployment():
 XAI = provider_intent("xai", "grok-4", "xai/grok-4", "https://api.x.ai/v1")
 OR_GROK = provider_intent("openrouter", "grok-4", "openrouter/x-ai/grok-4", "https://openrouter.ai/api/v1")
 OR_GEMMA = provider_intent("openrouter", "gemma", "openrouter/google/gemma", "https://openrouter.ai/api/v1")
-ACCOUNTS = edict(
-    fleet=edict(FLEET_KNOBS),
-    providers=edict(
-        xai=edict(api_key="xai-test", api_base="https://api.x.ai/v1", models=edict()),
-        openrouter=edict(api_key="sk-or-test", api_base="https://openrouter.ai/api/v1", models=edict()),
+ACCOUNTS = Box(
+    fleet=Box(FLEET_KNOBS),
+    providers=Box(
+        xai=Box(api_key="xai-test", api_base="https://api.x.ai/v1", models=Box()),
+        openrouter=Box(api_key="sk-or-test", api_base="https://openrouter.ai/api/v1", models=Box()),
     ),
 )
 
 
 def _bought(*pds):
     deps = [FleetDeployment.from_intended(pd) for pd in pds]
-    models = {pd.model_name: edict(model_name=pd.model_name, model_info=edict()) for pd in pds}
+    models = {pd.model_name: Box(model_name=pd.model_name, model_info=Box()) for pd in pds}
     return Fleet(ACCOUNTS, [], deployments=deps, models=models), deps
 
 
@@ -562,7 +562,7 @@ def _unplaced():
     """A rental whose public port is not known this pass, after an earlier pass knew it."""
     rental = _server(host="10.0.0.5", listen_port=8001, public_port=None)
     rental.state = HEALTHY
-    fleet = Fleet(CFG, [rental], models={"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))})
+    fleet = Fleet(CFG, [rental], models={"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))})
     (dep,) = fleet.deployments
     _registered(dep, api_base="http://10.0.0.5:41234")
     _health(dep, True, at=1000.0)
@@ -615,7 +615,7 @@ def test_sync_selfhost_drops_a_rental_that_rejects_our_key():
 
     s = _server()
     s.state = REJECTED
-    models = {"gemma4-26b": edict(litellm_params=edict(model="hosted_vllm/gemma4-26b"))}
+    models = {"gemma4-26b": Box(litellm_params=Box(model="hosted_vllm/gemma4-26b"))}
     fleet = Fleet(CFG, [s], models=models)
     _registered(fleet.deployments[0])
     be = _manager(fleet, _litellm(_info("10.0.0.1", 8001, model_id="abc", stamp="http://10.0.0.1:8001")["data"]))

@@ -20,7 +20,7 @@
 import importlib.util
 import pathlib
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "bin" / "sync-nodeping.py"
 
@@ -36,7 +36,7 @@ sync = _load()
 
 
 def _server(model, host, port, url):
-    return edict(model=model, host=host, listen_port=port, provider=url and "Vast", health_url=url)
+    return Box(model=model, host=host, listen_port=port, provider=url and "Vast", health_url=url)
 
 
 def _check(check_id, label, target, created=1):
@@ -95,25 +95,23 @@ class _Recorder:
 
 def test_apply_sends_the_sample_shape_on_create_and_only_the_target_on_update(capsys):
     actions = [
-        edict(
+        Box(
             action=sync.CREATE,
             label="rai m on h:8001",
             check=None,
             target="http://203.0.113.5:1/health",
             reason="no check",
         ),
-        edict(
+        Box(
             action=sync.UPDATE,
             label="rai m on h:8002",
             check={"_id": "A-2"},
             target="http://203.0.113.5:2/health",
             reason="x",
         ),
-        edict(action=sync.DELETE, label="old", check={"_id": "A-3"}, target=None, reason="gone"),
-        edict(action=sync.KEEP, label="rai m on h:8003", check={"_id": "A-4"}, target=None, reason="no address"),
-        edict(
-            action=sync.UNCHANGED, label="rai m on h:8004", check={"_id": "A-5"}, target="http://x/health", reason=""
-        ),
+        Box(action=sync.DELETE, label="old", check={"_id": "A-3"}, target=None, reason="gone"),
+        Box(action=sync.KEEP, label="rai m on h:8003", check={"_id": "A-4"}, target=None, reason="no address"),
+        Box(action=sync.UNCHANGED, label="rai m on h:8004", check={"_id": "A-5"}, target="http://x/health", reason=""),
     ]
     np = _Recorder()
     counts = sync.apply(np, "rai", actions, ["slack1"], dry_run=False, verbose=False)
@@ -144,7 +142,7 @@ def test_apply_sends_the_sample_shape_on_create_and_only_the_target_on_update(ca
 
 
 def test_dry_run_sends_nothing_and_says_would():
-    actions = [edict(action=sync.DELETE, label="old", check={"_id": "A-3"}, target=None, reason="gone")]
+    actions = [Box(action=sync.DELETE, label="old", check={"_id": "A-3"}, target=None, reason="gone")]
     np = _Recorder()
     counts = sync.apply(np, "rai", actions, ["slack1"], dry_run=True, verbose=False)
     assert np.calls == []

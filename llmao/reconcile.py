@@ -80,9 +80,9 @@ class DeploymentKey(NamedTuple):
     not the provider's model string, so two of our names on one provider model
     are two keys.
 
-    A NamedTuple, not the edict the rest of the codebase prefers: the key's job
+    A NamedTuple, not the Box the rest of the codebase prefers: the key's job
     is to join records across sources, so it is used as a dict key and a set
-    member, and an edict is a dict, which is unhashable. A NamedTuple hashes,
+    member, and an Box is a dict, which is unhashable. A NamedTuple hashes,
     compares as a tuple, cannot be changed after it is built, and still reads
     as ``key.url`` and ``key.model_name``.
     """

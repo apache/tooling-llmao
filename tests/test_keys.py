@@ -21,7 +21,7 @@ The seam tests run against MockBackend and never reach this code.
 
 import asyncio
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import KeyManager
 from tests.fake_transport import FakeTransport
@@ -31,7 +31,7 @@ class _Teams:
     """Stands in for TeamManager: every project has a team."""
 
     async def ensure(self, project):
-        return edict(team_id=f"team-{project}")
+        return Box(team_id=f"team-{project}")
 
 
 class _Tiers:

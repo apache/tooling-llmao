@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ class Rental:
     host: str
     name: str
     status: str
-    ports: dict[str, int] = field(default_factory=edict)
+    ports: dict[str, int] = field(default_factory=Box)
     gpu: str = ""
     gpus: int = 0
     vram_gb: float | None = None
@@ -132,7 +132,7 @@ class ProviderRentals:
     """
 
     provider: str
-    by_id: dict[str, Rental] = field(default_factory=edict)
+    by_id: dict[str, Rental] = field(default_factory=Box)
     fetched_at: float = field(default_factory=time.time)
 
     def __iter__(self):

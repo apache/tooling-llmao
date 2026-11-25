@@ -23,7 +23,7 @@ entry is something to be seen, and goes when it has been.
 import asyncio
 import json
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import (
     PROJECT_FREE_TIER,
@@ -172,7 +172,7 @@ def _backend(teams):
             return {"teams": teams}
         raise AssertionError(f"the watcher changed something: {call}")
 
-    return LiteLLMBackend(edict(), None, transport=FakeTransport(litellm)), store
+    return LiteLLMBackend(Box(), None, transport=FakeTransport(litellm)), store
 
 
 def _team(project, models):

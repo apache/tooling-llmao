@@ -30,7 +30,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from . import access_requests as _access
 from .proxy.client import (
@@ -504,7 +504,7 @@ class Seam:
             raise
 
     @require_member
-    async def project_usage(self, identity: Identity, project: str) -> list[edict]:
+    async def project_usage(self, identity: Identity, project: str) -> list[Box]:
         """Per-principal draw for one project, service keys separated out.
 
         Member-gated: a project's internal breakdown is not public, and the
@@ -528,13 +528,13 @@ class Seam:
             owner[k.token_id] = (name, is_service)
             key_count[name] = key_count.get(name, 0) + 1
 
-        acc: dict[str, edict] = {}
+        acc: dict[str, Box] = {}
         for r in rows:
             token = r.get("token_id")
             name, is_service = owner.get(token, (r.get("user") or "unknown", False))
             e = acc.setdefault(
                 name,
-                edict(
+                Box(
                     name=name,
                     is_service=is_service,
                     tokens=0,
@@ -577,7 +577,7 @@ class Seam:
             return {}
 
     @staticmethod
-    def actionable_key_approvals(requests: list) -> list[edict]:
+    def actionable_key_approvals(requests: list) -> list[Box]:
         """Approvals from an already-fetched list.
 
         Same filter as my_key_approvals, without the read. My Keys needs both
@@ -585,7 +585,7 @@ class Seam:
         derives both.
         """
         return [
-            edict(
+            Box(
                 id=r.id,
                 purpose=r.granted.get("purpose") or r.wanted.get("purpose") or "",
                 tier=r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
@@ -597,14 +597,14 @@ class Seam:
             if r.is_actionable()
         ]
 
-    async def my_key_approvals(self, identity: Identity) -> list[edict]:
+    async def my_key_approvals(self, identity: Identity) -> list[Box]:
         """Approved key requests this person can still exercise.
 
         Expired and consumed approvals are filtered here rather than in the
         template, so the page cannot offer a button that would fail.
         """
         return [
-            edict(
+            Box(
                 id=r.id,
                 purpose=r.granted.get("purpose") or r.wanted.get("purpose") or "",
                 tier=r.granted.get("tier") or r.wanted.get("tier") or TIER_SERVICE,
@@ -676,7 +676,7 @@ class Seam:
         """
         return await self._backend.metering.allowance(identity.uid)
 
-    async def my_project_usage(self, identity: Identity) -> list[edict]:
+    async def my_project_usage(self, identity: Identity) -> list[Box]:
         """Per-project draw for the projects this committer belongs to.
 
         Tokens and dollars are kept as separate fields deliberately. Tokens on
@@ -717,7 +717,7 @@ class Seam:
                 pass
 
             out.append(
-                edict(
+                Box(
                     name=project,
                     tokens_h=_tokens_short(tokens),
                     cap_h=_tokens_short(cap) if cap else "—",

@@ -89,7 +89,7 @@ from pathlib import Path
 from typing import Any
 
 import litellm
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 from litellm.integrations.custom_logger import CustomLogger
 from loguru import logger as _loguru
 
@@ -231,15 +231,15 @@ empty_completion_guard = EmptyCompletionGuard()
 _PROMPT_LOG_SETTING = "callback_settings.prompt_log"
 
 
-def _prompt_log_settings() -> edict:
+def _prompt_log_settings() -> Box:
     """The prompt_log section of litellm.yaml, or the error that names it."""
     section = (getattr(litellm, "callback_settings", None) or {}).get("prompt_log")
     if not isinstance(section, dict):
         raise RuntimeError(f"litellm.yaml: {_PROMPT_LOG_SETTING} is missing; the prompt log cannot start without it")
-    return edict(section)
+    return Box(section)
 
 
-def _prompt_log_dir(settings: edict) -> Path:
+def _prompt_log_dir(settings: Box) -> Path:
     """The log directory, which must already exist and be writable.
 
     The hook does not create it. In production a missing directory means
@@ -258,7 +258,7 @@ def _prompt_log_dir(settings: edict) -> Path:
     return path
 
 
-def _prompt_log_retention(settings: edict) -> int:
+def _prompt_log_retention(settings: Box) -> int:
     """Days a finished day's file is kept, which the terms promise; required, like the directory."""
     raw = settings.get("retention_days")
     try:

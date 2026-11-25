@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.capacity import fold_demand
 from llmao.models import VllmRecipe
@@ -32,7 +32,7 @@ SPEND_TODAY = dt.date(2026, 10, 19)
 
 
 def _row(day, provider, model, project, usd):
-    return edict(day=day, provider=provider, model_name=model, project=project, spend_usd=usd, tokens=0, requests=0)
+    return Box(day=day, provider=provider, model_name=model, project=project, spend_usd=usd, tokens=0, requests=0)
 
 
 def test_enough_days_are_read_for_the_month_to_date():
@@ -93,7 +93,7 @@ def _hour_row(
     rental_label="",
     preemptions=0,
 ):
-    return edict(
+    return Box(
         hour=hour,
         server=server,
         model_name=model,
@@ -239,18 +239,18 @@ def test_demand_is_summarised_per_model_over_the_period():
     assert gemma.days == 1
     assert gemma.requests_per_day == 3
     assert gemma.refused_total == 1
-    assert gemma.refused == [edict(name="429_RATE_LIMIT", count=1)]
+    assert gemma.refused == [Box(name="429_RATE_LIMIT", count=1)]
     assert [t.name for t in gemma.by_tool] == ["OpenAI", "codex-tui"]
     assert gemma.by_project[0].name == "spark"
     assert [b.count for b in gemma.prompt_len] == [2, 0, 0, 0, 0]
     # A demand value from before fold version 3: the project's share has
     # only its counts. Those still count; the rest waits for the re-roll.
-    old = edict(rows[0], by_project={"spark": dict(requests=2, prompt_tokens=580, completion_tokens=46)})
+    old = Box(rows[0], by_project={"spark": dict(requests=2, prompt_tokens=580, completion_tokens=46)})
     (gemma_old,) = summarise_demand([old], today=dt.date(2026, 11, 2), period_days=7)
     assert (gemma_old.requests, gemma_old.by_project[0].requests) == (2, 2)
     assert (gemma_old.by_tool, gemma_old.refused) == ([], [])
     assert gemma.duration_p50_s == 0.6
-    assert gemma.daily_requests == [edict(day="2026-11-01", value=3)]
+    assert gemma.daily_requests == [Box(day="2026-11-01", value=3)]
     assert qwen.requests == 1
     # A period that excludes the days leaves nothing.
     assert summarise_demand([*rows, qwen_row], today=dt.date(2026, 11, 20), period_days=7) == []

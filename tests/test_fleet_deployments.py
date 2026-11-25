@@ -20,7 +20,7 @@
 import re
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import Fleet, validate_fleet
 from llmao.models import load_models
@@ -38,12 +38,12 @@ def test_from_cfg_one_deployment_per_vllm():
     assert dep.api_base == "http://127.0.0.1:8001/v1"
 
 
-GROK = edict(model_name="grok-4", model_info=edict(license="proprietary"))
+GROK = Box(model_name="grok-4", model_info=Box(license="proprietary"))
 
 
 def _with_providers(providers):
     models = [*load_models(EXAMPLE), GROK]
-    cfg = edict(
+    cfg = Box(
         {
             "fleet": {
                 "hosts": {"127.0.0.1": [["gemma4-26b", 8001]]},

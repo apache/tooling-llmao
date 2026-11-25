@@ -23,7 +23,7 @@ import datetime as dt
 import json
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.capacity import (
     DEMAND_DAY_PREFIX,
@@ -197,12 +197,12 @@ def test_an_hour_that_cannot_be_stored_waits_for_the_next_pass():
 
 
 def test_retention_is_required():
-    assert retention_days(edict(capacity_retention_days=90)) == 90
+    assert retention_days(Box(capacity_retention_days=90)) == 90
     with pytest.raises(ValueError, match="capacity_retention_days is required"):
-        retention_days(edict())
+        retention_days(Box())
     for bad in (0, -1, "ninety"):
         with pytest.raises(ValueError, match="capacity_retention_days must be"):
-            retention_days(edict(capacity_retention_days=bad))
+            retention_days(Box(capacity_retention_days=bad))
 
 
 # ---- provider spend ----
@@ -230,10 +230,10 @@ def _spend(
     minute=10,
 ):
     """One spend-log row, as spend_log() hands them over. `failure` is LiteLLM's normalized_error."""
-    meta = edict(user_api_key_team_alias=project, user_agent=agent, error_information=None)
+    meta = Box(user_api_key_team_alias=project, user_agent=agent, error_information=None)
     if failure:
-        meta.error_information = edict(normalized_error=failure, error_code=failure[:3])
-    return edict(
+        meta.error_information = Box(normalized_error=failure, error_code=failure[:3])
+    return Box(
         startTime=f"{DAY}T{hour:02d}:{minute:02d}:00.000+00:00",
         model_group=model,
         status="failure" if failure else "success",
@@ -293,9 +293,9 @@ def test_what_is_not_demand_is_left_out():
         DAY,
         [
             _spend(9),
-            edict(_spend(9), model_group="", call_type="/v1/models"),
+            Box(_spend(9), model_group="", call_type="/v1/models"),
             _spend(9, project="litellm-internal-health-check"),
-            edict(_spend(9), startTime="2026-11-02T00:00:00.000+00:00"),
+            Box(_spend(9), startTime="2026-11-02T00:00:00.000+00:00"),
         ],
     )
     assert [(r.hour, r.requests) for r in rows] == [("2026-11-01T09", 1)]
@@ -327,7 +327,7 @@ def test_demand_rows_are_kept_by_hour_then_model_and_pruned_with_the_rest():
     assert sorted(rows) == [f"{DEMAND_DAY_PREFIX}2026-11-01", f"{DEMAND_PREFIX}2026-11-01T09:gemma4-26b"]
     assert [r.model for r in asyncio.run(store.read_demand(1, today=DAY))] == ["gemma4-26b"]
     assert asyncio.run(store.demand_days_done()) == {
-        "2026-11-01": edict(version=FOLD_VERSION, sources=["litellm"], rows=1, log="off")
+        "2026-11-01": Box(version=FOLD_VERSION, sources=["litellm"], rows=1, log="off")
     }
     # 90 days later the day, its rows and its marker go together.
     rows[f"llmao:capacity:2026-11-01T09:{SERVER}"] = json.dumps({"hour": "2026-11-01T09"})
@@ -353,7 +353,7 @@ class _Metering:
 
 def test_the_rollup_does_every_closed_day_the_store_lacks_oldest_first():
     store, rows = _store()
-    halloween = [edict(_spend(h), startTime=f"2026-10-31T{h:02d}:10:00.000+00:00") for h in (9, 10)]
+    halloween = [Box(_spend(h), startTime=f"2026-10-31T{h:02d}:10:00.000+00:00") for h in (9, 10)]
     metering = _Metering({"2026-11-01": [_spend(9)], "2026-10-31": halloween})
     rollup = DemandRollup(metering, store, keep_days=3)
     # 01:30 on the 2nd: the 1st closed at 01:00, the 2nd is still open.
@@ -492,7 +492,7 @@ def test_a_day_without_a_log_file_is_final_and_one_whose_tool_failed_is_tried_ag
     plain = DemandRollup(metering, store, keep_days=2)
     assert (
         plain.missing_days(
-            {"2026-11-01": edict(version=FOLD_VERSION, log="failed")}, dt.datetime(2026, 11, 2, 2, tzinfo=dt.UTC)
+            {"2026-11-01": Box(version=FOLD_VERSION, log="failed")}, dt.datetime(2026, 11, 2, 2, tzinfo=dt.UTC)
         )
         == []
     )

@@ -26,7 +26,7 @@ import asyncio
 import time
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import (
     GRANTOR_FREE_TIER,
@@ -47,7 +47,7 @@ from tests.mock_backend import MockBackend
 
 
 def _cfg():
-    return edict(
+    return Box(
         {
             "litellm": {
                 "base_url": "http://127.0.0.1:4000",
@@ -87,7 +87,7 @@ def _seed_usage(backend: MockBackend, project: str, cost: float = 0.01) -> None:
 
 
 def test_cfg_dotted_access():
-    cfg = edict(
+    cfg = Box(
         {
             "litellm": {"base_url": "http://llm:4000", "master_key": "sk-x"},
             "budgets": {"default_team_budget_usd": 50, "duration": "7d"},
@@ -202,7 +202,7 @@ def test_resolve_budget_duration_prefers_raw_then_cfg():
     assert resolve_budget_duration("7d", cfg) == "7d"
     assert resolve_budget_duration(None, cfg) == "30d"
     assert resolve_budget_duration("  ", cfg) == "30d"
-    bad = edict({"budgets": {}})
+    bad = Box({"budgets": {}})
     with pytest.raises(BackendUnavailableError):
         resolve_budget_duration(None, bad)
 
@@ -618,7 +618,7 @@ def test_a_half_applied_capacity_approval_is_reported():
         async def note(what, **detail):
             noted.append((what, detail))
 
-        backend.log = edict(note=note)
+        backend.log = Box(note=note)
 
         async def boom(_req):
             raise BackendUnavailableError("the LiteLLM backend is unreachable")

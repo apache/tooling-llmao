@@ -24,7 +24,7 @@ import re
 
 import ezt
 import httpx
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import LiteLLMBackend, LiteLLMTransport, pinned_litellm_version
 
@@ -51,7 +51,7 @@ def _render(
 ):
     matches = bool(running) and running == expected
     stale = any(listing.stale for listing in listings)
-    data = edict(
+    data = Box(
         title="Admin",
         is_site_admin=ezt.boolean(True),
         admin_at_heart=ezt.boolean(True),
@@ -92,7 +92,7 @@ def _render(
         litellm_matches=ezt.boolean(matches),
         disk=disk,
         listings=[
-            edict(provider=li.provider, ago=li.ago, error=li.error, stale=ezt.boolean(li.stale)) for li in listings
+            Box(provider=li.provider, ago=li.ago, error=li.error, stale=ezt.boolean(li.stale)) for li in listings
         ],
         gateway_ok=ezt.boolean(matches and not (disk and disk.is_low) and not stale),
     )
@@ -124,22 +124,22 @@ def test_capacity_page_renders_demand_beside_the_rentals():
 
     day = dt.date(2026, 11, 1)
     spend = [
-        edict(
+        Box(
             startTime=f"{day}T09:10:00.000+00:00",
             model_group="gemma4-26b",
             status=status,
             prompt_tokens=580,
             completion_tokens=46,
             request_duration_ms=600,
-            metadata=edict(user_api_key_team_alias="spark", user_agent="OpenAI/Python 1.109.1", error_information=err),
+            metadata=Box(user_api_key_team_alias="spark", user_agent="OpenAI/Python 1.109.1", error_information=err),
         )
-        for status, err in (("success", None), ("failure", edict(normalized_error="429_RATE_LIMIT_EXCEEDED")))
+        for status, err in (("success", None), ("failure", Box(normalized_error="429_RATE_LIMIT_EXCEEDED")))
     ]
     summary = summarise_demand(fold_demand(day, spend), today=day, period_days=7)
     cards, dormant = pages.capacity_cards(
         [], summary, catalog={"gemma4-26b": "Gemma 4 26B"}, live={"gemma4-26b"}, today=day, period_days=7
     )
-    data = edict(
+    data = Box(
         title="Capacity",
         is_site_admin=ezt.boolean(True),
         admin_at_heart=ezt.boolean(True),
@@ -162,7 +162,7 @@ def test_capacity_page_renders_demand_beside_the_rentals():
         repo="https://github.com/apache/tooling-llmao",
         commit="deadbeef",
         period_days=7,
-        periods=[edict(days=7, active=ezt.boolean(True))],
+        periods=[Box(days=7, active=ezt.boolean(True))],
         fleet_cost_per_day="$0.00",
         fleet_tokens_per_day="0",
         spend_month_to_date="$0.00",
@@ -225,7 +225,7 @@ def test_capacity_page_renders_demand_beside_the_rentals():
     assert "month to date" not in out
     data.providers = [
         pages._spend_provider_row(
-            edict(
+            Box(
                 provider="xAI",
                 period_usd=1.0,
                 today_usd=0.0,
@@ -244,7 +244,7 @@ def test_capacity_page_renders_demand_beside_the_rentals():
     data.cards[0].demand.refused_any = ezt.boolean(False)
     assert "Refused" not in render()
     # A model's rentals: named, with when each was seen and what became of it.
-    line = edict(
+    line = Box(
         server="Vast 9:8001",
         rental="Vast 9",
         label="RTX 3060 x2",
@@ -259,7 +259,7 @@ def test_capacity_page_renders_demand_beside_the_rentals():
         preemptions=0,
         tokens=514,
     )
-    model = edict(
+    model = Box(
         model_name="qwen3-8b-bf16",
         cost_usd=3.6,
         last_hour="2026-10-20T18",
@@ -299,7 +299,7 @@ def test_capacity_page_renders_demand_beside_the_rentals():
     assert "hours sampled" not in out
     # No rental preempted anything: no column. One did: the column, with the count on its line.
     assert "Preempted" not in out
-    model.servers[0].preemptions = 7  # edict copied the line on construction
+    model.servers[0].preemptions = 7  # Box copied the line on construction
     data.cards, data.dormant = pages.capacity_cards(
         [model], [], catalog={}, live={"qwen3-8b-bf16"}, today=day, period_days=7, listed={}
     )
@@ -353,9 +353,7 @@ def test_a_read_that_failed_is_a_dash_and_a_sentence_not_a_zero():
     assert "Nothing waiting" not in out and "None outstanding" not in out
     assert 'id="work"' in out  # the section is there to carry the sentence
     # A fleet item still shows while the skew store cannot be read: it never came from LiteLLM.
-    item = edict(
-        what="Vast 1 is rented, nobody intends it", detail="", anchor="", ident="", rest="", flag="", actions=[]
-    )
+    item = Box(what="Vast 1 is rented, nobody intends it", detail="", anchor="", ident="", rest="", flag="", actions=[])
     both = _render(running=None, expected=pin, skew_down=True, attention=[item])
     assert "nobody intends it" in both and "Could not read LiteLLM, so what it holds" in both
     # Fine reads say what they found.
@@ -373,13 +371,13 @@ def test_the_gateway_tile_shows_disk_room_and_goes_warm_when_low(tmp_path):
     assert pages.disk_room(tmp_path / "missing") is None
 
     pin = "1.0.0"
-    fine = edict(free_h="88 GB", total_h="103 GB", free_pct=85, is_low=False, low=None)
+    fine = Box(free_h="88 GB", total_h="103 GB", free_pct=85, is_low=False, low=None)
     out = _render(running=pin, expected=pin, disk=fine)
     tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
     # The glance leads with what is left and its share; the total is under the pointer.
     assert 'title="88 GB free of 103 GB on disk">88 GB free (85%)</span>' in tile
     assert "admin-tile-warm" not in tile
-    scarce = edict(free_h="9 GB", total_h="103 GB", free_pct=9, is_low=True, low="yes")
+    scarce = Box(free_h="9 GB", total_h="103 GB", free_pct=9, is_low=True, low="yes")
     low = _render(running=pin, expected=pin, disk=scarce)
     tile = low[low.index('href="/models" class="card') : low.index("</a>", low.index('href="/models" class="card'))]
     assert "9 GB free (9%)" in tile
@@ -391,8 +389,8 @@ def test_the_gateway_tile_shows_each_listing_age_and_goes_warm_when_one_is_stale
     """RunPod's v1 API was retired and the last report stood for a day with nothing on /admin saying so."""
     pin = "1.0.0"
     fresh = [
-        edict(provider="Vast", ago="32s ago", error="", stale=False),
-        edict(provider="RunPod", ago="5s ago", error="", stale=False),
+        Box(provider="Vast", ago="32s ago", error="", stale=False),
+        Box(provider="RunPod", ago="5s ago", error="", stale=False),
     ]
     out = _render(running=pin, expected=pin, listings=fresh)
     tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
@@ -400,14 +398,14 @@ def test_the_gateway_tile_shows_each_listing_age_and_goes_warm_when_one_is_stale
     assert "admin-tile-warm" not in tile
     stale = [
         fresh[0],
-        edict(provider="RunPod", ago="26h ago", error="ConnectError: name resolution failed", stale=True),
+        Box(provider="RunPod", ago="26h ago", error="ConnectError: name resolution failed", stale=True),
     ]
     out = _render(running=pin, expected=pin, listings=stale)
     tile = out[out.index('href="/models" class="card') : out.index("</a>", out.index('href="/models" class="card'))]
     assert "RunPod last read 26h ago: ConnectError: name resolution failed" in tile
     assert "admin-tile-warm" in tile and "bi-exclamation-triangle" in tile
     # Configured but never read: said so, and stale.
-    never = [edict(provider="RunPod", ago="never", error="", stale=True)]
+    never = [Box(provider="RunPod", ago="never", error="", stale=True)]
     out = _render(running=pin, expected=pin, listings=never)
     assert "RunPod last read never" in out and "admin-tile-warm" in out
 
@@ -445,7 +443,7 @@ class _Client:
 
 
 def _backend(client):
-    cfg = edict(litellm=edict(base_url="http://litellm.test", master_key="k", request_timeout_s=1))
+    cfg = Box(litellm=Box(base_url="http://litellm.test", master_key="k", request_timeout_s=1))
     return LiteLLMBackend(cfg, fleet=None, transport=LiteLLMTransport(cfg, client=client))
 
 
@@ -474,7 +472,7 @@ def test_admin_shows_work_needed():
     """Skew stays until it is put right, so it has no button to dismiss it."""
     pin = pinned_litellm_version()
     skew = [
-        edict(
+        Box(
             what="limits differ from the service tier",
             subject="t1",
             action="",
@@ -497,7 +495,7 @@ def test_admin_shows_work_needed():
 def test_work_with_a_way_to_do_it_has_a_button_that_does_it():
     pin = pinned_litellm_version()
     skew = [
-        edict(
+        Box(
             what="The free tier project allows any model.",
             subject="llmao:project:free-tier",
             action="/do-restrict-project",
@@ -517,7 +515,7 @@ def test_work_with_a_way_to_do_it_has_a_button_that_does_it():
 def test_something_to_see_is_shown_on_the_page_and_can_be_acknowledged():
     """The same partial on every page, so there is one place a person is told things."""
     pin = pinned_litellm_version()
-    told = edict(
+    told = Box(
         what="free tier allowed any model; restricted",
         key="llmao:log:admin:project:free-tier",
         times="3 times",
@@ -539,8 +537,8 @@ def test_what_stays_is_kept_apart_from_what_goes():
     and nobody could tell why.
     """
     pin = pinned_litellm_version()
-    flash = edict(category="success", message="Tier updated.")
-    told = edict(what="a site admin revoked your key ci", key="llmao:log:user:alice:x", times="", when="")
+    flash = Box(category="success", message="Tier updated.")
+    told = Box(what="a site admin revoked your key ci", key="llmao:log:user:alice:x", times="", when="")
     out = _render(running=pin, expected=pin, flashes=[flash], notices=[told])
     card = out[out.index("Notices") :]
     card = card[: card.index("</div>\n</div>")]
@@ -558,7 +556,7 @@ def test_what_stays_is_kept_apart_from_what_goes():
 def test_work_needed_is_one_line_saying_where_to_go():
     """Somebody reading Help is told work is waiting, and is not made to look at it."""
     pin = pinned_litellm_version()
-    work = edict(what="3 things need doing.", href="/keys", label="My Keys")
+    work = Box(what="3 things need doing.", href="/keys", label="My Keys")
     out = _render(running=pin, expected=pin, work=work)
     assert "3 things need doing." in out
     assert 'href="/keys">Go to My Keys</a>' in out
@@ -574,7 +572,7 @@ def test_the_reason_placeholder_mentions_a_number_only_where_there_is_one():
 
 
 def _pending(**over):
-    row = edict(
+    row = Box(
         id="r1",
         what="key",
         requester="jdoe",
@@ -613,7 +611,7 @@ def test_each_request_says_what_approving_it_does():
 
 def test_approvals_not_yet_used_say_who_may_do_what_until_when():
     pin = pinned_litellm_version()
-    row = edict(
+    row = Box(
         requester="jdoe",
         ask='one service key, "hadoop CI"',
         decided_by="admin1",
@@ -636,17 +634,15 @@ def test_the_approvals_tile_is_warm_only_when_one_is_about_to_lapse():
         start = out.index('href="#approvals" class="card')
         return out[start : out.index("</a>", start)]
 
-    calm = edict(requester="a", ask="one key", decided_by="x", decided_on="2026-11-01", expires_h="Nov 20", soon=None)
-    soon = edict(
-        requester="b", ask="one key", decided_by="x", decided_on="2026-10-31", expires_h="tomorrow", soon="yes"
-    )
+    calm = Box(requester="a", ask="one key", decided_by="x", decided_on="2026-11-01", expires_h="Nov 20", soon=None)
+    soon = Box(requester="b", ask="one key", decided_by="x", decided_on="2026-10-31", expires_h="tomorrow", soon="yes")
     assert "admin-tile-warm" not in tile(_render(running=pin, expected=pin, approvals=[calm]))
     assert "admin-tile-warm" in tile(_render(running=pin, expected=pin, approvals=[calm, soon]))
 
 
 def test_recent_work_reads_as_sentences_with_who_and_when():
     pin = pinned_litellm_version()
-    row = edict(
+    row = Box(
         at="2026-10-19T14:02:11",
         by="admin1",
         sentence="Restricted free-tier to our own rentals.",

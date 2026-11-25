@@ -32,7 +32,7 @@ from typing import Any
 
 import ezt
 import yaml
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def load_models(path: pathlib.Path | None = None, *, cfg: Any = None) -> list[di
     path = path or models_path_from_cfg(cfg)
     if not path.is_file():
         raise FileNotFoundError(f"Missing {path} (admin model definitions).")
-    data = edict(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    data = Box(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     if "models" not in data or not isinstance(data.models, list):
         raise ValueError(f"{path}: expected top-level models: [ ... ]")
     validate_models(data.models, path=path)
@@ -227,7 +227,7 @@ def model_in_service(health: str) -> bool:
     return health in ("available", "degraded")
 
 
-def ux_models(models: list, *, reveal_supply: bool = False) -> list[edict]:
+def ux_models(models: list, *, reveal_supply: bool = False) -> list[Box]:
     """Shape rows for the Models page (table + detail modal).
 
     ``models`` is the list loaded at startup (``load_models``); the page
@@ -246,7 +246,7 @@ def ux_models(models: list, *, reveal_supply: bool = False) -> list[edict]:
         display = _oneline(m.get("display_name")) or name
         ctx = m.get("context_window")
         rows.append(
-            edict(
+            Box(
                 model_name=name,
                 display_name=display,
                 good_for=_oneline(m.get("good_for")),

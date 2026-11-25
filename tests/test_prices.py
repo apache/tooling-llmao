@@ -24,7 +24,7 @@ import time
 
 import httpx
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 import llmao.fleet
 import llmao.runpod_client
@@ -60,14 +60,14 @@ def _rental(price, provider="Vast", id="1", label="GB10 x1", host="", status="ru
         # What the rental sends as its host: the provider's id for the machine.
         name=id,
         status=status,
-        ports=edict(ports or {}),
+        ports=Box(ports or {}),
     )
 
 
 def _reported(*rentals, provider=None):
     """One provider's set, as of now: what it reports we rent."""
     provider = provider or (rentals[0].provider if rentals else "Vast")
-    return ProviderRentals(provider, edict({r.id: r for r in rentals}))
+    return ProviderRentals(provider, Box({r.id: r for r in rentals}))
 
 
 def test_a_vast_rental_is_its_instance_gpus_status_address_and_price():
@@ -173,10 +173,10 @@ def test_every_runpod_pod_is_kept_with_its_status_and_address():
     ]
     # What fetch_hardware looked up: the catalog's short name and VRAM per
     # card type id, and the network volume's size.
-    hardware = edict(
+    hardware = Box(
         cards_by_id={
-            "NVIDIA RTX PRO 6000 Blackwell Server Edition": edict(name="RTX PRO 6000", vram_gb=96.0),
-            "NVIDIA A100 80GB PCIe": edict(name="A100 PCIe", vram_gb=80.0),
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition": Box(name="RTX PRO 6000", vram_gb=96.0),
+            "NVIDIA A100 80GB PCIe": Box(name="A100 PCIe", vram_gb=80.0),
         },
         volume_gb_by_id={"vol1": 200.0},
     )
@@ -380,7 +380,7 @@ def test_the_address_match_wins_over_the_old_pod():
 
 
 def _fleet_with_runpod(servers):
-    return Fleet(edict(providers=edict(runpod=edict(api_key="rp-test"))), servers)
+    return Fleet(Box(providers=Box(runpod=Box(api_key="rp-test"))), servers)
 
 
 def _runpod_v2(ip, price=2.49):
@@ -416,7 +416,7 @@ def test_the_runpod_report_is_read_into_the_fleet_and_placed_on_the_next_pass():
 
 
 def test_without_a_provider_key_the_runner_ends_at_once():
-    fleet = Fleet(edict(), [_server("203.0.113.20")])
+    fleet = Fleet(Box(), [_server("203.0.113.20")])
     asyncio.run(asyncio.wait_for(fleet.run_rentals(), timeout=1))
     assert fleet.rentals_read.is_set(), "the lifecycle's first pass must not wait on a runner that has nothing to read"
 
@@ -467,9 +467,7 @@ def test_the_first_lifecycle_pass_waits_for_the_first_listing_read(monkeypatch):
     # The whole pass runs, so the knobs every step reads are here. The probe
     # ends the lifecycle; a step that raised before it would be caught and
     # the loop would spin at health_interval_s, so that is not zero.
-    fleet.cfg.fleet = edict(
-        hosts={}, health_interval_s=1, health_timeout_s=1, health_grace_s=60, health_fail_threshold=3
-    )
+    fleet.cfg.fleet = Box(hosts={}, health_interval_s=1, health_timeout_s=1, health_grace_s=60, health_fail_threshold=3)
     order = []
 
     async def read_rentals(client):
@@ -498,7 +496,7 @@ def test_the_first_lifecycle_pass_waits_for_the_first_listing_read(monkeypatch):
 
 
 def _fleet_renting_from_both(servers):
-    cfg = edict(providers=edict(vast=edict(api_key="v"), runpod=edict(api_key="rp")))
+    cfg = Box(providers=Box(vast=Box(api_key="v"), runpod=Box(api_key="rp")))
     return Fleet(cfg, servers)
 
 
@@ -532,7 +530,7 @@ def test_a_host_no_listing_has_ever_named_is_unlisted_once_the_passes_run():
     verdict is a sentence; nothing Healthy is deleted on it.
     """
     never = _server("203.0.113.40")
-    fleet = Fleet(edict(providers=edict(vast=edict(api_key="v"))), [never])
+    fleet = Fleet(Box(providers=Box(vast=Box(api_key="v"))), [never])
     fleet.vast_rentals = _reported()
     for _ in range(UNLISTED_PASSES - 1):
         fleet.place_servers()
@@ -577,7 +575,7 @@ def test_nothing_is_concluded_until_every_provider_has_answered():
     fleet.place_servers()
     assert srv.unlisted is False
     # A fleet that rents from nobody (a local one) has nothing unlisted.
-    local = Fleet(edict(), [_server("127.0.0.1")])
+    local = Fleet(Box(), [_server("127.0.0.1")])
     local.place_servers()
     assert local.servers[0].unlisted is False
 
@@ -591,7 +589,7 @@ def test_a_stale_listing_concludes_nothing_about_the_hosts_it_lacks():
     old = time.time() - llmao.fleet.STALE_LISTING_PASSES * llmao.fleet.RENTALS_INTERVAL_S - 1
     fleet.vast_rentals = _reported()
     fleet.runpod_rentals = ProviderRentals(
-        "RunPod", edict(p=_rental(2.49, provider="RunPod", id="p", host="203.0.113.30")), fetched_at=old
+        "RunPod", Box(p=_rental(2.49, provider="RunPod", id="p", host="203.0.113.30")), fetched_at=old
     )
     for _ in range(UNLISTED_PASSES + 1):
         fleet.place_servers()
@@ -636,9 +634,9 @@ def test_listings_say_each_providers_age_staleness_and_last_error(caplog):
 
     fleet.read_runpod_rentals = read_runpod_ok
     asyncio.run(fleet.read_rentals(None))
-    assert fleet.listings(now=now)[1] == edict(provider="RunPod", ago="0s ago", stale=False, error="")
+    assert fleet.listings(now=now)[1] == Box(provider="RunPod", ago="0s ago", stale=False, error="")
     # A fleet that rents from nobody lists nothing.
-    assert Fleet(edict(), []).listings() == []
+    assert Fleet(Box(), []).listings() == []
 
 
 def test_each_row_carries_its_servers_share_of_the_machine():

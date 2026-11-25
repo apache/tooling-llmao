@@ -27,7 +27,7 @@ import time
 import uuid
 from typing import Any
 
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import (
     GRANTOR_FREE_TIER,
@@ -51,9 +51,9 @@ class MockBackend:
         }
         # The seam talks to the backend's managers. Here a manager is only a
         # name for some of the methods below.
-        self.teams = edict(info=self.team_info, ensure=self.ensure_team)
-        self.keys = edict(find=self.list_keys, create=self.create_key, delete=self.delete_key)
-        self.metering = edict(rows=self.usage)
+        self.teams = Box(info=self.team_info, ensure=self.ensure_team)
+        self.keys = Box(find=self.list_keys, create=self.create_key, delete=self.delete_key)
+        self.metering = Box(rows=self.usage)
 
     async def team_info(self, project: str) -> TeamInfo | None:
         t = self._data.get("teams", {}).get(project)

@@ -49,7 +49,7 @@ from pathlib import Path
 
 import httpx
 import yaml
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 CONFIG = Path(__file__).resolve().parent.parent / "config.yaml"
 
@@ -57,27 +57,27 @@ CONFIG = Path(__file__).resolve().parent.parent / "config.yaml"
 # the headers. The request's `user` field carries the case's tag, and the
 # message content carries it too, so the log can be searched for both.
 CASES = [
-    edict(name="plain", body={}, headers={}),
-    edict(name="body_no_log", body={"no-log": True}, headers={}),
-    edict(name="stream_no_log", body={"no-log": True, "stream": True}, headers={}),
-    edict(name="meta_no_log", body={"metadata": {"no-log": True}}, headers={}),
-    edict(name="body_turn_off", body={"turn_off_message_logging": True}, headers={}),
-    edict(name="meta_turn_off", body={"metadata": {"turn_off_message_logging": True}}, headers={}),
-    edict(name="litellm_meta_turn_off", body={"litellm_metadata": {"turn_off_message_logging": True}}, headers={}),
-    edict(name="hdr_enable_redaction", body={}, headers={"litellm-enable-message-redaction": "true"}),
-    edict(name="hdr_x_enable_redaction", body={}, headers={"x-litellm-enable-message-redaction": "true"}),
-    edict(name="hdr_disable_callbacks", body={}, headers={"x-litellm-disable-callbacks": "prompt_log"}),
-    edict(name="hdr_disable_callbacks_class", body={}, headers={"x-litellm-disable-callbacks": "PromptLog"}),
+    Box(name="plain", body={}, headers={}),
+    Box(name="body_no_log", body={"no-log": True}, headers={}),
+    Box(name="stream_no_log", body={"no-log": True, "stream": True}, headers={}),
+    Box(name="meta_no_log", body={"metadata": {"no-log": True}}, headers={}),
+    Box(name="body_turn_off", body={"turn_off_message_logging": True}, headers={}),
+    Box(name="meta_turn_off", body={"metadata": {"turn_off_message_logging": True}}, headers={}),
+    Box(name="litellm_meta_turn_off", body={"litellm_metadata": {"turn_off_message_logging": True}}, headers={}),
+    Box(name="hdr_enable_redaction", body={}, headers={"litellm-enable-message-redaction": "true"}),
+    Box(name="hdr_x_enable_redaction", body={}, headers={"x-litellm-enable-message-redaction": "true"}),
+    Box(name="hdr_disable_callbacks", body={}, headers={"x-litellm-disable-callbacks": "prompt_log"}),
+    Box(name="hdr_disable_callbacks_class", body={}, headers={"x-litellm-disable-callbacks": "PromptLog"}),
 ]
 
 REDACTED = "redacted-by-litellm"
 
 
-def send(client: httpx.Client, model: str, run: str, case: edict) -> edict:
+def send(client: httpx.Client, model: str, run: str, case: Box) -> Box:
     tag = f"{case.name}-{run}"
     body = dict(model=model, user=tag, messages=[dict(role="user", content=f"hello from {tag}")], **case.body)
     resp = client.post("/v1/chat/completions", json=body, headers=case.headers)
-    return edict(name=case.name, tag=tag, status=resp.status_code)
+    return Box(name=case.name, tag=tag, status=resp.status_code)
 
 
 def log_lines(log_dir: Path):
@@ -90,7 +90,7 @@ def log_lines(log_dir: Path):
                 yield from f
 
 
-def verdict(sent: edict, lines: list[str]) -> str:
+def verdict(sent: Box, lines: list[str]) -> str:
     mine = [line for line in lines if sent.tag in line]
     if any(f"hello from {sent.tag}" in line for line in mine):
         return "logged"
@@ -103,11 +103,11 @@ def first_model(client: httpx.Client) -> str:
     return client.get("/v1/models").json()["data"][0]["id"]
 
 
-def litellm_section(path: Path) -> edict:
+def litellm_section(path: Path) -> Box:
     """config.yaml's litellm section, or empty when the file is absent."""
     if not path.exists():
-        return edict()
-    return edict((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("litellm") or {})
+        return Box()
+    return Box((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("litellm") or {})
 
 
 def main() -> int:

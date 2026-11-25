@@ -21,7 +21,7 @@ import asyncio
 import pathlib
 
 import asfquart
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.fleet import Fleet
 from llmao.intent import HOSTS, vllm_intent
@@ -78,13 +78,13 @@ def test_the_config_route_serves_members_and_approved_hosts_and_404s_a_stranger(
 
 def test_server_json_is_the_listen_port_and_only_the_declared_requirements():
     cfg = _cfg({})
-    model = edict(
+    model = Box(
         model_name="m",
-        litellm_params=edict(model="hosted_vllm/m"),
-        model_info=edict(vllm=edict(model="org/m", args=["--x"], gpu_memory_utilization=0.5)),
+        litellm_params=Box(model="hosted_vllm/m"),
+        model_info=Box(vllm=Box(model="org/m", args=["--x"], gpu_memory_utilization=0.5)),
     )
     body = server_json(vllm_intent(cfg, "10.0.0.1", 8001, "rental-m", model, origin=HOSTS, public_port=41234))
-    assert body == edict(
+    assert body == Box(
         name="rental-m",
         model="org/m",
         served_model_name="m",

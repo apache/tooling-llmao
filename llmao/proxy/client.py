@@ -39,7 +39,7 @@ from typing import Any
 
 import httpx
 from asfpy.stopwatch import Stopwatch
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao import access_requests as _access
 from llmao import fmt
@@ -706,7 +706,7 @@ class KeyManager:
         self._transport.raise_http(resp)
 
 
-def _key_rows(section: Any) -> list[edict]:
+def _key_rows(section: Any) -> list[Box]:
     """One row per (model, key) from one breakdown of a day: {model: {api_key_breakdown: {key: entry}}}."""
     rows = []
     for model, group in (section or {}).items() if isinstance(section, dict) else ():
@@ -723,7 +723,7 @@ def _key_rows(section: Any) -> list[edict]:
                 total = (metrics.get("prompt_tokens") or 0) + (metrics.get("completion_tokens") or 0)
             try:
                 rows.append(
-                    edict(
+                    Box(
                         # The key's owner and team. A key llmao did not issue
                         # has neither, and is kept rather than dropped -- it
                         # still consumed the fleet.
@@ -756,11 +756,11 @@ class UsageManager:
         self.tiers = tiers
         # ISO date → usage rows for that UTC day, from LiteLLM's daily
         # aggregate. Spend and allowances are both derived from this.
-        self._daily: dict[str, list[edict]] = {}
+        self._daily: dict[str, list[Box]] = {}
         # The same days, broken down by the provider's model string
         # ("xai/grok-4") rather than our name for it, which is what tells
         # one provider from another. Read in the same request.
-        self._daily_models: dict[str, list[edict]] = {}
+        self._daily_models: dict[str, list[Box]] = {}
         # Days that can no longer change: kept, never refetched.
         self._closed_days: set[str] = set()
         # Monotonic stamp of the last read of the days still open.
@@ -817,7 +817,7 @@ class UsageManager:
             return rows
         return [r for r in rows if r.get("project") == project]
 
-    async def provider_spend(self, days: int) -> list[edict]:
+    async def provider_spend(self, days: int) -> list[Box]:
         """What each model provider we pay was paid, per day, model and project.
 
         One row per (day, provider, model, project) over the last `days`
@@ -838,14 +838,14 @@ class UsageManager:
         wanted = [(today - _dt.timedelta(days=i)).isoformat() for i in range(days)]
         rows = [(day, r) for day in wanted for r in self._daily_models.get(day, []) if r.model in bought]
         project_of = await self.teams.projects({r.team_id for _day, r in rows if r.team_id})
-        acc: dict[tuple, edict] = {}
+        acc: dict[tuple, Box] = {}
         for day, r in rows:
             provider, model_name = bought[r.model]
             project = project_of.get(r.team_id)
             k = (day, provider, model_name, project)
             row = acc.get(k)
             if row is None:
-                row = acc[k] = edict(
+                row = acc[k] = Box(
                     day=day,
                     provider=provider,
                     model_name=model_name,
@@ -874,7 +874,7 @@ class UsageManager:
                 out[token] = out.get(token, 0) + int(r.get("total_tokens") or 0)
         return out
 
-    async def _spend_rows(self) -> list[edict]:
+    async def _spend_rows(self) -> list[Box]:
         """This week's usage, one row per (user, project, model, key).
 
         The daily rows carry a date as well; it is folded away here so that
@@ -888,14 +888,14 @@ class UsageManager:
         seen = {r.team_id for rows in daily.values() for r in rows if r.team_id}
         project_of = await self.teams.projects(seen)
 
-        by_key: dict[tuple, edict] = {}
+        by_key: dict[tuple, Box] = {}
         for rows in daily.values():
             for row in rows:
                 project = project_of.get(row.team_id)
                 k = (row.user, project, row.model, row.token_id)
                 acc = by_key.get(k)
                 if acc is None:
-                    acc = by_key[k] = edict(
+                    acc = by_key[k] = Box(
                         user=row.user,
                         project=project,
                         model=row.model,
@@ -910,7 +910,7 @@ class UsageManager:
                 acc.requests += row.requests
         return list(by_key.values())
 
-    async def _daily_rows(self, days: int) -> dict[str, list[edict]]:
+    async def _daily_rows(self, days: int) -> dict[str, list[Box]]:
         """Usage rows for each of the last `days` UTC days, today included.
 
         Closed days come from memory. The fetch covers the earliest day still
@@ -955,9 +955,7 @@ class UsageManager:
     def _now(self) -> _dt.datetime:
         return _dt.datetime.now(_dt.UTC)
 
-    async def _fetch_daily(
-        self, start: _dt.date, end: _dt.date
-    ) -> tuple[dict[str, list[edict]], dict[str, list[edict]]]:
+    async def _fetch_daily(self, start: _dt.date, end: _dt.date) -> tuple[dict[str, list[Box]], dict[str, list[Box]]]:
         """One read of LiteLLM's daily aggregate, as rows grouped by date, twice over.
 
         The answer nests day -> model group -> key, and beside it day ->
@@ -966,8 +964,8 @@ class UsageManager:
         provider's own string ("xai/grok-4"), which says who served it.
         Returned as (by group, by model).
         """
-        groups_out: dict[str, list[edict]] = {}
-        models_out: dict[str, list[edict]] = {}
+        groups_out: dict[str, list[Box]] = {}
+        models_out: dict[str, list[Box]] = {}
         page = 1
         while True:
             resp = await self._transport.request(
@@ -998,7 +996,7 @@ class UsageManager:
 
     _SPEND_LOG_PAGE_SIZE = 1000
 
-    async def spend_log(self, day: _dt.date) -> list[edict]:
+    async def spend_log(self, day: _dt.date) -> list[Box]:
         """Every request LiteLLM logged on one UTC day, as LiteLLM stores it.
 
         One row per request, from /spend/logs/v2, page by page. The older
@@ -1014,7 +1012,7 @@ class UsageManager:
         """
         start = day.isoformat()
         end = (day + _dt.timedelta(days=1)).isoformat()
-        rows: list[edict] = []
+        rows: list[Box] = []
         page = 1
         while True:
             resp = await self._transport.request(
@@ -1028,7 +1026,7 @@ class UsageManager:
                 break
             for row in body.get("data") or []:
                 if isinstance(row, dict) and str(row.get("startTime") or "")[:10] == start:
-                    rows.append(edict(row))
+                    rows.append(Box(row))
             if page >= int(body.get("total_pages") or 0):
                 break
             page += 1
@@ -1526,7 +1524,7 @@ class TierManager:
             effective.update({k: v for k, v in stored.items() if k in _TIER_FIELDS and v is not None})
         return effective
 
-    async def last_change(self, tier: str) -> edict | None:
+    async def last_change(self, tier: str) -> Box | None:
         """Who last changed this tier, and when. None if nobody has."""
         try:
             stored = (await self._overrides()).get(tier)
@@ -1534,7 +1532,7 @@ class TierManager:
             return None
         if not isinstance(stored, dict) or not stored.get("changed_by"):
             return None
-        return edict(by=stored["changed_by"], at=stored.get("changed_at") or "")
+        return Box(by=stored["changed_by"], at=stored.get("changed_at") or "")
 
     async def key_limits(self, tier: str) -> dict[str, Any]:
         """The rate limits a key minted on this tier is given.
@@ -1655,7 +1653,7 @@ class AccessRequestManager:
         return _access.loads(await self._memory.get(_access.key_for(request_id)))
 
 
-def _notice(row: dict[str, Any]) -> edict | None:
+def _notice(row: dict[str, Any]) -> Box | None:
     """A stored skew or log row as the pages want it, or None if it is not one."""
     try:
         held = json.loads(row.get("value") or "")
@@ -1665,7 +1663,7 @@ def _notice(row: dict[str, Any]) -> edict | None:
         return None
     # LiteLLM stamps every row itself, so when a thing was first and last
     # seen does not have to be kept by us.
-    return edict(held, key=row.get("key"), first_seen=row.get("created_at"), last_seen=row.get("updated_at"))
+    return Box(held, key=row.get("key"), first_seen=row.get("created_at"), last_seen=row.get("updated_at"))
 
 
 class SkewManager:
@@ -1688,7 +1686,7 @@ class SkewManager:
     def _key(self, kind: str, subject: str) -> str:
         return f"{self.PREFIX}{kind}:{subject}"
 
-    async def open(self, kind: str | None = None) -> list[edict]:
+    async def open(self, kind: str | None = None) -> list[Box]:
         """Everything still wrong, or everything of one kind."""
         prefix = self._key(kind, "") if kind else self.PREFIX
         return [n for n in map(_notice, await self._memory.find(prefix)) if n is not None]
@@ -1758,7 +1756,7 @@ class LogManager:
                 pass
         await self._memory.put(key, json.dumps({"what": what, "count": count, **detail}, sort_keys=True))
 
-    async def unseen(self, user: str | None = None) -> list[edict]:
+    async def unseen(self, user: str | None = None) -> list[Box]:
         """What the admins have not acknowledged, or what `user` has not."""
         return [n for n in map(_notice, await self._memory.find(self._audience(user))) if n is not None]
 

@@ -28,7 +28,7 @@ import asyncio
 import json
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.proxy.client import TIER_FREE, TIER_PROJECT, TIER_SERVICE, MemoryStore, TierManager, resolve_entitlement
 from tests.fake_transport import fake_memory
@@ -50,7 +50,7 @@ def _cfg(**over):
         }
     }
     base.update(over)
-    return edict(base)
+    return Box(base)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ def test_tier_inherits_what_it_does_not_name():
     to change default silently fails to change three of the four tiers.
     """
     cfg = _cfg()
-    cfg.entitlements.sparse = edict({"rpm_limit": 999})
+    cfg.entitlements.sparse = Box({"rpm_limit": 999})
     assert resolve_entitlement(cfg, "sparse") == {
         "rpm_limit": 999,  # named
         "tpm_limit": 60000,  # inherited
@@ -102,7 +102,7 @@ def test_absent_config_yields_no_limits():
     it, and this test is here so nobody "fixes" the empty return into a
     guess.
     """
-    assert resolve_entitlement(edict({}), TIER_FREE) == {}
+    assert resolve_entitlement(Box({}), TIER_FREE) == {}
 
 
 def test_every_shipped_tier_sets_all_three_limits():
@@ -122,10 +122,10 @@ def test_every_shipped_tier_sets_all_three_limits():
 def _tiers(*, down=False):
     """A TierManager over a stand-in memory store, and what the store holds."""
     transport, store = fake_memory(down=down)
-    cfg = edict(
-        entitlements=edict(
-            default=edict(rpm_limit=60, tpm_limit=60000, max_parallel_requests=4),
-            free_tier=edict(token_cap=1_000_000, token_window_days=7),
+    cfg = Box(
+        entitlements=Box(
+            default=Box(rpm_limit=60, tpm_limit=60000, max_parallel_requests=4),
+            free_tier=Box(token_cap=1_000_000, token_window_days=7),
         )
     )
     return TierManager(cfg, MemoryStore(transport)), store

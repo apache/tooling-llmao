@@ -51,7 +51,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.models import load_models, models_path_from_cfg
 from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, read_day, tool_family
@@ -130,7 +130,7 @@ def require_models(names: set[str], config: pathlib.Path = CONFIG) -> None:
     places nothing. The portal, reading the same config, would warn; a
     script fails.
     """
-    known = {m["model_name"] for m in load_models(models_path_from_cfg(edict(_settings(config))))}
+    known = {m["model_name"] for m in load_models(models_path_from_cfg(Box(_settings(config))))}
     unknown = sorted(names - known)
     if unknown:
         raise SystemExit(f"not in models.yaml: {', '.join(unknown)} (known: {', '.join(sorted(known))})")
@@ -156,7 +156,7 @@ def require_private(judges: Iterable[str], config: pathlib.Path = CONFIG) -> Non
         raise SystemExit(f"a judge must run only on our rentals: {said}")
 
 
-def judge_settings(config: pathlib.Path = CONFIG) -> edict:
+def judge_settings(config: pathlib.Path = CONFIG) -> Box:
     """What the judge needs to call the gateway: its URL, the judges, the key.
 
     The front door, ``analysis_gateway``, not the proxy's local address:
@@ -169,7 +169,7 @@ def judge_settings(config: pathlib.Path = CONFIG) -> edict:
     key = _settings(config).get("analysis_key")
     if not key:
         raise SystemExit(f"{config}: analysis_key is required (a service key whose purpose is {ANALYSIS_KEY_PURPOSE})")
-    return edict(gateway=gateway(config), models=judge_models(config), key=str(key))
+    return Box(gateway=gateway(config), models=judge_models(config), key=str(key))
 
 
 def gateway(config: pathlib.Path = CONFIG) -> str:
@@ -308,7 +308,7 @@ def who(key: dict) -> str:
     return key.get("user") or key.get("purpose") or (key.get("hash") or "?")[:12]
 
 
-def fingerprint(record: dict) -> edict | None:
+def fingerprint(record: dict) -> Box | None:
     """The record's fingerprint with the parts it is made of; None when the record is not demand."""
     key = record.get("key") or {}
     if not counts_as_demand(record.get("model"), key.get("project")) or key.get("purpose") == ANALYSIS_KEY_PURPOSE:
@@ -317,7 +317,7 @@ def fingerprint(record: dict) -> edict | None:
     tool = tool_family(record.get("user_agent"))
     source, text = instructions(record)
     start = opening(text)
-    return edict(
+    return Box(
         fingerprint=digest(project, who(key), tool, start),
         project=project,
         who=who(key),
@@ -363,7 +363,7 @@ def completion_tokens(record: dict) -> int:
     return (record.get("tokens") or {}).get("completion") or 0
 
 
-def candidate(record: dict, text: str) -> edict | None:
+def candidate(record: dict, text: str) -> Box | None:
     """What the exemplar choice needs from one record, so a day is not held in memory whole.
 
     ``text`` is the record's instructions, already extracted for the
@@ -373,7 +373,7 @@ def candidate(record: dict, text: str) -> edict | None:
     message = last_user_text(record)
     if not message or len(message) < MIN_MESSAGE_CHARS:
         return None
-    return edict(
+    return Box(
         tokens=prompt_tokens(record),
         ts=record.get("ts") or "",
         call_id=record.get("call_id") or "",
@@ -382,7 +382,7 @@ def candidate(record: dict, text: str) -> edict | None:
     )
 
 
-def choose_exemplar(candidates: Iterable[edict], lengths: list[int]) -> edict | None:
+def choose_exemplar(candidates: Iterable[Box], lengths: list[int]) -> Box | None:
     """Up to EXEMPLAR_MESSAGES distinct messages, the ones most typical of the cluster.
 
     Ranked by how close the record's prompt length is to the cluster's
@@ -406,7 +406,7 @@ def choose_exemplar(candidates: Iterable[edict], lengths: list[int]) -> edict | 
         return None
     messages = [p[4] for p in picked]
     first = picked[0]
-    return edict(call_id=first[2], head=first[3], messages=messages, hash=digest(first[3], *messages))
+    return Box(call_id=first[2], head=first[3], messages=messages, hash=digest(first[3], *messages))
 
 
 # ---- the store ----------------------------------------------------------
@@ -526,9 +526,9 @@ class Store:
     def scanned_days(self) -> set[dt.date]:
         return {dt.date.fromisoformat(r["day"]) for r in self.db.execute("SELECT day FROM days")}
 
-    def cluster(self, fp: str) -> edict | None:
+    def cluster(self, fp: str) -> Box | None:
         row = self.db.execute("SELECT * FROM clusters WHERE fingerprint = ?", (fp,)).fetchone()
-        return row and edict(row)
+        return row and Box(row)
 
     def rebuild(self) -> None:
         """Forget every scanned day and cluster. Verdicts, when there are any, stay."""
@@ -553,7 +553,7 @@ class Store:
 
     def scan_day(self, log_dir: pathlib.Path, day: dt.date) -> int:
         """Cluster one day's records and write them, one transaction; returns the records clustered."""
-        groups: dict[str, edict] = {}
+        groups: dict[str, Box] = {}
         # The same messages sent to several models is a person comparing
         # models, which the judge cannot see from one exemplar: per group,
         # which models each distinct request went to.
@@ -564,7 +564,7 @@ class Store:
                 continue
             g = groups.get(fp.fingerprint)
             if g is None:
-                g = groups[fp.fingerprint] = edict(
+                g = groups[fp.fingerprint] = Box(
                     fp, requests=0, failures=0, prompt=[], completion=[], models={}, candidates=[], paired=0
                 )
                 sent_to[fp.fingerprint] = {}
@@ -593,7 +593,7 @@ class Store:
             )
         return records
 
-    def _write_cluster_day(self, day: dt.date, g: edict) -> None:
+    def _write_cluster_day(self, day: dt.date, g: Box) -> None:
         d = day.isoformat()
         self.db.execute(
             "INSERT OR REPLACE INTO cluster_days (fingerprint, day, requests, failures, prompt_tokens, "
@@ -646,7 +646,7 @@ class Store:
         row = self.db.execute("SELECT 1 FROM cluster_days WHERE fingerprint = ? AND day = ?", (fp, day)).fetchone()
         return row is not None
 
-    def clusters_over(self, days: list[dt.date]) -> Iterator[edict]:
+    def clusters_over(self, days: list[dt.date]) -> Iterator[Box]:
         """Every cluster with a day in the span, with its figures over the span, most requests first."""
         first, last = days[0].isoformat(), days[-1].isoformat()
         rows = self.db.execute(
@@ -658,7 +658,7 @@ class Store:
             (first, last),
         )
         for row in rows:
-            c = edict(row)
+            c = Box(row)
             models: dict[str, int] = {}
             for line in (c.pop("models_rows") or "").split("\n"):
                 for model, n in json.loads(line or "{}").items():
@@ -669,7 +669,7 @@ class Store:
 
     # ---- verdicts -------------------------------------------------------
 
-    def stale(self, clusters: Iterable[edict], prompt_hash: str, model: str) -> list[edict]:
+    def stale(self, clusters: Iterable[Box], prompt_hash: str, model: str) -> list[Box]:
         """The clusters with an exemplar and no verdict from this judge prompt, this model and this exemplar."""
         out = []
         for c in clusters:
@@ -683,7 +683,7 @@ class Store:
                 out.append(c)
         return out
 
-    def write_verdict(self, c: edict, prompt_hash: str, model: str, verdict: dict) -> None:
+    def write_verdict(self, c: Box, prompt_hash: str, model: str, verdict: dict) -> None:
         """One verdict, one transaction: a run that stops keeps every verdict before the stop."""
         with self.db:
             self.db.execute(
@@ -703,16 +703,16 @@ class Store:
             )
 
     @staticmethod
-    def _named(row: sqlite3.Row | None) -> edict | None:
+    def _named(row: sqlite3.Row | None) -> Box | None:
         """A verdict row with its integers named again."""
         if row is None:
             return None
-        v = edict(row)
+        v = Box(row)
         v.asf_work = ASF_WORK[v.asf_work]
         v.tier = TIERS[v.tier]
         return v
 
-    def with_verdicts(self, clusters: Iterable[edict], prompt_hash: str, model: str) -> Iterator[edict]:
+    def with_verdicts(self, clusters: Iterable[Box], prompt_hash: str, model: str) -> Iterator[Box]:
         """Each cluster with one model's current verdict under ``verdict`` (None when there is none or it is stale)."""
         for c in clusters:
             row = self.db.execute(
@@ -723,7 +723,7 @@ class Store:
             c.verdict = self._named(row)
             yield c
 
-    def with_consensus(self, clusters: Iterable[edict], prompt_hash: str) -> Iterator[edict]:
+    def with_consensus(self, clusters: Iterable[Box], prompt_hash: str) -> Iterator[Box]:
         """Each cluster with what its judges together say under ``verdict``, and every judge's say under ``verdicts``.
 
         ``verdict`` carries ``judges`` and how many distinct answers each
@@ -767,12 +767,12 @@ ACTIVITIES = (
 )
 
 
-def judge_prompt(path: pathlib.Path = JUDGE_PROMPT) -> edict:
+def judge_prompt(path: pathlib.Path = JUDGE_PROMPT) -> Box:
     text = path.read_text(encoding="utf-8")
-    return edict(text=text, hash=digest(text))
+    return Box(text=text, hash=digest(text))
 
 
-def exemplar_message(c: edict) -> str:
+def exemplar_message(c: Box) -> str:
     """The user message for one cluster: its figures, its head, its messages."""
     ok = max(1, c.requests - c.failures)
     models = ", ".join(sorted(c.models))
@@ -796,7 +796,7 @@ def exemplar_message(c: edict) -> str:
     return "\n".join(lines)
 
 
-def judge_request(c: edict, prompt: edict, model: str) -> dict:
+def judge_request(c: Box, prompt: Box, model: str) -> dict:
     """The chat completion body for one cluster. Reasoning off: the answer is a short JSON object."""
     return {
         "model": model,
@@ -814,7 +814,7 @@ class JudgeError(Exception):
     """The gateway did not answer, or the answer was not a verdict."""
 
 
-def ask(settings: edict, body: dict, timeout: float = 120.0) -> str:
+def ask(settings: Box, body: dict, timeout: float = 120.0) -> str:
     """One chat completion through the gateway, synchronously; the assistant's text, or JudgeError.
 
     One request in flight is the whole point, so the synchronous httpx
@@ -837,7 +837,7 @@ def ask(settings: edict, body: dict, timeout: float = 120.0) -> str:
         raise JudgeError(f"no message in the answer: {r.text[:200]}") from None
 
 
-def parse_verdict(text: str) -> edict:
+def parse_verdict(text: str) -> Box:
     """The JSON object in the judge's answer, checked against the three answer sets.
 
     Lenient about what surrounds the object, since a small model will
@@ -854,7 +854,7 @@ def parse_verdict(text: str) -> edict:
     for key, allowed in (("asf_work", ASF_WORK), ("tier", TIERS), ("activity", ACTIVITIES)):
         if v.get(key) not in allowed:
             raise JudgeError(f"{key} is {v.get(key)!r}, not one of {allowed}")
-    return edict(asf_work=v["asf_work"], tier=v["tier"], activity=v["activity"], reason=str(v.get("reason") or ""))
+    return Box(asf_work=v["asf_work"], tier=v["tier"], activity=v["activity"], reason=str(v.get("reason") or ""))
 
 
 # ---- the tier report ----------------------------------------------------
@@ -872,7 +872,7 @@ def tier_of(model: str, by_tier: dict[str, list[str]]) -> str | None:
     return None
 
 
-def tier_report(clusters: Iterable[edict], by_tier: dict[str, list[str]]) -> list[edict]:
+def tier_report(clusters: Iterable[Box], by_tier: dict[str, list[str]]) -> list[Box]:
     """Per judged cluster: the tier, the model to recommend, and the requests above and below the tier.
 
     Heaviest excess first, so the top of the list is the biggest saving.
@@ -894,7 +894,7 @@ def tier_report(clusters: Iterable[edict], by_tier: dict[str, list[str]]) -> lis
                 below += n
         recommended = (by_tier.get(c.verdict.tier) or ["?"])[0]
         out.append(
-            edict(cluster=c, tier=c.verdict.tier, recommended=recommended, above=above, below=below, unranked=unranked)
+            Box(cluster=c, tier=c.verdict.tier, recommended=recommended, above=above, below=below, unranked=unranked)
         )
     return sorted(out, key=lambda r: (-r.above, -r.below, r.cluster.fingerprint))
 
@@ -919,12 +919,12 @@ def span_text(days: list[dt.date]) -> str:
 OPENING_SHOWN = 72
 
 
-def models_text(c: edict) -> str:
+def models_text(c: Box) -> str:
     """A cluster's models with their request counts, most used first."""
     return ", ".join(f"{m} {n}" for m, n in sorted(c.models.items(), key=lambda kv: -kv[1]))
 
 
-def opening_text(c: edict, shown: int = OPENING_SHOWN) -> str:
+def opening_text(c: Box, shown: int = OPENING_SHOWN) -> str:
     """A cluster's opening for a listing: where it came from, and its first characters."""
     if not c.opening:
         return "(no text)"

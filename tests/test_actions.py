@@ -23,7 +23,7 @@ import datetime as dt
 import json
 
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.actions import ActionLog, retention_days
 from llmao.proxy.client import MemoryStore
@@ -90,9 +90,9 @@ def test_pruning_drops_only_the_days_past_retention():
 
 
 def test_retention_is_required():
-    assert retention_days(edict(action_retention_days=90)) == 90
+    assert retention_days(Box(action_retention_days=90)) == 90
     with pytest.raises(ValueError, match="action_retention_days is required"):
-        retention_days(edict())
+        retention_days(Box())
     for bad in (0, -1, "ninety"):
         with pytest.raises(ValueError, match="action_retention_days must be"):
-            retention_days(edict(action_retention_days=bad))
+            retention_days(Box(action_retention_days=bad))

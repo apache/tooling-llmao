@@ -24,7 +24,7 @@ import time
 
 import httpx
 import pytest
-from easydict import EasyDict as edict  # noqa: N813
+from box import Box
 
 from llmao.capacity import HOUR_S, HourlyRollup
 from llmao.fleet import Fleet, FleetDeployment, VllmServer
@@ -75,23 +75,23 @@ def test_parse_metrics_survives_an_unexpected_body():
 
 
 def test_the_interval_is_required_and_never_off():
-    assert sample_interval(edict(sample_interval_s=15)) == 15
+    assert sample_interval(Box(sample_interval_s=15)) == 15
     with pytest.raises(ValueError, match="sample_interval_s is required"):
-        sample_interval(edict())
+        sample_interval(Box())
     for bad in (0, -5):
         with pytest.raises(ValueError, match="never off"):
-            sample_interval(edict(sample_interval_s=bad))
+            sample_interval(Box(sample_interval_s=bad))
     with pytest.raises(ValueError, match="whole number"):
-        sample_interval(edict(sample_interval_s="soon"))
+        sample_interval(Box(sample_interval_s="soon"))
 
 
 def test_the_old_name_still_works_with_a_warning(caplog):
     with caplog.at_level(logging.WARNING, logger="llmao.sampler"):
-        assert sample_interval(edict(contention_interval_s=30)) == 30
+        assert sample_interval(Box(contention_interval_s=30)) == 30
     assert "contention_interval_s is deprecated; rename it to sample_interval_s" in caplog.text
     # The new name wins, silently.
     caplog.clear()
-    assert sample_interval(edict(sample_interval_s=15, contention_interval_s=30)) == 15
+    assert sample_interval(Box(sample_interval_s=15, contention_interval_s=30)) == 15
     assert caplog.text == ""
 
 
