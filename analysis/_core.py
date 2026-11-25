@@ -828,7 +828,7 @@ class JudgeTimeoutError(JudgeError):
 TIMEOUT_HINT = (
     "a timeout through the gateway is usually one deployment of the model not answering, "
     "whichever cluster the router sent there: /models shows each deployment's health; "
-    "a re-run resumes with this cluster"
+    "a re-run judges the skipped clusters"
 )
 
 

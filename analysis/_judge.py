@@ -32,8 +32,11 @@ cluster of the span that has no verdict yet from that judge prompt,
 that model and the cluster's present exemplar; each verdict is written
 as it returns, so a run that stops keeps what it judged. One request in
 flight, through the front door, with the service key in config.yaml
-analysis_key. Clusters from the master key are the operators' smoke
-tests and are never judged. A judge must run only on our rentals.
+analysis_key. A call that times out is reported and skipped, the run
+going on to the next cluster and ending with exit status 1: a re-run
+picks the skipped clusters up. Any other error stops the run. Clusters
+from the master key are the operators' smoke tests and are never
+judged. A judge must run only on our rentals.
 
 verdicts reads the store's consensus view: Foundation work leans
 towards "no", the tier towards "high", the activity is the majority. A
@@ -147,12 +150,22 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             _dry_run(todo, judges, days, prompt, request=args.request)
             return 0
         tally: dict[str, collections.Counter] = {m: collections.Counter() for m in judges}
+        timed_out = 0
         for model, cs in todo.items():
             for i, c in enumerate(cs, 1):
                 try:
                     verdict = _core.parse_verdict(_core.ask(settings, _core.judge_request(c, prompt, model)))
                 except _core.JudgeTimeoutError as e:
-                    raise SystemExit(f"{model} on {c.fingerprint}: {e}\n{_core.TIMEOUT_HINT}") from None
+                    # The cluster is left without this judge's verdict; the
+                    # next run finds it stale again. Only a timeout is
+                    # skipped: a dead deployment among several fails a share
+                    # of the calls at random, and stopping on each would
+                    # never finish the run. An answer that is not a verdict
+                    # still stops it, since that recurs on the same cluster.
+                    print(f"{model} {i}/{len(cs)} {c.fingerprint} {e}")
+                    tally[model]["timed out"] += 1
+                    timed_out += 1
+                    continue
                 except _core.JudgeError as e:
                     raise SystemExit(f"{model} on {c.fingerprint}: {e}") from None
                 store.write_verdict(c, prompt.hash, model, verdict)
@@ -167,7 +180,10 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     for model, counts in tally.items():
         n = counts.pop("verdicts", 0)
         said = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
-        print(f"{model}: {fmt.plural(n, 'verdict')} this run" + (f" ({said})" if n else ""))
+        print(f"{model}: {fmt.plural(n, 'verdict')} this run" + (f" ({said})" if said else ""))
+    if timed_out:
+        print(f"\n{fmt.plural(timed_out, 'call')} timed out and left the cluster without that judge's verdict;")
+        print(_core.TIMEOUT_HINT)
     print("\nnext:")
     nexts = [
         (f"  prompts {command} {span_args}".rstrip(), what)
@@ -180,7 +196,7 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     width = max(len(line) for line, _ in nexts) + 2
     for line, what in nexts:
         print(line.ljust(width) + f"# {what}")
-    return 0
+    return 1 if timed_out else 0
 
 
 # ---- verdicts -------------------------------------------------------------

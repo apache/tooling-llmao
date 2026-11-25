@@ -197,3 +197,45 @@ def test_a_gateway_timeout_names_the_request_size_and_the_wait():
     for conn, _ in held:
         conn.close()
     server.close()
+
+
+def test_a_judge_run_skips_a_timed_out_call_and_goes_on(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    import _clusters
+    import _judge
+    from box import Box
+
+    # Two clusters: the fingerprint is over the instructions' opening, so each day's differ.
+    for day in ("2026-11-01", "2026-11-02"):
+        record = _record(day)
+        record["messages"][0]["content"] = f"You review the work of {day}. Answer briefly."
+        (tmp_path / f"prompts-{day}.jsonl").write_text(json.dumps(record) + "\n")
+    monkeypatch.setattr(_core, "retention_days", lambda: 90)
+    ap = argparse.ArgumentParser()
+    span = dict(days=7, start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 2), log_dir=tmp_path, analysis_dir=tmp_path)
+    assert _clusters.run_build(ap, argparse.Namespace(**span, rebuild=False)) == 0
+    monkeypatch.setattr(_core, "judge_settings", lambda: Box(gateway="http://g", models=["judge-1"], key="k"))
+    monkeypatch.setattr(_core, "require_models", lambda names: None)
+    monkeypatch.setattr(_core, "require_private", lambda judges: None)
+    monkeypatch.setattr(_core, "tiers", lambda: {})
+    answers = iter(
+        [_core.JudgeTimeoutError("ReadTimeout: timed out (after 120 s; system 9 + user 9 characters)"), None]
+    )
+
+    def ask(settings, body, timeout=120.0):
+        answer = next(answers)
+        if answer:
+            raise answer
+        return '{"asf_work": "yes", "tier": "low", "activity": "other", "reason": "r"}'
+
+    monkeypatch.setattr(_core, "ask", ask)
+    args = argparse.Namespace(**span, judge=True, request=False, limit=None, model=None)
+    assert _judge.run_judge(ap, args) == 1
+    out = capsys.readouterr().out
+    assert "ReadTimeout: timed out (after 120 s" in out
+    assert "judge-1: 1 verdict this run (asf yes 1, tier low 1, timed out 1)" in out
+    assert "1 call timed out and left the cluster without that judge's verdict" in out
+    store = _core.Store(tmp_path)
+    assert store.db.execute("SELECT count(*) FROM verdicts").fetchone()[0] == 1
+    store.close()

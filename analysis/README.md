@@ -126,7 +126,13 @@ rewording the questions re-judges every cluster, a re-picked exemplar
 re-judges one, and a model added to the list judges everything afresh
 while the others' verdicts stay. Each verdict is its own transaction,
 written as it returns, so a run that stops at 200 of 1,000 keeps 200
-and resumes at 201. The answers are stored as integers beside the
+and resumes at 201. A call that times out is reported and skipped, and
+the run goes on: through the gateway a timeout is usually one dead
+deployment of the model among several, which fails a share of the calls
+at random, so stopping on each would never finish; the run then exits 1
+and a re-run judges the skipped clusters. Any other error stops the
+run, since it recurs on the same cluster. The answers are stored as
+integers beside the
 judge's words, so the consensus is plain aggregation.
 
 **The consensus** is a view in the store, `consensus`, over the verdicts
