@@ -48,6 +48,7 @@ import pathlib
 import re
 import sqlite3
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -814,12 +815,38 @@ class JudgeError(Exception):
     """The gateway did not answer, or the answer was not a verdict."""
 
 
+class JudgeTimeoutError(JudgeError):
+    """The gateway took longer than the judge waits.
+
+    Through the gateway this is nearly always one deployment of the model
+    not answering, not the request: LiteLLM waits longer than the judge
+    does, so a dead deployment among several shows here as a bare timeout
+    on whichever cluster the router happened to send there.
+    """
+
+
+TIMEOUT_HINT = (
+    "a timeout through the gateway is usually one deployment of the model not answering, "
+    "whichever cluster the router sent there: /models shows each deployment's health; "
+    "a re-run resumes with this cluster"
+)
+
+
+def request_size(body: dict) -> str:
+    """The size of a chat completion, for an error to carry: the characters of each message."""
+    parts = " + ".join(f"{m['role']} {len(m['content']):,}" for m in body["messages"])
+    return f"{parts} characters, max_tokens {body['max_tokens']}"
+
+
 def ask(settings: Box, body: dict, timeout: float = 120.0) -> str:
     """One chat completion through the gateway, synchronously; the assistant's text, or JudgeError.
 
     One request in flight is the whole point, so the synchronous httpx
-    client, not the async one the portal's transport uses.
+    client, not the async one the portal's transport uses. An error names
+    the request's size and how long the gateway was waited for, so a
+    timeout can be told from a request that is too big.
     """
+    started = time.monotonic()
     try:
         r = httpx.post(
             settings.gateway + "/v1/chat/completions",
@@ -828,7 +855,9 @@ def ask(settings: Box, body: dict, timeout: float = 120.0) -> str:
             timeout=timeout,
         )
     except httpx.HTTPError as e:
-        raise JudgeError(f"{type(e).__name__}: {e}"[:200]) from None
+        kind = JudgeTimeoutError if isinstance(e, httpx.TimeoutException) else JudgeError
+        waited = f"after {time.monotonic() - started:.0f} s; {request_size(body)}"
+        raise kind(f"{type(e).__name__}: {e}"[:200] + f" ({waited})") from None
     if r.status_code != 200:
         raise JudgeError(f"HTTP {r.status_code} {r.text[:200]}".replace("\n", " "))
     try:

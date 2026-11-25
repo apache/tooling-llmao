@@ -173,3 +173,27 @@ def test_prompt_report_prints_the_reports_as_text_and_as_csv(tmp_path):
     as_csv = subprocess.run([*base, "--csv"], capture_output=True, text=True, check=True).stdout
     assert "# By model\nname,requests,per day,prompt tokens\n" in as_csv
     assert "gemma4-26b,1,0.5,500\n" in as_csv
+
+
+def test_a_gateway_timeout_names_the_request_size_and_the_wait():
+    # A socket that accepts and never answers: the connect succeeds, the read times out.
+    import socket
+    import threading
+
+    from box import Box
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    held = []
+    threading.Thread(target=lambda: held.append(server.accept()), daemon=True).start()
+    settings = Box(gateway=f"http://127.0.0.1:{server.getsockname()[1]}", key="k")
+    body = {"model": "m", "messages": [{"role": "system", "content": "s" * 5}, {"role": "user", "content": "u" * 7}]}
+    body["max_tokens"] = 600
+    with pytest.raises(_core.JudgeTimeoutError) as caught:
+        _core.ask(settings, body, timeout=0.2)
+    assert str(caught.value).startswith("ReadTimeout: ")
+    assert str(caught.value).endswith("(after 0 s; system 5 + user 7 characters, max_tokens 600)")
+    for conn, _ in held:
+        conn.close()
+    server.close()

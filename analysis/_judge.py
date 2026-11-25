@@ -151,6 +151,8 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             for i, c in enumerate(cs, 1):
                 try:
                     verdict = _core.parse_verdict(_core.ask(settings, _core.judge_request(c, prompt, model)))
+                except _core.JudgeTimeoutError as e:
+                    raise SystemExit(f"{model} on {c.fingerprint}: {e}\n{_core.TIMEOUT_HINT}") from None
                 except _core.JudgeError as e:
                     raise SystemExit(f"{model} on {c.fingerprint}: {e}") from None
                 store.write_verdict(c, prompt.hash, model, verdict)
