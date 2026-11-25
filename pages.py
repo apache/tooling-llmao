@@ -2010,7 +2010,8 @@ def _chart(series: list, days: list[str], unit: str) -> str:
     if not series:
         return ""
     have = {p.day: p.value for p in series}
-    return json.dumps(Box(days=days, values=[have.get(d, 0) for d in days], unit=unit))
+    # A plain dict: it is only serialised, and "values" is a dict method name.
+    return json.dumps({"days": days, "values": [have.get(d, 0) for d in days], "unit": unit})
 
 
 def _demand_model_row(m, *, days: list[str] = ()) -> Box:
