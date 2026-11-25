@@ -87,15 +87,14 @@ GPU_HOSTS = ("vast", "runpod")
 # provider's listing maps each one to the public port a server is dialed on.
 VLLM_LISTEN_PORTS = (8001, 8002, 8003)
 
-# Rentals already up on other ports. Delete a pair when that rental is replaced.
-# Not a template for new hosts. These run the shared fleet.selfhost_api_key,
-# which validate_fleet requires while one of them is configured; every other
-# rental runs the key derived from the salt. vllm_api_key applies the rule.
+# The one rental set up by hand before the salt. A listed pair runs the
+# shared fleet.selfhost_api_key, which validate_fleet requires while one is
+# configured; every other rental runs the key derived from the salt.
+# vllm_api_key applies the rule. When this rental is replaced, delete this
+# last pair, and with it the set, fleet.selfhost_api_key and the two
+# branches that read them.
 LEGACY_SERVERS = {
-    ("80.188.223.202", 10100),  # gemma4-26b, public port from Vast
-    ("103.196.86.105", 8004),  # qwen3.8-27b, public port from RunPod
-    # 8003 is a normal listen port. This rental still runs the shared key.
-    ("213.173.110.78", 8003),
+    ("213.173.110.78", 8003),  # qwen3-8b on RunPod
 }
 
 # Where an IntendedDeployment came from.

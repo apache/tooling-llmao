@@ -128,9 +128,8 @@ none, and an installer that predates the field ignores it.
 A `fleet.hosts` entry is the rental's name (above) mapped to rows of
 `[model_name, port]` or `[model_name, port, name]`. The port is the
 container listen port, one of 8001, 8002 or 8003 (`VLLM_LISTEN_PORTS`;
-a rental gets at most three), plus the handful of older pairs in
-`LEGACY_SERVERS`. The optional name lets two processes share one
-`models.yaml` row.
+a rental gets at most three). The optional name lets two processes share
+one `models.yaml` row.
 
 A provider publishes each listen port on some other public port. llmao
 learns that mapping from the provider's listing (Vast's instance ports,

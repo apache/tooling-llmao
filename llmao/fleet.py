@@ -157,10 +157,6 @@ HOOK_RETRY_S = 600.0
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _listen_port_allowed(host: str, port: int) -> bool:
-    return port in VLLM_LISTEN_PORTS or (normalize_peer_ip(host), port) in LEGACY_SERVERS
-
-
 def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
     """Set srv.public_port from a listen port → public port map; said when it changes.
 
@@ -169,7 +165,7 @@ def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
     a warning: the listing knows the rental but not this port, so the row or
     the rental is wrong. A listen port llmao does not allow is left alone.
     """
-    if not _listen_port_allowed(srv.host, srv.listen_port):
+    if srv.listen_port not in VLLM_LISTEN_PORTS:
         return
     public = by_listen.get(str(srv.listen_port))
     if public is None:
@@ -182,7 +178,7 @@ def _set_public_port(srv: VllmServer, by_listen: Any, source: str) -> None:
 
 
 def _require_listen_port(host: str, port: int) -> None:
-    if _listen_port_allowed(host, port):
+    if port in VLLM_LISTEN_PORTS:
         return
     allowed = ", ".join(str(p) for p in VLLM_LISTEN_PORTS)
     raise ValueError(f"{host}: listen port {port} is not one of {allowed}")

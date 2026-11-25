@@ -468,30 +468,39 @@ def test_duplicate_name():
         validate_fleet(cfg, models=load_models(EXAMPLE))
 
 
-def test_legacy_rentals_need_the_shared_key_and_keep_their_ports():
+@pytest.fixture
+def legacy_pair(monkeypatch):
+    """LEGACY_SERVERS with a test-net pair, so the tests do not depend on which real rental is left.
+
+    fleet imports the set by name, so both modules are patched.
+    """
+    import llmao.fleet
+    import llmao.intent
+
+    pairs = llmao.intent.LEGACY_SERVERS | {("192.0.2.9", 8001)}
+    monkeypatch.setattr(llmao.intent, "LEGACY_SERVERS", pairs)
+    monkeypatch.setattr(llmao.fleet, "LEGACY_SERVERS", pairs)
+    return ("192.0.2.9", 8001)
+
+
+def test_legacy_rentals_need_the_shared_key(legacy_pair):
+    """The shared key is required while a legacy pair is configured; the listen port rule is the same for all."""
     models = load_models(EXAMPLE)
-    hosts = {
-        "80.188.223.202": [["gemma4-26b", 10100]],
-        "103.196.86.105": [["qwen3.8-27b", 8004, "qwen3.8-27b", 15602]],
-        "213.173.110.78": [["qwen3-8b", 8003]],
-    }
-    missing = _cfg(hosts)
+    host, port = legacy_pair
+    hosts = {host: [["gemma4-26b", port]]}
     with pytest.raises(ValueError, match="selfhost_api_key"):
-        validate_fleet(missing, models=models)
+        validate_fleet(_cfg(hosts), models=models)
     cfg = _cfg(hosts)
     cfg.fleet.selfhost_api_key = "sk-shared"
-    cfg.providers = Box(vast=Box(api_key="vast-test"))
     validate_fleet(cfg, models=models)
-    fleet = Fleet.from_cfg(cfg, models=models)
-    _place(fleet, {"80.188.223.202": {"10100": 40000, "22": 19022}})
-    by_host = {s.host: s for s in fleet.servers}
-    assert by_host["80.188.223.202"].public_port == 40000
-    assert by_host["103.196.86.105"].public_port == 15602
+    assert vllm_api_key(cfg, host, port) == "sk-shared"
+    assert vllm_api_key(cfg, "10.0.0.1", port) == derive_vllm_api_key("test-vllm-salt", "10.0.0.1", port)
+    # A legacy pair on another port is no longer allowed: the last odd-port rental went in 2026-11.
     with pytest.raises(ValueError, match="not one of"):
-        validate_fleet(_cfg({"10.0.0.1": [["qwen3-8b", 8004]]}), models=models)
+        validate_fleet(_cfg({host: [["gemma4-26b", 10100]]}), models=models)
 
 
-def test_the_bearer_is_minted_once_with_the_intent():
+def test_the_bearer_is_minted_once_with_the_intent(legacy_pair):
     """One rule for the bearer a rental runs with, applied when the intent is minted.
 
     Shared for LEGACY_SERVERS, derived from the salt for every other rental.
@@ -499,7 +508,7 @@ def test_the_bearer_is_minted_once_with_the_intent():
     executor registers it (deployment_body reads dep.vllm.api_key); neither
     derives anything.
     """
-    cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]], "10.0.0.1": [["qwen3-8b", 8001]]})
+    cfg = _cfg({"192.0.2.9": [["gemma4-26b", 8001]], "10.0.0.1": [["qwen3-8b", 8001]]})
     cfg.fleet.selfhost_api_key = "sk-shared"
     cfg.litellm = Box(base_url="http://127.0.0.1:4000", master_key="sk-m", request_timeout_s=5)
     models = load_models(EXAMPLE)
@@ -511,18 +520,18 @@ def test_the_bearer_is_minted_once_with_the_intent():
     assert vllm_api_key(cfg, "213.173.110.78", 8003) == "sk-shared"
 
 
-def test_served_window_is_asked_for_with_the_working_key():
+def test_served_window_is_asked_for_with_the_working_key(legacy_pair):
     """The /v1/models read on the edge into Healthy sends what the rental accepts.
 
     It used to send the derived key to every rental, so a legacy rental answered
     401 on every pass and its context window stayed unknown for good.
     """
-    cfg = _cfg({"80.188.223.202": [["gemma4-26b", 10100]]})
+    cfg = _cfg({"192.0.2.9": [["gemma4-26b", 8001]]})
     cfg.fleet.selfhost_api_key = "sk-shared"
     models = load_models(EXAMPLE)
     validate_fleet(cfg, models=models)
     fleet = Fleet.from_cfg(cfg, models=models)
-    _place(fleet, {"80.188.223.202": {"10100": 40000}})
+    _place(fleet, {"192.0.2.9": {"8001": 40000}})
     (srv,) = fleet.servers
     bearers = []
 
