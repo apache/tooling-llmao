@@ -22,6 +22,7 @@ import asyncio
 import datetime as dt
 import json
 import pathlib
+import types
 
 import asfquart
 from box import Box
@@ -126,9 +127,10 @@ class _Actions:
 
 def _recent(monkeypatch, stored, *, keys=(), tiers=None, actions=(), keys_down=False, only=None):
     pages = _app()
-    monkeypatch.setattr(
-        pages.APP, "backend", Box(keys=_Keys(keys, keys_down), tiers=_Tiers(tiers or {})), raising=False
-    )
+    # A namespace, not a Box: the page reads backend.keys, and on a Box that
+    # is the dict method, never a key.
+    backend = types.SimpleNamespace(keys=_Keys(keys, keys_down), tiers=_Tiers(tiers or {}))
+    monkeypatch.setattr(pages.APP, "backend", backend, raising=False)
     monkeypatch.setattr(pages.APP, "actions", _Actions(list(actions)), raising=False)
     return asyncio.run(pages._recent_work(stored, only=only))
 
