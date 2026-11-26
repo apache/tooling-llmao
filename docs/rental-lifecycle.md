@@ -273,7 +273,7 @@ reconcile migration.
 ## Where to read the code
 
 - `llmao/model_status.py`: the state names, `self_hosted_lifecycle`, the
-  roll-up and staleness (`deployment_status`, `model_status`).
+  roll-up and staleness (`DeploymentSnapshot.status`, `model_status`).
 - `llmao/fleet.py`: `VllmServer.record_probe` (the counters and the
   transition log lines), `Fleet.probe_all` (when `/v1/models` is asked),
   `Fleet.place_servers` and `apply_rentals` (listed, unlisted, the public

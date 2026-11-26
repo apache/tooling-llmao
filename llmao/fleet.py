@@ -66,7 +66,6 @@ from llmao.model_status import (
     STALLED,
     UNHEALTHY,
     DeploymentSnapshot,
-    deployment_status,
     model_status,
     self_hosted_lifecycle,
 )
@@ -1000,7 +999,7 @@ class Fleet:
         stamp = now or time.time()
         cfg = self.cfg.fleet
         for dep in self.deployments:
-            view = deployment_status(snapshot_for_status(dep), cfg, stamp)
+            view = snapshot_for_status(dep).status(cfg, stamp)
             fresh = [badge for badge in view.skew if badge not in dep.skew]
             dep.skew = list(view.skew)
             for badge in fresh:
@@ -1102,7 +1101,7 @@ class Fleet:
         """
         stamp = now or time.time()
         cfg = self.cfg.fleet
-        views = [deployment_status(snapshot_for_status(dep), cfg, stamp) for dep in self.deployments]
+        views = [snapshot_for_status(dep).status(cfg, stamp) for dep in self.deployments]
         orphaned = any(o.deployment.model_name == model_name and o.passes >= ORPHAN_PASSES for o in self.orphans)
         return model_status(model_name, views, orphaned=orphaned)
 

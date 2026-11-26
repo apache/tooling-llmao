@@ -71,7 +71,6 @@ from llmao.model_status import (
     STALLED,
     UNAVAILABLE,
     UNHEALTHY,
-    deployment_status,
 )
 from llmao.models import VllmRecipe, model_available_for, model_in_service, ux_models
 from llmao.planning import Advisor, days_to_read, summarise_capacity, summarise_demand, summarise_spend
@@ -666,7 +665,7 @@ def _replica_summary(model_name: str, fleet) -> str:
     for dep in fleet.deployments:
         if dep.model_name != model_name:
             continue
-        views.append(deployment_status(snapshot_for_status(dep), cfg))
+        views.append(snapshot_for_status(dep).status(cfg))
     by_state: dict[str, int] = {}
     for v in views:
         by_state[v.lifecycle] = by_state.get(v.lifecycle, 0) + 1
@@ -809,7 +808,7 @@ def attention_items(fleet) -> list:
         )
     cfg = fleet.cfg.fleet
     for dep in fleet.deployments:
-        view = deployment_status(snapshot_for_status(dep), cfg)
+        view = snapshot_for_status(dep).status(cfg)
         phrases = [SKEW_PHRASE.get(n, n) for n in dep.skew]
         unlisted = dep.vllm is not None and dep.vllm.unlisted
         if not _needs_attention(view.lifecycle, dep.skew, unlisted=unlisted):
@@ -1115,7 +1114,7 @@ def deployment_rows(fleet, *, admin: bool) -> list:
                 ("Config", f"served {ago(config_ago)}" if ago(config_ago) else "", False),
             ]
             diags = [Box(label=k, value=v, bad=ezt.boolean(bad)) for k, v, bad in fields if v and v != "—"]
-        lifecycle = deployment_status(snapshot_for_status(dep), cfg).lifecycle
+        lifecycle = snapshot_for_status(dep).status(cfg).lifecycle
         rows.append(
             Box(
                 host=host,

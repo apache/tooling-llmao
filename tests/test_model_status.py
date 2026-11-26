@@ -37,7 +37,6 @@ from llmao.model_status import (
     UNAVAILABLE,
     UNHEALTHY,
     DeploymentSnapshot,
-    deployment_status,
     model_status,
 )
 
@@ -78,29 +77,21 @@ def test_fleet_fixture_rollup_is_degraded():
         extra = {}
         if i == 0:
             extra = {"litellm_healthy": False}
-        views.append(deployment_status(_self(context_window=40960 - i, **extra), CFG, NOW))
+        views.append(_self(context_window=40960 - i, **extra).status(CFG, NOW))
     for _ in range(3):
         views.append(
-            deployment_status(
-                _self(
-                    probe_ok=None,
-                    last_ok=None,
-                    vllm_probed_at=None,
-                    in_litellm=False,
-                    litellm_healthy=None,
-                    litellm_health_at=None,
-                    config_served_at=NOW - 60,
-                ),
-                CFG,
-                NOW,
-            )
+            _self(
+                probe_ok=None,
+                last_ok=None,
+                vllm_probed_at=None,
+                in_litellm=False,
+                litellm_healthy=None,
+                litellm_health_at=None,
+                config_served_at=NOW - 60,
+            ).status(CFG, NOW)
         )
     views.append(
-        deployment_status(
-            _self(probe_ok=False, fails=CFG.health_fail_threshold, last_ok=NOW - 100, litellm_healthy=True),
-            CFG,
-            NOW,
-        )
+        _self(probe_ok=False, fails=CFG.health_fail_threshold, last_ok=NOW - 100, litellm_healthy=True).status(CFG, NOW)
     )
 
     lifecycles = [v.lifecycle for v in views]
@@ -119,36 +110,28 @@ def test_fleet_fixture_rollup_is_degraded():
 
 
 def test_loading_is_not_a_missing_route_badge():
-    view = deployment_status(
-        _self(
-            probe_ok=False,
-            fails=1,
-            last_ok=None,
-            in_litellm=False,
-            litellm_healthy=None,
-            litellm_health_at=None,
-        ),
-        CFG,
-        NOW,
-    )
+    view = _self(
+        probe_ok=False,
+        fails=1,
+        last_ok=None,
+        in_litellm=False,
+        litellm_healthy=None,
+        litellm_health_at=None,
+    ).status(CFG, NOW)
     assert view.lifecycle == LOADING
     assert view.skew == ()
     assert view.counted is False
 
 
 def test_grace_expired_without_success_is_stalled():
-    view = deployment_status(
-        _self(probe_ok=False, fails=1, last_ok=None, config_served_at=NOW - CFG.health_grace_s),
-        CFG,
-        NOW,
-    )
+    view = _self(probe_ok=False, fails=1, last_ok=None, config_served_at=NOW - CFG.health_grace_s).status(CFG, NOW)
     assert view.lifecycle == STALLED
     assert view.counted is False
 
 
 def test_no_config_served_is_awaiting():
     # No GET /vllm/config since we started: the rental has not contacted us.
-    view = deployment_status(_self(config_served_at=None, probe_ok=None, last_ok=None, in_litellm=False), CFG, NOW)
+    view = _self(config_served_at=None, probe_ok=None, last_ok=None, in_litellm=False).status(CFG, NOW)
     assert view.lifecycle == AWAITING
     assert view.counted is False
     assert view.skew == ()
@@ -157,11 +140,7 @@ def test_no_config_served_is_awaiting():
 def test_restart_recovery_was_serving_now_down():
     # We restarted, no config served yet, but LiteLLM still lists the route
     # and the probe fails: this was serving, so Unhealthy, not Awaiting.
-    view = deployment_status(
-        _self(config_served_at=None, probe_ok=False, fails=CFG.health_fail_threshold, last_ok=None),
-        CFG,
-        NOW,
-    )
+    view = _self(config_served_at=None, probe_ok=False, fails=CFG.health_fail_threshold, last_ok=None).status(CFG, NOW)
     assert view.lifecycle == UNHEALTHY
     assert view.counted is True
     assert view.skew == (SKEW_VLLM_DOWN_LITELLM_UP,)
@@ -170,28 +149,20 @@ def test_restart_recovery_was_serving_now_down():
 def test_awaiting_needs_no_probe():
     # Same as awaiting, but the first probe already failed and the rental is not
     # in LiteLLM: still Awaiting contact, the failure is expected.
-    view = deployment_status(
-        _self(config_served_at=None, probe_ok=False, fails=1, last_ok=None, in_litellm=False),
-        CFG,
-        NOW,
-    )
+    view = _self(config_served_at=None, probe_ok=False, fails=1, last_ok=None, in_litellm=False).status(CFG, NOW)
     assert view.lifecycle == AWAITING
 
 
 def test_config_served_within_grace_is_loading():
-    view = deployment_status(
-        _self(
-            config_served_at=NOW - 10,
-            probe_ok=False,
-            fails=1,
-            last_ok=None,
-            in_litellm=False,
-            litellm_healthy=None,
-            litellm_health_at=None,
-        ),
-        CFG,
-        NOW,
-    )
+    view = _self(
+        config_served_at=NOW - 10,
+        probe_ok=False,
+        fails=1,
+        last_ok=None,
+        in_litellm=False,
+        litellm_healthy=None,
+        litellm_health_at=None,
+    ).status(CFG, NOW)
     assert view.lifecycle == LOADING
     assert view.counted is False
 
@@ -199,7 +170,7 @@ def test_config_served_within_grace_is_loading():
 def test_healthy_probe_wins_without_config_served():
     # The rental answers a health probe (e.g. it was booted out-of-band). Healthy
     # comes from the probe alone; the missing fetch does not hold it back.
-    view = deployment_status(_self(config_served_at=None, in_litellm=False, litellm_healthy=None), CFG, NOW)
+    view = _self(config_served_at=None, in_litellm=False, litellm_healthy=None).status(CFG, NOW)
     assert view.lifecycle == HEALTHY
 
 
@@ -207,28 +178,20 @@ def test_reached_does_not_change_lifecycle_once_loading_started():
     # 503 while the model loads versus no connection: with the config fetch as
     # the loading start both are Loading; the detail only changes what the page says.
     for reached in (True, False):
-        view = deployment_status(
-            _self(probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=reached),
-            CFG,
-            NOW,
-        )
+        view = _self(probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=reached).status(CFG, NOW)
         assert view.lifecycle == LOADING
         assert view.reached is reached
 
 
 def test_under_fail_threshold_stays_healthy():
-    view = deployment_status(
-        _self(probe_ok=False, fails=CFG.health_fail_threshold - 1, last_ok=NOW - 50),
-        CFG,
-        NOW,
-    )
+    view = _self(probe_ok=False, fails=CFG.health_fail_threshold - 1, last_ok=NOW - 50).status(CFG, NOW)
     assert view.lifecycle == HEALTHY
     assert view.counted is True
 
 
 def test_stale_vllm_is_excluded():
     age = CFG.health_fail_threshold * CFG.health_interval_s + 1
-    view = deployment_status(_self(vllm_probed_at=NOW - age), CFG, NOW)
+    view = _self(vllm_probed_at=NOW - age).status(CFG, NOW)
     assert view.lifecycle == HEALTHY
     assert view.vllm_signal == "unknown"
     assert view.counted is False
@@ -239,36 +202,24 @@ def test_stale_vllm_is_excluded():
 
 
 def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
-    commercial = deployment_status(
-        DeploymentSnapshot(model_name=MODEL, self_hosted=False, context_window=200_000),
-        CFG,
-        NOW,
-    )
+    commercial = DeploymentSnapshot(model_name=MODEL, self_hosted=False, context_window=200_000).status(CFG, NOW)
     assert commercial.lifecycle == CONFIGURED
     assert commercial.counted is False
     assert commercial.skew == (SKEW_INTENDED_NOT_IN_LITELLM,)
 
-    healthy_rental = deployment_status(_self(), CFG, NOW)
-    up_commercial = deployment_status(
-        DeploymentSnapshot(
-            model_name=MODEL,
-            self_hosted=False,
-            in_litellm=True,
-            litellm_healthy=True,
-            litellm_health_at=NOW,
-            context_window=8000,
-        ),
-        CFG,
-        NOW,
-    )
+    healthy_rental = _self().status(CFG, NOW)
+    up_commercial = DeploymentSnapshot(
+        model_name=MODEL,
+        self_hosted=False,
+        in_litellm=True,
+        litellm_healthy=True,
+        litellm_health_at=NOW,
+        context_window=8000,
+    ).status(CFG, NOW)
     summary = model_status(MODEL, [healthy_rental, up_commercial])
     assert summary.privacy == MIXED
     # The external row is configured even while LiteLLM does not have it.
-    down_commercial = deployment_status(
-        DeploymentSnapshot(model_name=MODEL, self_hosted=False, context_window=200_000),
-        CFG,
-        NOW,
-    )
+    down_commercial = DeploymentSnapshot(model_name=MODEL, self_hosted=False, context_window=200_000).status(CFG, NOW)
     assert model_status(MODEL, [healthy_rental, down_commercial]).privacy == MIXED
     assert model_status(MODEL, [up_commercial]).privacy == EXTERNAL
     assert summary.rollup == AVAILABLE
@@ -279,7 +230,7 @@ def test_commercial_configured_is_not_counted_and_both_kinds_are_mixed():
 
 
 def test_duplicates_are_a_badge_only():
-    doubled = deployment_status(_self(litellm_copies=2), CFG, NOW)
+    doubled = _self(litellm_copies=2).status(CFG, NOW)
     assert doubled.lifecycle == HEALTHY
     assert doubled.counted is True
     assert doubled.skew == (SKEW_DUPLICATED,)
@@ -287,17 +238,15 @@ def test_duplicates_are_a_badge_only():
 
 def test_an_orphan_poisons_privacy():
     """LiteLLM sends requests somewhere nothing intends, so the name is MIXED until an admin acts."""
-    hosted = deployment_status(_self(), CFG, NOW)
+    hosted = _self().status(CFG, NOW)
     assert model_status(MODEL, [hosted]).privacy == PRIVATE
     assert model_status(MODEL, [hosted], orphaned=True).privacy == MIXED
     assert model_status(MODEL, [], orphaned=True).privacy == MIXED
 
 
 def test_vllm_down_litellm_up():
-    view = deployment_status(
-        _self(probe_ok=False, fails=CFG.health_fail_threshold, last_ok=NOW - 20, litellm_healthy=True),
-        CFG,
-        NOW,
+    view = _self(probe_ok=False, fails=CFG.health_fail_threshold, last_ok=NOW - 20, litellm_healthy=True).status(
+        CFG, NOW
     )
     assert view.lifecycle == UNHEALTHY
     assert view.skew == (SKEW_VLLM_DOWN_LITELLM_UP,)
@@ -311,7 +260,7 @@ def test_not_reached_with_no_loading_start_runs_out_of_grace():
     def view(**kw):
         base = dict(config_served_at=None, probe_ok=False, fails=3, last_ok=None, in_litellm=False, reached=False)
         base.update(kw)
-        return deployment_status(_self(**base), CFG, NOW)
+        return _self(**base).status(CFG, NOW)
 
     assert view(first_probed_at=None).lifecycle == AWAITING
     assert view(first_probed_at=NOW - CFG.health_grace_s + 1).lifecycle == AWAITING
@@ -332,7 +281,7 @@ def test_a_reached_probe_starts_loading_without_a_config_fetch():
     def view(**kw):
         base = dict(config_served_at=None, probe_ok=False, fails=1, last_ok=None, in_litellm=False, reached=True)
         base.update(kw)
-        return deployment_status(_self(**base), CFG, NOW)
+        return _self(**base).status(CFG, NOW)
 
     assert view(first_reached_at=NOW - 10).lifecycle == LOADING
     assert view(first_reached_at=NOW - CFG.health_grace_s).lifecycle == STALLED
@@ -346,22 +295,22 @@ def test_a_refused_key_is_rejected_until_unlisted_and_the_passes_run():
     from llmao.model_status import FOREIGN, REJECTED, REJECTED_PASSES
 
     def lifecycle(**kw):
-        return deployment_status(_self(probe_ok=True, key_rejected=True, **kw), CFG, NOW).lifecycle
+        return _self(probe_ok=True, key_rejected=True, **kw).status(CFG, NOW).lifecycle
 
     assert lifecycle() == REJECTED
     assert lifecycle(rejected_passes=REJECTED_PASSES * 10) == REJECTED, "a listed host is ours, never Foreign"
     assert lifecycle(unlisted=True, rejected_passes=REJECTED_PASSES - 1) == REJECTED
     assert lifecycle(unlisted=True, rejected_passes=REJECTED_PASSES) == FOREIGN
     # A 200 is Healthy whatever the count says.
-    assert deployment_status(_self(key_rejected=False, rejected_passes=9, unlisted=True), CFG, NOW).lifecycle == HEALTHY
+    assert _self(key_rejected=False, rejected_passes=9, unlisted=True).status(CFG, NOW).lifecycle == HEALTHY
 
 
 def test_rejected_counts_as_down_and_foreign_does_not():
     from llmao.model_status import FOREIGN, REJECTED
 
-    healthy = deployment_status(_self(), CFG, NOW)
-    rejected = deployment_status(_self(probe_ok=True, key_rejected=True, in_litellm=False), CFG, NOW)
-    foreign = deployment_status(_self(probe_ok=True, key_rejected=True, unlisted=True, rejected_passes=3), CFG, NOW)
+    healthy = _self().status(CFG, NOW)
+    rejected = _self(probe_ok=True, key_rejected=True, in_litellm=False).status(CFG, NOW)
+    foreign = _self(probe_ok=True, key_rejected=True, unlisted=True, rejected_passes=3).status(CFG, NOW)
     assert (rejected.lifecycle, rejected.counted, rejected.skew) == (REJECTED, True, ())
     assert (foreign.lifecycle, foreign.counted) == (FOREIGN, False)
     assert model_status(MODEL, [healthy, rejected]).rollup == DEGRADED

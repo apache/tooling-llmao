@@ -161,6 +161,54 @@ class DeploymentSnapshot:
     # Foreign needs it; nothing else here reads it.
     unlisted: bool = False
 
+    def status(self, cfg: object, now: float | None = None) -> DeploymentStatus:
+        """The lifecycle, the two signals and the skew badges, read at `now`.
+
+        cfg carries the thresholds (health_grace_s, health_fail_threshold,
+        the two probe intervals); they are not facts about the deployment,
+        which is why they arrive as an argument.
+        """
+        now = now or time.time()
+        if self.self_hosted:
+            lifecycle = self_hosted_lifecycle(self, cfg, now)
+        else:
+            lifecycle = commercial_lifecycle(self)
+
+        misses = int(cfg.health_fail_threshold)
+        vllm_stale = _stale(self.vllm_probed_at, now, cfg.health_interval_s, misses)
+        litellm_stale = _stale(self.litellm_health_at, now, cfg.litellm_health_interval_s, misses)
+        vllm_signal = _signal(self.probe_ok, vllm_stale) if self.self_hosted else SIGNAL_UNKNOWN
+        litellm_signal = _signal(self.litellm_healthy, litellm_stale)
+
+        # The signal that decides "is this replica really up" is vLLM for a
+        # rental and LiteLLM for a commercial endpoint. A stale one drops out
+        # of the roll-up instead of reading as down.
+        driving_unknown = vllm_signal == SIGNAL_UNKNOWN if self.self_hosted else litellm_signal == SIGNAL_UNKNOWN
+        counted = lifecycle in (HEALTHY, UNHEALTHY, REJECTED) and not driving_unknown
+
+        skew: list[str] = []
+        if not self.in_litellm and lifecycle in (HEALTHY, CONFIGURED):
+            skew.append(SKEW_INTENDED_NOT_IN_LITELLM)
+        if vllm_signal == SIGNAL_UP and litellm_signal == SIGNAL_DOWN:
+            skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
+        if vllm_signal == SIGNAL_DOWN and litellm_signal == SIGNAL_UP:
+            skew.append(SKEW_VLLM_DOWN_LITELLM_UP)
+        if self.litellm_copies > 1:
+            skew.append(SKEW_DUPLICATED)
+
+        return DeploymentStatus(
+            model_name=self.model_name,
+            self_hosted=self.self_hosted,
+            lifecycle=lifecycle,
+            vllm_signal=vllm_signal,
+            litellm_signal=litellm_signal,
+            skew=tuple(skew),
+            context_window=self.context_window,
+            kv_cache_tokens=self.kv_cache_tokens,
+            counted=counted,
+            reached=self.reached,
+        )
+
 
 @dataclass(frozen=True)
 class DeploymentStatus:
@@ -268,49 +316,6 @@ def commercial_lifecycle(snap: DeploymentSnapshot) -> str:
     if snap.litellm_healthy is False:
         return UNHEALTHY
     return CONFIGURED
-
-
-def deployment_status(snap: DeploymentSnapshot, cfg: object, now: float | None = None) -> DeploymentStatus:
-    now = now or time.time()
-    if snap.self_hosted:
-        lifecycle = self_hosted_lifecycle(snap, cfg, now)
-    else:
-        lifecycle = commercial_lifecycle(snap)
-
-    misses = int(cfg.health_fail_threshold)
-    vllm_stale = _stale(snap.vllm_probed_at, now, cfg.health_interval_s, misses)
-    litellm_stale = _stale(snap.litellm_health_at, now, cfg.litellm_health_interval_s, misses)
-    vllm_signal = _signal(snap.probe_ok, vllm_stale) if snap.self_hosted else SIGNAL_UNKNOWN
-    litellm_signal = _signal(snap.litellm_healthy, litellm_stale)
-
-    # The signal that decides "is this replica really up" is vLLM for a rental
-    # and LiteLLM for a commercial endpoint. A stale one drops out of the
-    # roll-up instead of reading as down.
-    driving_unknown = vllm_signal == SIGNAL_UNKNOWN if snap.self_hosted else litellm_signal == SIGNAL_UNKNOWN
-    counted = lifecycle in (HEALTHY, UNHEALTHY, REJECTED) and not driving_unknown
-
-    skew: list[str] = []
-    if not snap.in_litellm and lifecycle in (HEALTHY, CONFIGURED):
-        skew.append(SKEW_INTENDED_NOT_IN_LITELLM)
-    if vllm_signal == SIGNAL_UP and litellm_signal == SIGNAL_DOWN:
-        skew.append(SKEW_VLLM_UP_LITELLM_DOWN)
-    if vllm_signal == SIGNAL_DOWN and litellm_signal == SIGNAL_UP:
-        skew.append(SKEW_VLLM_DOWN_LITELLM_UP)
-    if snap.litellm_copies > 1:
-        skew.append(SKEW_DUPLICATED)
-
-    return DeploymentStatus(
-        model_name=snap.model_name,
-        self_hosted=snap.self_hosted,
-        lifecycle=lifecycle,
-        vllm_signal=vllm_signal,
-        litellm_signal=litellm_signal,
-        skew=tuple(skew),
-        context_window=snap.context_window,
-        kv_cache_tokens=snap.kv_cache_tokens,
-        counted=counted,
-        reached=snap.reached,
-    )
 
 
 def _privacy(rows: list[DeploymentStatus], *, orphaned: bool) -> str:

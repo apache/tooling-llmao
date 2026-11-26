@@ -618,7 +618,7 @@ classDiagram
   Fleet ..> LiteLLMDeployments : update_litellm_deployments()
   DeploymentSnapshot ..> FleetDeployment : snapshot_for_status()
   DeploymentSnapshot ..> VllmServer : snapshot_for_status()
-  DeploymentSnapshot ..> DeploymentStatus : deployment_status()
+  DeploymentSnapshot ..> DeploymentStatus : status()
   DeploymentStatus ..> ModelStatus : model_status()
 ```
 
