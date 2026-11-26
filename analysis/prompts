@@ -110,11 +110,9 @@ def main(argv: list[str] | None = None) -> int:
         "report",
         _report.run,
         "who asks what of which model, no content",
-        "Reads the day files, never the store, and prints the reports that need no prompt content: "
-        "requests and tokens by project, user, model and tool; prompt lengths; shares; failures; "
-        "messages per request.",
-        store=False,
-        log_dir=True,
+        "Reads the store, never the day files: the figures build kept for each day it read, added up over "
+        "the span. The reports need no prompt content: requests and tokens by project, user, model and tool; "
+        "prompt lengths; shares; failures; messages per request.",
     )
     p.add_argument("--csv", action="store_true", help="CSV, one block per report, instead of text")
 

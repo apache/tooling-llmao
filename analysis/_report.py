@@ -21,15 +21,16 @@
     prompts report --days 30
     prompts report --from 2026-11-01 --to 2026-11-03 --csv
 
-Reads the day files the proxy's hook writes (docs/prompt-logging-design.md)
-and nothing else: never a connection to LiteLLM, never a write in the log
-directory. None of the reports reads prompt content: requests and prompt
-tokens by project, user, model and tool; prompt length per model; the
-share of requests that stream, carry tools or end at max_tokens; failures
-by class; and messages per request.
+Reads the store, never the day files: build keeps each day's figures as it
+reads the day (docs/prompt-logging-design.md for the files), and a report
+over a span adds the days up, so it returns at once however long the span.
+A day the store has not read is not in the report; a day read before the
+figures were kept stops it, saying to rebuild. None of the reports reads
+prompt content: requests and prompt tokens by project, user, model and
+tool; prompt length per model; the share of requests that stream, carry
+tools or end at max_tokens; failures by class; and messages per request.
 
-The log directory is --log-dir, else prompt_log_dir from config.yaml in
-the current directory; without either the script stops.
+The store is --analysis-dir, else analysis_dir from config.yaml.
 """
 
 from __future__ import annotations
@@ -43,11 +44,20 @@ from llmao import fmt, prompt_log
 if TYPE_CHECKING:
     import argparse
     import datetime as dt
-    import pathlib
 
 
-def report(log_dir: pathlib.Path, days: list[dt.date], *, csv_out: bool) -> None:
-    rep = prompt_log.report(prompt_log.read_days(log_dir, days))
+def report(store: _core.Store, days: list[dt.date], *, csv_out: bool) -> None:
+    kept = store.figures_over(days)
+    unkept = [day for day, fig in kept if fig is None]
+    if unkept:
+        raise SystemExit(
+            f"{fmt.plural(len(unkept), 'day')} of the span ({unkept[0]} first) were read before the report's "
+            "figures were kept with them: run prompts build --rebuild, then report again"
+        )
+    total = prompt_log.Figures()
+    for _day, fig in kept:
+        _ = total.merge(fig)
+    rep = total.tables()
     span = f"{days[0]} to {days[-1]}" if len(days) > 1 else str(days[0])
     if not csv_out:
         print(f"{fmt.plural(rep.records, 'request')} over {span}, {fmt.plural(len(rep.days), 'day')} with records\n")
@@ -96,5 +106,9 @@ def run(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         days = _core.span(days=args.days, start=args.start, end=args.end)
     except ValueError:
         ap.error("--from is after --to")
-    report(args.log_dir or _core.log_dir(), days, csv_out=args.csv)
+    store = _core.Store(args.analysis_dir or _core.analysis_dir())
+    try:
+        report(store, days, csv_out=args.csv)
+    finally:
+        store.close()
     return 0

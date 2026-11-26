@@ -162,10 +162,21 @@ def test_a_rebuild_keeps_every_verdict(tmp_path, monkeypatch, capsys):
     _ = capsys.readouterr()
 
 
-def test_prompt_report_prints_the_reports_as_text_and_as_csv(tmp_path):
+def test_prompt_report_prints_the_reports_as_text_and_as_csv_from_the_store(tmp_path, monkeypatch):
+    import argparse
+
+    import _clusters
+
     (tmp_path / "prompts-2026-11-01.jsonl").write_text(json.dumps(_record("2026-11-01")) + "\n")
     (tmp_path / "prompts-2026-11-02.jsonl").write_text(json.dumps(_record("2026-11-02", "gemma4-26b")) + "\n")
-    base = [sys.executable, str(PROMPTS), "report", "--log-dir", str(tmp_path), "--from", "2026-11-01"]
+    # build keeps each day's figures; report reads them and never the day files.
+    monkeypatch.setattr(_core, "retention_days", lambda: 90)
+    args = argparse.Namespace(
+        days=7, start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 2), log_dir=tmp_path, analysis_dir=tmp_path
+    )
+    args.rebuild = False
+    assert _clusters.run_build(argparse.ArgumentParser(), args) == 0
+    base = [sys.executable, str(PROMPTS), "report", "--analysis-dir", str(tmp_path), "--from", "2026-11-01"]
     base += ["--to", "2026-11-02"]
     text = subprocess.run(base, capture_output=True, text=True, check=True).stdout
     assert "2 requests over 2026-11-01 to 2026-11-02, 2 days with records" in text
@@ -173,6 +184,14 @@ def test_prompt_report_prints_the_reports_as_text_and_as_csv(tmp_path):
     as_csv = subprocess.run([*base, "--csv"], capture_output=True, text=True, check=True).stdout
     assert "# By model\nname,requests,per day,prompt tokens\n" in as_csv
     assert "gemma4-26b,1,0.5,500\n" in as_csv
+    # A day read before the figures were kept stops the report and says what to do.
+    store = _core.Store(tmp_path)
+    with store.db:
+        store.db.execute("UPDATE days SET figures_json = NULL WHERE day = '2026-11-02'")
+    store.close()
+    run = subprocess.run(base, capture_output=True, text=True)
+    assert run.returncode != 0
+    assert "1 day of the span (2026-11-02 first) were read before" in run.stderr and "--rebuild" in run.stderr
 
 
 def test_a_gateway_timeout_names_the_request_size_and_the_wait():

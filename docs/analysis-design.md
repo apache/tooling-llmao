@@ -107,7 +107,7 @@ write the store, `build` and `judge`; the rest read it or the day files:
 |---|---|---|
 | The entry point: every command's arguments, and which module runs it | `analysis/prompts` | built; `prompts --help` is the map |
 | The shared module: `config.yaml`, the span of days, the fingerprint, the exemplar choice, the store and its views, the judge's call, the tier report, the table printer | `analysis/_core.py` | built |
-| `report`: the reports that need no content: by project, user, model, tool; prompt lengths; shares; failures; messages per request | `analysis/_report.py` | built; moved out of `bin/llmao-prompt-log` |
+| `report`: the reports that need no content: by project, user, model, tool; prompt lengths; shares; failures; messages per request | `analysis/_report.py` | built; moved out of `bin/llmao-prompt-log`; since 2026-11-25 read from the per-day figures `build` keeps in the store, not from the day files |
 | `build`, `clusters`, `show`: the store built from the day files, listed, one cluster in full | `analysis/_clusters.py` | built |
 | `judge`, `verdicts`, `tiers`: the questions, the call, the verdicts, the consensus, the tier report | `analysis/_judge.py`, `analysis/judge-prompt.md` | built; `judge` is a dry run by default, `--judge` sends |
 | The settings | `config.yaml`: `analysis_dir`, `analysis_retention_days`, `analysis_gateway`, `analysis_models`, `analysis_key`, `analysis_tiers` | built; all required, rendered by p6 since 2026-11-06 |

@@ -14,7 +14,7 @@ write the store, the rest read it or the day files:
 prompts build        cluster the span's day files into the store           writes
 prompts judge        the judges' verdicts on the clusters that lack one     writes (dry run; --judge sends)
 
-prompts report       who asks what of which model, no content read         the day files
+prompts report       who asks what of which model, no content read         the store
 prompts clusters     who is sending what kind of request, over the span    the store
 prompts show <fp>    one cluster, exemplar in full                          the store
 prompts verdicts     the judges' consensus per cluster, where they split   the store
@@ -198,7 +198,9 @@ the judge prompt changes.
 ## The store
 
 `analysis_dir/prompts.db`, SQLite, four tables: `days` (which days are
-in), `clusters` (what does not change per day, plus the exemplar),
+in, each with its report figures as one JSON document, so `report` adds
+days up instead of reading the day files), `clusters` (what does not
+change per day, plus the exemplar),
 `cluster_days` (the figures per cluster per day, the paired count among
 them), and `verdicts` (one per cluster, judge prompt and model, with the
 exemplar hash it was given); and the two views above. Every row older
@@ -212,7 +214,9 @@ exemplar. While this is R&D, a change to any of that leaves an existing
 store stale until the days are read again, so after pulling such a
 change run `prompts build --rebuild` over your span. A verdict keyed on
 a fingerprint that no longer exists is dropped at the next prune. A
-change to the tables themselves has no migration: delete the store and
+change to the tables themselves has no migration, with one exception so
+far, the figures column on `days`, which the store adds at open because
+deleting the store would lose the verdicts: delete the store and
 start again. The views are recreated at every open.
 
 A rebuild is cheap: about 12 seconds for a day of 4,800 records, string

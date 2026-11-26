@@ -55,7 +55,7 @@ import httpx
 from box import Box
 
 from llmao.models import load_models, models_path_from_cfg
-from llmao.prompt_log import NO_PROJECT, counts_as_demand, percentile, read_day, tool_family
+from llmao.prompt_log import NO_PROJECT, Figures, counts_as_demand, percentile, read_day, tool_family
 
 if TYPE_CHECKING:
     import argparse
@@ -430,7 +430,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS days (
     day TEXT PRIMARY KEY,
     scanned_at TEXT NOT NULL,
-    records INTEGER NOT NULL
+    records INTEGER NOT NULL,
+    figures_json TEXT
 );
 CREATE TABLE IF NOT EXISTS clusters (
     fingerprint TEXT PRIMARY KEY,
@@ -524,8 +525,13 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         # No migrations while this is R&D: a store whose tables are out of
         # date is deleted and rebuilt. The views are recreated at every
-        # open, so a change to them reaches a store without that.
+        # open, so a change to them reaches a store without that. The one
+        # exception is the figures column on days (2026-11-25), added here
+        # to a store that predates it: deleting the store would lose the
+        # verdicts, hours of the judges' time, where a rebuild keeps them.
         self.db.executescript(_SCHEMA)
+        if "figures_json" not in {r["name"] for r in self.db.execute("PRAGMA table_info(days)")}:
+            self.db.execute("ALTER TABLE days ADD COLUMN figures_json TEXT")
         self.db.executescript(_VIEWS)
 
     def close(self) -> None:
@@ -533,6 +539,16 @@ class Store:
 
     def scanned_days(self) -> set[dt.date]:
         return {dt.date.fromisoformat(r["day"]) for r in self.db.execute("SELECT day FROM days")}
+
+    def figures_over(self, days: list[dt.date]) -> list[tuple[dt.date, Figures | None]]:
+        """Each scanned day of the span with its report figures; None for a day scanned before they were kept."""
+        rows = self.db.execute(
+            "SELECT day, figures_json FROM days WHERE day BETWEEN ? AND ? ORDER BY day",
+            (days[0].isoformat(), days[-1].isoformat()),
+        )
+        return [
+            (dt.date.fromisoformat(r["day"]), r["figures_json"] and Figures.from_json(r["figures_json"])) for r in rows
+        ]
 
     def cluster(self, fp: str) -> Box | None:
         row = self.db.execute("SELECT * FROM clusters WHERE fingerprint = ?", (fp,)).fetchone()
@@ -560,13 +576,20 @@ class Store:
         return gone
 
     def scan_day(self, log_dir: pathlib.Path, day: dt.date) -> int:
-        """Cluster one day's records and write them, one transaction; returns the records clustered."""
+        """Cluster one day's records and write them, with the day's report figures, one transaction.
+
+        Returns the records clustered. The one pass over the day serves
+        both: the clusters, and the figures ``prompts report`` prints, so
+        the report never reads a day file again.
+        """
         groups: dict[str, Box] = {}
+        fig = Figures()
         # The same messages sent to several models is a person comparing
         # models, which the judge cannot see from one exemplar: per group,
         # which models each distinct request went to.
         sent_to: dict[str, dict[str, set[str]]] = {}
         for r in read_day(log_dir, day):
+            fig.add(r)
             fp = fingerprint(r)
             if fp is None:
                 continue
@@ -596,8 +619,8 @@ class Store:
             for g in groups.values():
                 self._write_cluster_day(day, g)
             self.db.execute(
-                "INSERT OR REPLACE INTO days (day, scanned_at, records) VALUES (?, ?, ?)",
-                (day.isoformat(), now, records),
+                "INSERT OR REPLACE INTO days (day, scanned_at, records, figures_json) VALUES (?, ?, ?, ?)",
+                (day.isoformat(), now, records, fig.to_json()),
             )
         return records
 

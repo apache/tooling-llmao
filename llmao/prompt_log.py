@@ -44,7 +44,8 @@ import pathlib
 import re
 import shutil
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from box import Box
@@ -370,81 +371,127 @@ def log_dir(cfg: Any) -> pathlib.Path:
 # For an admin at a shell on the host: the first analyses, chosen because
 # they need no reading of prompt content. The module makes the figures;
 # analysis/prompts report prints them as text or CSV.
+#
+# The figures of one day are one JSON document, kept in the analysis store
+# (figures_json on its days table) when build reads the day, so a report
+# over a span adds documents up instead of reading the day files again.
+# They add because every figure is a count: Counters, which add with
+# update() and rank with most_common().
+
+DIMENSIONS = ("project", "user", "model", "agent")  # what requests and prompt tokens are counted by
 
 
-def _tally(bucket: dict, name: str, tokens: int) -> None:
-    acc = bucket.setdefault(name, Box(requests=0, prompt_tokens=0))
-    acc.requests += 1
-    acc.prompt_tokens += tokens
+@dataclass
+class Figures:
+    """One day's figures, or several days' added up.
 
-
-def _ranked(bucket: dict) -> list[Box]:
-    return [Box(name=k, **v) for k, v in sorted(bucket.items(), key=lambda kv: -kv[1].requests)]
-
-
-def report(records: Iterable[Mapping]) -> Box:
-    """The figures of the design's first reports, over whatever records are given.
-
-    ``by_project``, ``by_user``, ``by_model``, ``by_agent``: requests and
-    prompt tokens, most requests first. ``prompt_len``: per model, counts
-    in the length buckets. ``shares``: per model, how many requests
-    streamed, carried tools, or ended at max_tokens. ``failures``: per
-    model and error class. ``conversation``: per model, messages per
-    request at the median and the 95th percentile.
+    Every mapping holds Counters. A dataclass rather than a Box, the one
+    place this module makes that choice: a Box turns any dict it holds
+    into a Box, a Counter among them, and with it go update() and
+    most_common(). ``requests`` and ``prompt_tokens`` are keyed by
+    dimension (DIMENSIONS), then name; the rest by model. The messages
+    histogram is keyed by the count as a string, which is what JSON hands
+    back.
     """
-    by_project: dict = {}
-    by_user: dict = {}
-    by_model: dict = {}
-    by_agent: dict = {}
-    prompt_len: dict[str, dict] = defaultdict(lambda: dict.fromkeys([b for _l, b in PROMPT_BUCKETS], 0))
-    shares: dict[str, Box] = defaultdict(lambda: Box(requests=0, streamed=0, with_tools=0, finish_length=0))
-    failures: dict[tuple[str, str], int] = defaultdict(int)
-    messages: dict[str, list[int]] = defaultdict(list)
-    days: set[str] = set()
-    seen = 0
-    for r in records:
+
+    records: int = 0
+    days: list[str] = field(default_factory=list)  # the UTC days the records carry, "YYYY-MM-DD"
+    requests: dict[str, Counter] = field(default_factory=dict)
+    prompt_tokens: dict[str, Counter] = field(default_factory=dict)
+    prompt_len: dict[str, Counter] = field(default_factory=dict)  # length bucket -> successful requests
+    shares: dict[str, Counter] = field(default_factory=dict)  # requests, streamed, with_tools, finish_length
+    failures: dict[str, Counter] = field(default_factory=dict)  # error class -> count
+    messages: dict[str, Counter] = field(default_factory=dict)  # messages per request -> successful requests
+
+    COUNTED = ("requests", "prompt_tokens", "prompt_len", "shares", "failures", "messages")  # what merge adds
+
+    @classmethod
+    def from_records(cls, records: Iterable[Mapping]) -> Figures:
+        fig = cls()
+        for r in records:
+            fig.add(r)
+        return fig
+
+    def add(self, r: Mapping) -> None:
+        """Count one record in; a record that is not demand is not counted."""
         key = r.get("key") or {}
         model = r.get("model")
         if not counts_as_demand(model, key.get("project")):
-            continue
-        seen += 1
-        if r.get("ts"):
-            days.add(r["ts"][:10])
+            return
+        self.records += 1
+        if r.get("ts") and r["ts"][:10] not in self.days:
+            self.days.append(r["ts"][:10])
         tokens = (r.get("tokens") or {}).get("prompt") or 0
-        _tally(by_project, key.get("project") or NO_PROJECT, tokens)
-        _tally(by_user, key.get("user") or "(automation)", tokens)
-        _tally(by_model, model, tokens)
-        _tally(by_agent, tool_family(r.get("user_agent")), tokens)
-        share = shares[model]
-        share.requests += 1
-        share.streamed += bool(r.get("stream"))
-        share.with_tools += bool((r.get("params") or {}).get("tools"))
-        share.finish_length += r.get("finish_reason") == "length"
+        names = Box(
+            project=key.get("project") or NO_PROJECT,
+            user=key.get("user") or "(automation)",
+            model=model,
+            agent=tool_family(r.get("user_agent")),
+        )
+        for dim, name in names.items():
+            self.requests.setdefault(dim, Counter())[name] += 1
+            self.prompt_tokens.setdefault(dim, Counter())[name] += tokens
+        share = self.shares.setdefault(model, Counter())
+        share["requests"] += 1
+        share["streamed"] += bool(r.get("stream"))
+        share["with_tools"] += bool((r.get("params") or {}).get("tools"))
+        share["finish_length"] += r.get("finish_reason") == "length"
         if r.get("status") == "failure":
-            failures[(model, ((r.get("error") or {}).get("class")) or "unknown")] += 1
-            continue
-        prompt_len[model][prompt_bucket(tokens)] += 1
+            self.failures.setdefault(model, Counter())[((r.get("error") or {}).get("class")) or "unknown"] += 1
+            return
+        self.prompt_len.setdefault(model, Counter())[prompt_bucket(tokens)] += 1
         if isinstance(r.get("messages"), list):
-            messages[model].append(len(r["messages"]))
-    return Box(
-        records=seen,
-        days=sorted(days),
-        by_project=_ranked(by_project),
-        by_user=_ranked(by_user),
-        by_model=_ranked(by_model),
-        by_agent=_ranked(by_agent),
-        prompt_len=[Box(model=m, **prompt_len[m]) for m in sorted(prompt_len)],
-        shares=[Box(model=m, **shares[m]) for m in sorted(shares)],
-        failures=[
-            Box(model=m, error=e, count=n) for (m, e), n in sorted(failures.items(), key=lambda kv: (kv[0][0], -kv[1]))
-        ],
-        conversation=[
-            Box(model=m, p50=percentile(messages[m], 0.5), p95=percentile(messages[m], 0.95)) for m in sorted(messages)
-        ],
-    )
+            self.messages.setdefault(model, Counter())[str(len(r["messages"]))] += 1
 
+    def merge(self, part: Figures) -> Figures:
+        """Add another day's figures in, in place; returns self. The part may be as from_json read it."""
+        self.records += part.records
+        self.days = sorted(set(self.days) | set(part.days))
+        for name in self.COUNTED:
+            mine = getattr(self, name)
+            for k, counts in getattr(part, name).items():
+                mine.setdefault(k, Counter()).update(counts)
+        return self
 
-def read_days(log_dir: pathlib.Path, days: Iterable[dt.date]) -> Iterator[dict]:
-    """Every record of several days, in day order."""
-    for day in days:
-        yield from read_day(log_dir, day)
+    def tables(self) -> Box:
+        """The figures as the tables ``prompts report`` prints: ranked, bucketed, percentiles taken.
+
+        ``by_project``, ``by_user``, ``by_model``, ``by_agent``: requests
+        and prompt tokens, most requests first. ``prompt_len``: per model,
+        counts in the length buckets. ``shares``: per model, how many
+        requests streamed, carried tools, or ended at max_tokens.
+        ``failures``: per model and error class. ``conversation``: per
+        model, messages per request at the median and the 95th percentile.
+        """
+
+        def ranked(dim: str) -> list[Box]:
+            tokens = self.prompt_tokens.get(dim, Counter())
+            requests = self.requests.get(dim, Counter())
+            return [Box(name=n, requests=c, prompt_tokens=tokens[n]) for n, c in requests.most_common()]
+
+        def lengths(model: str) -> list[int]:
+            return [int(n) for n in self.messages[model].elements()]
+
+        buckets = [b for _l, b in PROMPT_BUCKETS]
+        return Box(
+            records=self.records,
+            days=sorted(self.days),
+            **{f"by_{dim}": ranked(dim) for dim in DIMENSIONS},
+            prompt_len=[Box(model=m, **{b: self.prompt_len[m][b] for b in buckets}) for m in sorted(self.prompt_len)],
+            shares=[Box(model=m, **self.shares[m]) for m in sorted(self.shares)],
+            failures=[
+                Box(model=m, error=e, count=n) for m in sorted(self.failures) for e, n in self.failures[m].most_common()
+            ],
+            conversation=[
+                Box(model=m, p50=percentile(lengths(m), 0.5), p95=percentile(lengths(m), 0.95))
+                for m in sorted(self.messages)
+            ],
+        )
+
+    def to_json(self) -> str:
+        return json.dumps(vars(self), sort_keys=True)
+
+    @classmethod
+    def from_json(cls, text: str) -> Figures:
+        """A day as the store kept it; its mappings are plain, which update() takes as it takes a Counter."""
+        return cls(**json.loads(text))

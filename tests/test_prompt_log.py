@@ -350,7 +350,7 @@ def _full(hour, model="qwen3-8b", **over):
 
 
 def test_the_reports_count_requests_by_who_what_and_how_without_reading_a_prompt():
-    rep = prompt_log.report(
+    rep = prompt_log.Figures.from_records(
         [
             _full(9, stream=True, params={"tools": [{}]}, messages=[{}, {}, {}]),
             _full(9, key={"project": "spark", "user": None}, user_agent="opencode/1", tokens={"prompt": 9000}),
@@ -358,7 +358,7 @@ def test_the_reports_count_requests_by_who_what_and_how_without_reading_a_prompt
             _full(10, status="failure", error={"class": "RateLimitError"}, tokens={"prompt": 0}),
             _full(11, key={"project": prompt_log.HEALTH_CHECK_TEAM}),  # not demand
         ]
-    )
+    ).tables()
     assert rep.records == 4 and rep.days == ["2026-11-01"]
     assert [(r.name, r.requests, r.prompt_tokens) for r in rep.by_project] == [("tooling", 3, 1000), ("spark", 1, 9000)]
     assert [(r.name, r.requests) for r in rep.by_user] == [("someone", 3), ("(automation)", 1)]
@@ -373,3 +373,23 @@ def test_the_reports_count_requests_by_who_what_and_how_without_reading_a_prompt
     ]
     assert [(f.model, f.error, f.count) for f in rep.failures] == [("qwen3-8b", "RateLimitError", 1)]
     assert [(c.model, c.p50, c.p95) for c in rep.conversation] == [("gemma4-26b", 1, 1), ("qwen3-8b", 1, 3)]
+
+
+def test_the_figures_of_several_days_add_up_through_json_to_the_report_over_all_records():
+    import json
+
+    records = [
+        _full(9, stream=True, params={"tools": [{}]}, messages=[{}, {}, {}]),
+        _full(9, key={"project": "spark", "user": None}, user_agent="opencode/1", tokens={"prompt": 9000}),
+        _full(10, model="gemma4-26b", finish_reason="length"),
+        _full(10, status="failure", error={"class": "RateLimitError"}, tokens={"prompt": 0}),
+        _full(11, key={"project": prompt_log.HEALTH_CHECK_TEAM}),  # not demand
+    ]
+    whole = prompt_log.Figures.from_records(records).tables()
+    first, second = (prompt_log.Figures.from_records(part) for part in (records[:2], records[2:]))
+    total = prompt_log.Figures()
+    for part in (first, second):
+        _ = total.merge(prompt_log.Figures.from_json(part.to_json()))  # as the store keeps them
+    assert json.loads(total.to_json())["requests"]["model"] == {"qwen3-8b": 3, "gemma4-26b": 1}
+    assert total.tables() == whole
+    assert whole.records == 4 and [(c.model, c.p95) for c in whole.conversation] == [("gemma4-26b", 1), ("qwen3-8b", 3)]
