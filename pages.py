@@ -1446,7 +1446,7 @@ async def keys_list(result):
     """
     ident = await current_identity(APP.cfg)
     keys = await APP.seam.list_my_keys(ident)
-    result.keys = _key_rows(
+    result["keys"] = _key_rows(
         keys,
         after_path="/keys",
         used_by_token=await APP.seam.my_key_usage(ident),
@@ -2336,7 +2336,7 @@ async def keys_other_list(result):
                 by_id.setdefault(k.token_id, k)
         except (AuthzError, BackendUnavailableError):
             continue
-    result.keys = _key_rows(list(by_id.values()), after_path="/keys/other")
+    result["keys"] = _key_rows(list(by_id.values()), after_path="/keys/other")
     return result
 
 
