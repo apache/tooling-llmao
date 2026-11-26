@@ -1,6 +1,6 @@
 # Build status and backlog
 
-**As of:** 2026-11-14<br>
+**As of:** 2026-11-25<br>
 **Repo:** `apache/tooling-llmao`<br>
 **Product design (concepts/policy):** `apache/rai-private` → `services/llmao/README.md`<br>
 **How to run/use this software:** repo [`README.md`](../README.md)<br>
@@ -12,7 +12,7 @@
 |------|--------|
 | Product concepts (project-centered, budgets, credentials) | **rai-private design** |
 | What the code does *today* (short) | **Done** below — detail is the code |
-| What is open, what is parked, what is waiting on a decision | **Where the work stands** below |
+| What is open, what is parked, what is waiting on a decision | **GitHub issues**; what is left in **Where the work stands** below is moving there |
 | **Planned UX** (layouts, workflows, phases) | **UX backlog** below |
 | How to run locally / PATs against proxy | **README** (how-to) |
 | How the pieces connect | [`ARCHITECTURE.md`](ARCHITECTURE.md); the design docs it points at |
@@ -111,8 +111,6 @@ Limits of that sizing, all in `hosting/README.md`: it happens once, at install; 
 
 Remaining: long vLLM boot, config revision on the rental, pending-assignment table, rental smoke, and nothing restarting a GPU rental automatically.
 
-Open policy still: **who creates automation PATs** (A RAI / B Chair-VP / C any PMC — code provisional C). See design §5.1.1.
-
 **`/admin` is the admin's inbox** (2026-11-13). Four pages share a row of pills under the heading: Overview, Capacity, Tiers, Service keys. Work needed lists everything that needs a site admin, the skew store's items and the fleet's (a machine nobody intends, a stalled or unhealthy deployment, an orphan in LiteLLM) with their buttons and the Approve modal; `/models` shows no list of them, only each deployment's row with its state and buttons, which a Work needed item links to. The tiles run in the order of the sections. The Gateway tile carries the LiteLLM version against the pin and free space on the disk the prompt log grows on, warm under 15%. A read of LiteLLM that fails leaves a dash on its tile and "Could not read LiteLLM" in its section, never a 0. The DataDog half of disk monitoring is Infra's. Since 2026-11-17 the Gateway tile also carries each provider's listing and how long since it was read, warm with the last error once a listing is older than three listing intervals, because RunPod's v1 API was retired and the last report stood for a day with nothing saying so; a stale listing concludes nothing about the hosts it lacks, and a `/models` row no listing names says the listing is stale rather than that the rental may have ended.
 
 Edge cases that bite operators (LiteLLM down, pagination, master key drift, prisma path, etc.) are tracked as work items, not product design.
@@ -121,11 +119,10 @@ Edge cases that bite operators (LiteLLM down, pagination, master key drift, pris
 
 ## Where the work stands
 
-As of 2026-11-14. Three lists: what is small enough to pick up in an
-hour, what is an afternoon, and the larger threads with the steps each
-still has. Then what is waiting on a decision, and what is parked on
-purpose. Issues on GitHub hold the ideas that want colleagues' eyes
-before any code.
+As of 2026-11-25. What is small enough to pick up in an hour, what is an
+afternoon, and the larger threads with the steps each still has; then
+what is parked on purpose. Everything here that an open issue covers has
+moved to that issue; what remains is what has none yet.
 
 ### Small, an hour or less
 
@@ -139,9 +136,6 @@ Nothing at the moment.
   `GET /health?model_id=<id>` for that one deployment and feeds the
   result into the same fields the skew check writes. A paid deployment
   would get a note that it spends tokens.
-- **Issue #68, the scanner.** A source probes `/v1/models` daily with
-  model names as tokens. A refused-at-the-door admin signal, kept apart
-  from refusals of model calls.
 - **asfquart 0.1.13, once it is on PyPI.** Everything the release needs
   is on asfquart's main as of 2026-11-14 (CI green): `use_template`
   passes a `Response` through, and `auth.require` accepts the
@@ -182,17 +176,6 @@ done).
 - A rental's detail as a modal, live facts only.
 - Capacity advising on the shape of the next rental for a model ("a 96 GB
   card with 42 GB of disk") from what its deployments measured.
-- Parked within it: performance numbers, disk and GPU metrics, verdicts.
-
-**Capacity recommendations.** The first rule is live.
-
-- Hours-over-threshold counts in the summaries, for burst awareness
-  (qwen3-8b averaged 1% busy and hit KV 100% in burst hours).
-- The other rules the data supports: Add (busy or queueing in a share of
-  hours), Retire one of several idle rentals, Deploy (asked for, nothing
-  serving), Retire an unasked deployment.
-- Snooze on a recommendation; the minimum rentals per model in config,
-  since redundancy is policy.
 
 **The analysis, the portal's part** (`docs/analysis-design.md` A6 to
 A8; parked 2026-11-05 until the judges have run for a while).
@@ -207,64 +190,9 @@ A8; parked 2026-11-05 until the judges have run for a while).
 - The taxonomy refined with colleagues against real verdicts; tests for
   `analysis/_core.py` once its functions stop moving.
 
-**Access control** (`docs/access-control-design.md`; paused 2026-11-08
-with a three-step plan agreed and nothing built).
-
-- The design, revised 2026-11-08: LiteLLM's groups cover a model name;
-  its tag routing chooses among a name's deployments, and a `!` or `&`
-  tag from the key or team cannot be taken off by the caller. So the
-  second name per paid route is withdrawn: provider deployments carry
-  `paid`, teams that may never spend carry `!paid`. The hole it closes:
-  once a provider deployment shares a name with ours, the free tier
-  reaches it as fallback.
-- Step 1: llmao tags `paid` and `self-hosted` on the deployments it adds,
-  `router_settings` in the example config; the live rows backfilled by
-  hand.
-- Step 2: the p6 change that switches `enable_tag_filtering` on, a
-  reviewed PR.
-- Step 3: `!paid` on the pretend projects' teams in the existing
-  out-of-line check; the analysis judge sends `!paid` (#73).
-- Still open: who grants a restricted group (site admins only, or a PMC
-  for its own project); paid models granted per project with a budget;
-  a model going from Private to Mixed means prompts may leave our
-  infrastructure, and keys minted under the Private promise may want
-  revoking or re-consenting; the doc's questions 2, 3, 4, 6 and 7.
-
-### Waiting on a decision
-
-- **Who creates automation PATs** (design §5.1.1): RAI, a Chair or VP, or
-  any PMC; the code is provisionally the last.
-- **The Open RAI numbers** under the UX backlog: trial amounts and
-  duration, hard dual budgets or a display split, narrower stewards,
-  capacity fair-share defaults.
-
-### Held on GitHub for colleagues
-
-- **#72, request priority on our rentals.** vLLM's priority scheduling
-  would let the analysis judge queue behind users, but any client could
-  then raise its own priority; it needs the proxy to strip the field from
-  everyone not allowed to set it. Not done.
-- **#73, "self-hosted only" on a request.** Now step 3 of the access
-  control plan above: tags on the deployments, the filter switched on
-  in `litellm.yaml`, and a request sends `!paid`. Not in our hook, which
-  runs before routing and cannot choose a deployment. Not a development
-  item while nothing is served from a paid provider.
-- **#68, the scanner**, above.
-
 ### Parked on purpose
 
-- **"At or near their limit" on `/admin`** (parked 2026-11-14). The
-  idea: free-tier people at 80% of the rolling allowance and projects at
-  80% of their weekly cap, between Approvals and Recent work, quiet when
-  nobody is near. It is not buildable on what exists. It rests on budget
-  and capacity usage, and that base is not baked: the plumbing from
-  LiteLLM's spend to a per-person and per-project position against a
-  limit, the tracking and aggregation that position needs over a rolling
-  window, and the UX that says it to a person, a PMC and an admin. The
-  request and budget scaffolding in `seam.py` is a colleague's
-  in-progress work, and the colleague has input on this item. The base
-  comes first, with the colleague; this section follows from it.
-- Withdraw an approval from the UI; a Reboot button once a provider API
+- A Reboot button once a provider API
   is verified to reboot a rental; a RunPod console link per pod once a
   stable per-pod URL is confirmed; explicit `--kv-cache-memory` on a
   tight card; FLEET_KEY hardening and rotation; the budget and request
@@ -369,34 +297,6 @@ regression and are not.
 
 ---
 
-## Connecting an agent
-
-Claude Code works against the gateway with environment variables alone;
-LiteLLM exposes `/v1/messages`, so no shim is needed.
-
-```
-ANTHROPIC_BASE_URL=https://llm.apache.org
-ANTHROPIC_AUTH_TOKEN=<PAT>
-ANTHROPIC_MODEL=gemma4-26b
-CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000
-```
-
-Three things that are not obvious:
-
-- **Set the context limit below the real window.** vLLM rejects a request
-  where prompt + `max_tokens` exceeds it, and a client that assumes 200k
-  will auto-compact too late.
-- **Pick a model whose reasoning is off by default.** A reasoning model
-  emits nothing for a minute while it thinks; the client abandons the
-  stream and retries, and the retries stack.
-- **`reasoning_effort` vocabularies differ.** Qwen3.8-27B accepts only
-  `xhigh`, `medium`, `low` and 400s on `high`, which several clients send
-  by default. Gemma accepts all five.
-
-Tool use through the Anthropic path is currently broken — see open issues.
-
----
-
 ## UX backlog (planned — do these)
 
 Product intent for budgets, roles, and reports: **design §6**. Below is **what to build in the UI**, in order.
@@ -458,26 +358,6 @@ Home = role-aware launchpad (not keys-only)
 - Capacity meters (TPM/RPM/parallel) separate from $
 - Models: wire Available (and key `models` allow-list) when team / envelope policy exists; column already stubbed
 
-### P6 — Models page follow-ups
-
-Left open when the models-dashboard design was retired (its two passes
-shipped; the durable parts are in `docs/ARCHITECTURE.md` and
-`docs/rental-lifecycle.md`):
-
-- **Event history** per deployment: record every lifecycle transition with
-  a timestamp and show the latest ("Loading since 12:04"). Debugging a
-  stalled rental otherwise means guessing.
-- **Check LiteLLM now** per deployment: force LiteLLM's health check from
-  the page. It costs tokens, so a per-deployment cooldown (proposed five
-  minutes); paid providers flagged. The shape is settled under "Where the
-  work stands", medium.
-- **Preview as user** toggle for admins, so the user view can be checked
-  without a second account.
-- **Drained** state for planned maintenance, so maintenance is not read as
-  degradation.
-- **Privacy wording** for users, with the rented-VM caveat (a GPU host
-  operator can in principle observe a VM's memory).
-
 ### Cross-cutting UX rules (when building)
 
 - ASF vocabulary only (project, person, purpose, envelope)
@@ -486,47 +366,21 @@ shipped; the durable parts are in `docs/ARCHITECTURE.md` and
 - Proxy-down = loud banner, not silent zeros
 - Supply-path model fields: site admin only (already in Models v1)
 
-### Open RAI (block precise numbers, not UX scaffolding)
-
-1. Trial/free default amounts and duration
-2. Hard dual budgets vs display-only people/automation split
-3. Narrow stewards later (Chair vs any PMC)?
-4. Capacity fair-share defaults from Infra
-
 ---
 
 ## Engineering backlog (non-UX or infra)
 
-1. **`hosted_vllm/` — done in `models.yaml`.** New `/model/new` bodies use
-   that prefix. LiteLLM DB rows created as `openai/` stay until deleted and
-   re-pushed.
-2. **Deployment registration — done.** A host that changed address used to
-   leave the old deployment behind for good (one model had accumulated
-   twelve identical rows). Now every deployment is stamped with its
-   identity (`model_info.llmao_key`), every write is confirmed by
-   re-reading `/model/info`, and a deployment no server claims is an
-   orphan on the /models strip after `ORPHAN_PASSES` skew passes, with
-   Remove from LiteLLM; it is never deleted unattended (2026-10-28). The rest
-   of the clean-up is the reconcile migration
-   (`docs/fleet-reconcile-design.md`).
-3. **`models.yaml` does not record `reasoning_effort` levels** per model
+1. **`models.yaml` does not record `reasoning_effort` levels** per model
    (Qwen 3.8 lists them; not a uniform field).
-4. Harden PAT against LiteLLM pagination / delete ids
-5. Automation creator policy after RAI decides §5.1.1
-6. Site admin via `rai` PMC (optional keep cfg list)
-7. PMC notification email on key/budget lifecycle
-8. Advisor / richer routing
-9. **Nothing restarts a GPU rental.** All three were launched by hand; a
-    host restart leaves the rental up and the model down. RunPod pods carry
-    their launch command in `--docker-args` and recover; the hand-launched
-    rental does not.
-10. **Active notification when a model goes unserved.** A server was lost
-    unseen for days in late October; Infra has been asked for a monitor.
-    Until then the redundancy rule on `/admin/capacity` is the only
-    signal, and only to someone looking.
-11. **asfquart `Response` pass-through.** Upstream since 2026-11-14, in
-    the unreleased 0.1.13. The `use_template` shim in `pages.py` goes
-    when llmao pins that release (the afternoon item above).
+2. Site admin via `rai` PMC (optional keep cfg list)
+3. PMC notification email on key/budget lifecycle
+4. **Nothing restarts a GPU rental.** All three were launched by hand; a
+   host restart leaves the rental up and the model down. RunPod pods carry
+   their launch command in `--docker-args` and recover; the hand-launched
+   rental does not.
+5. **asfquart `Response` pass-through.** Upstream since 2026-11-14, in
+   the unreleased 0.1.13. The `use_template` shim in `pages.py` goes
+   when llmao pins that release (the afternoon item above).
 
 ---
 
