@@ -12,7 +12,7 @@
 |------|--------|
 | Product concepts (project-centered, budgets, credentials) | **rai-private design** |
 | What the code does *today* (short) | **Done** below — detail is the code |
-| What is open, what is parked, what is waiting on a decision | **GitHub issues**; what is left in **Where the work stands** below is moving there |
+| What is open, what is parked, what is waiting on a decision | **GitHub issues** |
 | **Planned UX** (layouts, workflows, phases) | **UX backlog** below |
 | How to run locally / PATs against proxy | **README** (how-to) |
 | How the pieces connect | [`ARCHITECTURE.md`](ARCHITECTURE.md); the design docs it points at |
@@ -109,8 +109,6 @@ Limits of that sizing, all in `hosting/README.md`: it happens once, at install; 
 
 **A hardening round from a security audit** landed on 2026-11-12, thirteen commits, each saying which audit finding it answers and where the audit's rating or proposal was wrong. The portal trusts the one Apache proxy in front of it for the client address (hypercorn's `ProxyFixMiddleware`, one hop) and names a rental by that corrected peer, not a header it sent. A rental's `/v1/models` and `/metrics` replies are read up to a 2 MB cap, streamed, since a timeout bounds the wait and never the size. The key list is walked page by page, so a key past the hundredth can be revoked. `@api` replies carry `no-store`, and the prompt log drops credential-shaped custom headers by a pattern over the name, not a list. The tier row's read-change-write is serialised within the one process. Deciding an access request takes a site admin; a cap raised before the request's save failed is said in the admin notice. Ports are range-checked, stored request rows are checked on the way in, two refusals say the same thing whether the key is invisible or someone else's. `log_level` in `config.yaml` sets the level (default DEBUG, so nothing changes until the node yaml says INFO; the p6 side is a class parameter and a template line) and the timestamps carry year, seconds and offset. The fleet key goes over https only, loopback excepted.
 
-Remaining: long vLLM boot, config revision on the rental, pending-assignment table, rental smoke, and nothing restarting a GPU rental automatically.
-
 **`/admin` is the admin's inbox** (2026-11-13). Four pages share a row of pills under the heading: Overview, Capacity, Tiers, Service keys. Work needed lists everything that needs a site admin, the skew store's items and the fleet's (a machine nobody intends, a stalled or unhealthy deployment, an orphan in LiteLLM) with their buttons and the Approve modal; `/models` shows no list of them, only each deployment's row with its state and buttons, which a Work needed item links to. The tiles run in the order of the sections. The Gateway tile carries the LiteLLM version against the pin and free space on the disk the prompt log grows on, warm under 15%. A read of LiteLLM that fails leaves a dash on its tile and "Could not read LiteLLM" in its section, never a 0. The DataDog half of disk monitoring is Infra's. Since 2026-11-17 the Gateway tile also carries each provider's listing and how long since it was read, warm with the last error once a listing is older than three listing intervals, because RunPod's v1 API was retired and the last report stood for a day with nothing saying so; a stale listing concludes nothing about the hosts it lacks, and a `/models` row no listing names says the listing is stale rather than that the rental may have ended.
 
 Edge cases that bite operators (LiteLLM down, pagination, master key drift, prisma path, etc.) are tracked as work items, not product design.
@@ -119,85 +117,10 @@ Edge cases that bite operators (LiteLLM down, pagination, master key drift, pris
 
 ## Where the work stands
 
-As of 2026-11-25. What is small enough to pick up in an hour, what is an
-afternoon, and the larger threads with the steps each still has; then
-what is parked on purpose. Everything here that an open issue covers has
-moved to that issue; what remains is what has none yet.
-
-### Small, an hour or less
-
-Nothing at the moment.
-
-### Medium, an afternoon
-
-- **Check LiteLLM now, per deployment, on `/models`.** LiteLLM's own
-  health check runs every four hours because it sends real completions;
-  after a fix, "LiteLLM down" lingers for hours. A button that runs
-  `GET /health?model_id=<id>` for that one deployment and feeds the
-  result into the same fields the skew check writes. A paid deployment
-  would get a note that it spends tokens.
-- **asfquart 0.1.13, once it is on PyPI.** Everything the release needs
-  is on asfquart's main as of 2026-11-14 (CI green): `use_template`
-  passes a `Response` through, and `auth.require` accepts the
-  classmethods of a `Requirements` subclass; the CHANGELOG is written and
-  a colleague cuts the tag the week of the 16th. Then here: pin
-  `asfquart>=0.1.13`, delete the `use_template` shim in `pages.py` and
-  go back to `@APP.use_template`, add a `Requirements` subclass with a
-  `site_admin` check, register an error handler that turns
-  `AuthenticationFailed` into the flash-and-redirect `@page` does for
-  `AuthzError`, and put `@asfquart.auth.require(...site_admin)` on the
-  admin routes in place of the checks in their bodies.
-
-### The larger threads
-
-**Fleet reconciliation, the Deployment step.** Decided 2026-11-17: a
-rental's state is computed from the rental alone, never from whether
-LiteLLM has a route to it; whether to delete a route is decided in the
-list of actions a pass produces, where the other LiteLLM actions are.
-The matrix is corrected accordingly. Next, in order:
-
-- `deployment.py` commit 1: the Deployment class and its transition
-  table, absorbing `model_status.py`; `deployment_status(...)` becomes a
-  method, retiring the five-call pair in `fleet.py` and `pages.py`.
-- `docs/rental-lifecycle.md` rewritten in the new names.
-- The tracking doc folded into `ARCHITECTURE.md` and deleted.
-- Then re-assess the parked backlog against the new shape.
-
-**The UX rethink** (started 2026-11-02; the capacity display round is
-done).
-
-- The tiles-and-words commit on `/admin/capacity`: the card's $/day is
-  the period average (verified, not a bug) beside present-tense $/hr
-  rental lines, so label it so and add the current rate; whether an
-  idle-rental dollar tile belongs is a question to ask first.
-- Details on `/models` as a tabbed dialog: general; provenance from
-  Apache Sourcelume; an admin tab with provisioning facts and GPU
-  metrics.
-- A rental's detail as a modal, live facts only.
-- Capacity advising on the shape of the next rental for a model ("a 96 GB
-  card with 42 GB of disk") from what its deployments measured.
-
-**The analysis, the portal's part** (`docs/analysis-design.md` A6 to
-A8; parked 2026-11-05 until the judges have run for a while).
-
-- The project page's panels from each project's share of the demand
-  values: tools by model, refusals, latency, prompt lengths, a daily
-  trend. The data has been in the demand values since fold version 3.
-- A note to a project, written by an admin, dated, shown until a PMC
-  member acknowledges it: the way a finding reaches the people it
-  concerns.
-- A person's own shape on the keys page, from LiteLLM's daily rows.
-- The taxonomy refined with colleagues against real verdicts; tests for
-  `analysis/_core.py` once its functions stop moving.
-
-### Parked on purpose
-
-- A Reboot button once a provider API
-  is verified to reboot a rental; a RunPod console link per pod once a
-  stable per-pod URL is confirmed; explicit `--kv-cache-memory` on a
-  tight card; FLEET_KEY hardening and rotation; the budget and request
-  scaffolding in `seam.py`, which belongs to a colleague's in-progress
-  work and is not to be touched.
+In GitHub issues, since 2026-11-25: what is open, what is parked and why,
+and the decisions waiting (#94). One note that is not an issue: the
+request and budget scaffolding in `seam.py` is a colleague's in-progress
+work and is not to be touched.
 
 ---
 
@@ -365,22 +288,6 @@ Home = role-aware launchpad (not keys-only)
 - Quart flashes for mutations
 - Proxy-down = loud banner, not silent zeros
 - Supply-path model fields: site admin only (already in Models v1)
-
----
-
-## Engineering backlog (non-UX or infra)
-
-1. **`models.yaml` does not record `reasoning_effort` levels** per model
-   (Qwen 3.8 lists them; not a uniform field).
-2. Site admin via `rai` PMC (optional keep cfg list)
-3. PMC notification email on key/budget lifecycle
-4. **Nothing restarts a GPU rental.** All three were launched by hand; a
-   host restart leaves the rental up and the model down. RunPod pods carry
-   their launch command in `--docker-args` and recover; the hand-launched
-   rental does not.
-5. **asfquart `Response` pass-through.** Upstream since 2026-11-14, in
-   the unreleased 0.1.13. The `use_template` shim in `pages.py` goes
-   when llmao pins that release (the afternoon item above).
 
 ---
 
