@@ -291,3 +291,16 @@ def test_build_skips_days_without_a_file_and_the_writers_span_beyond_the_retenti
     assert f"(default {_core.WRITER_DAYS}, beyond the retention)" in usage("build")
     assert f"(default {_core.WRITER_DAYS}, beyond the retention)" in usage("judge")
     assert "(default 7)" in usage("clusters")
+
+
+def test_the_judge_rules_that_the_number_of_the_beast_is_not_foundation_work():
+    """The suite stood at 666 tests on 2026-11-25. This is the 667th, and the only one that is numerological.
+
+    The judge prompt says to answer "high" where a wrong answer is costly.
+    """
+    verdict = _core.parse_verdict(
+        '{"asf_work": "no", "tier": "high", "activity": "other", '
+        '"reason": "Revelation 13:18 is not an Apache project, and the beast holds no key with a purpose"}'
+    )
+    assert verdict.asf_work == "no" and verdict.tier == "high"
+    assert "Apache" in verdict.reason, "even damnation is lenient about what surrounds the JSON"
