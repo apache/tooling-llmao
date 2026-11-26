@@ -46,9 +46,9 @@ the same file and the same store. As root:
 
 ```bash
 cd /opt/llmao
-sudo ./analysis/prompts build --days 30                 # the days the store lacks, read once
-sudo ./analysis/prompts judge --days 30                 # dry run: what --judge would do
-sudo ./analysis/prompts judge --days 30 --judge         # send them, judge after judge
+sudo ./analysis/prompts build                           # every closed day on disk the store lacks, read once
+sudo ./analysis/prompts judge                           # dry run over every cluster: what --judge would do
+sudo ./analysis/prompts judge --judge                   # send them, judge after judge
 sudo ./analysis/prompts verdicts --days 30 --compare    # the consensus, and where the judges split
 sudo ./analysis/prompts tiers --days 30
 sudo ./analysis/prompts show 1f2e3d4c5b6a7980
@@ -56,7 +56,12 @@ sudo ./analysis/prompts report --from 2026-11-01 --to 2026-11-03 --csv
 ```
 
 The commands share `--days`, `--from` and `--to` for the span of closed
-UTC days. The log directory is `--log-dir`, else `prompt_log_dir` from
+UTC days. The two writers, `build` and `judge`, default to 120 days,
+beyond the retention, so they take every day on disk and every cluster
+in the store: a writer run after a gap must not quietly skip what the
+gap holds. The readers default to the last 7 closed days; the judge's
+closing "next" lines name the span it covered, so the readers can be
+told the same one. The log directory is `--log-dir`, else `prompt_log_dir` from
 `config.yaml`; the store is `--analysis-dir`, else `analysis_dir`. A
 missing file or key stops the command: a script fails harder than the
 portal on purpose, since a startup error there takes a service down and

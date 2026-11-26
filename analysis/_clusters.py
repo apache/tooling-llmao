@@ -17,15 +17,17 @@
 
 """The store's clusters: build them from the day files, list them, show one.
 
-    prompts build                  # read the last 7 closed days into the store, those not yet in
-    prompts build --rebuild        # forget the days and clusters, read the span again
+    prompts build                  # read every closed day on disk into the store, those not yet in
+    prompts build --days 30        # only the last 30 closed days
+    prompts build --rebuild        # forget the days and clusters, read them again
     prompts clusters               # who is sending what kind of request, over the span
     prompts clusters --json
     prompts show 1f2e3d4c5b6a7980  # one cluster, exemplar in full
 
 A cluster is the set of records sharing a fingerprint: the project, the
 person, the tool family and the opening of the system prompt. build reads
-each day of the span the store has not seen, prunes what is past the
+each day of the span the store has not seen, every day on disk by default
+since the span reaches beyond the retention, prunes what is past the
 retention, and writes the clusters and their figures: a day is read once.
 clusters and show only read the store. No model is involved in any of
 this; that is `prompts judge`.
@@ -43,6 +45,7 @@ from typing import TYPE_CHECKING
 import _core
 
 from llmao import fmt
+from llmao.prompt_log import day_file
 
 if TYPE_CHECKING:
     import argparse
@@ -100,7 +103,9 @@ def run_build(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         scanned = store.scanned_days()
         read = 0
         for day in days:
-            if day in scanned:
+            # A day with no file is not read and not recorded: the default
+            # span reaches past the retention, so most of its days have none.
+            if day in scanned or day_file(log_dir, day) is None:
                 continue
             # The day's name first, so a slow day is seen to be in progress.
             print(f"reading {day}: ", end="", flush=True)

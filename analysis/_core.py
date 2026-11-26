@@ -186,6 +186,13 @@ def judge_models(config: pathlib.Path = CONFIG) -> list[str]:
     return [str(m) for m in raw]
 
 
+# The writers' default span: build and judge take everything there can be
+# unless told a span, so a run after a gap does not skip what the gap holds.
+# Beyond analysis_retention_days (90 on production) and the day files' own
+# retention; the readers default to 7 days.
+WRITER_DAYS = 120
+
+
 def span(*, days: int = 7, start: dt.date | None = None, end: dt.date | None = None) -> list[dt.date]:
     """The UTC days to read: the last ``days`` closed ones, or ``start`` to ``end``, in order.
 

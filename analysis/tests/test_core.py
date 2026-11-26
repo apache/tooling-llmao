@@ -242,3 +242,33 @@ def test_a_judge_run_skips_a_timed_out_call_and_goes_on(tmp_path, monkeypatch, c
     store = _core.Store(tmp_path)
     assert store.db.execute("SELECT count(*) FROM verdicts").fetchone()[0] == 1
     store.close()
+
+
+def test_build_skips_days_without_a_file_and_the_writers_span_beyond_the_retention(tmp_path, capsys):
+    import argparse
+
+    import _clusters
+
+    # Three days in the span, one file: only that day is read and recorded.
+    (tmp_path / "prompts-2026-11-02.jsonl").write_text(json.dumps(_record("2026-11-02")) + "\n")
+    ap = argparse.ArgumentParser()
+    args = argparse.Namespace(
+        days=7, start=dt.date(2026, 11, 1), end=dt.date(2026, 11, 3), log_dir=tmp_path, analysis_dir=tmp_path
+    )
+    args.rebuild = False
+    assert _clusters.run_build(ap, args) == 0
+    out = capsys.readouterr().out
+    assert out.count("reading ") == 1 and "reading 2026-11-02: 1 record" in out
+    store = _core.Store(tmp_path)
+    assert store.scanned_days() == {dt.date(2026, 11, 2)}
+    store.close()
+
+    # The writers' default reaches past the retention; the readers keep 7 days.
+    def usage(command: str) -> str:
+        run = subprocess.run([sys.executable, str(PROMPTS), command, "--help"], capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr
+        return " ".join(run.stdout.split())  # argparse wraps the help to the terminal
+
+    assert f"(default {_core.WRITER_DAYS}, beyond the retention)" in usage("build")
+    assert f"(default {_core.WRITER_DAYS}, beyond the retention)" in usage("judge")
+    assert "(default 7)" in usage("clusters")

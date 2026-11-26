@@ -17,7 +17,8 @@
 
 """The judges: their verdict on each cluster, and the reports read from the verdicts.
 
-    prompts judge                       # dry run: the clusters to judge, the calls --judge would make, where they go
+    prompts judge                       # dry run over every cluster in the store: the calls --judge would make
+    prompts judge --days 30             # only clusters seen in the last 30 closed days
     prompts judge --judge               # send them, one at a time, judge after judge; the forecast first
     prompts judge --judge --limit 20    # at most 20 calls per judge this run
     prompts judge --judge --model qwen3-8b   # one judge, instead of the configured list
@@ -28,7 +29,8 @@
 Several judges on each cluster is the normal operation: config.yaml
 analysis_models lists them, and --model names one or more instead. Each
 is asked the three questions of analysis/judge-prompt.md about every
-cluster of the span that has no verdict yet from that judge prompt,
+cluster of the span, which by default reaches beyond the retention and
+so takes the whole store, that has no verdict yet from that judge prompt,
 that model and the cluster's present exemplar; each verdict is written
 as it returns, so a run that stops keeps what it judged. One request in
 flight, through the front door, with the service key in config.yaml
@@ -141,6 +143,7 @@ def run_judge(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     _core.require_models({*judges, *(m for ms in by_tier.values() for m in ms)})
     _core.require_private(judges)
     # The span as the next commands should name it, from the parsed values.
+    # The readers default to 7 days, so a writer's default span is spelt out.
     if args.start or args.end:
         span_args = f"--from {days[0]} --to {days[-1]}"
     else:

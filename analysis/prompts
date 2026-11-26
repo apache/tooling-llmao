@@ -46,6 +46,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import _clusters
+import _core
 import _judge
 import _report
 
@@ -55,13 +56,18 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="command", required=True, metavar="command")
 
     def command(
-        name: str, run, help_text: str, description: str, *, span=True, store=True, log_dir=False
+        name: str, run, help_text: str, description: str, *, span=True, writer=False, store=True, log_dir=False
     ) -> argparse.ArgumentParser:
-        """One subcommand, with the arguments most of them share: the span of days, the store, the log directory."""
+        """One subcommand, with the arguments most of them share: the span of days, the store, the log directory.
+
+        A writer (build, judge) spans beyond the retention by default, so
+        it takes everything there is; a reader shows the last 7 closed days.
+        """
         p = sub.add_parser(name, help=help_text, description=description)
         p.set_defaults(run=run, parser=p)
         if span:
-            p.add_argument("--days", type=int, default=7, help="the last N closed UTC days (default %(default)s)")
+            days_help = "the last N closed UTC days (default %(default)s" + (", beyond the retention)" if writer else ")")
+            p.add_argument("--days", type=int, default=_core.WRITER_DAYS if writer else 7, help=days_help)
             p.add_argument("--from", dest="start", type=dt.date.fromisoformat, help="first day, instead of --days")
             p.add_argument("--to", dest="end", type=dt.date.fromisoformat, help="last day (default: yesterday)")
         if log_dir:
@@ -73,9 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     p = command(
         "build",
         _clusters.run_build,
-        "cluster the span's day files into the store",
+        "cluster the day files into the store",
         "Writes the store: each day of the span it has not seen is read and its records clustered, "
-        "and what is past the retention is pruned. A day is read once; --rebuild reads them all again.",
+        "and what is past the retention is pruned. The span defaults to beyond the retention, so every "
+        "day on disk is taken. A day is read once; --rebuild reads them all again.",
+        writer=True,
         log_dir=True,
     )
     p.add_argument("--rebuild", action="store_true", help="forget every day and cluster, read the span again")
@@ -115,9 +123,11 @@ def main(argv: list[str] | None = None) -> int:
         _judge.run_judge,
         "the judges' verdicts on the clusters that lack one",
         "Writes the store: asks each judge the three questions about every cluster of the span that has no "
-        "verdict from it yet, one request at a time, and ends with a summary and what to run next. "
+        "verdict from it yet, one request at a time, and ends with a summary and what to run next. The span "
+        "defaults to beyond the retention, so every cluster in the store is taken. "
         "A dry run unless --judge is given: the clusters to judge, which judges each lacks, the calls and "
         "the time they take, and where they go.",
+        writer=True,
     )
     p.add_argument("--judge", action="store_true", help="send the requests; without it nothing is sent")
     p.add_argument("--request", action="store_true", help="in the dry run, also print the first request as JSON")
