@@ -502,10 +502,10 @@ the same `Fleet`; it and its `DeploymentManager`
 (`llmao/proxy/deployments.py`, which adds and deletes deployments and
 confirms every write by re-reading `/model/info`) are the only things
 that write deployments to LiteLLM. The lifecycle/skew logic in
-`model_status.py` is a set of **pure functions**: it takes a
-`DeploymentSnapshot` (frozen out of a deployment + its server by
-`fleet.snapshot_for_status`) and returns a status object, with no shared
-mutable state.
+`model_status.py` works on a `DeploymentSnapshot`, a frozen record a
+deployment builds out of itself and its server (`FleetDeployment.snapshot`),
+and returns a status object (`snapshot.status`), with no shared mutable
+state.
 
 ```mermaid
 classDiagram
@@ -616,8 +616,8 @@ classDiagram
   LiteLLMBackend "1" *-- "1" DeploymentManager : deployments
   DeploymentManager ..> LiteLLMDeployments : fetch_deployments()
   Fleet ..> LiteLLMDeployments : update_litellm_deployments()
-  DeploymentSnapshot ..> FleetDeployment : snapshot_for_status()
-  DeploymentSnapshot ..> VllmServer : snapshot_for_status()
+  FleetDeployment ..> DeploymentSnapshot : snapshot()
+  FleetDeployment ..> DeploymentStatus : status()
   DeploymentSnapshot ..> DeploymentStatus : status()
   DeploymentStatus ..> ModelStatus : model_status()
 ```

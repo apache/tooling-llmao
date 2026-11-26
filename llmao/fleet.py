@@ -66,6 +66,7 @@ from llmao.model_status import (
     STALLED,
     UNHEALTHY,
     DeploymentSnapshot,
+    DeploymentStatus,
     model_status,
     self_hosted_lifecycle,
 )
@@ -736,6 +737,51 @@ class FleetDeployment:
             return "—"
         return fmt.ago_short(self.litellm_error_at)
 
+    def snapshot(self) -> DeploymentSnapshot:
+        """The last stored observations, as the one record model_status reads.
+
+        record_probe keeps the last probe and the history (fails, last_ok, the
+        loading starts) on the server, and the two LiteLLM reads sit here, so
+        status() can re-run the same lifecycle function the probe loop uses --
+        at the current time, so a Loading deployment that has since outlasted
+        the grace window reads Stalled without waiting for the next probe.
+        """
+        srv = self.vllm
+        if srv is None:
+            return DeploymentSnapshot(
+                model_name=self.model_name,
+                self_hosted=False,
+                in_litellm=self.in_litellm,
+                litellm_healthy=self.litellm_healthy,
+                litellm_health_at=self.litellm_health_at,
+                litellm_copies=len(self.litellm),
+            )
+        return DeploymentSnapshot(
+            model_name=self.model_name,
+            self_hosted=True,
+            probe_ok=srv.last_probe_ok,
+            fails=srv.fails,
+            last_ok=srv.last_ok,
+            vllm_probed_at=srv.vllm_probed_at,
+            in_litellm=self.in_litellm,
+            litellm_healthy=self.litellm_healthy,
+            litellm_health_at=self.litellm_health_at,
+            context_window=srv.observed_max_model_len or srv.max_model_len,
+            kv_cache_tokens=srv.kv_cache_tokens,
+            litellm_copies=len(self.litellm),
+            config_served_at=srv.config_served_at,
+            reached=srv.reached,
+            first_probed_at=srv.first_probed_at,
+            first_reached_at=srv.first_reached_at,
+            key_rejected=srv.key_rejected,
+            rejected_passes=srv.rejected_passes,
+            unlisted=srv.unlisted,
+        )
+
+    def status(self, cfg: object, now: float | None = None) -> DeploymentStatus:
+        """The lifecycle, signals and skew badges of this deployment, read at `now`."""
+        return self.snapshot().status(cfg, now)
+
 
 @dataclass(frozen=True)
 class Orphan:
@@ -999,7 +1045,7 @@ class Fleet:
         stamp = now or time.time()
         cfg = self.cfg.fleet
         for dep in self.deployments:
-            view = snapshot_for_status(dep).status(cfg, stamp)
+            view = dep.status(cfg, stamp)
             fresh = [badge for badge in view.skew if badge not in dep.skew]
             dep.skew = list(view.skew)
             for badge in fresh:
@@ -1101,7 +1147,7 @@ class Fleet:
         """
         stamp = now or time.time()
         cfg = self.cfg.fleet
-        views = [snapshot_for_status(dep).status(cfg, stamp) for dep in self.deployments]
+        views = [dep.status(cfg, stamp) for dep in self.deployments]
         orphaned = any(o.deployment.model_name == model_name and o.passes >= ORPHAN_PASSES for o in self.orphans)
         return model_status(model_name, views, orphaned=orphaned)
 
@@ -1524,49 +1570,6 @@ async def run_hook(script: pathlib.Path, document: Box, *, timeout_s: float = HO
         await proc.wait()
         return proc.returncode or -9, f"killed after {timeout_s:g}s"
     return proc.returncode or 0, out.decode("utf-8", "replace")
-
-
-def snapshot_for_status(dep) -> DeploymentSnapshot:
-    """The last stored observations for this deployment, as the one record model_status reads.
-
-    record_probe keeps the last probe and the history (fails, last_ok, the
-    loading starts) on the server, and the two LiteLLM reads sit on the
-    deployment, so deployment_status can re-run the same
-    lifecycle function the probe loop uses -- at the current time, so a
-    Loading deployment that has since outlasted the grace window reads
-    Stalled without waiting for the next probe.
-    """
-    srv = dep.vllm
-    if srv is None:
-        return DeploymentSnapshot(
-            model_name=dep.model_name,
-            self_hosted=False,
-            in_litellm=dep.in_litellm,
-            litellm_healthy=dep.litellm_healthy,
-            litellm_health_at=dep.litellm_health_at,
-            litellm_copies=len(dep.litellm),
-        )
-    return DeploymentSnapshot(
-        model_name=dep.model_name,
-        self_hosted=True,
-        probe_ok=srv.last_probe_ok,
-        fails=srv.fails,
-        last_ok=srv.last_ok,
-        vllm_probed_at=srv.vllm_probed_at,
-        in_litellm=dep.in_litellm,
-        litellm_healthy=dep.litellm_healthy,
-        litellm_health_at=dep.litellm_health_at,
-        context_window=srv.observed_max_model_len or srv.max_model_len,
-        kv_cache_tokens=srv.kv_cache_tokens,
-        litellm_copies=len(dep.litellm),
-        config_served_at=srv.config_served_at,
-        reached=srv.reached,
-        first_probed_at=srv.first_probed_at,
-        first_reached_at=srv.first_reached_at,
-        key_rejected=srv.key_rejected,
-        rejected_passes=srv.rejected_passes,
-        unlisted=srv.unlisted,
-    )
 
 
 def add_refusal(dep) -> str | None:

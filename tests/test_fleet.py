@@ -29,7 +29,6 @@ from llmao.fleet import (
     Fleet,
     FleetDeployment,
     normalize_peer_ip,
-    snapshot_for_status,
     validate_fleet,
 )
 from llmao.intent import UnknownHostError, derive_vllm_api_key, provider_intent, vllm_api_key
@@ -190,7 +189,7 @@ def test_config_fetch_starts_loading_on_the_approved_host():
     fleet.update_config_fetches()
     assert [s.listen_port for s in fleet.servers] == [8001, 8002]
     assert all(s.config_served_at == 60.0 for s in fleet.servers)
-    view = snapshot_for_status(fleet.deployments[0]).status(cfg.fleet, 60.0)
+    view = fleet.deployments[0].status(cfg.fleet, 60.0)
     assert view.lifecycle == LOADING
     # Copied, not referenced: the record dropping the fetch leaves the start standing.
     fleet.provisioning.fetches.clear()

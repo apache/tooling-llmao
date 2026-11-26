@@ -37,8 +37,9 @@ verdict, `rejected_passes`, `state`), the LiteLLM reads on
 `FleetDeployment`, and `model_status.py` recomputes a name from a dozen
 counters on every call. Two symptoms of that:
 
-- `deployment_status(snapshot_for_status(dep), cfg, now)` is called in five
-  places, each rebuilding the same record from the same two objects.
+- `dep.status(cfg, now)` is called in five places, each rebuilding the
+  same record from the same two objects (it was a pair of module
+  functions until 2026-11-26; the rebuilding is what remains).
 - `record_probe` takes `in_litellm`, LiteLLM's fact, because the lifecycle
   needs it to tell Unhealthy from Awaiting after a restart, and the only
   object that has both facts is neither of the two that hold them.
@@ -268,8 +269,8 @@ Small, each acknowledged and pushed before the next:
    the probe pass. `VllmServer.state` and the counters become reads of
    the history. `self_hosted_lifecycle` is deleted.
 3. **The pages read the deployment.** `badges`, `reason` and the signals
-   become methods; the five `deployment_status(snapshot_for_status(dep))`
-   calls become `dep.status()`, and the parked pair is gone.
+   become methods. (`dep.status()` already exists, 2026-11-26; this step
+   replaces its body with a read of the history.)
 4. **The provider line's machine** goes through the same step;
    `commercial_lifecycle` is deleted.
 5. **`model_status.py` is deleted.** The constants and `model_status`
