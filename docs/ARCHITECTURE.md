@@ -18,12 +18,16 @@ else is outside.
   revokes keys, runs the fleet's control plane, meters the fleet, and
   renders every page. It never carries a prompt.
 - **The LiteLLM proxy**, `llm.apache.org`, the inference pipe and the
-  meter. A tool calls its OpenAI-compatible API with a key; it checks the
-  key, the team's budget and rate limits, routes to a deployment, and
-  records the spend. Two callbacks of ours, `litellm_hooks.py`, run
-  inside it: `empty_completion_guard`, which rejects a 200 that carries
-  no answer with a message saying why, and `prompt_log`, which writes
-  every request to the prompt log.
+  meter. A tool calls its OpenAI-compatible API with a key (TLS on 443
+  at the Apache proxy in front; LiteLLM's own port is bound to loopback);
+  it checks the key, the team's budget and rate limits, routes to a
+  deployment, and records the spend with the key's attribution. Tool
+  calling and vision work on the models that support them, and
+  `/v1/messages` serves Anthropic-style clients without a shim. Two
+  callbacks of ours, `litellm_hooks.py`, run inside it:
+  `empty_completion_guard`, which rejects a 200 that carries no answer
+  with a message saying why, and `prompt_log`, which writes every
+  request to the prompt log.
 - **Postgres**, LiteLLM's, holding teams, keys, spend and deployments.
   The portal has no database of its own; what it must remember goes in
   LiteLLM's `/v1/memory` store, a key-value table in the same Postgres.
@@ -37,6 +41,13 @@ else is outside.
   provisioning: `hosting/README.md`.
 - **Paid providers**, xAI and OpenRouter, behind our own rentals in
   LiteLLM's routing order, for models we do not host or as overflow.
+  `config.yaml` `providers` holds every account we pay: the GPU hosts
+  `vast` and `runpod` (only an `api_key`; the portal reads their APIs for
+  port mappings and prices) and the model providers. A provider's
+  deployment is added at portal startup, skipped when already
+  registered, with `order` putting it behind our rentals. As of November
+  2026 the fleet is self-hosted only: nothing is served from a paid
+  provider.
 - **Puppet**, in `apache/infrastructure-p6`, renders the three config
   files from one set of node data: `config.yaml` for the portal,
   `litellm.yaml` for the proxy, and the systemd units. `models.yaml`,
@@ -104,14 +115,25 @@ log files and the fleet.
 3. `llmao/seam.py` turns that into authorization per project: a member
    may see the project; a PMC member, or a site admin named in
    `config.yaml`, may administer it. `@asfquart.auth.require` guards the
-   route; the project-scoped rule is the seam's.
+   route; the project-scoped rule is the seam's. A site admin can
+   operate as a normal user from the name menu: the standing goes
+   everywhere, the Admin link, the work pointer and `/admin` itself; the
+   flag is per browser session and names the uid that set it.
+4. The home page is the front door: three steps, sign in, make a key,
+   send a request, each marked done when the server can see that it is.
+   A key exists for this person; a spend-log row exists for them, ever;
+   each is one question to LiteLLM with a one-record answer. Picking a
+   model is advice inside the connect step, not a step, since nothing is
+   stored when someone picks one. The welcome page says nothing about
+   who sees prompts; hosting facts live on the Models page, the FAQ and
+   the Terms.
 
 ### A key
 
 1. On `/keys` a person picks a project and a purpose. A personal key
    binds the ASF uid to the project's team; an automation key is
    team-scoped, and who may create one is an open policy question
-   (`docs/STATUS.md`).
+   (#94). Automation keys are listed for site admins as Service keys.
 2. The seam hands the request to `LiteLLMBackend` (`llmao/proxy/client.py`),
    which speaks LiteLLM's admin API with the master key over async
    httpx. The project is a LiteLLM team whose alias is the project's
@@ -137,7 +159,9 @@ log files and the fleet.
    answer into an error that says why, and the prompt log appends one
    JSON record, the prompt and
    the figures but never the response, to the day's file on `/x1`.
-   Nothing a client sends switches the log off.
+   Nothing a client sends switches the log off. A request to a paid
+   provider is priced then, from LiteLLM's model cost map, and never
+   re-priced: the spend is LiteLLM's estimate, not the provider's bill.
 4. Spend and budget reach the pages live: `/projects` reads the team's
    spend from LiteLLM each time, and the usage API reads LiteLLM's
    daily activity.
@@ -152,13 +176,22 @@ log files and the fleet.
 1. An admin rents a machine on Vast or RunPod with our `provision.sh`
    as its entrypoint. The rental boots, installs vLLM, and asks the portal
    `GET /vllm/config` with the fleet key, naming itself by the
-   provider's instance id in `X-LLMAO-Host`. That name is the server's
+   provider's instance id in `X-LLMAO-Host`. Before pulling weights it
+   checks each model's `vram_gb` and `disk_gb` against the card and the
+   disk, and sizes servers that share a card (`hosting/README.md`, "Fit
+   check" and "Sizing servers that share a card"). That name is the server's
    identity: the key it is looked up by in `fleet.hosts`, what its
    bearer is derived from, what an approval is granted to.
 2. The portal answers with the servers the rental should run, each a
    model recipe from `models.yaml`, a container listen port, and the
    derived key. The public port the provider maps it to is never sent;
-   the portal learns it from the provider's listing.
+   the portal learns it from the provider's listing. Vast's instance
+   listing and RunPod's pod listing both carry the container-to-public
+   mapping; RunPod reassigns the port on every pod recreate, even on the
+   same machine, and the next listing read follows it. The optional
+   fourth host-row element that pinned a RunPod port is deprecated: it
+   loads with a warning and only seeds the port until the listing names
+   the rental.
 3. The `fleet-lifecycle` runner reads the provider's listing to place
    each server at an address, then probes `/health` and, when the key
    or context window needs asking, `/v1/models`. A server moves through
@@ -166,10 +199,22 @@ log files and the fleet.
    Rejected or Foreign (`docs/rental-lifecycle.md`).
 4. When a server is Healthy, `DeploymentManager` adds a deployment to
    LiteLLM with `/model/new`, re-reading `/model/info` to confirm, and
-   the proxy starts routing to it. When it is down the deployment is
-   deleted. `fleet.hosts` plus in-memory approvals are the single source
-   of intent; what LiteLLM holds that nothing intends is an orphan,
-   shown to admins and never deleted unattended.
+   the proxy starts routing to it. When it is Unhealthy, Stalled,
+   Rejected or Foreign, or on an unlisted host that is not Healthy, the
+   deployment is deleted. `fleet.hosts` plus in-memory approvals are the
+   single source of intent; what LiteLLM holds that nothing intends is
+   an orphan, shown to admins and never deleted unattended. A
+   deployment's identity is its listen URL plus model name
+   (`DeploymentKey`), stamped into the LiteLLM row as
+   `model_info.llmao_key`; pages and log lines name it by
+   `FleetDeployment.label`: the model, then where it runs ("qwen3-8b on
+   Vast 53865410:8001", the listen port, since one host can run several
+   servers; "grok-4 at xAI"), with the public port only where it
+   differs. The green badge means Healthy **and** LiteLLM has that
+   `api_base`. "Remove from LiteLLM" deletes the route and nothing else;
+   the rental keeps running. LiteLLM's own `/health`, which sends real
+   completions every four hours, is cached on the deployment by the skew
+   runner.
 5. From then on the `metrics-sampler` reads the server's `/metrics` every
    `sample_interval_s`, folds the readings into the current hour, and
    the `capacity-writer` stores each finished hour as a capacity value.
@@ -208,6 +253,7 @@ an admin writes down. Design: `docs/analysis-design.md`.
 | Where | What | Written by | Read by | Kept |
 |---|---|---|---|---|
 | Postgres, LiteLLM's tables | teams, keys, spend log, daily activity, deployments (`store_model_in_db`) | LiteLLM | the portal through the admin API | LiteLLM's own rules |
+| LiteLLM's scheduler, in the same Postgres | the model cost map reload, every 24 hours, set once with `POST /schedule/model_cost_map_reload?hours=24` (master key); LiteLLM fetches the map from GitHub at startup and prices paid requests from it | an admin, by hand | LiteLLM | lost with a rebuilt database; the portal logs an ERROR at startup when it is missing |
 | `/v1/memory`: `llmao:request:<id>` | access requests | the portal | `/admin` | pending ones always; decided capped at the last 50, lapsed approvals dropped, by `memory-prune` |
 | `llmao:tiers` | the tier limits an admin changed, one value | `/admin` | key issuance | overwritten |
 | `llmao:skew:` | what the outside-edits check found | `litellm-outside-edits` | the "Work needed" strip | rewritten each pass |
@@ -307,9 +353,20 @@ The words the pages and the fleet code share.
 - **What users see** per model: Available, Degraded or Unavailable; the
   context window as the minimum across healthy deployments; concurrency
   as an upper bound of full-context requests; never an Awaiting, Loading
-  or Stalled deployment. **What admins see** besides: the attention
-  strip, a replica summary, and the deployments drill-down with one
-  primary action.
+  or Stalled deployment. The Models page is a definitions-first table
+  (name, id, Available, Request a key); context, license and hosting
+  live in Details, and the supply-path fields there are site-admin only.
+  Available is policy (always true until the models allow-list exists)
+  **and** in service **and** in LiteLLM: a self-hosted model with
+  nothing Healthy or no deployment is No, and the sort puts No last.
+  **What admins see** besides: the attention strip, a replica summary,
+  and the deployments drill-down with one primary action and a menu for
+  the rest, showing measured KV cache against the served context window
+  (the cache from each `/metrics` reading, the window from `/v1/models`
+  with the working key, asked on the transition into Healthy and again
+  until it has answered). A `--max-model-len` above what the cache holds
+  makes vLLM hang rather than error, which that view is the only way to
+  see.
 
 ## Rules worth knowing
 
@@ -335,11 +392,44 @@ The words the pages and the fleet code share.
   there, is a startup error, never a quiet default.
 - **An exception in a log is a bug.** Recoverable paths are handled;
   what is logged as an exception is something to fix.
+- **A `models.yaml` edit is not a live deployment.** The proxy does not
+  read that file; LiteLLM keeps its deployments in its database
+  (`store_model_in_db: true`), and a change reaches it only when the
+  portal POSTs `/model/new` again. A model carries a vLLM recipe or a
+  static `api_base`, one or the other, fail-fast; self-hosted is a
+  property of a deployment, never written in `models.yaml`; a self-host
+  deployment's `litellm_params.model` is `hosted_vllm/<name>`, not
+  `openai/`.
+- **The pages' house rules.** ASF vocabulary only (project, person,
+  purpose); script-first, and a secret is shown once; every
+  mutation flashes; the proxy being down is a loud banner, never silent
+  zeros; supply-path model fields are site admin only.
 
-Build status and backlog: `docs/STATUS.md`. Quickstart and the API
-surface: `../README.md`.
+The backlog is in GitHub issues; `docs/STATUS.md` holds what has not yet
+moved to the document that owns it. Quickstart and the API surface:
+`../README.md`.
 
 ## Reference
+
+### /admin, the admin's inbox
+
+Four pages share a row of pills under the heading: Overview, Capacity,
+Tiers, Service keys. Work needed lists everything that needs a site
+admin, the skew store's items and the fleet's (a machine nobody intends,
+a stalled or unhealthy deployment, an orphan in LiteLLM) with their
+buttons and the Approve modal; `/models` shows no list of them, only each
+deployment's row with its state and buttons, which a Work needed item
+links to. The tiles run in the order of the sections. The Gateway tile
+carries the LiteLLM version against the pin, free space on the disk the
+prompt log grows on (warm under 15%; the DataDog half of disk monitoring
+is Infra's), and each provider's listing with how long since it was
+read, warm with the last error once a listing is older than three
+listing intervals, because RunPod's v1 API was retired and the last
+report stood for a day with nothing saying so. A stale listing concludes
+nothing about the hosts it lacks: a `/models` row no listing names says
+the listing is stale rather than that the rental may have ended. A read
+of LiteLLM that fails leaves a dash on its tile and "Could not read
+LiteLLM" in its section, never a 0.
 
 ### Inside the portal
 
