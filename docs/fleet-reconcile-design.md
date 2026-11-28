@@ -403,7 +403,11 @@ acknowledged and pushed before the next.
 2. **The deployment holds its intent.** `intent: IntendedDeployment |
    None` replaces the copied fields (`model_name`, `name`, `api_base`,
    `provider`, `litellm_model`, the recipe's values), which become
-   properties reading it. None is an orphan, when orphans arrive.
+   properties reading it. `None` is allowed from this commit (decided
+   2026-11-28) and is the definition of an orphan: a deployment LiteLLM
+   has that nothing intends, its model name and base from the LiteLLM
+   row. `Orphan` in fleet.py becomes such a Deployment when the join
+   lands.
 3. **The rules read the deployment.** `lifecycle` and `status` become
    methods of `FleetDeployment` reading its own fields; `record_probe`
    reads `self.in_litellm` instead of taking it, and `DeploymentSnapshot`
@@ -413,9 +417,11 @@ acknowledged and pushed before the next.
    methods of the deployment: `lifecycle`, `vllm_signal`,
    `litellm_signal`, `skew`, `counted`. The thresholds they read
    (`health_grace_s`, `health_fail_threshold`, the two intervals) are
-   handed to the deployment once, by `Fleet` at construction, so the
-   reads take `now` and nothing else; `model_status()` takes the
-   deployments of one name.
+   handed to the deployment once, by `Fleet` at construction, as the
+   four values and never as the config object, so the reads take `now`
+   and nothing else; `model_status()` takes the deployments of one name.
+   Decided 2026-11-28: a `cfg` parameter is a catch-all that lets a
+   reader reach any knob and hides which ones it uses; pass the values.
 5. **`FleetDeployment` becomes `Deployment` in `deployment.py`**, with
    model_status.py's constants, `ModelStatus` and `model_status()`;
    model_status.py is deleted. deployment.py imports the source records
