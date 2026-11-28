@@ -10,9 +10,9 @@ says what is planned.
 One server is one row of `fleet.hosts` (or one approved model on an
 unknown rental): a host, a listen port, a model. Its lifecycle is a name
 recomputed on every probe pass from a handful of stored observations.
-There is no transition table in the code; `self_hosted_lifecycle` is a
-pure function of the observations and the clock, and the diagram below
-is what that function implies.
+There is no transition table in the code; `DeploymentSnapshot.lifecycle`
+is a pure function of the observations and the clock, and the diagram
+below is what that function implies.
 
 ## The observations
 
@@ -128,7 +128,7 @@ reachable only from Awaiting, before anything has answered.
 The loading start matters more than the diagram can show: the same observation
 names a different state depending on whether loading has started
 (`config_served_at` or `first_reached_at`). The decision order in
-`self_hosted_lifecycle` is:
+`DeploymentSnapshot.lifecycle` is:
 
 1. `/health` passed: Rejected if the key was refused (Foreign if also
    unlisted past the passes), else **Healthy**. Always, including the
@@ -272,8 +272,9 @@ reconcile migration.
 
 ## Where to read the code
 
-- `llmao/model_status.py`: the state names, `self_hosted_lifecycle`, the
-  roll-up and staleness (`DeploymentSnapshot.status`, `model_status`).
+- `llmao/model_status.py`: the state names, the lifecycle rules, the
+  roll-up and staleness (`DeploymentSnapshot.lifecycle`,
+  `DeploymentSnapshot.status`, `model_status`).
 - `llmao/fleet.py`: `VllmServer.record_probe` (the counters and the
   transition log lines), `Fleet.probe_all` (when `/v1/models` is asked),
   `Fleet.place_servers` and `apply_rentals` (listed, unlisted, the public

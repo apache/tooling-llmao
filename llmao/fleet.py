@@ -68,7 +68,6 @@ from llmao.model_status import (
     DeploymentSnapshot,
     DeploymentStatus,
     model_status,
-    self_hosted_lifecycle,
 )
 from llmao.models import VllmRecipe, validate_models, warn_deprecated
 from llmao.provisioning import ConfigFetch, ProvisioningRecord
@@ -373,13 +372,13 @@ class VllmServer:
         self.observed_version: str = ""
         self.version_error: str = ""
         # Named by model_status. Awaiting contact until the rental fetches its
-        # config (config_served_at) and the probes run; see self_hosted_lifecycle.
+        # config (config_served_at) and the probes run; see DeploymentSnapshot.lifecycle.
         self.state = AWAITING
         self.config_served_at: float | None = None
         self.last_ok = None
         self.fails = 0
         # The first probe attempt in this process: the grace clock for a server
-        # with no loading start that never answers (see self_hosted_lifecycle).
+        # with no loading start that never answers (see DeploymentSnapshot.lifecycle).
         self.first_probed_at: float | None = None
         # The first probe in this process that vLLM answered (a 503 counts):
         # the other loading start, beside config_served_at.
@@ -561,7 +560,6 @@ class VllmServer:
         else:
             self.rejected_passes = 0
         # The probe and the history above are the observation. The name comes from one place.
-        cfg = Box(health_grace_s=grace_s, health_fail_threshold=fail_threshold)
         snap = DeploymentSnapshot(
             model_name=self.model_name,
             self_hosted=True,
@@ -578,7 +576,7 @@ class VllmServer:
             rejected_passes=self.rejected_passes,
             unlisted=self.unlisted,
         )
-        self.state = self_hosted_lifecycle(snap, cfg, now)
+        self.state = snap.lifecycle(grace_s, fail_threshold, now)
         if self.state == HEALTHY and was != HEALTHY:
             _LOGGER.info("fleet server %s healthy", self.label)
         elif self.state in (UNHEALTHY, STALLED) and was not in (UNHEALTHY, STALLED):

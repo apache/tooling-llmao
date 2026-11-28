@@ -75,7 +75,7 @@ pieces, and only the first is a table:
 
 1. **The transition table**, `step(history, observed, clock) -> history`.
    Its first column is the previous state. That is what makes it short:
-   today's `self_hosted_lifecycle` has to work out where a deployment was
+   today's `DeploymentSnapshot.lifecycle` has to work out where a deployment was
    from a dozen counters on every call (`last_ok` set and `fails` under
    threshold means it was Healthy; a loading start with no `last_ok`
    means it was Loading; and so on), and every new state has added a
@@ -225,7 +225,7 @@ not serving means different things depending on what it was doing:
   other is the first pass after a restart: a silent rental with a route
   in LiteLLM reads Awaiting, not Unhealthy, and the route is deleted on
   that pass by the plan rather than by the state, so what LiteLLM sees is
-  the same. Everything else reproduces `self_hosted_lifecycle`, and the
+  the same. Everything else reproduces `DeploymentSnapshot.lifecycle`, and the
   fixtures from the prior version's table are the proof.
 
 **What the step reads and keeps.** The observation for one pass is the
@@ -267,12 +267,13 @@ Small, each acknowledged and pushed before the next:
    holds a `History`; `record_probe` becomes `FleetDeployment.observe`,
    which reads the deployment's own LiteLLM rows, so `in_litellm` leaves
    the probe pass. `VllmServer.state` and the counters become reads of
-   the history. `self_hosted_lifecycle` is deleted.
+   the history. The self-hosted rules of `DeploymentSnapshot.lifecycle`
+   are deleted.
 3. **The pages read the deployment.** `badges`, `reason` and the signals
    become methods. (`dep.status()` already exists, 2026-11-26; this step
    replaces its body with a read of the history.)
 4. **The provider line's machine** goes through the same step;
-   `commercial_lifecycle` is deleted.
+   the commercial rules of `DeploymentSnapshot.lifecycle` are deleted.
 5. **`model_status.py` is deleted.** The constants and `model_status`
    (the roll-up over one model name, which stays a pure function) move
    to `deployment.py`; `DeploymentSnapshot` and `DeploymentStatus` go.

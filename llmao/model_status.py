@@ -169,10 +169,7 @@ class DeploymentSnapshot:
         which is why they arrive as an argument.
         """
         now = now or time.time()
-        if self.self_hosted:
-            lifecycle = self_hosted_lifecycle(self, cfg, now)
-        else:
-            lifecycle = commercial_lifecycle(self)
+        lifecycle = self.lifecycle(float(cfg.health_grace_s), int(cfg.health_fail_threshold), now)
 
         misses = int(cfg.health_fail_threshold)
         vllm_stale = _stale(self.vllm_probed_at, now, cfg.health_interval_s, misses)
@@ -208,6 +205,81 @@ class DeploymentSnapshot:
             counted=counted,
             reached=self.reached,
         )
+
+    def lifecycle(self, grace_s: float, fail_threshold: int, now: float) -> str:
+        """Name the state these observations describe, read at `now`.
+
+        The two thresholds are the only knobs the rules read; they are not
+        facts about the deployment, which is why they arrive as arguments.
+        A commercial deployment reads none of the three.
+        """
+        if self.self_hosted:
+            return self._self_hosted_lifecycle(grace_s, fail_threshold, now)
+        return self._commercial_lifecycle()
+
+    @property
+    def loading_start(self) -> float | None:
+        """When the loading window began, or None when it has not.
+
+        The config fetch or the first probe that reached vLLM, whichever is
+        earlier. Either alone is a start: a rental that fetched its config is
+        loading before vLLM listens, and a rental answering 503 is loading
+        whether or not this process served its config.
+        """
+        starts = [t for t in (self.config_served_at, self.first_reached_at) if t is not None]
+        if not starts:
+            return None
+        return min(starts)
+
+    def _self_hosted_lifecycle(self, grace_s: float, fail_threshold: int, now: float) -> str:
+        """Name the vLLM observation.
+
+        A passing probe: Healthy, always -- including the first probe after a
+        control-plane restart -- unless /v1/models refused the working key:
+        Rejected, and Foreign once the refusal has run ``REJECTED_PASSES``
+        passes at a host no listing names. Loading not started (no config
+        fetch and no probe has reached vLLM, see ``loading_start``): Unhealthy
+        if it is in LiteLLM and the probe failed (it was serving before a
+        restart, now down); Stalled if nothing has answered at all for
+        ``grace_s`` after the first probe attempt (a rental that died, with no
+        deployment left to say so); otherwise Awaiting contact. Loading
+        started but not yet up: Loading while inside ``grace_s`` of the
+        start, Stalled past it. After it has been Healthy, ``fail_threshold``
+        failures: Unhealthy; fewer keep Healthy (hold-over-the-threshold).
+
+        The not-reached clock runs from the first attempt, not from unlisted's
+        listing count: a new RunPod rental is unlisted within minutes but
+        fetches its config only after its image pull, and must not read
+        Stalled five minutes after the admin created it. A probe that reaches
+        (a 503) is not on this clock: it is a loading start, and the grace
+        runs from it.
+        """
+        if self.probe_ok is True:
+            if self.key_rejected is True:
+                if self.unlisted and self.rejected_passes >= REJECTED_PASSES:
+                    return FOREIGN
+                return REJECTED
+            return HEALTHY
+        start = self.loading_start
+        if start is None:
+            if self.in_litellm and self.probe_ok is False:
+                return UNHEALTHY
+            not_reached = self.probe_ok is False and self.reached is False
+            if not_reached and self.first_probed_at is not None and (now - self.first_probed_at) >= grace_s:
+                return STALLED
+            return AWAITING
+        if self.last_ok is not None:
+            return UNHEALTHY if self.fails >= fail_threshold else HEALTHY
+        if self.probe_ok is None:
+            return LOADING
+        return LOADING if (now - start) < grace_s else STALLED
+
+    def _commercial_lifecycle(self) -> str:
+        if self.litellm_healthy is True:
+            return HEALTHY
+        if self.litellm_healthy is False:
+            return UNHEALTHY
+        return CONFIGURED
 
 
 @dataclass(frozen=True)
@@ -245,77 +317,6 @@ def _signal(up: bool | None, stale: bool) -> str:
     if stale or up is None:
         return SIGNAL_UNKNOWN
     return SIGNAL_UP if up else SIGNAL_DOWN
-
-
-def loading_start(snap: DeploymentSnapshot) -> float | None:
-    """When the loading window began, or None when it has not.
-
-    The config fetch or the first probe that reached vLLM, whichever is
-    earlier. Either alone is a start: a rental that fetched its config is
-    loading before vLLM listens, and a rental answering 503 is loading whether
-    or not this process served its config.
-    """
-    starts = [t for t in (snap.config_served_at, snap.first_reached_at) if t is not None]
-    if not starts:
-        return None
-    return min(starts)
-
-
-def self_hosted_lifecycle(
-    snap: DeploymentSnapshot,
-    cfg: object,
-    now: float,
-) -> str:
-    """Name the vLLM observation.
-
-    A passing probe: Healthy, always -- including the first probe after a
-    control-plane restart -- unless /v1/models refused the working key:
-    Rejected, and Foreign once the refusal has run ``REJECTED_PASSES`` passes
-    at a host no listing names. Loading not started (no config fetch and no
-    probe has reached vLLM, see ``loading_start``): Unhealthy if it is in
-    LiteLLM and the probe failed (it was serving before a restart, now down);
-    Stalled if nothing has answered at all for ``health_grace_s`` after the
-    first probe attempt (a rental that died, with no deployment left to say
-    so); otherwise Awaiting contact. Loading started but not yet up: Loading
-    while inside ``health_grace_s`` of the start, Stalled past it. After it
-    has been Healthy, ``health_fail_threshold`` failures: Unhealthy; fewer
-    keep Healthy (hold-over-the-threshold).
-
-    The not-reached clock runs from the first attempt, not from unlisted's
-    listing count: a new RunPod rental is unlisted within minutes but fetches
-    its config only after its image pull, and must not read Stalled five
-    minutes after the admin created it. A probe that reaches (a 503) is not
-    on this clock: it is a loading start, and the grace runs from it.
-    """
-    grace = float(cfg.health_grace_s)
-    threshold = int(cfg.health_fail_threshold)
-    if snap.probe_ok is True:
-        if snap.key_rejected is True:
-            if snap.unlisted and snap.rejected_passes >= REJECTED_PASSES:
-                return FOREIGN
-            return REJECTED
-        return HEALTHY
-    start = loading_start(snap)
-    if start is None:
-        if snap.in_litellm and snap.probe_ok is False:
-            return UNHEALTHY
-        not_reached = snap.probe_ok is False and snap.reached is False
-        if not_reached and snap.first_probed_at is not None and (now - snap.first_probed_at) >= grace:
-            return STALLED
-        return AWAITING
-    if snap.last_ok is not None:
-        return UNHEALTHY if snap.fails >= threshold else HEALTHY
-    if snap.probe_ok is None:
-        return LOADING
-    return LOADING if (now - start) < grace else STALLED
-
-
-def commercial_lifecycle(snap: DeploymentSnapshot) -> str:
-    if snap.litellm_healthy is True:
-        return HEALTHY
-    if snap.litellm_healthy is False:
-        return UNHEALTHY
-    return CONFIGURED
 
 
 def _privacy(rows: list[DeploymentStatus], *, orphaned: bool) -> str:
