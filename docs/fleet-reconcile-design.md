@@ -44,12 +44,38 @@ counters on every call. Two symptoms of that:
   needs it to tell Unhealthy from Awaiting after a restart, and the only
   object that has both facts is neither of the two that hold them.
 
+Behind both symptoms is one cause: four classes describe one deployment
+(2026-11-28). The two source records about it are fine, and stay:
+`IntendedDeployment` is what config.yaml said, `LiteLLMDeployment` is
+one row LiteLLM reported. They are evidence, not the thing. The other
+four are the thing, cut four ways, and each cut has a historical reason
+rather than a technical one:
+
+| Class | Holds | Why it exists apart |
+|---|---|---|
+| `VllmServer` (fleet.py) | a copy of the intent, the probe counters and `state`, the address the listing placed, URL and display helpers | it was the original object, when the fleet was a list of host rows |
+| `FleetDeployment` (fleet.py) | one `VllmServer` or one provider line, the LiteLLM rows and health, skew | layered on when provider lines arrived and LiteLLM's reads needed a home that was not a vLLM process |
+| `DeploymentSnapshot` (model_status.py) | a frozen copy of the fields the rules read, rebuilt on every call | import direction: model_status.py sits below fleet.py and could not name its classes, so the rules were written against a copy |
+| `DeploymentStatus` (model_status.py) | the ten answers the rules compute | the rules were functions returning a bundle |
+
+Every self-hosted deployment is exactly one `VllmServer` and one
+`FleetDeployment` (`from_vllm`, one to one), which says that boundary is
+not real; it is what forces `in_litellm` into the probe pass. The
+snapshot is the rebuilding. The status record would be ten properties if
+the rules were methods.
+
 ## This step: the Deployment
 
-One class with state, `Deployment` in `deployment.py`. It holds the intent
-(or none, for an orphan), the latest of each observation, and its own
+One class with state, `Deployment` in `deployment.py`, and the four
+above go: `VllmServer` and `FleetDeployment` fold into it, and
+`DeploymentSnapshot` and `DeploymentStatus` are deleted because their
+fields become its fields and its properties. It holds the intent (or
+none, for an orphan), the latest of each observation, and its own
 history, and it is the only place a lifecycle name is read. It absorbs
-`model_status.py`.
+`model_status.py`; `model_status()` stays a function, since it is about
+a model name and not a deployment, and `ModelStatus` stays as its
+answer. `Fleet` becomes the list of deployments and the runners that
+fold observations onto them; `Fleet.servers` is the self-hosted subset.
 
 Out of it come:
 
@@ -65,6 +91,99 @@ Out of it come:
 
 Adding a fine state changes `Deployment` and nothing else.
 
+### Observation and history
+
+An **observation** is what one source said at one moment, complete in
+itself and saying nothing about the past. A probe at `t` says: `/health`
+answered 200, or 503, or nothing; `/v1/models` said 401, or 200, or was
+not asked; the window was this. A LiteLLM read says: these rows exist
+now. A listing says: these rentals exist now, at these addresses. Each
+is a frozen record beside the reader that fetched it (`VllmProbe`,
+`LiteLLMDeployments`, `ProviderRentals`), and that is all a source ever
+gives: a fact about an instant.
+
+An observation alone cannot name the state, because the same observation
+means different things depending on what came before it:
+
+- **Silence** is a rental still pulling its image (Awaiting), a rental
+  that died before it ever answered (Stalled), a serving rental's one
+  missed probe (still Healthy, the hold-over), or a serving rental that
+  has gone down (Unhealthy, at the threshold).
+- **A 503** is a rental coming up (Loading), or one that had its grace
+  and never got there (Stalled).
+- **A 200 that refuses our key** is Rejected; the same answer for
+  `REJECTED_PASSES` passes at a host no listing names is Foreign.
+
+Every one of those distinctions is a fact about the past: whether a 200
+was ever seen, when the first attempt was, when loading began, how many
+passes in a row have said the same thing. None of it is in the probe.
+
+**History** is the smallest memory of the past that disambiguates the
+present observation. It is of three kinds, and the Deployment keeps all
+three, but they are not the same thing:
+
+1. **The position**: where the deployment was, the previous state. This
+   is the first column of the matrix below, and what makes each cell
+   small: a cell says only what this pass's observation does from here.
+2. **The clocks and counts** the next step needs: `first_probed_at` (the
+   grace runs from it while nothing has answered), the loading start
+   (the grace runs from it once something has), `last_ok` and `fails`
+   (the hold-over), `rejected_passes` (the Foreign debounce). A duration
+   in config is meaningless without the moment it is measured from, and
+   that moment is history; so `now` is an input to the step beside the
+   observation, and the step is a function of three things, not one.
+3. **Standing observations**: the last answer to a question that is not
+   asked every pass, kept until it is asked again. The window
+   (`/v1/models` is asked only when the deployment needs it), the key
+   verdict (same), the config fetch time, the address the listing
+   placed. These are observations, not history of position; they are
+   kept because the source does not repeat them, and "serving" in the
+   matrix can mean "not asked and the last verdict stands" because of
+   them.
+
+What history is **not**: anything another source said about the same
+deployment. Whether LiteLLM has a route to it is LiteLLM's observation,
+read by the plan and never by the step. Nothing derived is carried
+between passes except through history; the last state is an input to the
+step, not only a log line.
+
+Today's code keeps kind 2 and kind 3 and recomputes kind 1 from them on
+every call: `last_ok` set and `fails` under the threshold means it was
+Healthy; a loading start with no `last_ok` means it was Loading; and so
+on. That is history stored as evidence and re-derived into a position
+each time, and it is why every new state has added a clause to one
+function and why the hold-over cannot tell a Rejected rental from a
+Healthy one (quirk 1 in `rental-lifecycle.md`). The matrix stores the
+position and reads it.
+
+History is **process memory**. It exists in this process and nowhere
+else; after a restart every deployment is Awaiting with empty clocks,
+whatever its rental is doing, and the Awaiting row is the one that has
+to cope with that. The one thing that clears history short of a restart
+is a new rental at the same key, which is a new rental to be checked
+afresh.
+
+**Where the history lives** (decided 2026-11-28): in its own class. A
+frozen `History` holds the position and the clocks, kinds 1 and 2, and
+nothing else; the Deployment holds one, beside its intent and its
+standing observations. The step is a pure function, `step(history,
+probe, now) -> History`, and `Deployment.observe(probe, now)` is one
+line: store what `step` returns. Each cell test builds a `History` and a
+probe and compares records.
+
+The alternative was to keep the position and the clocks as fields of
+`Deployment` and let `observe` move them in place: one class fewer. It
+was rejected because the class is the point. The three kinds above are
+distinct things, and a Deployment with a dozen fields of mixed kind is
+exactly what `VllmServer` is today, where `first_probed_at` sits beside
+`observed_version` and `public_port` and nothing says which of them the
+lifecycle reads and which it does not. Naming the history as a record
+draws that line in the code: what the step reads and returns is in
+`History`, and anything not in it is by construction not history. There
+is no `Observed` class: the observation is the `VllmProbe` the runner
+hands over, and the standing observations are the Deployment's own
+fields.
+
 ### The programming model
 
 The prior version's decision table had about forty-five rows. It was
@@ -73,17 +192,13 @@ production had been seen to do, and as a list of test fixtures it stands.
 As a shape for the code it mixed four things that want to be four small
 pieces, and only the first is a table:
 
-1. **The transition table**, `step(history, observed, clock) -> history`.
-   Its first column is the previous state. That is what makes it short:
-   today's `DeploymentSnapshot.lifecycle` has to work out where a deployment was
-   from a dozen counters on every call (`last_ok` set and `fails` under
-   threshold means it was Healthy; a loading start with no `last_ok`
-   means it was Loading; and so on), and every new state has added a
-   clause. With the previous state as an input, a row only says what
-   this pass observed. In code: one pure function per previous state,
-   each a short ordered chain of conditions over the observation, and a
-   dict from state to function. Each cell of the matrix below gets one
-   test, named for the cell.
+1. **The transition table**, `step(history, probe, now) -> History`: the
+   previous position and clocks, plus this pass's probe and `now`, to the
+   next position and clocks. Its first column is the previous state, for
+   the reason the section above gives. In code: one pure function per
+   previous state, each a short ordered chain of conditions over the
+   observation, and a dict from state to function. Each cell of the
+   matrix below gets one test, named for the cell.
 
    Not a list of row objects with predicate lambdas. That reads worse,
    debugs worse, and buys nothing the tests do not already give.
@@ -241,9 +356,19 @@ the plan, which is the only reader of that fact. The one thing that
 clears history is a new rental at the same key, which is a new rental to
 be checked afresh.
 
-**A provider line** has no probe. Its machine is three states and one
-source: Configured until LiteLLM's `/health` has spoken, then Healthy or
-Unhealthy as it says, back to Configured when that read is stale.
+**A provider line** has no vLLM probe. Its machine is three states and
+one source: Configured until LiteLLM's `/health` has spoken, then Healthy
+or Unhealthy as it says, back to Configured when that read is stale. Its
+observation is the `LiteLLMHealth` the health read produced for it,
+where the rental's is a `VllmProbe`: the same step, a different
+observation argument. There is no `LiteLLMProbe` class, because LiteLLM
+is two sources on two clocks, `/model/info` (the rows, read by the plan)
+and `/health` (the verdict, read by the step), and each already has its
+record beside its reader. One addition is owed: `LiteLLMHealth` carries
+only the boolean and `at`, while the `/health` body gives an error string
+for each unhealthy endpoint and `VllmProbe` has an `error` field for the
+same purpose. `LiteLLMHealth.error` gives the admin the reason on the
+Deployments row.
 
 ### Needs
 
@@ -257,26 +382,69 @@ state.
 
 ### Commits
 
-Small, each acknowledged and pushed before the next:
+Two phases. Phase A is the collapse of the four classes into one and
+changes no behaviour: every commit keeps the whole suite passing with
+only mechanical edits to tests, in the manner of the three commits of
+2026-11-26 and 27 (`DeploymentSnapshot.status`, `FleetDeployment.snapshot`
+and `status`, `DeploymentSnapshot.lifecycle`). Phase B is the matrix,
+which changes the two behaviours named above, and rewrites methods of
+one class instead of relocating state across three. Small commits, each
+acknowledged and pushed before the next.
 
-1. **`deployment.py`: `History`, `Observed`, `step`, `verdict`.** The
-   matrix above as code, one test per cell in `tests/test_deployment.py`,
-   plus the walked fixtures (the dead rental, the reassigned address, the
-   listing gap, the restarts). Used by nothing yet.
-2. **The rental's history moves onto the deployment.** `FleetDeployment`
-   holds a `History`; `record_probe` becomes `FleetDeployment.observe`,
-   which reads the deployment's own LiteLLM rows, so `in_litellm` leaves
-   the probe pass. `VllmServer.state` and the counters become reads of
-   the history. The self-hosted rules of `DeploymentSnapshot.lifecycle`
-   are deleted.
-3. **The pages read the deployment.** `badges`, `reason` and the signals
-   become methods. (`dep.status()` already exists, 2026-11-26; this step
-   replaces its body with a read of the history.)
-4. **The provider line's machine** goes through the same step;
-   the commercial rules of `DeploymentSnapshot.lifecycle` are deleted.
-5. **`model_status.py` is deleted.** The constants and `model_status`
-   (the roll-up over one model name, which stays a pure function) move
-   to `deployment.py`; `DeploymentSnapshot` and `DeploymentStatus` go.
+**Phase A: one class.**
+
+1. **`VllmServer` folds into `FleetDeployment`.** The server's fields and
+   methods move onto the deployment, `from_vllm` goes, `Fleet.servers`
+   becomes the self-hosted deployments, and `dep.vllm.x` reads become
+   `dep.x`. Tests that built a `VllmServer` build a deployment. The
+   largest sweep, scripted like the 27-call sweep of 2026-11-26; it can
+   be two commits if the diff is too long to review (the probe fields
+   and `record_probe` first, the address and URL helpers second).
+2. **The deployment holds its intent.** `intent: IntendedDeployment |
+   None` replaces the copied fields (`model_name`, `name`, `api_base`,
+   `provider`, `litellm_model`, the recipe's values), which become
+   properties reading it. None is an orphan, when orphans arrive.
+3. **The rules read the deployment.** `lifecycle` and `status` become
+   methods of `FleetDeployment` reading its own fields; `record_probe`
+   reads `self.in_litellm` instead of taking it, and `DeploymentSnapshot`
+   is deleted. (Import direction holds: fleet.py imports model_status.py
+   for the constants; the rules move up, not the class down.)
+4. **`DeploymentStatus` goes.** Its ten fields become properties and
+   methods of the deployment: `lifecycle`, `vllm_signal`,
+   `litellm_signal`, `skew`, `counted`. The thresholds they read
+   (`health_grace_s`, `health_fail_threshold`, the two intervals) are
+   handed to the deployment once, by `Fleet` at construction, so the
+   reads take `now` and nothing else; `model_status()` takes the
+   deployments of one name.
+5. **`FleetDeployment` becomes `Deployment` in `deployment.py`**, with
+   model_status.py's constants, `ModelStatus` and `model_status()`;
+   model_status.py is deleted. deployment.py imports the source records
+   and nothing of fleet.py; fleet.py imports deployment.py.
+
+After Phase A there is one class with state per deployment, and the two
+symptoms under "Where we are" are gone: nothing is rebuilt on a call, and
+`in_litellm` is a read of the deployment's own rows. The lifecycle is
+still recomputed from the counters on every read.
+
+**Phase B: the matrix.**
+
+6. **`History` and `step` in deployment.py.** The frozen record of the
+   position and the clocks, and the matrix above as code, one test per
+   cell in `tests/test_deployment.py`, plus the walked fixtures (the dead
+   rental, the reassigned address, the listing gap, the restarts). Used
+   by nothing yet.
+7. **The deployment holds a `History`.** `Deployment.observe(probe, now)`
+   stores what `step` returns; the counters on the deployment become
+   reads of the history, and the recomputation (`lifecycle`) is deleted.
+   The two decided behaviour changes land here: Rejected under silence
+   holds over and goes Unhealthy, and the first pass after a restart
+   reads Awaiting with the route deletion decided in the list of
+   actions.
+8. **The reads off the stepped state**: `verdict`, `reason`, `badges`
+   and `needs`, and the pages read them.
+9. **The provider line's machine** goes through the same step, with its
+   `LiteLLMHealth` as the observation; `LiteLLMHealth.error` is added
+   from the `/health` body.
 
 ### After this step
 
